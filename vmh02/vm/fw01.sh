@@ -19,7 +19,7 @@ qm create $VMID \
   --scsi0 nas-data2-vm:1,format=qcow2,discard=on,ssd=1 \
   --scsihw virtio-scsi-pci \
   --bootdisk scsi0 \
-  --net0 virtio,bridge=vmbr1,firewall=1,tag=100 \ \
+  --net0 virtio,bridge=vmbr1,firewall=1,tag=100 \
   --net1 virtio,bridge=vmbr1,firewall=1,tag=300 \
   --net2 virtio,bridge=vmbr1,firewall=1,tag=103 \
   --onboot 1 \

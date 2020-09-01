@@ -21,7 +21,7 @@ qm create $VMID \
   --scsi0 nas-data1-vm:1,format=qcow2,discard=on,ssd=1 \
   --scsihw virtio-scsi-pci \
   --bootdisk scsi0 \
-  --net0 virtio,bridge=vmbr0,firewall=1 \
+  --net0 virtio,bridge=vmbr1,firewall=1,tag=100 \
   --onboot 1 \
   --numa 0 \
   --agent 1,fstrim_cloned_disks=1
