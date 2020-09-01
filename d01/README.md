@@ -1,12 +1,8 @@
-# proxmox-docker
+# d01
 
 Docker host running as a Proxmox VM
 
-run the following
-
-``` shell
-bash <(curl -s https://raw.githubusercontent.com/shepner/proxmox-docker/master/proxmox/create_vm.sh)
-```
+## Install Ubuntu
 
 install Ubuntu 20.04 the usual way.
 
@@ -16,7 +12,7 @@ DNS: 10.0.0.5,208.67.222.222,208.67.220.220
 
 Do NOT setup disk as LVM group
 
-install OpenSSH
+Install OpenSSH
 
 ## Fix the UID
 
@@ -42,22 +38,22 @@ Do this from the local workstation:
 DHOST=plex
 ssh-copy-id -i ~/.ssh/shepner_rsa.pub $DHOST
 
-scp ~/.ssh/shepner_rsa $DHOST:.ssh/shepner_rsa
-scp ~/.ssh/shepner_rsa.pub $DHOST:.ssh/shepner_rsa.pub
-scp ~/.ssh/config $DHOST:.ssh/config
-ssh $DHOST "chmod -R 700 ~/.ssh"
+#scp ~/.ssh/shepner_rsa $DHOST:.ssh/shepner_rsa
+#scp ~/.ssh/shepner_rsa.pub $DHOST:.ssh/shepner_rsa.pub
+#scp ~/.ssh/config $DHOST:.ssh/config
+#ssh $DHOST "chmod -R 700 ~/.ssh"
 ```
 
 ## Configure the system
 
 ``` shell
-bash <(curl -s https://raw.githubusercontent.com/shepner/proxmox-docker/master/update-scripts.sh)
+bash <(curl -s https://raw.githubusercontent.com/shepner/asyla/master/`hostname -s`/update_scripts.sh)
+
+~/scripts/`hostname -s`/setup/userConfig.sh
+~/scripts/`hostname -s`/setup/systemConfig.sh
+~/scripts/`hostname -s`/setup/nfs.sh
+~/scripts/`hostname -s`/setup/smb.sh
+~/scripts/`hostname -s`/setup/docker.sh
 
 ~/update.sh
-
-~/scripts/setup/userConfig.sh
-~/scripts/setup/systemConfig.sh
-~/scripts/setup/nfs.sh
-~/scripts/setup/smb.sh
-~/scripts/setup/docker.sh
 ```

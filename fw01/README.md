@@ -1,4 +1,4 @@
-# proxmox-pfsense
+# fw01
 
 PFsense running as a Proxmox VM
 

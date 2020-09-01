@@ -1,12 +1,6 @@
-# proxmox-blueiris
+# blueiris
 
-## Create the VM
-
-run the following
-
-``` shell
-bash <(curl -s https://raw.githubusercontent.com/shepner/proxmox-blueiris/master/proxmox/create_vm.sh)
-```
+Installation instructions for [BlueIris](https://blueirissoftware.com) server
 
 ## Install Windows
 

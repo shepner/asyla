@@ -1,26 +1,18 @@
-# proxmos-ns
+# ns01
 
 Ubuntu 20.04 Proxmox VM running DNS/DHCP services
 
-## Installation
+## Install Ubuntu
 
-VM setup in Proxmox:
-
-run the following
-
-``` shell
-bash <(curl -s https://raw.githubusercontent.com/shepner/proxmox-ns/master/setup/create-vm.sh)
-```
-
-install Ubuntu 20.04 the usual way.
+Install Ubuntu 20.04 the usual way.
 
 provide a static IP address
 
-DNS: 10.0.0.5,208.67.222.222,208.67.220.220
+DNS: 208.67.222.222,208.67.220.220
 
 Do NOT setup disk as LVM group
 
-install OpenSSH
+Install OpenSSH
 
 ## Fix the UID
 
@@ -46,19 +38,21 @@ Do this from the local workstation:
 DHOST=ns01
 ssh-copy-id -i ~/.ssh/shepner_rsa.pub $DHOST
 
-scp ~/.ssh/shepner_rsa $DHOST:.ssh/shepner_rsa
-scp ~/.ssh/shepner_rsa.pub $DHOST:.ssh/shepner_rsa.pub
-scp ~/.ssh/config $DHOST:.ssh/config
-ssh $DHOST "chmod -R 700 ~/.ssh"
+#scp ~/.ssh/shepner_rsa $DHOST:.ssh/shepner_rsa
+#scp ~/.ssh/shepner_rsa.pub $DHOST:.ssh/shepner_rsa.pub
+#scp ~/.ssh/config $DHOST:.ssh/config
+#ssh $DHOST "chmod -R 700 ~/.ssh"
 ```
 
 ## Configure the system
 
 ``` shell
-bash <(curl -s https://raw.githubusercontent.com/shepner/proxmox-ns/master/update-scripts.sh)
+bash <(curl -s https://raw.githubusercontent.com/shepner/asyla/master/`hostname -s`/update_scripts.sh)
 
-~/scripts/setup/userConfig.sh
-~/scripts/setup/systemConfig.sh
-~/scripts/setup/nfs.sh
-~/scripts/setup/docker.sh
+~/scripts/`hostname -s`/setup/userConfig.sh
+~/scripts/`hostname -s`/setup/systemConfig.sh
+~/scripts/`hostname -s`/setup/nfs.sh
+~/scripts/`hostname -s`/setup/docker.sh
+
+~/update.sh
 ```
