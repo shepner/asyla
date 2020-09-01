@@ -14,5 +14,5 @@ git checkout master -- `hostname -s`
 
 find $WORKDIR -name "*.sh" -exec chmod 744 {} \;
 
-mv $WORKDIR/`hostname -s`/*.sh ~
+mv $WORKDIR/`hostname -s`/update_scripts.sh ~
 

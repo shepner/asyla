@@ -12,7 +12,7 @@ Documentation:
 Install with base options, but use ZFS mirror 1 for the disk
 
 ``` shell
-bash <(curl -s https://raw.githubusercontent.com/shepner/asyla/master/`hostname -s`/update-scripts.sh
+bash <(curl -s https://raw.githubusercontent.com/shepner/asyla/master/`hostname -s`/update_scripts.sh)
 
 
 
