@@ -1,0 +1,20 @@
+version: "3.7"
+
+services:
+
+  traefik:
+    image: "traefik:v2.2"
+    container_name: "traefik"
+    ports:
+      - "80:80" # The HTTP port
+      - "8080:8080" # The dashboard is here
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro" # So that Traefik can listen to the Docker events
+      - "${CONFIGDIR}/traefik.yml:/traefik.yml:ro"
+    #command:
+      # use the `traefik.yml` instead
+
+networks:
+  default:
+    external:
+      name: ${DEFAULT_NETWORK}
