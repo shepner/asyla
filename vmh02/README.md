@@ -11,12 +11,16 @@ Documentation:
 
 Install with base options, but use ZFS mirror 1 for the disk
 
+Download the scripts:
+
 ``` shell
 bash <(curl -s https://raw.githubusercontent.com/shepner/asyla/master/`hostname -s`/update_scripts.sh)
 
-
-
-
+~/scripts/setup/repos.sh
+~/scripts/setup/network.sh
+~/scripts/setup/storage.sh
+~/scripts/setup/github.sh
+#~/scripts/setup/cloud-init.sh
 ```
 
 ## Create a cluster
@@ -25,6 +29,11 @@ Follow the instructions here: [5.3. Create a Cluster](https://pve.proxmox.com/pv
 
 ## Create VMs
 
-
-
+``` shell
+~/scripts/vm/blueiris.sh
+~/scripts/vm/d01.sh
+~/scripts/vm/fw01.sh
+~/scripts/vm/ns01.sh
+~/scripts/vm/plex.sh
+```
 
