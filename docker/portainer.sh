@@ -6,43 +6,37 @@
 # Portainer server
 
 
-# Load environment variables
+# Load functions and environment variables
 . ~/scripts/docker/docker.env
 
 
 NAME=portainer
 IMAGE=portainer/portainer
 
-echo $CONFIGDIR
+# Update the image
+dockerContainerUpdate $NAME
+# Shut down the old image
+dockerContainerKill $NAME
 
-sleep 60
-
-# fetch the latest image
-sudo docker pull $IMAGE
-
-# stop the image if it is running
-if [ `sudo docker ps -q -f name=$NAME` ]; then
-  sudo docker stop $NAME
-fi
-
-# remove the stopped image if it exists
-if [ `sudo docker ps -aq --filter "name=$NAME" --filter "status=exited"` ]; then
-  sudo docker rm -v $NAME
-fi
 
 # create a volume to store the data
-sudo docker volume create portainer_data
+VOLUME=portainer_data
+dockerVolumeCreate $VOLUME
+
+# create the network label
+NETWORK=traefik_net
+dockerNetworkCreate $NETWORK
 
 # start the image
 sudo docker run --detach --restart=always \
   --name $NAME \
   --cpus=2 \
   --cpu-shares=1024 \
-  --network=traefik_net \
+  --network=$NETWORK \
   --volume /var/run/docker.sock:/var/run/docker.sock \
-  --volume portainer_data:/data \
+  --volume $VOLUME:/data \
   --label traefik.enable=true \
   --label traefik.http.routers.portainer.entrypoints=web \
-  --label traefik.http.routers.portainer.rule=Host\(\`portainer.asyla.org\`\) \
+  --label traefik.http.routers.portainer.rule=Host\(\`$NAME.$MY_DOMAIN\`\) \
   $IMAGE
 
