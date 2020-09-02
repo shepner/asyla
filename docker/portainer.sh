@@ -9,8 +9,13 @@
 # Load environment variables
 . ~/scripts/docker/docker.env
 
+
 NAME=portainer
 IMAGE=portainer/portainer
+
+echo $CONFIGDIR
+
+sleep 60
 
 # fetch the latest image
 sudo docker pull $IMAGE

@@ -9,6 +9,7 @@
 # Load environment variables
 . ~/scripts/docker/docker.env
 
+
 NAME=portainer_agent
 IMAGE=portainer/agent
 
@@ -25,6 +26,13 @@ if [ `sudo docker ps -aq --filter "name=$NAME" --filter "status=exited"` ]; then
   sudo docker rm -v $NAME
 fi
 
+
+# create the network if needed
+NETWORK=traefik_net
+if [ ! `sudo docker network ls --quiet --filter "name=$NETWORK"` ]; then
+  sudo docker network create $NETWORK
+fi
+
 # start the image
 sudo docker run --detach --restart=always \
   --name $NAME \
@@ -33,8 +41,5 @@ sudo docker run --detach --restart=always \
   --network=traefik_net \
   --volume /var/run/docker.sock:/var/run/docker.sock \
   --volume /var/lib/docker/volumes:/var/lib/docker/volumes \
-  --label traefik.enable=true \
-  --label traefik.http.routers.portainer.entrypoints=web \
-  --label traefik.http.routers.portainer.rule=Host\(\`portainer.asyla.org\`\) \
   $IMAGE
 
