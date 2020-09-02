@@ -11,6 +11,17 @@ Documentation:
 
 Install with base options, but use ZFS mirror 1 for the disk
 
+## Setup ssh keys
+
+Do this from the local workstation:
+
+``` shell
+DHOST=vmh02
+ssh-copy-id -i ~/.ssh/shepner_rsa.pub $DHOST
+```
+
+## Configure the system
+
 Download the scripts:
 
 ``` shell

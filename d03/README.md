@@ -24,7 +24,7 @@ echo "`id -un` ALL=(ALL) NOPASSWD: ALL" | sudo EDITOR='tee -a' visudo
 Do this from the local workstation:
 
 ``` shell
-DHOST=vmh03
+DHOST=d03
 ssh-copy-id -i ~/.ssh/shepner_rsa.pub $DHOST
 scp ~/.ssh/shepner_rsa $DHOST:.ssh/shepner_rsa
 scp ~/.ssh/shepner_rsa.pub $DHOST:.ssh/shepner_rsa.pub

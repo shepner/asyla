@@ -11,7 +11,14 @@ Documentation:
 
 Boot drive:  ZFS (RAID1)
 
+## Setup ssh keys
 
+Do this from the local workstation:
+
+``` shell
+DHOST=vmh01
+ssh-copy-id -i ~/.ssh/shepner_rsa.pub $DHOST
+```
 
 ## Configure
 

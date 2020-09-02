@@ -35,7 +35,7 @@ Finally, logout and back in again
 Do this from the local workstation:
 
 ``` shell
-DHOST=plex
+DHOST=d02
 ssh-copy-id -i ~/.ssh/shepner_rsa.pub $DHOST
 
 #scp ~/.ssh/shepner_rsa $DHOST:.ssh/shepner_rsa
