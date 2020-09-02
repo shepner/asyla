@@ -18,13 +18,14 @@ Boot drive:  ZFS (RAID1)
 Download the scripts:
 
 ``` shell
+bash <(curl -s https://raw.githubusercontent.com/shepner/asyla/master/`hostname -s`/setup/github.sh)
 bash <(curl -s https://raw.githubusercontent.com/shepner/asyla/master/`hostname -s`/update_scripts.sh)
 
-~/scripts/setup/repos.sh
-~/scripts/setup/network.sh
-~/scripts/setup/storage.sh
-~/scripts/setup/github.sh
-#~/scripts/setup/cloud-init.sh
+~/scripts/`hostname -s`/setup/repos.sh
+~/scripts/`hostname -s`/setup/network.sh
+~/scripts/`hostname -s`/setup/storage.sh
+#~/scripts/`hostname -s`/setup/github.sh
+#~/scripts/`hostname -s`/setup/cloud-init.sh
 ```
 
 ## Create a cluster
@@ -34,10 +35,6 @@ Follow the instructions here: [5.3. Create a Cluster](https://pve.proxmox.com/pv
 ## Create VMs
 
 ``` shell
-~/scripts/vm/blueiris.sh
-~/scripts/vm/d01.sh
-~/scripts/vm/fw01.sh
-~/scripts/vm/ns01.sh
-~/scripts/vm/plex.sh
+~/scripts/vm/
 ```
 
