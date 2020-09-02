@@ -11,7 +11,7 @@ qm create $VMID \
   --name d01 \
   --sockets 2 \
   --cores 10 \
-  --memory 1024000 \
+  --memory 102400 \
   --ostype l26 \
   --ide2 nas-data1-iso:iso/ubuntu-20.04.1-live-server-amd64.iso,media=cdrom \
   --scsi0 nas-data2-vm:1,format=qcow2,discard=on,ssd=1 \

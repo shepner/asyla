@@ -26,11 +26,15 @@ Download the scripts:
 
 ``` shell
 bash <(curl -s https://raw.githubusercontent.com/shepner/asyla/master/`hostname -s`/setup/github.sh)
+
 bash <(curl -s https://raw.githubusercontent.com/shepner/asyla/master/`hostname -s`/update_scripts.sh)
 
 ~/scripts/`hostname -s`/setup/repos.sh
+
 ~/scripts/`hostname -s`/setup/network.sh
+
 ~/scripts/`hostname -s`/setup/storage.sh
+
 #~/scripts/`hostname -s`/setup/github.sh
 #~/scripts/`hostname -s`/setup/cloud-init.sh
 ```
@@ -80,15 +84,15 @@ free
 sysctl -w vm.swappiness=10
 ```
 
-## Create a cluster
+## Create/join a cluster
 
 Follow the instructions here: [5.3. Create a Cluster](https://pve.proxmox.com/pve-docs/pve-admin-guide.html#pvecm_create_cluster)
 
 Note that the network configs must be identical between the nodes otherwise migrations will fail.  Same goes for mountpoints, etc.
 
+In the event you need to remove a node and you get a "cluster not ready - no quorum?" error, run `pvecm e 1` to change the needed quorum votes so the remaining node can win the vote.
+
 ## Create VMs
 
-``` shell
-~/scripts/vm/
-```
+If needed, run the scripts in `~/scripts/vm/` which will create the VMs
 
