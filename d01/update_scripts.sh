@@ -6,7 +6,7 @@ WORKDIR=~/scripts
 
 # Dont care about any changes
 if [ -d $WORKDIR ]; then
-  rm -R $WORKDIR
+  sudo rm -R $WORKDIR
 fi
 
 # git only the items we care about
