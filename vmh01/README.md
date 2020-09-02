@@ -28,6 +28,51 @@ bash <(curl -s https://raw.githubusercontent.com/shepner/asyla/master/`hostname 
 #~/scripts/`hostname -s`/setup/cloud-init.sh
 ```
 
+## Config swap drive(s)
+
+this may or may not be needed depending
+
+``` shell
+# https://opensource.com/article/18/9/swap-space-linux-systems
+
+fdisk /dev/sdc
+# p: check the existing partitions
+# n: New parition, follow instructions, use partition 1
+# p: verify change.  Should show linux filesystem
+# t: select type 19 (Linux swap)
+# p: verify change.  Should show linux swap
+# w: write to disk
+
+fdisk /dev/sdd
+# n: New parition, follow instructions, use partition 1
+# t: select type 19 (Linux swap)
+# p: verify change.  Should show linux swap
+# w: write to disk
+
+# force the kernel to re-read the partition table so that it is not necessary to perform a reboot.
+partprobe
+
+# to list the partitions:
+fdisk -l
+
+# add the entries to `/etc/fstab`
+echo "/dev/sdc1 swap swap defaults 0 0" >> /etc/fstab
+echo "/dev/sdd1 swap swap defaults 0 0" >> /etc/fstab
+
+# define the partition as a swap partition
+mkswap /dev/sdc1
+mkswap /dev/sdd1
+
+# turn swap on
+swapon -a
+
+# to show swap space
+free
+
+# proxmox recommended level of swappiness
+sysctl -w vm.swappiness=10
+```
+
 ## Create a cluster
 
 Follow the instructions here: [5.3. Create a Cluster](https://pve.proxmox.com/pve-docs/pve-admin-guide.html#pvecm_create_cluster)
