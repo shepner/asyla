@@ -11,19 +11,19 @@ sudo docker network create traefik_net
 cp ~/scripts/docker/traefik/traefik.yml /mnt/nas/data2/docker/traefik/config/
 
 SERVICE=traefik
-sudo docker-compose -f ~/scripts/docker/traefik/$SERVICE-docker-compose.yml --env-file ~/scripts/docker/traefik/.env pull $SERVICE
-sudo docker-compose -f ~/scripts/docker/traefik/$SERVICE-docker-compose.yml --env-file ~/scripts/docker/traefik/.env rm --force --stop $SERVICE
-sudo docker-compose -f ~/scripts/docker/traefik/$SERVICE-docker-compose.yml --env-file ~/scripts/docker/traefik/.env up -d $SERVICE
+sudo docker-compose -f ~/scripts/docker/traefik/$SERVICE-docker-compose.yml --env-file ~/scripts/docker/traefik/dot.env pull $SERVICE
+sudo docker-compose -f ~/scripts/docker/traefik/$SERVICE-docker-compose.yml --env-file ~/scripts/docker/traefik/dot.env rm --force --stop $SERVICE
+sudo docker-compose -f ~/scripts/docker/traefik/$SERVICE-docker-compose.yml --env-file ~/scripts/docker/traefik/dot.env up -d $SERVICE
 
 SERVICE=whoami
-sudo docker-compose -f ~/scripts/docker/traefik/$SERVICE-docker-compose.yml --env-file ~/scripts/docker/traefik/.env pull $SERVICE
-sudo docker-compose -f ~/scripts/docker/traefik/$SERVICE-docker-compose.yml --env-file ~/scripts/docker/traefik/.env rm --force --stop $SERVICE
-sudo docker-compose -f ~/scripts/docker/traefik/$SERVICE-docker-compose.yml --env-file ~/scripts/docker/traefik/.env up -d $SERVICE
+sudo docker-compose -f ~/scripts/docker/traefik/$SERVICE-docker-compose.yml --env-file ~/scripts/docker/traefik/dot.env pull $SERVICE
+sudo docker-compose -f ~/scripts/docker/traefik/$SERVICE-docker-compose.yml --env-file ~/scripts/docker/traefik/dot.env rm --force --stop $SERVICE
+sudo docker-compose -f ~/scripts/docker/traefik/$SERVICE-docker-compose.yml --env-file ~/scripts/docker/traefik/dot.env up -d $SERVICE
 
 SERVICE=portainer
-sudo docker-compose -f ~/scripts/docker/traefik/$SERVICE-docker-compose.yml --env-file ~/scripts/docker/traefik/.env pull $SERVICE
-sudo docker-compose -f ~/scripts/docker/traefik/$SERVICE-docker-compose.yml --env-file ~/scripts/docker/traefik/.env rm --force --stop $SERVICE
-sudo docker-compose -f ~/scripts/docker/traefik/$SERVICE-docker-compose.yml --env-file ~/scripts/docker/traefik/.env up -d $SERVICE
+sudo docker-compose -f ~/scripts/docker/traefik/$SERVICE-docker-compose.yml --env-file ~/scripts/docker/traefik/dot.env pull $SERVICE
+sudo docker-compose -f ~/scripts/docker/traefik/$SERVICE-docker-compose.yml --env-file ~/scripts/docker/traefik/dot.env rm --force --stop $SERVICE
+sudo docker-compose -f ~/scripts/docker/traefik/$SERVICE-docker-compose.yml --env-file ~/scripts/docker/traefik/dot.env up -d $SERVICE
 
 
 # To stop all containers
