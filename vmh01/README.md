@@ -84,6 +84,8 @@ sysctl -w vm.swappiness=10
 
 Follow the instructions here: [5.3. Create a Cluster](https://pve.proxmox.com/pve-docs/pve-admin-guide.html#pvecm_create_cluster)
 
+Note that the network configs must be identical between the nodes otherwise migrations will fail.  Same goes for mountpoints, etc.
+
 ## Create VMs
 
 ``` shell
