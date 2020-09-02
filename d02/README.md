@@ -50,9 +50,13 @@ ssh-copy-id -i ~/.ssh/shepner_rsa.pub $DHOST
 bash <(curl -s https://raw.githubusercontent.com/shepner/asyla/master/`hostname -s`/update_scripts.sh)
 
 ~/scripts/`hostname -s`/setup/userConfig.sh
+
 ~/scripts/`hostname -s`/setup/systemConfig.sh
+
 ~/scripts/`hostname -s`/setup/nfs.sh
+
 ~/scripts/`hostname -s`/setup/smb.sh
+
 ~/scripts/`hostname -s`/setup/docker.sh
 
 ~/update.sh
