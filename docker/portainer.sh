@@ -14,7 +14,7 @@ NAME=portainer
 IMAGE=portainer/portainer
 
 # Update the image
-dockerContainerUpdate $NAME
+dockerContainerUpdate $IMAGE
 # Shut down the old image
 dockerContainerKill $NAME
 
