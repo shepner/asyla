@@ -13,7 +13,7 @@ qm create $VMID \
   --name fw01 \
   --sockets 1 \
   --cores 2 \
-  --memory 2048 \
+  --memory 4096 \
   --ostype other \
   --ide2 nas-data1-iso:iso/pfSense-CE-2.4.5-RELEASE-p1-amd64.iso,media=cdrom \
   --scsi0 nas-data2-vm:1,format=qcow2,discard=on,ssd=1 \
