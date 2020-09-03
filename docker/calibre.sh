@@ -57,7 +57,7 @@ sudo docker run --detach --restart=always \
   --mount type=bind,src=$DATA1/media,dst=/media \
   --network=$NETWORK_INTERNET \
   --label traefik.enable=true \
-  --label traefik.http.routers.portainer.entrypoints=web \
-  --label traefik.http.routers.portainer.rule=Host\(\`$NAME.$MY_DOMAIN\`\) \
+  --label traefik.http.routers.$NAME.rule=Host\(\`$NAME.$MY_DOMAIN\`\) \
+  --label traefik.http.routers.$NAME.entrypoints=web \
   $IMAGE
 
