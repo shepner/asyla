@@ -22,6 +22,10 @@ dockerServiceUpdate $NAME
 NETWORK=portainer_agent_network
 dockerServiceNetworkCreate $NETWORK
 
+# create the data volume
+VOLUME=portainer_data
+dockerVolumeCreate portainer_data
+
 
 # create the network label
 #NETWORK=traefik_net
@@ -33,7 +37,7 @@ sudo docker service create \
   --replicas=1 \
   --network=$NETWORK \
   --publish 9000:9000 \
-  --mount type=bind,src=/mnt/nas/docker/portainer,dst=/data \
+  -v $VOLUME:/data
   --label traefik.enable=true \
   --label traefik.http.routers.portainer.entrypoints=web \
   --label traefik.http.routers.portainer.rule=Host\(\`$NAME.$MY_DOMAIN\`\) \
