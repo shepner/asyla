@@ -55,7 +55,7 @@ sudo docker run --detach --restart=always \
   --env CALIBRE_OVERRIDE_DATABASE_PATH="/config/metadata.db" \
   --mount type=bind,src=$CONFIGDIR,dst=/config \
   --mount type=bind,src=$DATA1/media,dst=/media \
-  --network=$NETWORK_INTERNET
+  --network=$NETWORK_INTERNET \
   --label traefik.enable=true \
   --label traefik.http.routers.portainer.entrypoints=web \
   --label traefik.http.routers.portainer.rule=Host\(\`$NAME.$MY_DOMAIN\`\) \
