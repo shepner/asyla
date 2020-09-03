@@ -3,7 +3,7 @@
 
 
 # Load the functions and environment variables
-. ~/scripts/docker/docker.env
+. ~/scripts/docker/common.sh
 
 
 NAME=traefik
@@ -20,9 +20,9 @@ sudo -u \#$DOCKER_UID cp ~/scripts/docker/traefik/traefik.yml $CONFIGDIR
 dockerNetworkCreate $NETWORK_INTERNET
 
 
-sudo docker-compose -f ~/scripts/docker/traefik/docker-compose.yml --env-file ~/scripts/docker/docker.env pull $NAME
-sudo docker-compose -f ~/scripts/docker/traefik/docker-compose.yml --env-file ~/scripts/docker/docker.env rm --force --stop $NAME
-sudo docker-compose -f ~/scripts/docker/traefik/docker-compose.yml --env-file ~/scripts/docker/docker.env up -d $NAME
+sudo docker-compose -f ~/scripts/docker/traefik/docker-compose.yml --env-file ~/scripts/docker/common.env pull $NAME
+sudo docker-compose -f ~/scripts/docker/traefik/docker-compose.yml --env-file ~/scripts/docker/common.env rm --force --stop $NAME
+sudo docker-compose -f ~/scripts/docker/traefik/docker-compose.yml --env-file ~/scripts/docker/common.env up -d $NAME
 
 
 
