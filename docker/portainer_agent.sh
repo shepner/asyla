@@ -26,8 +26,6 @@ dockerServiceNetworkCreate $NETWORK
 # start the image
 sudo docker service create \
   --name $NAME \
-  --cpus=1 \
-  --cpu-shares=1024 \
   --mode global \
   --constraint 'node.platform.os == linux' \
   --env AGENT_CLUSTER_ADDR=tasks.portainer_agent \

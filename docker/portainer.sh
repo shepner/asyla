@@ -31,8 +31,6 @@ dockerServiceNetworkCreate $NETWORK
 sudo docker service create \
   --name $NAME \
   --replicas=1 \
-  --cpus=2 \
-  --cpu-shares=1024 \
   --network=$NETWORK \
   --publish 9000:9000 \
   --mount type=bind,src=/mnt/nas/docker/portainer,dst=/data \
