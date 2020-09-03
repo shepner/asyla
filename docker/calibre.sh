@@ -18,16 +18,33 @@ IMAGE=linuxserver/calibre
 CONFIGDIR=$DOCKER_DL/$NAME/config
 
 
+dockerPull $IMAGE # fetch the latest image
+dockerStopRm $NAME # kill the old one
+
+
 # create the dir if needed
 if [ ! -d $CONFIGDIR ]; then
   sudo -u \#DOCKER_UID mkdir -p $CONFIGDIR
 fi
 
 
-dockerPull $IMAGE # fetch the latest image
-dockerStopRm $NAME # kill the old one
+# direct access
+#sudo docker run --detach --restart=always \
+#  --name $NAME \
+#  --cpus=2 \
+#  --cpu-shares=1024 \
+#  --env PUID=$DOCKER_UID \
+#  --env PGID=$DOCKER_GID \
+#  --env TZ=$LOCAL_TZ \
+#  --env CALIBRE_OVERRIDE_DATABASE_PATH="/config/metadata.db" \
+#  --mount type=bind,src=$CONFIGDIR,dst=/config \
+#  --mount type=bind,src=$DATA1/media,dst=/media \
+#  --publish published=6080,target=8080,protocol=tcp,mode=ingress \
+#  --publish published=6081,target=8081,protocol=tcp,mode=ingress \
+#  $IMAGE
 
-# load the image
+# access via traefik
+dockerNetworkCreate $NETWORK_INTERNET
 sudo docker run --detach --restart=always \
   --name $NAME \
   --cpus=2 \
@@ -38,8 +55,9 @@ sudo docker run --detach --restart=always \
   --env CALIBRE_OVERRIDE_DATABASE_PATH="/config/metadata.db" \
   --mount type=bind,src=$CONFIGDIR,dst=/config \
   --mount type=bind,src=$DATA1/media,dst=/media \
-  --publish published=6080,target=8080,protocol=tcp,mode=ingress \
-  --publish published=6081,target=8081,protocol=tcp,mode=ingress \
+  --network $NETWORK_INTERNET
+  --label traefik.enable=true \
+  --label traefik.http.routers.portainer.entrypoints=web \
+  --label traefik.http.routers.portainer.rule=Host\(\`$NAME.$MY_DOMAIN\`\) \
   $IMAGE
-  
-  # --cpu-shares=1024 # default job priority
+
