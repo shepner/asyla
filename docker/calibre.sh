@@ -30,7 +30,7 @@ dockerStopRm $NAME # kill the old one
 # load the image
 sudo docker run --detach --restart=always \
   --name $NAME \
-  --cpus=1 \
+  --cpus=2 \
   --cpu-shares=1024 \
   --env PUID=$DOCKER_UID \
   --env PGID=$DOCKER_GID \
