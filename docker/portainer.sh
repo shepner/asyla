@@ -37,7 +37,7 @@ sudo docker service create \
   --replicas=1 \
   --network=$NETWORK \
   --publish 9000:9000 \
-  -v $VOLUME:/data \
+  --mount type=bind,src=$VOLUME,dst=/data \
   --label traefik.enable=true \
   --label traefik.http.routers.portainer.entrypoints=web \
   --label traefik.http.routers.portainer.rule=Host\(\`$NAME.$MY_DOMAIN\`\) \
