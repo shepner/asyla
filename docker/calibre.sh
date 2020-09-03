@@ -44,6 +44,7 @@ fi
 #  $IMAGE
 
 # access via traefik
+# https://stackoverflow.com/questions/59830648/traefik-multiple-port-bindings-for-the-same-host-v2
 dockerNetworkCreate $NETWORK_INTERNET
 sudo docker run --detach --restart=always \
   --name $NAME \
@@ -57,8 +58,11 @@ sudo docker run --detach --restart=always \
   --mount type=bind,src=$DATA1/media,dst=/media \
   --network=$NETWORK_INTERNET \
   --label traefik.enable=true \
-  --label traefik.http.routers.${NAME}_web.rule=Host\(\`${NAME}.${MY_DOMAIN}\`\) \
-  --label traefik.http.routers.${NAME}_web.entrypoints=web \
-  --label traefik.http.services.${NAME}_web.loadbalancer.server.port=8080 \
+  --label traefik.http.routers.${NAME}_desktop.rule=Host\(\`${NAME}.${MY_DOMAIN}\`\) \
+  --label traefik.http.routers.${NAME}_desktop.entrypoints=web \
+  --label traefik.http.services.${NAME}_desktop.loadbalancer.server.port=8080 \
+  --label traefik.http.routers.${NAME}_webserver.rule=Host\(\`${NAME}.${MY_DOMAIN}\`\) \
+  --label traefik.http.routers.${NAME}_webserver.entrypoints.name.address:8081 \
+  --label traefik.http.services.${NAME}_webserver.loadbalancer.server.port=8081 \
   $IMAGE
 
