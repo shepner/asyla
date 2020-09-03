@@ -7,9 +7,9 @@ api:
   dashboard: true
 
 entryPoints:
-  web:
+  http:
     address: ":80"
-  web_secure:
+  https:
     address: ":443"
 
 providers:
