@@ -58,6 +58,8 @@ sudo docker run --detach --restart=always \
   --network=$NETWORK_INTERNET \
   --label traefik.enable=true \
   --label traefik.http.routers.$NAME.rule=Host\(\`$NAME.$MY_DOMAIN\`\) \
-  --label traefik.http.routers.$NAME.entrypoints=web \
+  --label traefik.http.routers.$NAME.entrypoints.calibre_desktop=web \
   $IMAGE
+
+#  --label traefik.http.routers.$NAME.entrypoints=web \
 
