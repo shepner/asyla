@@ -38,10 +38,10 @@ Do this from the local workstation:
 DHOST=d01
 ssh-copy-id -i ~/.ssh/shepner_rsa.pub $DHOST
 
-#scp ~/.ssh/shepner_rsa $DHOST:.ssh/shepner_rsa
-#scp ~/.ssh/shepner_rsa.pub $DHOST:.ssh/shepner_rsa.pub
-#scp ~/.ssh/config $DHOST:.ssh/config
-#ssh $DHOST "chmod -R 700 ~/.ssh"
+scp ~/.ssh/shepner_rsa $DHOST:.ssh/shepner_rsa
+scp ~/.ssh/shepner_rsa.pub $DHOST:.ssh/shepner_rsa.pub
+scp ~/.ssh/config $DHOST:.ssh/config
+ssh $DHOST "chmod -R 700 ~/.ssh"
 ```
 
 ## Configure the system
@@ -57,3 +57,24 @@ bash <(curl -s https://raw.githubusercontent.com/shepner/asyla/master/`hostname 
 
 ~/update.sh
 ```
+
+## Configure Docker Swarm
+
+Run this on the first node:
+
+``` shell
+sudo docker swarm init
+
+# for managers
+sudo docker swarm join-token manager
+
+# for workers
+sudo docker swarm join-token worker
+```
+
+Follow the instructions provided and run the command on each of the other nodes as appropriate:
+
+``` shell
+sudo docker swarm join --token <TOKEN> <IP>:2377
+```
+

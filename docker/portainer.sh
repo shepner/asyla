@@ -13,30 +13,31 @@
 NAME=portainer
 IMAGE=portainer/portainer
 
+
 # Update the image
-dockerContainerUpdate $IMAGE
-# Shut down the old image
-dockerContainerKill $NAME
+dockerServiceUpdate $NAME
 
-
-# create a volume to store the data
-VOLUME=portainer_data
-dockerVolumeCreate $VOLUME
 
 # create the network label
-NETWORK=traefik_net
-dockerNetworkCreate $NETWORK
+NETWORK=portainer_agent_network
+dockerServiceNetworkCreate $NETWORK
+
+
+# create the network label
+#NETWORK=traefik_net
+#dockerNetworkCreate $NETWORK
 
 # start the image
-sudo docker run --detach --restart=always \
+sudo docker service create \
   --name $NAME \
+  --replicas=1 \
   --cpus=2 \
   --cpu-shares=1024 \
   --network=$NETWORK \
-  --volume /var/run/docker.sock:/var/run/docker.sock \
-  --volume $VOLUME:/data \
+  --publish 9000:9000 \
+  --mount type=bind,src=/mnt/nas/docker/portainer,dst=/data \
   --label traefik.enable=true \
   --label traefik.http.routers.portainer.entrypoints=web \
   --label traefik.http.routers.portainer.rule=Host\(\`$NAME.$MY_DOMAIN\`\) \
-  $IMAGE
+  $IMAGE -H "tcp://tasks.portainer_agent:9001" --tlsskipverify
 

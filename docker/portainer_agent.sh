@@ -6,30 +6,33 @@
 # Portainer agent
 
 
-# Load environment variables
+# Load functions and environment variables
 . ~/scripts/docker/docker.env
 
 
 NAME=portainer_agent
 IMAGE=portainer/agent
 
+
 # Update the image
-dockerContainerUpdate $IMAGE
-# Shut down the old image
-dockerContainerKill $NAME
+dockerServiceUpdate $NAME
 
 
 # create the network label
-NETWORK=traefik_net
-dockerNetworkCreate $NETWORK
+NETWORK=portainer_agent_network
+dockerServiceNetworkCreate $NETWORK
+
 
 # start the image
-sudo docker run --detach --restart=always \
+sudo docker service create \
   --name $NAME \
   --cpus=1 \
   --cpu-shares=1024 \
-  --network=$NETWORK \
-  --volume /var/run/docker.sock:/var/run/docker.sock \
-  --volume /var/lib/docker/volumes:/var/lib/docker/volumes \
+  --mode global \
+  --constraint 'node.platform.os == linux' \
+  --env AGENT_CLUSTER_ADDR=tasks.portainer_agent \
+  --network $NETWORK \
+  --mount type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock \
+  --mount type=bind,src=/var/lib/docker/volumes,dst=/var/lib/docker/volumes \
   $IMAGE
 
