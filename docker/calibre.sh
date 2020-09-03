@@ -1,12 +1,12 @@
 #!/bin/sh
 # https://docs.linuxserver.io/images/docker-calibre
 
-# 6080(8080) Calibre desktop gui. ctrl-alt-shift to access the clipboard
-# 6081(8081) Calibre webserver gui.
+# 8080: Calibre desktop gui. ctrl-alt-shift to access the clipboard
+# 8081: Calibre webserver gui.
 
 # [Customizing calibre](https://manual.calibre-ebook.com/customize.html)
 # Environment variables:
-#   CALIBRE_OVERRIDE_DATABASE_PATH - allows you to specify the full path to metadata.db. Using this variable you can have metadata.db be in a location other than the library folder. Useful if your library folder is on a networked drive that does not support file locking.
+# * CALIBRE_OVERRIDE_DATABASE_PATH - allows you to specify the full path to metadata.db. Using this variable you can have metadata.db be in a location other than the library folder. Useful if your library folder is on a networked drive that does not support file locking.
 
 
 # Load the functions and environment variables
@@ -58,8 +58,7 @@ sudo docker run --detach --restart=always \
   --network=$NETWORK_INTERNET \
   --label traefik.enable=true \
   --label traefik.http.routers.$NAME.rule=Host\(\`$NAME.$MY_DOMAIN\`\) \
-  --label traefik.http.routers.$NAME.entrypoints.calibre_desktop=web \
+  --label traefik.http.routers.$NAME.entrypoints=web \
+  --label traefik.http.services.$NAME.loadbalancer.server.port=8080 \
   $IMAGE
-
-#  --label traefik.http.routers.$NAME.entrypoints=web \
 
