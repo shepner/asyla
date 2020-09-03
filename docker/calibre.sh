@@ -68,8 +68,3 @@ sudo docker run --detach --restart=always \
   $IMAGE
 
 
-- traefik.http.routers.whoami-https.rule=Host(`whoami.localhost`)
-- traefik.http.routers.whoami-https.entrypoints=web-secure
-- traefik.http.routers.whoami-https.service=whoami-https-service
-- traefik.http.services.whoami-https-service.loadbalancer.server.port=80
-
