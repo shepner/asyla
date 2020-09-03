@@ -35,6 +35,6 @@ sudo docker run --detach --restart=always \
   --mount type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock:ro \
   --publish published=80,target=80,protocol=tcp,mode=ingress \
   --publish published=8080,target=8080,protocol=tcp,mode=ingress \
-  --network $NETWORK_INTERNET
+  --network $NETWORK_INTERNET \
   $IMAGE
 

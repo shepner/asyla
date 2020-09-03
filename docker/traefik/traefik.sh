@@ -2,28 +2,30 @@
 # [Traefik v2](https://github.com/DoTheEvo/Traefik-v2-examples#1-traefik-routing-to-various-docker-containers) examples
 
 
-sudo docker network create traefik_net
-#sudo docker network inspect traefik_net
+# Load the functions and environment variables
+. ~/scripts/docker/docker.env
 
-# This will show the docker-compose.yml file with the vars filled in
-#sudo docker-compose config
 
-cp ~/scripts/docker/traefik/traefik.yml /mnt/nas/data2/docker/traefik/config/
+NAME=traefik
+CONFIGDIR=$DOCKER_D2/$NAME/config
 
-SERVICE=traefik
-sudo docker-compose -f ~/scripts/docker/traefik/$SERVICE-docker-compose.yml --env-file ~/scripts/docker/traefik/dot.env pull $SERVICE
-sudo docker-compose -f ~/scripts/docker/traefik/$SERVICE-docker-compose.yml --env-file ~/scripts/docker/traefik/dot.env rm --force --stop $SERVICE
-sudo docker-compose -f ~/scripts/docker/traefik/$SERVICE-docker-compose.yml --env-file ~/scripts/docker/traefik/dot.env up -d $SERVICE
 
-SERVICE=whoami
-sudo docker-compose -f ~/scripts/docker/traefik/$SERVICE-docker-compose.yml --env-file ~/scripts/docker/traefik/dot.env pull $SERVICE
-sudo docker-compose -f ~/scripts/docker/traefik/$SERVICE-docker-compose.yml --env-file ~/scripts/docker/traefik/dot.env rm --force --stop $SERVICE
-sudo docker-compose -f ~/scripts/docker/traefik/$SERVICE-docker-compose.yml --env-file ~/scripts/docker/traefik/dot.env up -d $SERVICE
+# create the dir if needed
+if [ ! -d $CONFIGDIR ]; then
+  sudo -u \#$DOCKER_UID mkdir -p $CONFIGDIR
+fi
 
-SERVICE=portainer
-sudo docker-compose -f ~/scripts/docker/traefik/$SERVICE-docker-compose.yml --env-file ~/scripts/docker/traefik/dot.env pull $SERVICE
-sudo docker-compose -f ~/scripts/docker/traefik/$SERVICE-docker-compose.yml --env-file ~/scripts/docker/traefik/dot.env rm --force --stop $SERVICE
-sudo docker-compose -f ~/scripts/docker/traefik/$SERVICE-docker-compose.yml --env-file ~/scripts/docker/traefik/dot.env up -d $SERVICE
+sudo -u \#$DOCKER_UID cp ~/scripts/docker/traefik/traefik.yml $CONFIGDIR
+
+dockerNetworkCreate $NETWORK_INTERNET
+
+
+sudo docker-compose -f ~/scripts/docker/traefik/docker-compose.yml --env-file ~/scripts/docker/docker.env pull $NAME
+sudo docker-compose -f ~/scripts/docker/traefik/docker-compose.yml --env-file ~/scripts/docker/docker.env rm --force --stop $NAME
+sudo docker-compose -f ~/scripts/docker/traefik/docker-compose.yml --env-file ~/scripts/docker/docker.env up -d $NAME
+
+
+
 
 
 # To stop all containers
