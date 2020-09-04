@@ -9,10 +9,10 @@ HOSTNAME=`hostname -s`
 
 if [ ${HOSTNAME} = "d01" ]; then
   echo ${HOSTNAME}
-~/scripts/docker/traefik/traefik.sh
+  ~/scripts/docker/traefik/traefik.sh
 
-~/scripts/docker/calibre.sh
-~/scripts/docker/booksonic.sh
+  ~/scripts/docker/calibre.sh
+  ~/scripts/docker/booksonic.sh
 
 elif [ ${HOSTNAME} = "d02" ]; then
   echo ${HOSTNAME}

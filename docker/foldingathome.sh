@@ -8,8 +8,8 @@
 . ~/scripts/docker/common.sh
 
 
-NAME=calibre
-IMAGE=linuxserver/calibre
+NAME=foldingathome
+IMAGE=linuxserver/foldingathome
 DOCKERDIR=${DOCKER_D2}
 
 
