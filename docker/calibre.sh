@@ -60,10 +60,12 @@ sudo docker run --detach --restart=always \
   --label traefik.enable=true \
   --label traefik.http.routers.${NAME}_desktop.rule=Host\(\`${NAME}.${MY_DOMAIN}\`\) \
   --label traefik.http.routers.${NAME}_desktop.entrypoints=http \
-  --label traefik.http.services.${NAME}_desktop.loadbalancer.server.port=8080 \
+  --label traefik.http.routers.${NAME}_desktop.service=${NAME}_desktop_service \
+  --label traefik.http.services.${NAME}_desktop_service.loadbalancer.server.port=8080 \
   --label traefik.http.routers.${NAME}_webserver.rule=Host\(\`${NAME}.${MY_DOMAIN}\`\) \
   --label traefik.http.routers.${NAME}_webserver.entrypoints=https \
-  --label traefik.http.services.${NAME}_webserver.loadbalancer.server.port=8081 \
+  --label traefik.http.routers.${NAME}_webserver.service=${NAME}_webserver_service \
+  --label traefik.http.services.${NAME}_webserver_service.loadbalancer.server.port=8081 \
   $IMAGE
 
 #  --label traefik.http.routers.${NAME}_webserver.entrypoints=web_secure \
