@@ -4,7 +4,6 @@ services:
 
   traefik:
     image: "traefik:v2.2"
-    container_name: "traefik"
     ports:
       - "80:80"     # HTTP - general use
       - "443:443"   # HTTPS - general use
@@ -13,14 +12,15 @@ services:
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock:ro" # So that Traefik can listen to the Docker events
       - "/mnt/nas/data2/docker/traefik/config/traefik.yml:/traefik.yml:ro"
-    #command:
-      # use the `traefik.yml` instead
+    #command: # use the `traefik.yml` instead
+    #container_name: "traefik" # not used with Swarm
     deploy:
       placement:
         constraints:
           - node.role == manager
 
 networks:
-  default:
-    external:
-      name: traefik_net
+  #default:
+  #  external:
+  #    name: traefik_net
+  name: traefik_net

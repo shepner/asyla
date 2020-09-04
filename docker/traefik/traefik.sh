@@ -25,8 +25,7 @@ dockerNetworkCreate $NETWORK_INTERNET
 #sudo docker-compose -f ~/scripts/docker/traefik/docker-compose.yml --env-file ~/scripts/docker/common.env up -d $NAME
 
 # docker swarm
-sudo docker stack deploy --compose-file=~/scripts/docker/traefik/docker-compose.yml pull $NAME
-sudo docker stack deploy --compose-file=~/scripts/docker/traefik/docker-compose.yml rm --force --stop $NAME
-sudo docker stack deploy --compose-file=~/scripts/docker/traefik/docker-compose.yml up -d $NAME
+sudo docker stack rm ${NAME}
+sudo docker stack deploy --compose-file ~/scripts/docker/traefik/docker-compose.yml ${NAME}
 
 
