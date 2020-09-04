@@ -22,4 +22,5 @@ providers:
     #this is if using docker swarm
     #endpoint: "tcp://127.0.0.1:2377"
     swarmMode: true
+    network: traefik_net
 
