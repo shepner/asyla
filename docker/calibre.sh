@@ -31,8 +31,9 @@ if [ ! -d ${CONFIGDIR} ]; then
 fi
 #
 echo "Making a backup"
-sudo -u \#${DOCKER_UID} tar -czf ${DOCKERAPPDIR}.tgz -C ${DOCKERDIR} ${NAME}
+sudo -u \#${DOCKER_UID} tar -czf ${DOCKER_D1}/${NAME}.tgz -C ${DOCKERDIR} ${NAME}
 echo "Backup complete"
+
 
 # direct access
 #sudo docker run --detach --restart=always \
