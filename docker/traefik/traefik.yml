@@ -11,7 +11,7 @@ entryPoints:
     address: ":80"
   https:
     address: ":443"
-  calibre_ep:
+  calibre_web_ep:
     address: ":8081"
 
 providers:
