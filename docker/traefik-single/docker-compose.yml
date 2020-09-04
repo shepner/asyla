@@ -1,0 +1,21 @@
+version: "3.8"
+
+services:
+
+  traefik:
+    image: "traefik:v2.2"
+    ports:
+      - "80:80"     # HTTP - general use
+      - "443:443"   # HTTPS - general use
+      - "8080:8080" # Traefik dashboard
+      - "8081:8081" # Calibre web interface
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro" # So that Traefik can listen to the Docker events
+      - "/mnt/nas/data2/docker/traefik/config/traefik.yml:/traefik.yml:ro"
+    #command: # use the `traefik.yml` instead
+    container_name: "traefik"
+
+networks:
+  default:
+    external:
+      name: traefik_net
