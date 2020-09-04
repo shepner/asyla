@@ -10,7 +10,7 @@
 
 NAME=foldingathome
 IMAGE=linuxserver/foldingathome
-DOCKERDIR=${DOCKER_D2}
+DOCKERDIR=${DOCKER_DL}
 
 
 DOCKERAPPDIR=${DOCKERDIR}/${NAME}
