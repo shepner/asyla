@@ -15,6 +15,10 @@ services:
       - "/mnt/nas/data2/docker/traefik/config/traefik.yml:/traefik.yml:ro"
     #command:
       # use the `traefik.yml` instead
+    deploy:
+      placement:
+        constraints:
+          - node.role == manager
 
 networks:
   default:

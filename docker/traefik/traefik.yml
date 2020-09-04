@@ -15,7 +15,11 @@ entryPoints:
     address: ":8081"
 
 providers:
-  docker:
-    endpoint: "unix:///var/run/docker.sock"
+  docker: # [Traefik & Docker](https://docs.traefik.io/providers/docker/)
     exposedByDefault: false
-      
+    #this is if using standalone docker
+    #endpoint: "unix:///var/run/docker.sock"
+    #this is if using docker swarm
+    endpoint: "tcp://127.0.0.1:2375"
+    swarmMode: true
+
