@@ -24,4 +24,4 @@ networks:
   #  external:
   #    name: traefik_net
   traefik_net:
-    #external: true
+    external: true
