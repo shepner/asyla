@@ -16,22 +16,23 @@
 
 NAME=calibre
 IMAGE=linuxserver/calibre
-CONFIGDIR=${DOCKER_DL}/${NAME}/config
+DOCKERDIR=${DOCKER_D2}
 
 
+DOCKERAPPDIR=${DOCKERDIR}/${NAME}
+CONFIGDIR=${DOCKERAPPDIR}/config
+#
 dockerPull ${IMAGE} # fetch the latest image
 dockerStopRm ${NAME} # kill the old one
-
-
+#
 # create the dir if needed
 if [ ! -d ${CONFIGDIR} ]; then
   sudo -u \#${DOCKER_UID} mkdir -p ${CONFIGDIR}
 fi
-
-
+#
 echo "Making a backup"
-sudo -u \#${DOCKER_UID} tar -czf ${DOCKER_D1}/${NAME}.tgz -C ${DOCKER_DL} ${NAME}
-
+sudo -u \#${DOCKER_UID} tar -czf ${DOCKERAPPDIR}.tgz -C ${DOCKERDIR} ${NAME}
+echo "Backup complete"
 
 # direct access
 #sudo docker run --detach --restart=always \
