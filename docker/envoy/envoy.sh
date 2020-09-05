@@ -7,11 +7,7 @@
 
 NAME=envoy
 IMAGE=envoyproxy/envoy:v1.15.0
-DOCKERDIR=${DOCKER_D2}
-
-
-$ docker run --rm -d -p 10000:10000 envoyproxy/envoy:v1.15.0
-$ curl -v localhost:10000
+DOCKERDIR=${DOCKER_DL}
 
 
 DOCKERAPPDIR=${DOCKERDIR}/${NAME}
@@ -24,8 +20,8 @@ fi
 
 
 #build the image
-sudo -u \#${DOCKER_UID} cp ~./scripts/docker/envoy/envoy.yaml ${CONFIGDIR}
-sudo -u \#${DOCKER_UID} cp ~./scripts/docker/envoy/Dockerfile ${CONFIGDIR}
+sudo -u \#${DOCKER_UID} cp ~/scripts/docker/envoy/envoy.yaml ${CONFIGDIR}
+sudo -u \#${DOCKER_UID} cp ~/scripts/docker/envoy/Dockerfile ${CONFIGDIR}
 cd ${CONFIGDIR}
 sudo docker build -t envoy:v1 .
 
@@ -33,13 +29,13 @@ sudo docker build -t envoy:v1 .
 
 
 #
-dockerPull ${IMAGE} # fetch the latest image
-dockerStopRm ${NAME} # kill the old one
+#dockerPull ${IMAGE} # fetch the latest image
+#dockerStopRm ${NAME} # kill the old one
 #
 #
-echo "Making a backup"
-sudo -u \#${DOCKER_UID} tar -czf ${DOCKER_D1}/${NAME}.tgz -C ${DOCKERDIR} ${NAME}
-echo "Backup complete"
+#echo "Making a backup"
+#sudo -u \#${DOCKER_UID} tar -czf ${DOCKER_D1}/${NAME}.tgz -C ${DOCKERDIR} ${NAME}
+#echo "Backup complete"
 
 
 # direct access
