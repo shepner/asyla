@@ -9,7 +9,7 @@ HOSTNAME=`hostname -s`
 
 if [ ${HOSTNAME} = "d01" ]; then
   echo ${HOSTNAME}
-  ~/scripts/docker/traefik/traefik.sh
+#  ~/scripts/docker/traefik/traefik.sh
 
   ~/scripts/docker/calibre.sh
   ~/scripts/docker/booksonic.sh
