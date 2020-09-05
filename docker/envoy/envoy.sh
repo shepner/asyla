@@ -30,7 +30,7 @@ sudo docker build -t envoy:v1 .
 
 #
 #dockerPull ${IMAGE} # fetch the latest image
-#dockerStopRm ${NAME} # kill the old one
+dockerStopRm ${NAME} # kill the old one
 #
 #
 #echo "Making a backup"
