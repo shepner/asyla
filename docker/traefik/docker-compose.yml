@@ -4,6 +4,8 @@ services:
 
   reverse-proxy:
     image: "traefik:v2.2"
+    networks:
+      - traefik_net
     command: # use the `traefik.yml` instead
       - "--api.insecure=true"
       - "--api.dashboard=true"
