@@ -4,26 +4,38 @@ services:
 
   reverse-proxy:
     image: "traefik:v2.2"
+    command:
+      - '--providers.docker=true'
+      - '--entryPoints.web.address=:80'
+      - '--providers.providersThrottleDuration=2s'
+      - '--providers.docker.watch=true'
+      - '--providers.docker.swarmMode=true'
+      - '--providers.docker.swarmModeRefreshSeconds=15s'
+      - '--providers.docker.exposedbydefault=false'
+      - '--providers.docker.defaultRule=Host("local.me")'
+      - '--accessLog.bufferingSize=0'
+    volumes:
+      - '/var/run/docker.sock:/var/run/docker.sock:ro'
+    ports:
+      - '80:80'
+    deploy:
+      restart_policy:
+        condition: any
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+      update_config:
+        delay: 10s
+        order: start-first
+        parallelism: 1
+      rollback_config:
+        parallelism: 0
+        order: stop-first
+    logging:
+      driver: json-file
+      options:
+        'max-size': '10m'
+        'max-file': '5'
     networks:
       - traefik_net
-    command: # use the `traefik.yml` instead
-      - "--api.insecure=true"
-      - "--api.dashboard=true"
-      - "--providers.docker.endpoint=unix:///var/run/docker.sock"
-      - "--providers.docker.swarmMode=true"
-      - "--providers.docker.exposedbydefault=false"
-      - "--providers.docker.network=traefik_net"
-      - "--entrypoints.web.address=:80"
-    ports:
-      - "80:80"     # HTTP - general use
-      - "8080:8080" # Traefik dashboard
-    volumes:
-      - "/var/run/docker.sock:/var/run/docker.sock:ro"
-    deploy:
-      placement:
-        constraints:
-          - node.role == manager
 
-networks:
-  traefik_net:
-    external: true
