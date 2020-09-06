@@ -2,17 +2,19 @@ version: "3.8"
 
 services:
 
-  traefik:
+  reverse-proxy:
     image: "traefik:v2.2"
+    command: # use the `traefik.yml` instead
+      - "--providers.docker.endpoint=unix:///var/run/docker.sock"
+      - "--providers.docker.swarmMode=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=traefik-public"
+      - "--entrypoints.web.address=:80"
     ports:
       - "80:80"     # HTTP - general use
-      - "443:443"   # HTTPS - general use
-      - "8080:8080" # Traefik dashboard
-      - "8081:8081" # Calibre web interface
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock:ro" # So that Traefik can listen to the Docker events
-      - "/mnt/nas/data2/docker/traefik/config/traefik.yml:/traefik.yml:ro"
-    #command: # use the `traefik.yml` instead
+    
     #container_name: "traefik" # not used with Swarm
     deploy:
       placement:
@@ -20,8 +22,5 @@ services:
           - node.role == manager
 
 networks:
-  #default:
-  #  external:
-  #    name: traefik_net
   traefik_net:
     external: true

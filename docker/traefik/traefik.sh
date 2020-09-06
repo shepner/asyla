@@ -19,10 +19,6 @@ sudo -u \#$DOCKER_UID cp ~/scripts/docker/traefik/traefik.yml $CONFIGDIR
 
 dockerNetworkCreate $NETWORK_INTERNET
 
-# standalone docker
-#sudo docker-compose -f ~/scripts/docker/traefik/docker-compose.yml --env-file ~/scripts/docker/common.env pull $NAME
-#sudo docker-compose -f ~/scripts/docker/traefik/docker-compose.yml --env-file ~/scripts/docker/common.env rm --force --stop $NAME
-#sudo docker-compose -f ~/scripts/docker/traefik/docker-compose.yml --env-file ~/scripts/docker/common.env up -d $NAME
 
 # docker swarm
 sudo docker stack rm ${NAME}

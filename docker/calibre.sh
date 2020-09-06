@@ -76,4 +76,24 @@ sudo docker run --detach --restart=always \
 #  --label traefik.http.services.${NAME}_webserver_svc.loadbalancer.server.port=8081 \
 #  ${IMAGE}
 
+# access via traefik
+# https://github.com/DoTheEvo/Traefik-v2-examples
+# https://stackoverflow.com/questions/59830648/traefik-multiple-port-bindings-for-the-same-host-v2
+dockerNetworkCreate ${NETWORK_INTERNET}
+sudo docker run --detach --restart=always \
+  --name ${NAME} \
+  --cpus=2 \
+  --cpu-shares=1024 \
+  --env PUID=${DOCKER_UID} \
+  --env PGID=${DOCKER_GID} \
+  --env TZ=${LOCAL_TZ} \
+  --env CALIBRE_OVERRIDE_DATABASE_PATH="/config/metadata.db" \
+  --mount type=bind,src=${CONFIGDIR},dst=/config \
+  --mount type=bind,src=${DATA1}/media,dst=/media \
+  --network=${NETWORK_INTERNET} \
+  --label traefik.enable=true \
+  --label traefik.http.routers.${NAME}.rule=Host\(\`${NAME}.${MY_DOMAIN}\`\) \
+  --label traefik.http.routers.${NAME}.entrypoints=web \
+  --label traefik.http.services.${NAME}.loadbalancer.server.port=8080 \
+  ${IMAGE}
 
