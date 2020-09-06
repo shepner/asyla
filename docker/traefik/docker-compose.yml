@@ -1,45 +1,42 @@
 version: "3.8"
 
 services:
-
-  reverse-proxy:
-    image: "traefik:v2.2"
-    command:
-      - '--providers.docker=true'
-      - '--entryPoints.web.address=:80'
-      - '--providers.providersThrottleDuration=2s'
-      - '--providers.docker.watch=true'
-      - '--providers.docker.swarmMode=true'
-      - '--providers.docker.swarmModeRefreshSeconds=15s'
-      - '--providers.docker.exposedbydefault=false'
-      - '--providers.docker.defaultRule=Host("local.me")'
-      - '--accessLog.bufferingSize=0'
-    volumes:
-      - '/var/run/docker.sock:/var/run/docker.sock:ro'
+  traefik:
+    image: traefik:v2.0
+    restart: always
+    container_name: traefik
     ports:
-      - '80:80'
-    deploy:
-      restart_policy:
-        condition: any
-        delay: 5s
-        max_attempts: 3
-        window: 120s
-      update_config:
-        delay: 10s
-        order: start-first
-        parallelism: 1
-      rollback_config:
-        parallelism: 0
-        order: stop-first
-    logging:
-      driver: json-file
-      options:
-        'max-size': '10m'
-        'max-file': '5'
+      - "80:80"
+      - "8080:8080" # traefik dashboard
+      - "443:443"
+    command:
+      - --api.insecure=true # set to 'false' on production
+      - --api.dashboard=true # see https://docs.traefik.io/v2.0/operations/dashboard/#secure-mode for how to secure the dashboard
+      - --api.debug=true # enable additional endpoints for debugging and profiling
+      - --log.level=DEBUG # debug while we get it working, for more levels/info see https://docs.traefik.io/observability/logs/
+      - --providers.docker=true
+      - --providers.docker.swarmMode=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=proxy
+      - --entrypoints.web.address=:80
+      - --entrypoints.web-secured.address=:443
+      - --certificatesresolvers.mytlschallenge.acme.httpChallenge.entrypoint=web
+      - --certificatesresolvers.mytlschallenge.acme.email=shepner@asyla.org
+      - --certificatesresolvers.mytlschallenge.acme.storage=/letsencrypt/acme.json
+    volumes:
+      - letsencrypt:/letsencrypt
+      - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - traefik_net
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.api.rule=Host(`traefik.asyla.org`)"
+        - "traefik.http.routers.api.service=api@internal" # Let the dashboard access the traefik api
 
 networks:
   traefik_net:
     external: true
 
+volumes:
+  letsencrypt:
