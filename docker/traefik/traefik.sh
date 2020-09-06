@@ -15,7 +15,6 @@ if [ ! -d $CONFIGDIR ]; then
   sudo -u \#$DOCKER_UID mkdir -p $CONFIGDIR
 fi
 
-sudo -u \#$DOCKER_UID cp ~/scripts/docker/traefik/traefik.yml $CONFIGDIR
 
 dockerNetworkCreate $NETWORK_INTERNET
 
