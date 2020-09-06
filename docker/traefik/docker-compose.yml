@@ -39,3 +39,7 @@ services:
     networks:
       - traefik_net
 
+networks:
+  traefik_net:
+    external: true
+
