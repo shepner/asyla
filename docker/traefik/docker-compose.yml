@@ -10,15 +10,13 @@ services:
       - "--providers.docker.endpoint=unix:///var/run/docker.sock"
       - "--providers.docker.swarmMode=true"
       - "--providers.docker.exposedbydefault=false"
-      - "--providers.docker.network=traefik-public"
+      - "--providers.docker.network=traefik_net"
       - "--entrypoints.web.address=:80"
     ports:
       - "80:80"     # HTTP - general use
       - "8080:8080" # Traefik dashboard
     volumes:
-      - "/var/run/docker.sock:/var/run/docker.sock:ro" # So that Traefik can listen to the Docker events
-    
-    #container_name: "traefik" # not used with Swarm
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
     deploy:
       placement:
         constraints:
