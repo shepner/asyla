@@ -16,7 +16,7 @@ entryPoints:
 
 providers:
   file:
-    directory: /mnt/nas/data2/docker/traefik/config/dynamic
+    directory: /mnt/nas/data2/docker/traefik/config
   #docker: # [Traefik & Docker](https://docs.traefik.io/providers/docker/)
   #  exposedByDefault: false
   #  endpoint: "unix:///var/run/docker.sock"
