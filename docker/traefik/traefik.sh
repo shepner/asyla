@@ -12,7 +12,7 @@ CONFIGDIR=$DOCKER_D2/$NAME/config
 
 # create the dir if needed
 if [ ! -d $CONFIGDIR ]; then
-  sudo -u \#$DOCKER_UID mkdir -p $CONFIGDIR
+  sudo -u \#$DOCKER_UID mkdir -p $CONFIGDIR/dynamic
 fi
 
 
