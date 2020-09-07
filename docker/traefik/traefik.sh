@@ -7,20 +7,22 @@
 
 
 NAME=traefik
-CONFIGDIR=$DOCKER_D2/$NAME/config
+CONFIGDIR=${DOCKER_D2}/${NAME}/config
 
 
 # create the dir if needed
-if [ ! -d $CONFIGDIR ]; then
-  sudo -u \#$DOCKER_UID mkdir -p $CONFIGDIR/dynamic
+if [ ! -d ${CONFIGDIR} ]; then
+  sudo -u \#${DOCKER_UID} mkdir -p ${CONFIGDIR}
 fi
 
+# Copy the Traefik config file
+sudo -u \#${DOCKER_UID} cp ~/scripts/docker/${NAME}/${NAME}.yaml $DOCKER_D2/$NAME
 
-dockerNetworkCreate $NETWORK_INTERNET
+dockerNetworkCreate ${NETWORK_INTERNET}
 
 
 # docker swarm
 sudo docker stack rm ${NAME}
-sudo docker stack deploy --compose-file ~/scripts/docker/traefik/docker-compose.yml ${NAME}
+sudo docker stack deploy --compose-file ~/scripts/docker/${NAME}/docker-compose.yaml ${NAME}
 
 

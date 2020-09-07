@@ -9,13 +9,13 @@ services:
       - "8080:8080" # Traefik dashboard
       - "8081:8081" # Calibre web interface
     volumes:
-      - "/var/run/docker.sock:/var/run/docker.sock:ro"
-      - "/mnt/nas/data2/docker/traefik/config/traefik.yml:/traefik.yml:ro"
+      #- "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "/mnt/nas/data2/docker/traefik/traefik.yaml:/traefik.yaml:ro"
+      - "/mnt/nas/data2/docker/traefik/config:/config"
     deploy:
       placement:
         constraints:
           - node.role == manager
-      
 
 networks:
   traefik_net:
