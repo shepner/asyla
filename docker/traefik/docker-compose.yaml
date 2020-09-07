@@ -16,6 +16,13 @@ services:
       placement:
         constraints:
           - node.role == manager
+    labels:
+      - "traefik.enable=true"
+
+      # Dashboard
+      - "traefik.http.routers.traefik.rule=Host(`traefik.asyla.org`)"
+      - "traefik.http.routers.traefik.service=api@internal"
+      - "traefik.http.routers.traefik.entrypoints=http"
 
 networks:
   traefik_net:
