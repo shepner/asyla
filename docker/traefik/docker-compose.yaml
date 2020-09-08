@@ -13,10 +13,6 @@ services:
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
       - "/mnt/nas/data2/docker/traefik/traefik.yaml:/traefik.yaml:ro"
       - "/mnt/nas/data2/docker/traefik/config:/config"
-    deploy:
-      placement:
-        constraints:
-          - node.role == manager
     labels:
       - "traefik.enable=true"
 
