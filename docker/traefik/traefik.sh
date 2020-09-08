@@ -21,8 +21,11 @@ sudo -u \#${DOCKER_UID} cp ~/scripts/docker/${NAME}/${NAME}.yaml $DOCKER_D2/$NAM
 dockerNetworkCreate ${NETWORK_INTERNET}
 
 
-# docker swarm
-sudo docker stack rm ${NAME}
-sudo docker stack deploy --compose-file ~/scripts/docker/${NAME}/docker-compose.yaml ${NAME}
+
+sudo docker-compose -f ~/scripts/docker/traefik/docker-compose.yml --env-file ~/scripts/docker/common.env pull $NAME
+sudo docker-compose -f ~/scripts/docker/traefik/docker-compose.yml --env-file ~/scripts/docker/common.env rm --force --stop $NAME
+sudo docker-compose -f ~/scripts/docker/traefik/docker-compose.yml --env-file ~/scripts/docker/common.env up -d $NAME
+
+
 
 
