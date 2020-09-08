@@ -16,7 +16,8 @@ entryPoints:
 
 providers:
   file: # [Traefik & File](https://docs.traefik.io/providers/file/)
-    directory: /config
+    directory: "/config"
+    watch: true
   docker: # [Traefik & Docker](https://docs.traefik.io/providers/docker/)
     exposedByDefault: false
     endpoint: "unix:///var/run/docker.sock"
