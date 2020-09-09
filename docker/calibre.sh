@@ -91,15 +91,6 @@ sudo docker run --detach --restart=always \
   --mount type=bind,src=${CONFIGDIR},dst=/config \
   --mount type=bind,src=${DATA1}/media,dst=/media \
   --network=${NETWORK_INTERNET} \
-  --label traefik.enable=true \
-  --label traefik.http.routers.${NAME}_desktop.rule=Host\(\`${NAME}.${MY_DOMAIN}\`\) \
-  --label traefik.http.routers.${NAME}_desktop.entrypoints=http \
-  --label traefik.http.routers.${NAME}_desktop.service=${NAME}_desktop_svc \
-  --label traefik.http.services.${NAME}_desktop_svc.loadbalancer.server.port=8080 \
-  --label traefik.http.routers.${NAME}_webserver.rule=Host\(\`${NAME}.${MY_DOMAIN}\`\) \
-  --label traefik.http.routers.${NAME}_webserver.entrypoints=calibre_web_ep \
-  --label traefik.http.routers.${NAME}_webserver.service=${NAME}_webserver_svc \
-  --label traefik.http.services.${NAME}_webserver_svc.loadbalancer.server.port=8081 \
   ${IMAGE}
 
 

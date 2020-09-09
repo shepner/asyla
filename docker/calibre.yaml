@@ -4,27 +4,13 @@ http:
   # Add the router
   routers:
     router0:
-      entryPoints:
-      - http
-      middlewares:
-      - my-basic-auth
+      rule: Host(`calibre.asyla.org`)
       service: calibre_desktop
-      rule: Path(`/foo`)
 
-  # Add the middleware
-  middlewares:
-    my-basic-auth:
-      basicAuth:
-        users:
-        - test:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/
-        - test2:$apr1$d9hr9HBB$4HxwgUir3HP4EsggP/QNo0
-        usersFile: etc/traefik/.htpasswd
 
   # Add the service
   services:
     calibre_desktop:
       loadBalancer:
         servers:
-        - url: http://calibre.asyla.org/
-        - url: http://calibre.asyla.org/
-        passHostHeader: false
+          - url: http://10.0.15.10:8080
