@@ -13,4 +13,4 @@ http:
     calibre_desktop:
       loadBalancer:
         servers:
-          - url: http://10.10.10.10:8080
+          - url: http://10.10.10.4:8080

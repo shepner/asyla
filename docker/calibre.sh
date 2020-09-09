@@ -16,7 +16,7 @@
 
 NAME=calibre
 IMAGE=linuxserver/calibre
-DOCKERDIR=${DOCKER_D2}
+DOCKERDIR=${DOCKER_DL}
 
 
 DOCKERAPPDIR=${DOCKERDIR}/${NAME}
