@@ -45,8 +45,22 @@ dockerServiceUpdate () {
 }
 
 dockerNetworkCreate () {
+  # [docker network create](https://docs.docker.com/engine/reference/commandline/network_create/)
   if [ ! `sudo docker network ls --quiet --filter "name=$1"` ]; then
     sudo docker network create --driver overlay --attachable $1
+  fi
+}
+
+dockerNetworkCreate_general () {
+  # [docker network create](https://docs.docker.com/engine/reference/commandline/network_create/)
+  dockerNetworkCreate_general_NAME=general
+  if [ ! `sudo docker network ls --quiet --filter "name=${dockerNetworkCreate_general_NAME}"` ]; then
+    sudo docker network create \
+      --driver overlay \
+      --attachable \
+      --subnet=10.10.10.0/24 \
+      --gateway=10.10.10.1 \
+      ${dockerNetworkCreate_general_NAME}
   fi
 }
 

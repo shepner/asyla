@@ -5,7 +5,7 @@ services:
     container_name: "traefik"
     image: "traefik:v2.2"
     networks:
-      - traefik_net
+      - general
     ports:
       - "80:80"     # HTTP - general use
       - "443:443"   # HTTPS - general use
@@ -24,6 +24,6 @@ services:
       - "traefik.http.routers.traefik.entrypoints=http"
 
 networks:
-  traefik_net:
+  general:
     external: true
 

@@ -18,8 +18,7 @@ fi
 # Copy the Traefik config file
 sudo -u \#${DOCKER_UID} cp ~/scripts/docker/${NAME}/${NAME}.yaml $DOCKER_D2/$NAME
 
-dockerNetworkCreate ${NETWORK_INTERNET}
-
+dockerNetworkCreate_general
 
 
 sudo docker-compose -f ~/scripts/docker/traefik/docker-compose.yaml --env-file ~/scripts/docker/common.env pull $NAME

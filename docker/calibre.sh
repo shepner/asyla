@@ -79,7 +79,8 @@ echo "Backup complete"
 # access via traefik
 # https://github.com/DoTheEvo/Traefik-v2-examples
 # https://stackoverflow.com/questions/59830648/traefik-multiple-port-bindings-for-the-same-host-v2
-dockerNetworkCreate ${NETWORK_INTERNET}
+dockerNetworkCreate_general
+
 sudo docker run --detach --restart=always \
   --name ${NAME} \
   --cpus=2 \
@@ -90,7 +91,7 @@ sudo docker run --detach --restart=always \
   --env CALIBRE_OVERRIDE_DATABASE_PATH="/config/metadata.db" \
   --mount type=bind,src=${CONFIGDIR},dst=/config \
   --mount type=bind,src=${DATA1}/media,dst=/media \
-  --network=${NETWORK_INTERNET} \
+  --network=general \
   ${IMAGE}
 
 
