@@ -2,9 +2,9 @@
 
 sudo service plexmediaserver stop
 
-sudo sudo tar -v -czf /mnt/nas/data1/docker/plexmediaserver.tgz -C /var/lib/ plexmediaserver
+sudo sudo tar -v -cf /mnt/nas/data1/docker/plexmediaserver.tar -C /var/lib/ plexmediaserver
 
 # To restore:
-#sudo tar -v -xzf /mnt/nas/data1/docker/plexmediaserver.tgz -C /var/lib/
+#sudo tar -v -xf /mnt/nas/data1/docker/plexmediaserver.tar -C /var/lib/
 
 sudo service plexmediaserver start
