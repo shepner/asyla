@@ -28,7 +28,7 @@ http:
       rule: Host(`calibre.asyla.org`)
       service: calibre_web
       entryPoints:
-        - calibre_web_ep
+        - calibre_web
     calibre_rdp:
       rule: Host(`calibre.asyla.org`)
       service: calibre_rdp

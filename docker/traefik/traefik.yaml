@@ -13,7 +13,7 @@ entryPoints:
     address: ":443"
   rdp:
     address: ":3389"
-  calibre_web_ep:
+  calibre_web:
     address: ":8081"
 
 providers:
