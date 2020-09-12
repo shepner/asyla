@@ -33,7 +33,7 @@ tcp:
           - address: "calibre:3389"
   routers:
     calibre_rdp:
-      rule: HostSNI(`calibre.asyla.org`)
+      rule: HostSNI(`*`) # must use wildcard for non-TLS services
       service: calibre_rdp
       entryPoints:
         - rdp
