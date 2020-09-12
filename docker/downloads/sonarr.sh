@@ -20,7 +20,7 @@ sudo docker run --detach --restart=always \
   --env PUID=1003 \
   --env PGID=1000 \
   --env TZ="America/Chicago" \
-  --dns 10.0.0.71 \
+  --dns 10.0.0.5 \
   --publish published=8989,target=8989,protocol=tcp,mode=ingress \
   --mount type=bind,src=/etc/localtime,dst=/etc/localtime,readonly=1 \
   --mount type=bind,src=$BASEDIR/config,dst=/config \
