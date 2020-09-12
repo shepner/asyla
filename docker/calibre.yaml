@@ -1,8 +1,7 @@
 # Traefik configuration [file](https://docs.traefik.io/providers/file/)
 
 http:
-  
-  # services that the container is publishing
+  # web services that the container is publishing
   services:
     calibre_desktop:
       loadBalancer:
@@ -12,10 +11,6 @@ http:
       loadBalancer:
         servers:
           - url: http://calibre:8081
-    calibre_rdp:
-      loadBalancer:
-        servers:
-          - url: http://calibre:3389
 
   # how to present the original service
   routers:
@@ -29,6 +24,14 @@ http:
       service: calibre_web
       entryPoints:
         - calibre_web
+
+tcp:
+  services:
+    calibre_rdp:
+      loadBalancer:
+        servers:
+          - url: http://calibre:3389
+  routers:
     calibre_rdp:
       rule: Host(`calibre.asyla.org`)
       service: calibre_rdp
