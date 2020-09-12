@@ -80,7 +80,8 @@ echo "Backup complete"
 # https://github.com/DoTheEvo/Traefik-v2-examples
 # https://stackoverflow.com/questions/59830648/traefik-multiple-port-bindings-for-the-same-host-v2
 dockerNetworkCreate_general
-
+sudo -u \#${DOCKER_UID} cp ~/scripts/docker/calibre.yaml ${DOCKER_D2}/traefik/config
+~/scripts/docker/traefik/traefik.sh
 sudo docker run --detach --restart=always \
   --name ${NAME} \
   --cpus=2 \

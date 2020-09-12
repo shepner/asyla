@@ -1,16 +1,34 @@
 # Traefik configuration [file](https://docs.traefik.io/providers/file/)
 
 http:
-  # Add the router
-  routers:
-    router0:
-      rule: Host(`calibre.asyla.org`)
-      service: calibre_desktop
-
-
-  # Add the service
+  
+  # services that the container is publishing
   services:
     calibre_desktop:
       loadBalancer:
         servers:
-          - url: http://10.10.10.4:8080
+          - url: http://calibre:8080
+    calibre_web:
+      loadBalancer:
+        servers:
+          - url: http://calibre:8081
+    calibre_rdp:
+      loadBalancer:
+        servers:
+          - url: http://calibre:3389
+
+  # how to present the original service
+  routers:
+    router0:
+      rule: Host(`calibre.asyla.org`)
+      service: calibre_desktop
+      entryPoints: http
+    router1:
+      rule: Host(`calibre.asyla.org`)
+      service: calibre_web
+      entryPoints: calibre_web_ep
+    router2:
+      rule: Host(`calibre.asyla.org`)
+      service: calibre_rdp
+      entryPoints: rdp
+
