@@ -22,13 +22,16 @@ http:
     router0:
       rule: Host(`calibre.asyla.org`)
       service: calibre_desktop
-      entryPoints: http
+      entryPoints:
+        - http
     router1:
       rule: Host(`calibre.asyla.org`)
       service: calibre_web
-      entryPoints: calibre_web_ep
+      entryPoints:
+        - calibre_web_ep
     router2:
       rule: Host(`calibre.asyla.org`)
       service: calibre_rdp
-      entryPoints: rdp
+      entryPoints:
+        - rdp
 

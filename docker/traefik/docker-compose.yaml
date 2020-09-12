@@ -9,6 +9,7 @@ services:
     ports:
       - "80:80"     # HTTP - general use
       - "443:443"   # HTTPS - general use
+      - "3389:3389" # RDP - general use
       - "8080:8080" # Traefik dashboard
       - "8081:8081" # Calibre web interface
     volumes:
