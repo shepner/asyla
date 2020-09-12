@@ -30,7 +30,7 @@ tcp:
     calibre_rdp:
       loadBalancer:
         servers:
-          - url: http://calibre:3389
+          - address: "calibre:3389"
   routers:
     calibre_rdp:
       rule: Host(`calibre.asyla.org`)
