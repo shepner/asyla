@@ -19,17 +19,17 @@ http:
 
   # how to present the original service
   routers:
-    router0:
+    calibre_desktop:
       rule: Host(`calibre.asyla.org`)
       service: calibre_desktop
       entryPoints:
         - http
-    router1:
+    calibre_web:
       rule: Host(`calibre.asyla.org`)
       service: calibre_web
       entryPoints:
         - calibre_web_ep
-    router2:
+    calibre_rdp:
       rule: Host(`calibre.asyla.org`)
       service: calibre_rdp
       entryPoints:
