@@ -33,7 +33,7 @@ tcp:
           - address: "calibre:3389"
   routers:
     calibre_rdp:
-      rule: Host(`calibre.asyla.org`)
+      rule: HostSNI(`calibre.asyla.org`)
       service: calibre_rdp
       entryPoints:
         - rdp
