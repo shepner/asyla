@@ -23,12 +23,15 @@ sudo -u \#${DOCKER_UID} cp ~/scripts/docker/${NAME}/${NAME}.yaml ${DOCKERAPPDIR}
 sudo -u \#${DOCKER_UID} cp ~/scripts/docker/${NAME}/usersFile.txt ${DOCKERAPPDIR}
 sudo chmod 400 ${DOCKERAPPDIR}/usersFile.txt
 
+# File to store the LetsEncrypt certificate and etc
+sudo -u \#${DOCKER_UID} touch ${DOCKERAPPDIR}/acme.json
+sudo -u \#${DOCKER_UID} chmod 600 ${DOCKERAPPDIR}/acme.json
+
 #make sure ownership and permissions are correct
 sudo chown -R ${DOCKER_UID}:${DOCKER_GID} ${DOCKERAPPDIR}
-sudo chmod -R 775 ${CONFIGDIR}
+sudo chmod -R 664 ${CONFIGDIR}
 
 dockerNetworkCreate_general
-
 
 sudo docker-compose -f ~/scripts/docker/traefik/docker-compose.yaml --env-file ~/scripts/docker/common.env pull $NAME
 sudo docker-compose -f ~/scripts/docker/traefik/docker-compose.yaml --env-file ~/scripts/docker/common.env rm --force --stop $NAME

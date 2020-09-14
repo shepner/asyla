@@ -21,6 +21,8 @@ http:
       - http
       middlewares:
       - my-basic-auth
+      tls:
+        certresolver: lets-encr
     calibre_web:
       rule: Host(`calibre.asyla.org`)
       service: calibre_web
@@ -28,6 +30,8 @@ http:
       - calibre_web
       middlewares:
       - my-basic-auth
+      tls:
+        certresolver: lets-encr
 
   middlewares:
     my-basic-auth:

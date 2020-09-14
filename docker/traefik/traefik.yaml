@@ -16,6 +16,11 @@ entryPoints:
   calibre_web:
     address: ":8081"
 
+# Dont bother with Swarm unless everything is in swarm, dont bother with
+# Docker for anything other then the traefik dashboard unless everything
+# happens to be on the same host.
+# Instead, just use 'file' for everything as its the easiest (or at least
+# most consistent and least confusing) option.
 providers:
   file: # [Traefik & File](https://docs.traefik.io/providers/file/)
     directory: "/config"
@@ -23,4 +28,13 @@ providers:
   docker: # [Traefik & Docker](https://docs.traefik.io/providers/docker/)
     exposedByDefault: false
     endpoint: "unix:///var/run/docker.sock"
+
+certificatesResolvers:
+  lets-encr:
+    acme:
+      #caServer: https://acme-staging-v02.api.letsencrypt.org/directory
+      storage: acme.json
+      email: shepner@asyla.org
+      httpChallenge:
+        entryPoint: http
 
