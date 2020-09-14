@@ -7,18 +7,23 @@
 
 
 NAME=traefik
-CONFIGDIR=${DOCKER_D2}/${NAME}/config
+DOCKERDIR=${DOCKER_D2}
+DOCKERAPPDIR=${DOCKERDIR}/${NAME}
+CONFIGDIR=${DOCKERAPPDIR}/config
 
 
 # create the dir if needed
 if [ ! -d ${CONFIGDIR} ]; then
   sudo -u \#${DOCKER_UID} mkdir -p ${CONFIGDIR}
+  sudo chmod 775 ${DOCKERAPPDIR}
 fi
 
 # Copy the Traefik support files
-sudo -u \#${DOCKER_UID} cp ~/scripts/docker/${NAME}/${NAME}.yaml $DOCKER_D2/$NAME
-sudo -u \#${DOCKER_UID} cp ~/scripts/docker/${NAME}/users_credentials $DOCKER_D2/${NAME}
-sudo -u \#${DOCKER_UID} chmod 400 $DOCKER_D2/${NAME}/users_credentials
+sudo -u \#${DOCKER_UID} cp ~/scripts/docker/${NAME}/${NAME}.yaml ${DOCKERAPPDIR}
+sudo -u \#${DOCKER_UID} cp ~/scripts/docker/${NAME}/users_credentials ${DOCKERAPPDIR}
+sudo chmod 400 ${DOCKERAPPDIR}/users_credentials
+#make sure ownership is correct
+sudo chown -R ${DOCKER_UID}:${DOCKER_GID} ${DOCKERAPPDIR}
 
 dockerNetworkCreate_general
 
