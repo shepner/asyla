@@ -15,15 +15,17 @@ CONFIGDIR=${DOCKERAPPDIR}/config
 # create the dir if needed
 if [ ! -d ${CONFIGDIR} ]; then
   sudo -u \#${DOCKER_UID} mkdir -p ${CONFIGDIR}
-  sudo chmod 775 ${DOCKERAPPDIR}
+  sudo chmod -R 775 ${DOCKERAPPDIR}
 fi
 
 # Copy the Traefik support files
 sudo -u \#${DOCKER_UID} cp ~/scripts/docker/${NAME}/${NAME}.yaml ${DOCKERAPPDIR}
 sudo -u \#${DOCKER_UID} cp ~/scripts/docker/${NAME}/usersFile.txt ${DOCKERAPPDIR}
 sudo chmod 400 ${DOCKERAPPDIR}/usersFile.txt
-#make sure ownership is correct
+
+#make sure ownership and permissions are correct
 sudo chown -R ${DOCKER_UID}:${DOCKER_GID} ${DOCKERAPPDIR}
+sudo chmod -R 775 ${CONFIGDIR}
 
 dockerNetworkCreate_general
 
