@@ -29,7 +29,7 @@ sudo -u \#${DOCKER_UID} chmod 600 ${DOCKERAPPDIR}/acme.json
 
 #make sure ownership and permissions are correct
 sudo chown -R ${DOCKER_UID}:${DOCKER_GID} ${DOCKERAPPDIR}
-sudo chmod -R 664 ${CONFIGDIR}
+sudo chmod -R 775 ${CONFIGDIR}
 
 dockerNetworkCreate_general
 
