@@ -21,7 +21,7 @@ fi
 # Copy the Traefik support files
 sudo -u \#${DOCKER_UID} cp ~/scripts/docker/${NAME}/${NAME}.yaml ${DOCKERAPPDIR}
 sudo -u \#${DOCKER_UID} cp ~/scripts/docker/${NAME}/usersFile.txt ${DOCKERAPPDIR}
-sudo chmod 500 ${DOCKERAPPDIR}/usersFile.txt
+sudo chmod 600 ${DOCKERAPPDIR}/usersFile.txt
 
 # File to store the LetsEncrypt certificate and etc
 sudo -u \#${DOCKER_UID} touch ${DOCKERAPPDIR}/acme.json
