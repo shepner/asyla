@@ -6,11 +6,11 @@ http:
     calibre_desktop:
       loadBalancer:
         servers:
-          - url: http://calibre:8080
+         - url: http://calibre:8080
     calibre_web:
       loadBalancer:
         servers:
-          - url: http://calibre:8081
+         - url: http://calibre:8081
 
   # how to present the original service
   routers:
@@ -18,12 +18,16 @@ http:
       rule: Host(`calibre.asyla.org`)
       service: calibre_desktop
       entryPoints:
-        - http
+      - http
+      middlewares:
+      - my-basic-auth
     calibre_web:
       rule: Host(`calibre.asyla.org`)
       service: calibre_web
       entryPoints:
-        - calibre_web
+      - calibre_web
+      middlewares:
+      - my-basic-auth
 
   middlewares:
     my-basic-auth:
@@ -37,11 +41,11 @@ tcp:
     calibre_rdp:
       loadBalancer:
         servers:
-          - address: "calibre:3389"
+        - address: "calibre:3389"
   routers:
     calibre_rdp:
       rule: HostSNI(`*`) # must use wildcard for non-TLS services
       service: calibre_rdp
       entryPoints:
-        - rdp
+      - rdp
 
