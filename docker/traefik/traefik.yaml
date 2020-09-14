@@ -7,9 +7,9 @@ api:
   dashboard: true
 
 entryPoints:
-  http:
+  web:
     address: ":80"
-  https:
+  web_secure:
     address: ":443"
   rdp:
     address: ":3389"
@@ -36,5 +36,5 @@ certificatesResolvers:
       storage: acme.json
       email: shepner@asyla.org
       httpChallenge:
-        entryPoint: http
+        entryPoint: web
 

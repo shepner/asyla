@@ -7,11 +7,11 @@ services:
     networks:
       - general
     ports:
-      - "80:80"     # HTTP - general use
-      - "443:443"   # HTTPS - general use
-      - "3389:3389" # RDP - general use
-      - "8080:8080" # Traefik dashboard
-      - "8081:8081" # Calibre web interface
+      - "80:80"     # web
+      - "443:443"   # web_secure
+      - "3389:3389" # rdp
+      - "8080:8080" # (Traefik dashboard)
+      - "8081:8081" # calibre_web
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
       - "/mnt/nas/data2/docker/traefik/traefik.yaml:/traefik.yaml:ro"
