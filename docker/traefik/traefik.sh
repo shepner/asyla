@@ -15,8 +15,10 @@ if [ ! -d ${CONFIGDIR} ]; then
   sudo -u \#${DOCKER_UID} mkdir -p ${CONFIGDIR}
 fi
 
-# Copy the Traefik config file
+# Copy the Traefik support files
 sudo -u \#${DOCKER_UID} cp ~/scripts/docker/${NAME}/${NAME}.yaml $DOCKER_D2/$NAME
+sudo -u \#${DOCKER_UID} cp ~/scripts/docker/${NAME}/users_credentials $DOCKER_D2
+sudo -u \#${DOCKER_UID} chmod 400 $DOCKER_D2/users_credentials
 
 dockerNetworkCreate_general
 

@@ -25,6 +25,13 @@ http:
       entryPoints:
         - calibre_web
 
+  middlewares:
+    my-basic-auth:
+      basicAuth:
+        users:
+        - test2:$2y$10$G47YT8rxP79xTHW2lZjHeORdZKEYhht.ia07hVMM9Hs6j6queQaPu
+        usersFile: /users_credentials
+
 tcp:
   services:
     calibre_rdp:
