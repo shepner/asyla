@@ -18,7 +18,7 @@ http:
       rule: Host(`calibre.asyla.org`)
       service: calibre_desktop
       entryPoints:
-      - http
+      - https
       middlewares:
       - my-basic-auth
       tls:
