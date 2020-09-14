@@ -17,8 +17,6 @@
 NAME=calibre
 IMAGE=linuxserver/calibre
 DOCKERDIR=${DOCKER_DL}
-
-
 DOCKERAPPDIR=${DOCKERDIR}/${NAME}
 CONFIGDIR=${DOCKERAPPDIR}/config
 #

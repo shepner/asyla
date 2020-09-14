@@ -21,7 +21,7 @@ fi
 # Copy the Traefik support files
 sudo -u \#${DOCKER_UID} cp ~/scripts/docker/${NAME}/${NAME}.yaml ${DOCKERAPPDIR}
 sudo -u \#${DOCKER_UID} cp ~/scripts/docker/${NAME}/users_credentials ${DOCKERAPPDIR}
-sudo chmod 400 ${DOCKERAPPDIR}/users_credentials
+sudo chmod 400 ${DOCKERAPPDIR}/usersFile.txt
 #make sure ownership is correct
 sudo chown -R ${DOCKER_UID}:${DOCKER_GID} ${DOCKERAPPDIR}
 
