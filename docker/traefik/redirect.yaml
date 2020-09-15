@@ -1,11 +1,11 @@
 http:
   routers:
-    http:
+    redirect-https:
       entryPoints:
         - web
       middlewares:
-        - https_redirect
-      rule: HostRegexp(`{any:.+}`)
+        - redirect-to-https
+      rule: hostregexp(`{host:.+}`)
       service: noop
 
   services:
@@ -16,8 +16,9 @@ http:
           - url: http://192.168.0.1
 
   middlewares:
-    https_redirect:
+    redirect-to-https:
       redirectScheme:
         scheme: https
         permanent: true
+
 
