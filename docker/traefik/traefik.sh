@@ -23,6 +23,9 @@ sudo -u \#${DOCKER_UID} cp ~/scripts/docker/${NAME}/${NAME}.yaml ${DOCKERAPPDIR}
 sudo -u \#${DOCKER_UID} cp ~/scripts/docker/${NAME}/usersFile.txt ${DOCKERAPPDIR}
 sudo chmod 600 ${DOCKERAPPDIR}/usersFile.txt
 
+sudo -u \#${DOCKER_UID} cp ~/scripts/docker/${NAME}/redirect.yaml ${CONFIGDIR}
+sudo chmod 664 ${CONFIGDIR}/redirect.yaml
+
 # File to store the LetsEncrypt certificate and etc
 sudo -u \#${DOCKER_UID} touch ${DOCKERAPPDIR}/acme.json
 sudo -u \#${DOCKER_UID} chmod 600 ${DOCKERAPPDIR}/acme.json
