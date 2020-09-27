@@ -7,12 +7,11 @@ services:
     networks:
       - general
     ports:
-      - "80:80"     # http
-      - "443:443"   # https
+      - "80:80"     # web
+      - "443:443"   # web-secure
       - "3389:3389" # rdp
-      - "8080:8080" # http-alt
-      - "8081:8081" # calibre_web
-      - "8080:8080" # https-alt
+      - "8080:8080" # web-alt
+      - "8080:8080" # web-secure-alt
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
       - "/mnt/nas/data2/docker/traefik/traefik.yaml:/traefik.yaml:ro"

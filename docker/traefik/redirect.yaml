@@ -2,7 +2,7 @@ http:
   routers:
     redirect-https:
       entryPoints:
-        - http
+        - web
       middlewares:
         - redirect-to-https
       rule: hostregexp(`{host:.+}`)

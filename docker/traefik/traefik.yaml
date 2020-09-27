@@ -7,17 +7,15 @@ api:
   dashboard: true
 
 entryPoints:
-  http:
+  web:
     address: ":80"
-  https:
+  web-secure:
     address: ":443"
   rdp:
     address: ":3389"
-  http-alt:
+  web-alt:
     address: ":8080"
-  calibre_web:
-    address: ":8081"
-  https-alt:
+  web-secure-alt:
     address: ":8443"
 
 # Dont bother with Swarm unless everything is in swarm, dont bother with
