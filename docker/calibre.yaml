@@ -23,11 +23,11 @@ http:
       - my-basic-auth
       tls:
         certresolver: lets-encr
-    calibre_web:
-      rule: Host(`calibre.asyla.org`)
-      service: calibre_web
-      entryPoints:
-      - web-alt
+    #calibre_web:
+    #  rule: Host(`calibre.asyla.org`)
+    #  service: calibre_web
+    #  entryPoints:
+    #  - web-alt
       #middlewares:
       #- my-basic-auth
       #tls:
