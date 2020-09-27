@@ -17,6 +17,8 @@ entryPoints:
     address: ":8080"
   web-secure-alt:
     address: ":8443"
+  dash-web:
+    address: ":9080"
 
 # Dont bother with Swarm unless everything is in swarm, dont bother with
 # Docker for anything other then the traefik dashboard unless everything

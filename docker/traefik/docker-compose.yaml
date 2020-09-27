@@ -12,6 +12,7 @@ services:
       - "3389:3389" # rdp
       - "8080:8080" # web-alt
       - "8443:8443" # web-secure-alt
+      - "9080:8080" # Traefik dashboard
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
       - "/mnt/nas/data2/docker/traefik/traefik.yaml:/traefik.yaml:ro"
@@ -24,7 +25,7 @@ services:
       # Dashboard
       - "traefik.http.routers.traefik.rule=Host(`traefik.asyla.org`)"
       - "traefik.http.routers.traefik.service=api@internal"
-      - "traefik.http.routers.traefik.entrypoints=web"
+      - "traefik.http.routers.traefik.entrypoints=dash-web"
 
 networks:
   general:
