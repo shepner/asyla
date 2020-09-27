@@ -13,8 +13,8 @@ entryPoints:
     address: ":443"
   rdp:
     address: ":3389"
-  #web-alt:
-  #  address: ":8080"
+  web-alt:
+    address: ":8080"
   web-secure-alt:
     address: ":8443"
 
