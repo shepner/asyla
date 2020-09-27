@@ -38,7 +38,7 @@ certificatesResolvers:
       storage: acme.json
       email: shepner@asyla.org
       httpChallenge:
-        entryPoint: http
+        entryPoint: web
       #dnsChallenge:
       #  provider: dnsexit
       #  resolvers:
