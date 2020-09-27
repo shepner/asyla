@@ -5,7 +5,7 @@ http:
         - web
       middlewares:
         - redirect-to-https
-      rule: hostregexp(`{any:.+}`)
+      rule: hostregexp(`{Host:.+}`)
       service: noop
 
   services:
