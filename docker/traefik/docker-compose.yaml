@@ -10,7 +10,7 @@ services:
       - "80:80"     # web
       - "443:443"   # web-secure
       - "3389:3389" # rdp
-      - "8080:8080" # web-alt
+      #- "8080:8080" # web-alt
       - "8443:8443" # web-secure-alt
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
