@@ -18,16 +18,16 @@ http:
       rule: Host(`calibre.asyla.org`)
       service: calibre_desktop
       entryPoints:
-      - web_secure
+      - https
       middlewares:
       - my-basic-auth
       tls:
         certresolver: lets-encr
     calibre_web:
       rule: Host(`calibre.asyla.org`)
-      service: calibre_web
+      service: http-alt
       entryPoints:
-      - calibre_web
+      - http-aly
       middlewares:
       - my-basic-auth
       tls:

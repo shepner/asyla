@@ -7,14 +7,18 @@ api:
   dashboard: true
 
 entryPoints:
-  web:
+  http:
     address: ":80"
-  web_secure:
+  https:
     address: ":443"
   rdp:
     address: ":3389"
+  http-alt:
+    address: ":8080"
   calibre_web:
     address: ":8081"
+  https-alt:
+    address: ":8443"
 
 # Dont bother with Swarm unless everything is in swarm, dont bother with
 # Docker for anything other then the traefik dashboard unless everything
@@ -36,7 +40,7 @@ certificatesResolvers:
       storage: acme.json
       email: shepner@asyla.org
       httpChallenge:
-        entryPoint: web
+        entryPoint: http
       #dnsChallenge:
       #  provider: dnsexit
       #  resolvers:
