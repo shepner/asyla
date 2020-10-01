@@ -41,8 +41,8 @@ sudo docker run --detach --restart=unless-stopped \
   --env PGID=${DOCKER_GID} \
   --env TZ=${LOCAL_TZ} \
   --mount type=bind,src=${CONFIGDIR},dst=/config \
-  --publish published=3478,target=3478,protocol=ucp,mode=ingress \
-  --publish published=10001,target=10001,protocol=ucp,mode=ingress \
+  --publish published=3478,target=3478,protocol=udp,mode=ingress \
+  --publish published=10001,target=10001,protocol=udp,mode=ingress \
   --publish published=8080,target=8080,protocol=tcp,mode=ingress \
   --publish published=8443,target=8443,protocol=tcp,mode=ingress \
   ${IMAGE}
