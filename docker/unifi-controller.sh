@@ -1,6 +1,7 @@
 #!/bin/sh
 # https://docs.linuxserver.io/images/docker-unifi-controller
 
+# [UniFi - Ports Used](https://help.ui.com/hc/en-us/articles/218506997)
 # 3478/udp Unifi STUN port
 # 10001/udp Required for AP discovery
 # 8080 Required for device communication
@@ -42,9 +43,13 @@ sudo docker run --detach --restart=unless-stopped \
   --env TZ=${LOCAL_TZ} \
   --mount type=bind,src=${CONFIGDIR},dst=/config \
   --publish published=3478,target=3478,protocol=udp,mode=ingress \
-  --publish published=10001,target=10001,protocol=udp,mode=ingress \
+  --publish published=5514,target=5514,protocol=udp,mode=ingress \
   --publish published=8080,target=8080,protocol=tcp,mode=ingress \
   --publish published=8443,target=8443,protocol=tcp,mode=ingress \
+  --publish published=8880,target=8880,protocol=tcp,mode=ingress \
+  --publish published=8843,target=8843,protocol=tcp,mode=ingress \
+  --publish published=6789,target=6789,protocol=tcp,mode=ingress \
+  --publish published=10001,target=10001,protocol=udp,mode=ingress \
   ${IMAGE}
 
 
