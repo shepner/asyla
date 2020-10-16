@@ -18,7 +18,6 @@ cd ${SOURCE}
 sudo docker build --tag $IMAGE .
 
 #
-dockerPull ${IMAGE} # fetch the latest image
 dockerStopRm ${NAME} # kill the old one
 #
 # create the dir if needed
