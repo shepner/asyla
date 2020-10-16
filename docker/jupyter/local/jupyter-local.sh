@@ -15,7 +15,7 @@ CONFIGDIR=${DOCKERAPPDIR}/config
 
 # build the container
 cd ${SOURCE}
-build --tag $IMAGE .
+sudo docker build --tag $IMAGE .
 
 #
 dockerPull ${IMAGE} # fetch the latest image
