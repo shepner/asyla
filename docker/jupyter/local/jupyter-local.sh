@@ -34,17 +34,19 @@ echo "Backup complete"
 sudo docker run --detach --restart=unless-stopped \
   --name ${NAME} \
   --cpu-shares=1024 \
+  --env TZ=${LOCAL_TZ} \
   --env NB_UID=${DOCKER_UID} \
   --env NB_USER=${DOCKER_UNAME} \
   --env NB_GID=${DOCKER_GID} \
   --env NB_GROUP=${DOCKER_GNAME} \
-  --env CHOWN_HOME=yes \
   --env GRANT_SUDO=yes \
   --env GEN_CERT=yes \
   --env JUPYTER_ENABLE_LAB=yes \
   --env RESTARTABLE=yes \
-  --env TZ=${LOCAL_TZ} \
   --mount type=bind,src=${DOCKERAPPDIR},dst=/home/${DOCKER_UNAME} \
+  --user root \
+  --workdir /home/${DOCKER_UNAME} \
+  --env CHOWN_HOME=yes \
   --publish published=8888,target=8888,protocol=tcp,mode=ingress \
   ${IMAGE}
 
