@@ -5,9 +5,9 @@
 . ~/scripts/docker/common.sh
 
 
-NAME=jupyter-custom
+NAME=jupyter-local
 IMAGE=${NAME}
-SOURCE=~/scripts/docker/jupyter/custom
+SOURCE=~/scripts/docker/jupyter/local
 DOCKERDIR=${DOCKER_D1}
 DOCKERAPPDIR=${DOCKERDIR}/${NAME}
 CONFIGDIR=${DOCKERAPPDIR}/config
