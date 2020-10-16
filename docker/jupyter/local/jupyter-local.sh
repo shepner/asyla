@@ -14,11 +14,9 @@ DOCKERDIR=${DOCKER_D1}
 DOCKERAPPDIR=${DOCKERDIR}/${NAME}
 #CONFIGDIR=${DOCKERAPPDIR}/config
 
-
 # build the container
 cd ${SOURCE}
 sudo docker build --tag $IMAGE .
-
 #
 dockerStopRm ${NAME} # kill the old one
 #
