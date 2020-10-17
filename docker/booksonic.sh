@@ -10,7 +10,7 @@
 
 
 #NAME=booksonic
-NAME=`basename ${0}`
+NAME=`basename "${0}" ".sh"`
 IMAGE=linuxserver/${NAME}
 CONFIGDIR=${DOCKER_DL}/${NAME}/config
 
