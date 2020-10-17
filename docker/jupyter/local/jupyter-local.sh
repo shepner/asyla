@@ -2,6 +2,8 @@
 # https://jupyter-docker-stacks.readthedocs.io/en/latest/
 # https://jupyter-docker-stacks.readthedocs.io/en/latest/using/common.html
 
+# Notes
+# `JUPYTER_ALLOW_INSECURE_WRITES=true` is needed when using a filesystem with SMB because the permissions for the kernel's files show as '0o677' instead of '0o0600'
 
 # Load the functions and environment variables
 . ~/scripts/docker/common.sh
@@ -26,7 +28,7 @@ if [ ! -d ${DOCKERAPPDIR} ]; then
 fi
 #
 echo "Making a backup"
-sudo -u \#${DOCKER_UID} tar -czf ${DOCKER_D1}/${NAME}.tgz -C ${DOCKERDIR} ${NAME}
+#sudo -u \#${DOCKER_UID} tar -czf ${DOCKER_D1}/${NAME}.tgz -C ${DOCKERDIR} ${NAME}
 echo "Backup complete"
 
 sudo docker run --detach --restart=unless-stopped \
@@ -41,6 +43,7 @@ sudo docker run --detach --restart=unless-stopped \
   --env GEN_CERT=yes \
   --env JUPYTER_ENABLE_LAB=yes \
   --env RESTARTABLE=yes \
+  --env JUPYTER_ALLOW_INSECURE_WRITES=true \
   --mount type=bind,src=${DOCKERAPPDIR},dst=/home/${DOCKER_UNAME} \
   --user root \
   --workdir /home/${DOCKER_UNAME}/work \
