@@ -9,8 +9,9 @@
 
 
 
-NAME=booksonic
-IMAGE=linuxserver/booksonic
+#NAME=booksonic
+NAME=${0}
+IMAGE=linuxserver/${NAME}
 CONFIGDIR=${DOCKER_DL}/${NAME}/config
 
 
