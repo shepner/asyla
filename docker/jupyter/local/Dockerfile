@@ -8,6 +8,15 @@ FROM $BASE_CONTAINER
 LABEL maintainer="Stephen Hepner <shepner@asyla.org>"
 
 RUN \
+  apt-get update \
+  && apt-get install -y --no-install-recommends \
+    curl \
+  && rm -rf /var/lib/apt/lists/*
+
+# https://rclone.org/install/
+RUN curl https://rclone.org/install.sh | sudo bash
+
+RUN \
   pip3 install \
     boto3 \
     pyyaml \
