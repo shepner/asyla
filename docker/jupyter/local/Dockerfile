@@ -57,7 +57,7 @@ RUN jupyter labextension install @jupyterlab/toc --no-build
 # https://github.com/telamonian/theme-darcula
 #sudo jupyter labextension install @telamonian/theme-darcula
 #https://github.com/Rahlir/theme-gruvbox
-RUN jupyter labextension install @rahlir/theme-gruvbox --no-build
+#RUN jupyter labextension install @rahlir/theme-gruvbox --no-build
 
 # Run this last as it takes a while
 RUN jupyter lab build
