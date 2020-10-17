@@ -43,7 +43,7 @@ sudo docker run --detach --restart=unless-stopped \
   --env RESTARTABLE=yes \
   --mount type=bind,src=${DOCKERAPPDIR},dst=/home/${DOCKER_UNAME} \
   --user root \
-  --workdir /home/${DOCKER_UNAME} \
+  --workdir /home/${DOCKER_UNAME}/work \
   --env CHOWN_HOME=yes \
   --publish published=8888,target=8888,protocol=tcp,mode=ingress \
   ${IMAGE}
