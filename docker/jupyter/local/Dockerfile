@@ -7,6 +7,8 @@ FROM $BASE_CONTAINER
 # Local config changes for the JupyterLab container go here
 LABEL maintainer="Stephen Hepner <shepner@asyla.org>"
 
+USER root
+
 RUN \
   mkdir -p /var/lib/apt/lists/partial \
   && apt-get update \
@@ -73,4 +75,5 @@ RUN jupyter labextension install @jupyterlab/toc --no-build
 # Run this last as it takes a while
 RUN jupyter lab build
 
+USER $NB_UID
 
