@@ -9,7 +9,7 @@ LABEL maintainer="Stephen Hepner <shepner@asyla.org>"
 
 RUN pip3 install boto3 pyyaml fabric
 
-RUN pip3 install flask hewy micawber peewee redis markdown flask_peewee beautifulsoup4
+RUN pip3 install flask huey micawber peewee redis markdown flask_peewee beautifulsoup4
 
 # [ruamel.yaml](https://yaml.readthedocs.io/en/latest/install.html)
 RUN pip3 install setuptools ruamel.yaml
