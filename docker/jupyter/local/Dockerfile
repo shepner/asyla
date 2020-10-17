@@ -31,11 +31,12 @@ RUN \
     ruamel.yaml
 
 # https://pypi.org/project/plotly/
-RUN pip3 install "ipywidgets==7.5"
-# Basic JupyterLab renderer support
-RUN jupyter labextension install jupyterlab-plotly@4.11.0  --no-build
-# OPTIONAL: Jupyter widgets extension for FigureWidget support
-RUN jupyter labextension install @jupyter-widgets/jupyterlab-manager plotlywidget@4.11.0  --no-build
+RUN \
+  pip3 install \
+    plotly \
+    "ipywidgets==7.5" \
+  && jupyter labextension install jupyterlab-plotly@4.11.0  --no-build \
+  && jupyter labextension install @jupyter-widgets/jupyterlab-manager plotlywidget@4.11.0  --no-build
 
 #https://github.com/jupyter/jupyter/wiki/Jupyter-kernels
 #https://vatlab.github.io/sos-docs/
