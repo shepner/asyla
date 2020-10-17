@@ -33,9 +33,9 @@ RUN \
 # https://pypi.org/project/plotly/
 RUN pip3 install "ipywidgets==7.5"
 # Basic JupyterLab renderer support
-RUN jupyter labextension install jupyterlab-plotly@4.11.0
+RUN jupyter labextension install jupyterlab-plotly@4.11.0  --no-build
 # OPTIONAL: Jupyter widgets extension for FigureWidget support
-RUN jupyter labextension install @jupyter-widgets/jupyterlab-manager plotlywidget@4.11.0
+RUN jupyter labextension install @jupyter-widgets/jupyterlab-manager plotlywidget@4.11.0  --no-build
 
 #https://github.com/jupyter/jupyter/wiki/Jupyter-kernels
 #https://vatlab.github.io/sos-docs/
@@ -46,14 +46,18 @@ RUN \
     sos-notebook \
   && python3 -m sos_notebook.install \
   && jupyter labextension install transient-display-data --no-build \
-  && jupyter labextension install jupyterlab-sos --no-build \
-  && jupyter lab build
+  && jupyter labextension install jupyterlab-sos --no-build
 
+#https://github.com/jupyterlab/jupyterlab-toc
+RUN jupyter labextension install @jupyterlab/toc --no-build
 
-
-
-
-
+#themes
+#https://github.com/oriolmirosa/jupyterlab_materialdarker
+#sudo jupyter labextension install @oriolmirosa/jupyterlab_materialdarker
+# https://github.com/telamonian/theme-darcula
+#sudo jupyter labextension install @telamonian/theme-darcula
+#https://github.com/Rahlir/theme-gruvbox
+RUN jupyter labextension update @rahlir/theme-gruvbox --no-build
 
 # Run this last as it takes a while
 RUN jupyter lab build
