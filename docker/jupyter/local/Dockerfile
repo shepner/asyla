@@ -50,6 +50,13 @@ RUN \
   && jupyter labextension install jupyterlab-plotly@4.11.0  --no-build \
   && jupyter labextension install @jupyter-widgets/jupyterlab-manager plotlywidget@4.11.0  --no-build
 
+# [gmplot](https://github.com/gmplot/gmplot)
+# A matplotlib-like interface to render all the data you'd like on top of Google Maps
+# [Maps JavaScript API](https://developers.google.com/maps/documentation/javascript/get-api-key)
+RUN \
+  pip3 install \
+    gmplot
+
 #https://github.com/jupyter/jupyter/wiki/Jupyter-kernels
 #https://vatlab.github.io/sos-docs/
 #https://github.com/vatlab/SOS
