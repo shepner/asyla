@@ -43,10 +43,12 @@ RUN \
     ruamel.yaml
 
 # https://pypi.org/project/plotly/
+# https://plotly.com/python/static-image-export/
 RUN \
   pip3 install \
     plotly \
     "ipywidgets==7.5" \
+    kaleido \
   && jupyter labextension install jupyterlab-plotly@4.11.0  --no-build \
   && jupyter labextension install @jupyter-widgets/jupyterlab-manager plotlywidget@4.11.0  --no-build
 
