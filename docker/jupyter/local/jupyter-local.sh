@@ -12,8 +12,9 @@
 NAME=jupyter-local
 IMAGE=${NAME}
 SOURCE=~/scripts/docker/jupyter/local
-DOCKERDIR=${DOCKER_D1}
+DOCKERDIR=${DOCKER_DL}
 DOCKERAPPDIR=${DOCKERDIR}/${NAME}
+WORKDIR=${DOCKER_D1}/${NAME}/work
 #CONFIGDIR=${DOCKERAPPDIR}/config
 
 # build the container
@@ -28,7 +29,7 @@ if [ ! -d ${DOCKERAPPDIR} ]; then
 fi
 #
 echo "Making a backup"
-sudo -u \#${DOCKER_UID} tar -czf ${DOCKER_D1}/${NAME}.tgz -C ${DOCKERDIR} ${NAME}
+#sudo -u \#${DOCKER_UID} tar -czf ${DOCKER_D1}/${NAME}.tgz -C ${DOCKERDIR} ${NAME}
 echo "Backup complete"
 
 sudo docker run --detach --restart=unless-stopped \
@@ -45,6 +46,7 @@ sudo docker run --detach --restart=unless-stopped \
   --env RESTARTABLE=yes \
   --env JUPYTER_ALLOW_INSECURE_WRITES=true \
   --mount type=bind,src=${DOCKERAPPDIR},dst=/home/${DOCKER_UNAME} \
+  --mount type=bind,src=${WORKDIR},dst=/home/${DOCKER_UNAME}/work \
   --user root \
   --workdir /home/${DOCKER_UNAME}/work \
   --env CHOWN_HOME=yes \
