@@ -28,6 +28,10 @@ elif [ ${HOSTNAME} = "d02" ]; then
 elif [ ${HOSTNAME} = "d03" ]; then
   echo ${HOSTNAME}
 
+elif [ ${HOSTNAME} = "ns01" ]; then
+  echo ${HOSTNAME}
+  ~/scripts/docker/dnsmasq.sh
+
 fi
 
 
