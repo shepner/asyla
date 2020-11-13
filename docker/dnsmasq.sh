@@ -5,6 +5,7 @@
 
 # WARNING: This runs with privledged rights
 
+
 # Load the functions and environment variables
 . ~/scripts/docker/common.sh
 
@@ -13,10 +14,6 @@ NAME=`basename "${0}" ".sh"`
 IMAGE=shepner/${NAME}
 BASEPATH=${DOCKER_D2}/${NAME}
 CONFIGDIR=${BASEPATH}/config
-
-
-dockerPull ${IMAGE} # fetch the latest image
-dockerStopRm ${NAME} # kill the old one
 
 
 # create the dir if needed
@@ -31,6 +28,9 @@ fi
 echo "Making a backup"
 sudo -u \#${DOCKER_UID} tar -czf ${DOCKER_D1}/${NAME}.tgz -C ${DOCKER_DL} ${NAME}
 
+
+dockerPull ${IMAGE} # fetch the latest image
+dockerStopRm ${NAME} # kill the old one
 
 
 sudo docker run --detach --restart=always \
