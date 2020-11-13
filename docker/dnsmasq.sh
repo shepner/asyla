@@ -5,6 +5,10 @@
 
 # WARNING: This runs with privledged rights
 
+# Load the functions and environment variables
+. ~/scripts/docker/common.sh
+
+
 NAME=`basename "${0}" ".sh"`
 IMAGE=shepner/${NAME}
 BASEPATH=${DOCKER_D2}/${NAME}
