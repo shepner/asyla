@@ -38,7 +38,7 @@ sudo docker run --detach --restart=unless-stopped \
   --env SUBDOMAINS=www, \
   --env VALIDATION=dns \
   --env DNSPLUGIN=cloudflare \
-  --env EMAIL= `shepner@asyla.org` \
+  --env EMAIL=shepner@asyla.org \
   --env ONLY_SUBDOMAINS=false \
   --env STAGING=false \
   --mount type=bind,src=${CONFIGDIR},dst=/config \
