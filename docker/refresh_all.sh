@@ -9,7 +9,6 @@ HOSTNAME=`hostname -s`
 
 if [ ${HOSTNAME} = "d01" ]; then
   echo ${HOSTNAME}
-  #~/scripts/docker/traefik/traefik.sh
 
   ~/scripts/docker/unifi-controller.sh
   ~/scripts/docker/jupyter/local/jupyter-local.sh
@@ -21,6 +20,8 @@ if [ ${HOSTNAME} = "d01" ]; then
   ~/scripts/docker/downloads/jackett.sh
   ~/scripts/docker/downloads/sonarr.sh
 
+  # run this last
+  ~/scripts/docker/swag.sh
 elif [ ${HOSTNAME} = "d02" ]; then
   echo ${HOSTNAME}
   ~/scripts/docker/foldingathome.sh

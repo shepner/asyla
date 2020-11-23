@@ -29,15 +29,13 @@ sudo -u \#${DOCKER_UID} tar -czf ${DOCKER_D1}/${NAME}.tgz -C ${DOCKERDIR} ${NAME
 echo "Backup complete"
 
 
-sudo docker run --detach --restart=unless-stopped \
+sudo docker create --detach --restart=unless-stopped \
   --name ${NAME} \
   --cpu-shares=1024 \
   --env PUID=${DOCKER_UID} \
   --env PGID=${DOCKER_GID} \
   --env TZ=${LOCAL_TZ} \
   --cap-add=NET_ADMIN \
-  --net=calibre_net \
-  --net=dillinger_net \
   --env URL=asyla.org \
   --env SUBDOMAINS=www, \
   --env VALIDATION=dns \
@@ -49,4 +47,9 @@ sudo docker run --detach --restart=unless-stopped \
   --publish published=80,target=80,protocol=tcp,mode=ingress \
   --publish published=443,target=443,protocol=tcp,mode=ingress \
   ${IMAGE}
+
+sudo docker network connect calibre_net ${NAME}
+sudo docker network connect dillinger_net ${NAME}
+
+docker start ${NAME}
 
