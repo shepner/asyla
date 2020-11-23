@@ -31,7 +31,7 @@ sudo docker run --detach --restart=unless-stopped \
   --env PUID=${DOCKER_UID} \
   --env PGID=${DOCKER_GID} \
   --env TZ=${LOCAL_TZ} \
-  --mount type=bind,src=${CONFIGDIR},dst=/config \
+  --mount type=bind,src=${DOCKERAPPDIR},dst=/config \
   --publish published=10080,target=8080,protocol=tcp,mode=ingress \
   ${IMAGE}
 
