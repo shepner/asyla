@@ -24,6 +24,7 @@ if [ ! -d ${CONFIGDIR} ]; then
 fi
 #
 echo "Making a backup"
+sleep 10
 sudo -u \#${DOCKER_UID} tar -czf ${DOCKER_D1}/${NAME}.tgz -C ${DOCKERDIR} ${NAME}
 echo "Backup complete"
 
