@@ -11,14 +11,14 @@ NAME=`basename "${0}" ".sh"`
 IMAGE=ghcr.io/linuxserver/${NAME}
 DOCKERDIR=${DOCKER_DL} # Run this locally
 DOCKERAPPDIR=${DOCKERDIR}/${NAME}
-CONFIGDIR=${DOCKERAPPDIR}/config
+#CONFIGDIR=${DOCKERAPPDIR}/config
 #
 dockerPull ${IMAGE} # fetch the latest image
 dockerStopRm ${NAME} # kill the old one
 #
 # create the dir if needed
-if [ ! -d ${CONFIGDIR} ]; then
-  sudo -u \#${DOCKER_UID} mkdir -p ${CONFIGDIR}
+if [ ! -d ${DOCKERAPPDIR} ]; then
+  sudo -u \#${DOCKER_UID} mkdir -p ${DOCKERAPPDIR}
 fi
 #
 echo "Making a backup"
