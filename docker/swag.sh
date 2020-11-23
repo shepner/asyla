@@ -36,6 +36,7 @@ sudo docker run --detach --restart=unless-stopped \
   --env PGID=${DOCKER_GID} \
   --env TZ=${LOCAL_TZ} \
   --cap-add=NET_ADMIN \
+  --net=calibre_net \
   --net=dillinger_net \
   --env URL=asyla.org \
   --env SUBDOMAINS=www, \
