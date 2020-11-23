@@ -42,6 +42,6 @@ sudo docker run --detach --restart=unless-stopped \
   --env ONLY_SUBDOMAINS=false \
   --env STAGING=false \
   --mount type=bind,src=${CONFIGDIR},dst=/config \
-  --publish published=10080,target=8080,protocol=tcp,mode=ingress \
+  --publish published=443,target=443,protocol=tcp,mode=ingress \
   ${IMAGE}
 
