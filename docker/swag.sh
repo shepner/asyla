@@ -28,6 +28,7 @@ sleep 10
 sudo -u \#${DOCKER_UID} tar -czf ${DOCKER_D1}/${NAME}.tgz -C ${DOCKERDIR} ${NAME}
 echo "Backup complete"
 
+
 sudo docker run --detach --restart=unless-stopped \
   --name ${NAME} \
   --cpu-shares=1024 \
@@ -35,6 +36,7 @@ sudo docker run --detach --restart=unless-stopped \
   --env PGID=${DOCKER_GID} \
   --env TZ=${LOCAL_TZ} \
   --cap-add=NET_ADMIN \
+  --net=dillinger_net \
   --env URL=asyla.org \
   --env SUBDOMAINS=www, \
   --env VALIDATION=dns \
