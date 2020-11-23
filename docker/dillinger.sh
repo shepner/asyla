@@ -12,6 +12,7 @@ IMAGE=ghcr.io/linuxserver/${NAME}
 DOCKERDIR=${DOCKER_DL} # Run this locally
 DOCKERAPPDIR=${DOCKERDIR}/${NAME}
 #CONFIGDIR=${DOCKERAPPDIR}/config
+NETWORK=${NAME}_net
 #
 dockerPull ${IMAGE} # fetch the latest image
 dockerStopRm ${NAME} # kill the old one
@@ -25,12 +26,16 @@ echo "Making a backup"
 sudo -u \#${DOCKER_UID} tar -czf ${DOCKER_D1}/${NAME}.tgz -C ${DOCKERDIR} ${NAME}
 echo "Backup complete"
 
+# create the network if needed
+dockerNetworkCreate ${NETWORK}
+
 sudo docker run --detach --restart=unless-stopped \
   --name ${NAME} \
   --cpu-shares=1024 \
   --env PUID=${DOCKER_UID} \
   --env PGID=${DOCKER_GID} \
   --env TZ=${LOCAL_TZ} \
+  --network=${NETWORK} \
   --mount type=bind,src=${DOCKERAPPDIR},dst=/config \
   --publish published=10080,target=8080,protocol=tcp,mode=ingress \
   ${IMAGE}
