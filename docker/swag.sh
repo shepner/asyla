@@ -29,7 +29,7 @@ sudo -u \#${DOCKER_UID} tar -czf ${DOCKER_D1}/${NAME}.tgz -C ${DOCKERDIR} ${NAME
 echo "Backup complete"
 
 
-sudo docker create --detach --restart=unless-stopped \
+sudo docker create \
   --name ${NAME} \
   --cpu-shares=1024 \
   --env PUID=${DOCKER_UID} \
@@ -51,5 +51,5 @@ sudo docker create --detach --restart=unless-stopped \
 sudo docker network connect calibre_net ${NAME}
 sudo docker network connect dillinger_net ${NAME}
 
-docker start ${NAME}
+sudo docker start  --detach --restart=unless-stopped ${NAME}
 
