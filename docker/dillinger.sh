@@ -29,9 +29,11 @@ echo "Backup complete"
 # create the network if needed
 dockerNetworkCreate ${NETWORK}
 
+#  --cpu-shares=1024 \# default job priority
+#  --publish published=10080,target=8080,protocol=tcp,mode=ingress \
 sudo docker run --detach --restart=unless-stopped \
   --name ${NAME} \
-  --cpu-shares=1024 \
+  --cpus=2 \
   --env PUID=${DOCKER_UID} \
   --env PGID=${DOCKER_GID} \
   --env TZ=${LOCAL_TZ} \
@@ -39,4 +41,4 @@ sudo docker run --detach --restart=unless-stopped \
   --mount type=bind,src=${DOCKERAPPDIR},dst=/config \
   ${IMAGE}
 
-#  --publish published=10080,target=8080,protocol=tcp,mode=ingress \
+
