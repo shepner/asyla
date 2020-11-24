@@ -64,3 +64,17 @@ dockerNetworkCreate_general () {
   fi
 }
 
+appCreateDir () {
+  # create the spedified directory if needed
+  if [ ! -d ${1} ]; then
+    sudo -u \#${DOCKER_UID} mkdir -p ${1}
+  fi
+}
+
+appBackup () {
+  # Backup the specified Docker app config folder to a common location
+  echo "Making a backup"
+  sudo -u \#${DOCKER_UID} tar -czf ${DOCKER_D1}/${2}.tgz -C ${1} ${2}
+  echo "Backup complete"
+}
+

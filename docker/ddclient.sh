@@ -2,32 +2,26 @@
 # https://docs.linuxserver.io/images/docker-dillinger
 
 
-
-# Load the functions and environment variables
+# Load the global functions and environment variables
 . ~/scripts/docker/common.sh
 
 
+# Setup the app specific environment vars
 NAME=`basename "${0}" ".sh"`
 IMAGE=ghcr.io/linuxserver/${NAME}
 DOCKERDIR=${DOCKER_D2}
 DOCKERAPPDIR=${DOCKERDIR}/${NAME}
 CONFIGDIR=${DOCKERAPPDIR}/config
 NETWORK=${NAME}_net
-#
+
+
+# Perform setups/updates as needed
 dockerPull ${IMAGE} # fetch the latest image
 dockerStopRm ${NAME} # kill the old one
-#
-# create the dir if needed
-if [ ! -d ${DOCKERAPPDIR} ]; then
-  sudo -u \#${DOCKER_UID} mkdir -p ${CONFIGDIR}
-fi
-#
-echo "Making a backup"
-sudo -u \#${DOCKER_UID} tar -czf ${DOCKER_D1}/${NAME}.tgz -C ${DOCKERDIR} ${NAME}
-echo "Backup complete"
+dockerNetworkCreate ${NETWORK} # create the network if needed
+appCreateDir ${CONFIGDIR} # create the config folder if needed
+appBackup ${DOCKERDIR} ${NAME} # backup the app
 
-# create the network if needed
-dockerNetworkCreate ${NETWORK}
 
 #  --cpu-shares=1024 \# default job priority
 sudo docker run --detach --restart=unless-stopped \
@@ -39,5 +33,4 @@ sudo docker run --detach --restart=unless-stopped \
   --network=${NETWORK} \
   --mount type=bind,src=${CONFIGDIR},dst=/config \
   ${IMAGE}
-
 
