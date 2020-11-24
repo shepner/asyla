@@ -31,6 +31,7 @@ dockerNetworkCreate ${NETWORK} # create the network if needed
 #appCreateDir ${CONFIGDIR} # create the config folder if needed
 appCreateDir ${DOCKERAPPDIR}/work
 appBackup ${DOCKERDIR} ${NAME} # backup the app
+appBackup ${DOCKER_D1}/${NAME} ${NAME} # backup the app
 
 
 sudo docker run --detach --restart=unless-stopped \
@@ -52,7 +53,7 @@ sudo docker run --detach --restart=unless-stopped \
   --user root \
   --workdir /home/${DOCKER_UNAME}/work \
   --env CHOWN_HOME=yes \
-  --publish published=8888,target=8888,protocol=tcp,mode=ingress \
+`:  --publish published=8888,target=8888,protocol=tcp,mode=ingress` \
   ${IMAGE}
 
 # To troubleshoot:
