@@ -48,6 +48,8 @@ sudo docker create \
   --publish published=443,target=443,protocol=tcp,mode=ingress \
   ${IMAGE}
 
+# Needed per app (along with a config file)
+# https://stackoverflow.com/a/39393229
 sudo docker network connect calibre_net ${NAME}
 sudo docker network connect dillinger_net ${NAME}
 
