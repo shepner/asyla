@@ -47,8 +47,7 @@ sudo docker run --detach --restart=always \
   --env CALIBRE_OVERRIDE_DATABASE_PATH="/config/metadata.db" \
   --mount type=bind,src=${CONFIGDIR},dst=/config \
   --mount type=bind,src=${DATA1}/media,dst=/media \
-  #--publish published=6080,target=8080,protocol=tcp,mode=ingress \
-  #--publish published=6081,target=8081,protocol=tcp,mode=ingress \
   ${IMAGE}
 
-
+  #--publish published=6080,target=8080,protocol=tcp,mode=ingress \
+  #--publish published=6081,target=8081,protocol=tcp,mode=ingress \
