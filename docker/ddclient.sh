@@ -2,17 +2,17 @@
 # https://docs.linuxserver.io/images/docker-dillinger
 
 
-# Load the global functions and environment variables
+# Load the global functions and default environment variables
 . ~/scripts/docker/common.sh
 
 
 # Setup the app specific environment vars
-NAME=`basename "${0}" ".sh"`
 IMAGE=ghcr.io/linuxserver/${NAME}
-DOCKERDIR=${DOCKER_D2}
+#DOCKERDIR=${DOCKER_DL} # local disk
+#DOCKERDIR=${DOCKER_D1} # NFS attached HDD
+DOCKERDIR=${DOCKER_D2} # NFS attached SSD
 DOCKERAPPDIR=${DOCKERDIR}/${NAME}
 CONFIGDIR=${DOCKERAPPDIR}/config
-NETWORK=${NAME}_net
 
 
 # Perform setups/updates as needed
