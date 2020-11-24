@@ -37,6 +37,7 @@ sudo docker run --detach --restart=unless-stopped \
   --name ${NAME} \
 `:  --cpu-shares=1024` \
   --env TZ=${LOCAL_TZ} \
+  --network=${NETWORK} \
   --env NB_UID=${DOCKER_UID} \
   --env NB_USER=${DOCKER_UNAME} \
   --env NB_GID=${DOCKER_GID} \
