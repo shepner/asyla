@@ -51,5 +51,5 @@ sudo docker create \
 sudo docker network connect calibre_net ${NAME}
 sudo docker network connect dillinger_net ${NAME}
 
-sudo docker start  --detach --restart=unless-stopped ${NAME}
+sudo docker start ${NAME}
 
