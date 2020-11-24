@@ -51,6 +51,7 @@ sudo docker network connect booksonic_net ${NAME}
 sudo docker network connect calibre_net ${NAME}
 sudo docker network connect dillinger_net ${NAME}
 sudo docker network connect jupyter_net ${NAME}
+sudo docker network connect unifi-controller_net ${NAME}
 
 # Dont forget to also setup a config file per app:
 # /docker/swag/config/nginx/proxy-confs

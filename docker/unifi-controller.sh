@@ -40,6 +40,7 @@ sudo docker run --detach --restart=unless-stopped \
   --env PUID=${DOCKER_UID} \
   --env PGID=${DOCKER_GID} \
   --env TZ=${LOCAL_TZ} \
+  --network=${NETWORK} \
   --mount type=bind,src=${CONFIGDIR},dst=/config \
   --publish published=1900,target=1900,protocol=udp,mode=ingress \
   --publish published=3478,target=3478,protocol=udp,mode=ingress \
