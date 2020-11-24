@@ -12,7 +12,7 @@ if [ ${HOSTNAME} = "d01" ]; then
 
   ~/scripts/docker/ddclient.sh
   ~/scripts/docker/unifi-controller.sh
-  ~/scripts/docker/jupyter/local/jupyter-local.sh
+  ~/scripts/docker/jupyter/jupyter.sh
 
   ~/scripts/docker/calibre.sh
   ~/scripts/docker/booksonic.sh

@@ -5,33 +5,30 @@
 # https://docs.linuxserver.io/general/swag
 
 
-# Load the functions and environment variables
+# Load the global functions and environment variables
 . ~/scripts/docker/common.sh
 
 
-NAME=`basename "${0}" ".sh"`
+# Setup the app specific environment vars
 IMAGE=ghcr.io/linuxserver/${NAME}
-DOCKERDIR=${DOCKER_DL} # Run this locally
+DOCKERDIR=${DOCKER_DL} # local disk
+#DOCKERDIR=${DOCKER_D1} # NFS attached HDD
+#DOCKERDIR=${DOCKER_D2} # NFS attached SSD
 DOCKERAPPDIR=${DOCKERDIR}/${NAME}
 CONFIGDIR=${DOCKERAPPDIR}/config
-#
+
+
+# Perform setups/updates as needed
 dockerPull ${IMAGE} # fetch the latest image
 dockerStopRm ${NAME} # kill the old one
-#
-# create the dir if needed
-if [ ! -d ${CONFIGDIR} ]; then
-  sudo -u \#${DOCKER_UID} mkdir -p ${CONFIGDIR}
-fi
-#
-echo "Making a backup"
-sleep 10
-sudo -u \#${DOCKER_UID} tar -czf ${DOCKER_D1}/${NAME}.tgz -C ${DOCKERDIR} ${NAME}
-echo "Backup complete"
+dockerNetworkCreate ${NETWORK} # create the network if needed
+appCreateDir ${CONFIGDIR} # create the folder if needed
+appBackup ${DOCKERDIR} ${NAME} # backup the app
 
 
 sudo docker create \
   --name ${NAME} \
-  --cpu-shares=1024 \
+`:  --cpu-shares=1024` \
   --env PUID=${DOCKER_UID} \
   --env PGID=${DOCKER_GID} \
   --env TZ=${LOCAL_TZ} \
@@ -53,6 +50,7 @@ sudo docker create \
 sudo docker network connect booksonic_net ${NAME}
 sudo docker network connect calibre_net ${NAME}
 sudo docker network connect dillinger_net ${NAME}
+sudo docker network connect jupyter_net ${NAME}
 
 # Dont forget to also setup a config file per app:
 # /docker/swag/config/nginx/proxy-confs

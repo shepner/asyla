@@ -13,27 +13,26 @@
 # 10001/udp Required for AP discovery
 
 
-# Load the functions and environment variables
+# Load the global functions and environment variables
 . ~/scripts/docker/common.sh
 
 
-NAME=unifi-controller
-IMAGE=linuxserver/unifi-controller
-DOCKERDIR=${DOCKER_DL} # Run this locally
+# Setup the app specific environment vars
+IMAGE=ghcr.io/linuxserver/${NAME}
+DOCKERDIR=${DOCKER_DL} # local disk
+#DOCKERDIR=${DOCKER_D1} # NFS attached HDD
+#DOCKERDIR=${DOCKER_D2} # NFS attached SSD
 DOCKERAPPDIR=${DOCKERDIR}/${NAME}
 CONFIGDIR=${DOCKERAPPDIR}/config
-#
+
+
+# Perform setups/updates as needed
 dockerPull ${IMAGE} # fetch the latest image
 dockerStopRm ${NAME} # kill the old one
-#
-# create the dir if needed
-if [ ! -d ${CONFIGDIR} ]; then
-  sudo -u \#${DOCKER_UID} mkdir -p ${CONFIGDIR}
-fi
-#
-echo "Making a backup"
-sudo -u \#${DOCKER_UID} tar -czf ${DOCKER_D1}/${NAME}.tgz -C ${DOCKERDIR} ${NAME}
-echo "Backup complete"
+dockerNetworkCreate ${NETWORK} # create the network if needed
+appCreateDir ${CONFIGDIR} # create the folder if needed
+appBackup ${DOCKERDIR} ${NAME} # backup the app
+
 
 sudo docker run --detach --restart=unless-stopped \
   --name ${NAME} \
@@ -47,10 +46,9 @@ sudo docker run --detach --restart=unless-stopped \
   --publish published=5514,target=5514,protocol=udp,mode=ingress \
   --publish published=6789,target=6789,protocol=tcp,mode=ingress \
   --publish published=8080,target=8080,protocol=tcp,mode=ingress \
-  --publish published=8443,target=8443,protocol=tcp,mode=ingress \
+`:  --publish published=8443,target=8443,protocol=tcp,mode=ingress` \
   --publish published=8843,target=8843,protocol=tcp,mode=ingress \
   --publish published=8880,target=8880,protocol=tcp,mode=ingress \
   --publish published=10001,target=10001,protocol=udp,mode=ingress \
   ${IMAGE}
-
 

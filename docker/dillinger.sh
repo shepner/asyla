@@ -27,13 +27,13 @@ appBackup ${DOCKERDIR} ${NAME} # backup the app
 sudo docker run --detach --restart=unless-stopped \
   --name ${NAME} \
   --cpus=2 \
-`:  --cpu-shares=1024 ``# default job priority`\
+`:  --cpu-shares=1024` `# default job priority` \
   --env PUID=${DOCKER_UID} \
   --env PGID=${DOCKER_GID} \
   --env TZ=${LOCAL_TZ} \
   --network=${NETWORK} \
   --mount type=bind,src=${DOCKERAPPDIR},dst=/config \
-`:  --publish published=10080,target=8080,protocol=tcp,mode=ingress `\
+`:  --publish published=10080,target=8080,protocol=tcp,mode=ingress` \
   ${IMAGE}
 
 

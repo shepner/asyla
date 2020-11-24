@@ -25,17 +25,17 @@ appCreateDir ${CONFIGDIR} # create the config folder if needed
 appBackup ${DOCKERDIR} ${NAME} # backup the app
 
 
-#  --cpu-shares=1024 \# default job priority
-#  --publish published=4040,target=4040,protocol=tcp,mode=ingress \
 sudo docker run --detach --restart=always \
   --name ${NAME} \
   --cpus=2 \
+`:  --cpu-shares=1024 ``# default job priority`\
   --env PUID=${DOCKER_UID} \
   --env PGID=${DOCKER_GID} \
   --env TZ=${LOCAL_TZ} \
   --network=${NETWORK} \
   --mount type=bind,src=${CONFIGDIR},dst=/config \
   --mount type=bind,src=${DATA1}/media/Audiobook,dst=/audiobooks \
+`:  --publish published=4040,target=4040,protocol=tcp,mode=ingress `\
   ${IMAGE}
 
 

@@ -5,36 +5,40 @@
 # Notes
 # `JUPYTER_ALLOW_INSECURE_WRITES=true` is needed when using a filesystem with SMB because the permissions for the kernel's files show as '0o677' instead of '0o0600'
 
-# Load the functions and environment variables
+
+# Load the global functions and environment variables
 . ~/scripts/docker/common.sh
 
 
-NAME=jupyter-local
+# Setup the app specific environment vars
 IMAGE=${NAME}
-SOURCE=~/scripts/docker/jupyter/local
-DOCKERDIR=${DOCKER_DL}
+DOCKERDIR=${DOCKER_DL} # local disk
+#DOCKERDIR=${DOCKER_D1} # NFS attached HDD
+#DOCKERDIR=${DOCKER_D2} # NFS attached SSD
 DOCKERAPPDIR=${DOCKERDIR}/${NAME}
-WORKDIR=${DOCKER_D1}/${NAME}/work
-#CONFIGDIR=${DOCKERAPPDIR}/config
+CONFIGDIR=${DOCKERAPPDIR}/config
+
+SOURCE=~/scripts/docker/jupyter # location of the Dockerfile
+WORKDIR=${DOCKER_D1}/${NAME}/work # location of the notebooks
+
 
 # build the container
 cd ${SOURCE}
 sudo docker build --tag $IMAGE .
-#
+
+
+# Perform setups/updates as needed
+#dockerPull ${IMAGE} # fetch the latest image
 dockerStopRm ${NAME} # kill the old one
-#
-# create the dir if needed
-if [ ! -d ${DOCKERAPPDIR} ]; then
-  sudo -u \#${DOCKER_UID} mkdir -p ${DOCKERAPPDIR}
-fi
-#
-echo "Making a backup"
-#sudo -u \#${DOCKER_UID} tar -czf ${DOCKER_D1}/${NAME}.tgz -C ${DOCKERDIR} ${NAME}
-echo "Backup complete"
+dockerNetworkCreate ${NETWORK} # create the network if needed
+#appCreateDir ${CONFIGDIR} # create the config folder if needed
+appCreateDir ${DOCKERAPPDIR} # create the config folder if needed
+#appBackup ${DOCKERDIR} ${NAME} # backup the app
+
 
 sudo docker run --detach --restart=unless-stopped \
   --name ${NAME} \
-  --cpu-shares=1024 \
+`:  --cpu-shares=1024` \
   --env TZ=${LOCAL_TZ} \
   --env NB_UID=${DOCKER_UID} \
   --env NB_USER=${DOCKER_UNAME} \
@@ -53,5 +57,6 @@ sudo docker run --detach --restart=unless-stopped \
   --publish published=8888,target=8888,protocol=tcp,mode=ingress \
   ${IMAGE}
 
+# To troubleshoot:
 # docker exec -it ${IMAGE} bash
 
