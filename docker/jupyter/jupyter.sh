@@ -18,22 +18,19 @@ DOCKERDIR=${DOCKER_DL} # local disk
 DOCKERAPPDIR=${DOCKERDIR}/${NAME}
 CONFIGDIR=${DOCKERAPPDIR}/config
 
-SOURCE=~/scripts/docker/jupyter # location of the Dockerfile
+SOURCE=~/scripts/docker/${NAME} # location of the Dockerfile
 WORKDIR=${DOCKER_D1}/${NAME}/work # location of the notebooks
-
-
-# build the container
-cd ${SOURCE}
-sudo docker build --tag $IMAGE .
 
 
 # Perform setups/updates as needed
 #dockerPull ${IMAGE} # fetch the latest image
+# build the container
+cd ${SOURCE} && sudo docker build --tag $IMAGE .
 dockerStopRm ${NAME} # kill the old one
 dockerNetworkCreate ${NETWORK} # create the network if needed
 #appCreateDir ${CONFIGDIR} # create the config folder if needed
-appCreateDir ${DOCKERAPPDIR} # create the config folder if needed
-#appBackup ${DOCKERDIR} ${NAME} # backup the app
+appCreateDir ${DOCKERAPPDIR}/work
+appBackup ${DOCKERDIR} ${NAME} # backup the app
 
 
 sudo docker run --detach --restart=unless-stopped \
