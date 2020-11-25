@@ -21,6 +21,7 @@ CONFIGDIR=${DOCKERAPPDIR}/config
 # Perform setups/updates as needed
 dockerPull ${IMAGE} # fetch the latest image
 dockerStopRm ${NAME} # kill the old one
+sleep 10 # because this takes some time to shut down
 dockerNetworkCreate ${NETWORK} # create the network if needed
 appCreateDir ${CONFIGDIR} # create the folder if needed
 appBackup ${DOCKERDIR} ${NAME} # backup the app
