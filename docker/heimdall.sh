@@ -35,6 +35,7 @@ sudo docker run --detach --restart=unless-stopped \
   --env PUID=${DOCKER_UID} \
   --env PGID=${DOCKER_GID} \
   --env TZ=${LOCAL_TZ} \
+  --network=${NETWORK} \
 `:  --publish published=80,target=80,protocol=tcp,mode=ingress` \
 `:  --publish published=443,target=443,protocol=tcp,mode=ingress` \
   --mount type=bind,src=${CONFIGDIR},dst=/config \

@@ -33,6 +33,7 @@ sudo docker run --detach --restart=unless-stopped \
   --env PUID=${DOCKER_UID} \
   --env PGID=${DOCKER_GID} \
   --env TZ=${LOCAL_TZ} \
+  --network=${NETWORK} \
   --publish published=7396,target=7396,protocol=tcp,mode=ingress \
   --mount type=bind,src=${CONFIGDIR},dst=/config \
   ${IMAGE}
