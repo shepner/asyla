@@ -31,11 +31,10 @@ appCreateDir ${CONFIGDIR} # create the folder if needed
 appBackup ${DOCKERDIR} ${NAME} # backup the app
 
 
-#  --cpu-shares=1024 \
-#  --publish published=6080,target=8080,protocol=tcp,mode=ingress \
 sudo docker run --detach --restart=always \
   --name ${NAME} \
   --cpus=2 \
+`:  --cpu-shares=1024` \
   --env PUID=${DOCKER_UID} \
   --env PGID=${DOCKER_GID} \
   --env TZ=${LOCAL_TZ} \
@@ -43,6 +42,7 @@ sudo docker run --detach --restart=always \
   --env CALIBRE_OVERRIDE_DATABASE_PATH="/config/metadata.db" \
   --mount type=bind,src=${CONFIGDIR},dst=/config \
   --mount type=bind,src=${DATA1}/media,dst=/media \
-  --publish published=6081,target=8081,protocol=tcp,mode=ingress \
+  --publish published=6080,target=8080,protocol=tcp,mode=ingress \
+`:  --publish published=6081,target=8081,protocol=tcp,mode=ingress` \
   ${IMAGE}
 
