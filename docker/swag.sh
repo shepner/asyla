@@ -34,7 +34,7 @@ sudo docker create \
   --env TZ=${LOCAL_TZ} \
   --cap-add=NET_ADMIN \
   --env URL=${MY_DOMAIN} \
-  --env SUBDOMAINS=booksonic,calibre,dillinger,jupyter,unifi,www, \
+  --env SUBDOMAINS=booksonic,calibre,dillinger,jackett,jupyter,sonarr,transmission,unifi,www, \
   --env VALIDATION=dns \
   --env DNSPLUGIN=cloudflare \
   --env EMAIL=${MY_EMAIL} \
@@ -51,7 +51,10 @@ sudo docker network connect booksonic_net ${NAME}
 sudo docker network connect calibre_net ${NAME}
 sudo docker network connect dillinger_net ${NAME}
 sudo docker network connect heimdall_net ${NAME}
+sudo docker network connect jackett_net ${NAME}
 sudo docker network connect jupyter_net ${NAME}
+sudo docker network connect sonarr_net ${NAME}
+sudo docker network connect transmission_net ${NAME}
 sudo docker network connect unifi-controller_net ${NAME}
 
 # Dont forget to also setup a config file per app:

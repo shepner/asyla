@@ -1,5 +1,5 @@
 #!/bin/sh
-# https://docs.linuxserver.io/images/docker-dillinger
+# https://docs.linuxserver.io/images/docker-jackett
 
 
 # Load the global functions and default environment variables
@@ -20,17 +20,21 @@ dockerPull ${IMAGE} # fetch the latest image
 dockerStopRm ${NAME} # kill the old one
 dockerNetworkCreate ${NETWORK} # create the network if needed
 appCreateDir ${CONFIGDIR} # create the config folder if needed
+appCreateDir ${DOCKERAPPDIR}/downloads
 appBackup ${DOCKERDIR} ${NAME} # backup the app
 
 
 sudo docker run --detach --restart=unless-stopped \
   --name ${NAME} \
   --cpus=2 \
-`:   --cpu-shares=1024`` # default job priority` \
+  --cpu-shares=768 \
   --env PUID=${DOCKER_UID} \
   --env PGID=${DOCKER_GID} \
   --env TZ=${LOCAL_TZ} \
   --network=${NETWORK} \
+  --env AUTO_UPDATE=true \
+`:  --publish published=9117,target=9117,protocol=tcp,mode=ingress` \
   --mount type=bind,src=${CONFIGDIR},dst=/config \
-  ${IMAGE}
+  --mount type=bind,src=${DOCKERAPPDIR}/downloads,dst=/downloads \
+  $IMAGE
 
