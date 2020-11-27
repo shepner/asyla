@@ -37,7 +37,7 @@ echo "User-agent: * Disallow: /" | sudo -u \#${DOCKER_UID} tee -a ${DOCKERAPPDIR
 
 sudo docker run --detach --restart=unless-stopped \
   --name ${NAME} \
-  --cpus=2 \
+`:  --cpus=2` \
 `:  --cpu-shares=1024` `# default job priority` \
 `:  --env PUID=${DOCKER_UID}` \
 `:  --env PGID=${DOCKER_GID}` \
