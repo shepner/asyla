@@ -33,11 +33,11 @@ sudo docker create \
   --env PGID=${DOCKER_GID} \
   --env TZ=${LOCAL_TZ} \
   --cap-add=NET_ADMIN \
-  --env URL=asyla.org \
-  --env SUBDOMAINS=www, \
+  --env URL=${MY_DOMAIN} \
+  --env SUBDOMAINS=booksonic,calibre,dillinger,jupyter,unifi,www, \
   --env VALIDATION=dns \
   --env DNSPLUGIN=cloudflare \
-  --env EMAIL=shepner@asyla.org \
+  --env EMAIL=${MY_EMAIL} \
   --env ONLY_SUBDOMAINS=false \
   --env STAGING=false \
   --mount type=bind,src=${CONFIGDIR},dst=/config \
