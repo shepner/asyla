@@ -35,7 +35,6 @@ appBackup ${DOCKERDIR} ${NAME} # backup the app
 echo "User-agent: * Disallow: /" | sudo -u \#${DOCKER_UID} tee -a ${DOCKERAPPDIR}/robots.txt > /dev/null
 
 
-
 sudo docker run --detach --restart=unless-stopped \
   --name ${NAME} \
   --cpus=2 \
@@ -46,6 +45,6 @@ sudo docker run --detach --restart=unless-stopped \
   --network=${NETWORK} \
   --mount type=bind,src=${DOCKERAPPDIR},dst=/data \
   --mount type=bind,src=${DOCKER_D1}/${NAME}/archive,dst=/data/archive \
-  --publish published=8000,target=8000,protocol=tcp,mode=ingress \
+`:  --publish published=8000,target=8000,protocol=tcp,mode=ingress` \
   ${IMAGE}
 
