@@ -32,6 +32,6 @@ sudo docker run --detach --restart=unless-stopped \
   --env TZ=${LOCAL_TZ} \
   --network=${NETWORK} \
   --mount type=bind,src=${DOCKERAPPDIR},dst=/config \
-`:  --publish published=3000,target=3000,protocol=tcp,mode=ingress` \
+  --publish published=3000,target=3000,protocol=tcp,mode=ingress \
   ${IMAGE}
 
