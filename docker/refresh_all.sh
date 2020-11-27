@@ -23,6 +23,8 @@ if [ ${HOSTNAME} = "d01" ]; then
   ~/scripts/docker/jackett.sh
   ~/scripts/docker/sonarr.sh
 
+  ~/scripts/docker/archivebox.sh
+
   # run this last
   ~/scripts/docker/swag.sh
 elif [ ${HOSTNAME} = "d02" ]; then
