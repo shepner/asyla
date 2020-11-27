@@ -1,7 +1,5 @@
 #!/bin/sh
-# https://docs.linuxserver.io/images/docker-codimd
-# https://hedgedoc.org
-# https://github.com/hedgedoc/hedgedoc/tree/HEAD/docs
+# https://archivebox.io
 
 
 # Load the global functions and environment variables
@@ -9,7 +7,7 @@
 
 
 # Setup the app specific environment vars
-IMAGE=ghcr.io/linuxserver/${NAME}
+IMAGE=archivebox/${NAME}
 DOCKERDIR=${DOCKER_DL} # local disk
 #DOCKERDIR=${DOCKER_D1} # NFS attached HDD
 #DOCKERDIR=${DOCKER_D2} # NFS attached SSD
@@ -26,15 +24,21 @@ appCreateDir ${DOCKERAPPDIR}
 appBackup ${DOCKERDIR} ${NAME} # backup the app
 
 
+# Initial setup tasks
+#sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} init
+#sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} add 'https://example.com'
+#sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} manage createsuperuser
+
+
 sudo docker run --detach --restart=unless-stopped \
   --name ${NAME} \
   --cpus=2 \
 `:  --cpu-shares=1024` `# default job priority` \
-  --env PUID=${DOCKER_UID} \
-  --env PGID=${DOCKER_GID} \
-  --env TZ=${LOCAL_TZ} \
+`:  --env PUID=${DOCKER_UID}` \
+`:  --env PGID=${DOCKER_GID}` \
+`:  --env TZ=${LOCAL_TZ}` \
   --network=${NETWORK} \
-  --mount type=bind,src=${DOCKERAPPDIR},dst=/config \
-  --publish published=3000,target=3000,protocol=tcp,mode=ingress \
+  --mount type=bind,src=${DOCKERAPPDIR},dst=/data \
+  --publish published=8000,target=8000,protocol=tcp,mode=ingress \
   ${IMAGE}
 
