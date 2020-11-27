@@ -29,6 +29,8 @@ appBackup ${DOCKERDIR} ${NAME} # backup the app
 #sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} init
 #sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} add 'https://example.com'
 #sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} manage createsuperuser
+echo "User-agent: * Disallow: /" | sudo -u \#${DOCKER_UID} tee -a ${DOCKERAPPDIR}/robots.txt > /dev/null
+
 
 
 sudo docker run --detach --restart=unless-stopped \
