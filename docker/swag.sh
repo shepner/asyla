@@ -34,7 +34,7 @@ sudo docker create \
   --env TZ=${LOCAL_TZ} \
   --cap-add=NET_ADMIN \
   --env URL=${MY_DOMAIN} \
-  --env SUBDOMAINS=booksonic,calibre,dillinger,jackett,jupyter,sonarr,transmission,unifi,www, \
+  --env SUBDOMAINS=archivebox,booksonic,calibre,dillinger,jackett,jupyter,sonarr,transmission,unifi,www, \
   --env VALIDATION=dns \
   --env DNSPLUGIN=cloudflare \
   --env EMAIL=${MY_EMAIL} \
@@ -47,6 +47,7 @@ sudo docker create \
 
 # Needed per proxied app on this host
 # [Multiple subnets in Docker container](https://stackoverflow.com/a/39393229)
+sudo docker network connect archivebox_net ${NAME}
 sudo docker network connect booksonic_net ${NAME}
 sudo docker network connect calibre_net ${NAME}
 sudo docker network connect dillinger_net ${NAME}

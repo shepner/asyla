@@ -1,6 +1,9 @@
 #!/bin/sh
 # https://archivebox.io
 
+# Instructions for how to schedule jobs
+#sudo docker exec -it ${NAME} archivebox schedule --help
+
 
 # Load the global functions and environment variables
 . ~/scripts/docker/common.sh
