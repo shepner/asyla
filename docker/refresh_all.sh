@@ -24,6 +24,7 @@ if [ ${HOSTNAME} = "d01" ]; then
   ~/scripts/docker/sonarr.sh
 
   ~/scripts/docker/archivebox.sh
+  ~/scripts/docker/codimd.sh
 
   # run this last
   ~/scripts/docker/swag.sh

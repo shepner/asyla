@@ -4,6 +4,8 @@
 # Instructions for how to schedule jobs
 #sudo docker exec -it ${NAME} archivebox schedule --help
 
+# example of how to import a file manually (doesnt work)
+# sudo docker run -it -v /docker/archivebox:/data -v /mnt/nas/data1/docker/archivebox/archive/:/data/archive archivebox/archivebox add --depth=1 '/data/Safari_Bookmarks.html'
 
 # Load the global functions and environment variables
 . ~/scripts/docker/common.sh
@@ -53,10 +55,13 @@ sudo docker run --detach --restart=unless-stopped \
 `:  --cpu-shares=1024` `# default job priority` \
 `:  --env PUID=${DOCKER_UID}` \
 `:  --env PGID=${DOCKER_GID}` \
-`:  --env TZ=${LOCAL_TZ}` \
+  --env TZ=${LOCAL_TZ} \
   --network=${NETWORK} \
+`:  --mount type=bind,src=/etc/localtime,dst=/etc/localtime,readonly=1` \
   --mount type=bind,src=${DOCKERAPPDIR},dst=/data \
   --mount type=bind,src=${DOCKER_D1}/${NAME}/archive,dst=/data/archive \
 `:  --publish published=8000,target=8000,protocol=tcp,mode=ingress` \
   ${IMAGE}
+
+dockerRestartProxy
 

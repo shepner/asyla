@@ -64,6 +64,18 @@ dockerNetworkCreate_general () {
   fi
 }
 
+dockerRestartProxy () {
+  # this is to quick-restart the proxy service without running its script
+  PROXY_NAME=swag
+  if [ `sudo docker ps -q --filter "name=${PROXY_NAME}"` ]; then
+    echo "Restarting ${PROXY_NAME}"
+    sudo docker stop ${PROXY_NAME}
+    sudo docker start ${PROXY_NAME}
+  else
+    echo "WARNING: ${PROXY_NAME} was not running!"
+  fi
+}
+
 appCreateDir () {
   # create the spedified directory if needed
   if [ ! -d ${1} ]; then

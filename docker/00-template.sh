@@ -21,8 +21,8 @@ CONFIGDIR=${DOCKERAPPDIR}/config
 dockerPull ${IMAGE} # fetch the latest image
 dockerStopRm ${NAME} # kill the old one
 dockerNetworkCreate ${NETWORK} # create the network if needed
+appCreateDir ${DOCKERAPPDIR} # create the folder if needed
 #appCreateDir ${CONFIGDIR} # create the folder if needed
-appCreateDir ${DOCKERAPPDIR}
 appBackup ${DOCKERDIR} ${NAME} # backup the app
 
 
@@ -34,7 +34,11 @@ sudo docker run --detach --restart=unless-stopped \
   --env PGID=${DOCKER_GID} \
   --env TZ=${LOCAL_TZ} \
   --network=${NETWORK} \
+  --env CMD_DOMAIN=${NAME}.${MY_DOMAIN} \
+  --env CMD_PROTOCOL_USESSL=true \
   --mount type=bind,src=${DOCKERAPPDIR},dst=/config \
-  --publish published=3000,target=3000,protocol=tcp,mode=ingress \
+`:  --publish published=3000,target=3000,protocol=tcp,mode=ingress` \
   ${IMAGE}
+
+dockerRestartProxy
 
