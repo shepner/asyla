@@ -28,11 +28,15 @@ appCreateDir ${DOCKER_D1}/${NAME}/archive
 appBackup ${DOCKERDIR} ${NAME} # backup the app
 
 
-# Initial setup tasks
-#sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} init
-#sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} add 'https://example.com'
-#sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} manage createsuperuser
 echo "User-agent: * Disallow: /" | sudo -u \#${DOCKER_UID} tee -a ${DOCKERAPPDIR}/robots.txt > /dev/null
+
+
+# Initial setup tasks
+if [ ${1} -eq init ] ; then
+  sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} init
+  sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} add 'https://example.com'
+  sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} manage createsuperuser
+else
 
 
 sudo docker run --detach --restart=unless-stopped \
@@ -47,4 +51,7 @@ sudo docker run --detach --restart=unless-stopped \
   --mount type=bind,src=${DOCKER_D1}/${NAME}/archive,dst=/data/archive \
 `:  --publish published=8000,target=8000,protocol=tcp,mode=ingress` \
   ${IMAGE}
+
+
+fi
 
