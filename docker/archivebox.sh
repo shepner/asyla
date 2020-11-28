@@ -36,12 +36,12 @@ appBackup ${DOCKERDIR} ${NAME} # backup the app
 
 
 echo "User-agent: * Disallow: /" | sudo -u \#${DOCKER_UID} tee -a ${DOCKERAPPDIR}/robots.txt > /dev/null
-echo "OUTPUT_PERMISSIONS=775" | sudo -u \#${DOCKER_UID} tee -a ${DOCKERAPPDIR}/ArchiveBox.conf > /dev/null
 
 
 # Initial setup tasks
 if [ ${1} ]; then
   sudo docker run -v ${DOCKERAPPDIR}:/data -v ${DOCKER_D1}/${NAME}/archive:/data/archive -it ${IMAGE} init
+  echo "OUTPUT_PERMISSIONS=775" | sudo -u \#${DOCKER_UID} tee -a ${DOCKERAPPDIR}/ArchiveBox.conf > /dev/null
   #sudo docker run -v ${DOCKERAPPDIR}:/data -v ${DOCKER_D1}/${NAME}/archive:/data/archive -it ${IMAGE} add 'https://example.com'
   sudo docker run -v ${DOCKERAPPDIR}:/data -v ${DOCKER_D1}/${NAME}/archive:/data/archive -it ${IMAGE} manage createsuperuser
 fi
