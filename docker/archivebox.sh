@@ -18,6 +18,13 @@ DOCKERAPPDIR=${DOCKERDIR}/${NAME}
 CONFIGDIR=${DOCKERAPPDIR}/config
 
 
+# Initial setup tasks
+if [ ${1} -eq init ] ; then
+  dockerStopRm ${NAME} # kill the old one
+  sudo rm -R ${DOCKERAPPDIR}
+fi
+
+
 # Perform setups/updates as needed
 dockerPull ${IMAGE} # fetch the latest image
 dockerStopRm ${NAME} # kill the old one
