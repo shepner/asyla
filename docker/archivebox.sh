@@ -19,7 +19,7 @@ CONFIGDIR=${DOCKERAPPDIR}/config
 
 
 # Initial setup tasks
-if [ ${1} = "init" ]; then
+if [ $1 = "init" ]; then
   dockerStopRm ${NAME} # kill the old one
   sudo rm -R ${DOCKERAPPDIR}
 fi
@@ -39,11 +39,11 @@ echo "User-agent: * Disallow: /" | sudo -u \#${DOCKER_UID} tee -a ${DOCKERAPPDIR
 
 
 # Initial setup tasks
-if [ ${1} = "init" ]; then
+if [ $1 = "init" ]; then
   sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} init
   sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} add 'https://example.com'
   sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} manage createsuperuser
-else
+fi
 
 
 sudo docker run --detach --restart=unless-stopped \
@@ -58,7 +58,4 @@ sudo docker run --detach --restart=unless-stopped \
   --mount type=bind,src=${DOCKER_D1}/${NAME}/archive,dst=/data/archive \
 `:  --publish published=8000,target=8000,protocol=tcp,mode=ingress` \
   ${IMAGE}
-
-
-fi
 
