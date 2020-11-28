@@ -36,6 +36,7 @@ appBackup ${DOCKERDIR} ${NAME} # backup the app
 
 
 echo "User-agent: * Disallow: /" | sudo -u \#${DOCKER_UID} tee -a ${DOCKERAPPDIR}/robots.txt > /dev/null
+echo "OUTPUT_PERMISSIONS=775" | sudo -u \#${DOCKER_UID} tee -a ${DOCKERAPPDIR}/ArchiveBox.conf > /dev/null
 
 
 # Initial setup tasks
