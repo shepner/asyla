@@ -34,8 +34,8 @@ sudo docker run --detach --restart=unless-stopped \
   --env PGID=${DOCKER_GID} \
   --env TZ=${LOCAL_TZ} \
   --network=${NETWORK} \
-  --env CMD_DOMAIN=${NAME}.${MY_DOMAIN} \
-  --env CMD_PROTOCOL_USESSL=true \
+`:  --env CMD_DOMAIN=${NAME}.${MY_DOMAIN}` \
+`:  --env CMD_PROTOCOL_USESSL=true` \
   --mount type=bind,src=${DOCKERAPPDIR},dst=/config \
 `:  --publish published=3000,target=3000,protocol=tcp,mode=ingress` \
   ${IMAGE}
