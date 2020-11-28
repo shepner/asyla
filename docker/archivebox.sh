@@ -19,10 +19,10 @@ CONFIGDIR=${DOCKERAPPDIR}/config
 
 
 # Initial setup tasks
-if [ $1 = 'init' ]; then
+if [ -z $1 ]; then; if [ $1 = 'init' ]; then
   dockerStopRm ${NAME} # kill the old one
   sudo rm -R ${DOCKERAPPDIR}
-fi
+fi; fi
 
 
 # Perform setups/updates as needed
