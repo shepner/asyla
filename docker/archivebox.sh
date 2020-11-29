@@ -34,16 +34,12 @@ else
 fi
 
 
-# Initial setup tasks
-if [ ${SWITCH} = "new" ]; then
-  dockerStopRm ${NAME} # kill the old one
-  sudo rm -R ${DOCKERAPPDIR}
-fi
-
-
 # Perform setups/updates as needed
 dockerPull ${IMAGE} # fetch the latest image
 dockerStopRm ${NAME} # kill the old one
+if [ ${SWITCH} = "new" ]; then # start with a fresh config folder
+  sudo rm -R ${DOCKERAPPDIR}
+fi
 dockerNetworkCreate ${NETWORK} # create the network if needed
 #appCreateDir ${CONFIGDIR} # create the folder if needed
 appCreateDir ${DOCKERAPPDIR}/archive
@@ -51,12 +47,14 @@ appCreateDir ${DOCKER_D1}/${NAME}/archive
 appBackup ${DOCKERDIR} ${NAME} # backup the app
 
 
-# Init the DB (needed when the schema changes)
+# Configs that are mainly needed for a new setup or when the schema changes
+#
+# Init the DB
 sudo docker run -v ${DOCKERAPPDIR}:/data -v ${DOCKER_D1}/${NAME}/archive:/data/archive -it ${IMAGE} init
 # Set default file permissions
 sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} config --set OUTPUT_PERMISSIONS=775
-#
-sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} config --set PUBLIC_SNAPSHOTS=False
+# Permit public access to the pages
+sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} config --set PUBLIC_SNAPSHOTS=True
 # Turn off public access to the top level page
 sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} config --set PUBLIC_INDEX=False
 # Prevent viewing the files within the directory 
