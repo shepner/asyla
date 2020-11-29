@@ -28,7 +28,7 @@ DOCKERAPPDIR=${DOCKERDIR}/${NAME}
 CONFIGDIR=${DOCKERAPPDIR}/config
 
 
-if [ -n ${1} ]; then
+if [ -z ${1} ]; then
   1="none" # set a value so the rest of the script doesnt complain
 fi
 
