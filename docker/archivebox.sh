@@ -32,6 +32,8 @@ if [ -z ${1} ]; then
   1="none" # set a value so the rest of the script doesnt complain
 fi
 
+echo ${1}
+
 
 # Initial setup tasks
 if [ ${1} == "new" ]; then
