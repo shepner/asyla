@@ -54,11 +54,10 @@ appBackup ${DOCKERDIR} ${NAME} # backup the app
 # Init the DB (needed when the schema changes)
 sudo docker run -v ${DOCKERAPPDIR}:/data -v ${DOCKER_D1}/${NAME}/archive:/data/archive -it ${IMAGE} init
 # Ensure base settings are in place
-sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} config \
-  --set OUTPUT_PERMISSIONS=775 \
-  --set PUBLIC_SNAPSHOTS=True \
-  --set PUBLIC_INDEX=True \
-  --set PUBLIC_ADD_VIEW=False
+sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} config --set OUTPUT_PERMISSIONS=775
+sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} config --set PUBLIC_SNAPSHOTS=True
+sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} config --set PUBLIC_INDEX=True
+sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} config --set PUBLIC_ADD_VIEW=False
 echo "User-agent: * Disallow: /" | sudo -u \#${DOCKER_UID} tee ${DOCKERAPPDIR}/robots.txt > /dev/null
 
 
