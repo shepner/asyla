@@ -39,3 +39,5 @@ sudo docker run --detach --restart=unless-stopped \
   --mount type=bind,src=/mnt/nas/data1/docker/transmission/downloads/complete,dst=/downloads \
   ${IMAGE}
 
+dockerRestartProxy
+

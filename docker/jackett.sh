@@ -38,3 +38,5 @@ sudo docker run --detach --restart=unless-stopped \
   --mount type=bind,src=${DOCKERAPPDIR}/downloads,dst=/downloads \
   $IMAGE
 
+dockerRestartProxy
+

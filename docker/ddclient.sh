@@ -1,5 +1,5 @@
 #!/bin/sh
-# https://docs.linuxserver.io/images/docker-dillinger
+# https://docs.linuxserver.io/images/docker-ddclient
 
 
 # Load the global functions and default environment variables

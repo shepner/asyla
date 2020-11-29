@@ -38,4 +38,5 @@ sudo docker run --detach --restart=always \
 `:  --publish published=4040,target=4040,protocol=tcp,mode=ingress `\
   ${IMAGE}
 
+dockerRestartProxy
 

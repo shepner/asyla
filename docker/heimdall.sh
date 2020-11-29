@@ -41,3 +41,5 @@ sudo docker run --detach --restart=unless-stopped \
   --mount type=bind,src=${CONFIGDIR},dst=/config \
   ${IMAGE}
 
+dockerRestartProxy
+

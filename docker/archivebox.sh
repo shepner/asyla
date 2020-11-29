@@ -4,8 +4,10 @@
 # Instructions for how to schedule jobs
 #sudo docker exec -it ${NAME} archivebox schedule --help
 
-# example of how to import a file manually (doesnt work)
-# sudo docker run -it -v /docker/archivebox:/data -v /mnt/nas/data1/docker/archivebox/archive/:/data/archive archivebox/archivebox add --depth=1 '/data/Safari_Bookmarks.html'
+# example of how to import a file manually:
+#sudo docker exec -it archivebox bash
+#su archivebox
+#archivebox add --depth=0 < ./Safari_Bookmarks.html
 
 # Load the global functions and environment variables
 . ~/scripts/docker/common.sh
@@ -43,9 +45,11 @@ echo "User-agent: * Disallow: /" | sudo -u \#${DOCKER_UID} tee -a ${DOCKERAPPDIR
 # Initial setup tasks
 if [ ${1} ]; then
   sudo docker run -v ${DOCKERAPPDIR}:/data -v ${DOCKER_D1}/${NAME}/archive:/data/archive -it ${IMAGE} init
-  echo "OUTPUT_PERMISSIONS=775" | sudo -u \#${DOCKER_UID} tee -a ${DOCKERAPPDIR}/ArchiveBox.conf > /dev/null
-  #sudo docker run -v ${DOCKERAPPDIR}:/data -v ${DOCKER_D1}/${NAME}/archive:/data/archive -it ${IMAGE} add 'https://example.com'
-  sudo docker run -v ${DOCKERAPPDIR}:/data -v ${DOCKER_D1}/${NAME}/archive:/data/archive -it ${IMAGE} manage createsuperuser
+  sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} config --set OUTPUT_PERMISSIONS=775
+  sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} config --set PUBLIC_SNAPSHOTS=True
+  sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} config --set PUBLIC_INDEX=True
+  sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} config --set PUBLIC_ADD_VIEW=True
+  sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} manage createsuperuser
 fi
 
 
