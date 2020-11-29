@@ -28,12 +28,14 @@ CONFIGDIR=${DOCKERAPPDIR}/config
 
 
 if [ -z ${1} ]; then
-  1="none" # set a value so the rest of the script doesnt complain
+  SWITCH="none" # set a value so the rest of the script doesnt complain
+else
+  SWITCH=${1}
 fi
 
 
 # Initial setup tasks
-if [ ${1} = "new" ]; then
+if [ ${SWITCH} = "new" ]; then
   dockerStopRm ${NAME} # kill the old one
   sudo rm -R ${DOCKERAPPDIR}
 fi
@@ -60,7 +62,7 @@ sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} config --set PUBLIC_INDEX=
 sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} config --set PUBLIC_ADD_VIEW=True
 
 
-if [ ${1} = "new" ]; then
+if [ ${SWITCH} = "new" ]; then
   sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} manage createsuperuser
 fi
 
