@@ -4,7 +4,6 @@
 # $1 values:
 # "": normal opertion
 # "new": start fresh
-# "init": reinitialize the DB
 
 
 # Instructions for how to schedule jobs
@@ -32,13 +31,11 @@ if [ -z ${1} ]; then
   1="none" # set a value so the rest of the script doesnt complain
 fi
 
-echo ${1}
-
 
 # Initial setup tasks
 if [ ${1} = "new" ]; then
   dockerStopRm ${NAME} # kill the old one
-  #sudo rm -R ${DOCKERAPPDIR}
+  sudo rm -R ${DOCKERAPPDIR}
 fi
 
 
@@ -52,21 +49,19 @@ appCreateDir ${DOCKER_D1}/${NAME}/archive
 appBackup ${DOCKERDIR} ${NAME} # backup the app
 
 
+# update the DB
+sudo docker run -v ${DOCKERAPPDIR}:/data -v ${DOCKER_D1}/${NAME}/archive:/data/archive -it ${IMAGE} init
+# set file permissions
+sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} config --set OUTPUT_PERMISSIONS=775
+# Website security settings
 echo "User-agent: * Disallow: /" | sudo -u \#${DOCKER_UID} tee ${DOCKERAPPDIR}/robots.txt > /dev/null
+sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} config --set PUBLIC_SNAPSHOTS=True
+sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} config --set PUBLIC_INDEX=True
+sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} config --set PUBLIC_ADD_VIEW=True
 
-
-# Initial setup tasks
-if [ ${1} = "init" ]; then
-  sudo docker run -v ${DOCKERAPPDIR}:/data -v ${DOCKER_D1}/${NAME}/archive:/data/archive -it ${IMAGE} init
-fi
 
 if [ ${1} = "new" ]; then
-  sudo docker run -v ${DOCKERAPPDIR}:/data -v ${DOCKER_D1}/${NAME}/archive:/data/archive -it ${IMAGE} init
-  sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} config --set OUTPUT_PERMISSIONS=775
-  sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} config --set PUBLIC_SNAPSHOTS=True
-  sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} config --set PUBLIC_INDEX=True
-  sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} config --set PUBLIC_ADD_VIEW=True
-  #sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} manage createsuperuser
+  sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} manage createsuperuser
 fi
 
 
