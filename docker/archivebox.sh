@@ -58,7 +58,7 @@ sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} config \
   --set OUTPUT_PERMISSIONS=775 \
   --set PUBLIC_SNAPSHOTS=True \
   --set PUBLIC_INDEX=True \
-  --set PUBLIC_ADD_VIEW=True
+  --set PUBLIC_ADD_VIEW=False
 echo "User-agent: * Disallow: /" | sudo -u \#${DOCKER_UID} tee ${DOCKERAPPDIR}/robots.txt > /dev/null
 
 
