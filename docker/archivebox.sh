@@ -6,13 +6,13 @@
 # "new": start fresh
 
 
-# Instructions for how to schedule jobs
-#sudo docker exec -it ${NAME} archivebox schedule --help
-
-# example of how to import a file manually:
+# Examples:
 #sudo docker exec -it archivebox bash
-#su archivebox
-#archivebox add --depth=0 < ./Safari_Bookmarks.html
+# sudo docker exec -it archivebox su archivebox archivebox --help
+# sudo docker exec -it archivebox su archivebox archivebox schedule --help
+# sudo docker exec -it archivebox su archivebox archivebox add --depth=0 < ./Safari_Bookmarks.html
+# sudo docker exec -it archivebox su archivebox archivebox manage createsuperuser
+
 
 # Load the global functions and environment variables
 . ~/scripts/docker/common.sh
@@ -51,15 +51,15 @@ appCreateDir ${DOCKER_D1}/${NAME}/archive
 appBackup ${DOCKERDIR} ${NAME} # backup the app
 
 
-# update the DB
+# Init the DB (needed when the schema changes)
 sudo docker run -v ${DOCKERAPPDIR}:/data -v ${DOCKER_D1}/${NAME}/archive:/data/archive -it ${IMAGE} init
-# set file permissions
-sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} config --set OUTPUT_PERMISSIONS=775
-# Website security settings
+# Ensure base settings are in place
+sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} config \
+  --set OUTPUT_PERMISSIONS=775 \
+  --set PUBLIC_SNAPSHOTS=True \
+  --set PUBLIC_INDEX=True \
+  --set PUBLIC_ADD_VIEW=True
 echo "User-agent: * Disallow: /" | sudo -u \#${DOCKER_UID} tee ${DOCKERAPPDIR}/robots.txt > /dev/null
-sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} config --set PUBLIC_SNAPSHOTS=True
-sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} config --set PUBLIC_INDEX=True
-sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} config --set PUBLIC_ADD_VIEW=True
 
 
 if [ ${SWITCH} = "new" ]; then
