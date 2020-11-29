@@ -36,7 +36,7 @@ echo ${1}
 
 
 # Initial setup tasks
-if [ ${1} == "new" ]; then
+if [ ${1} = "new" ]; then
   dockerStopRm ${NAME} # kill the old one
   #sudo rm -R ${DOCKERAPPDIR}
 fi
@@ -56,11 +56,11 @@ echo "User-agent: * Disallow: /" | sudo -u \#${DOCKER_UID} tee ${DOCKERAPPDIR}/r
 
 
 # Initial setup tasks
-if [ ${1} == "init" ]; then
+if [ ${1} = "init" ]; then
   sudo docker run -v ${DOCKERAPPDIR}:/data -v ${DOCKER_D1}/${NAME}/archive:/data/archive -it ${IMAGE} init
 fi
 
-if [ ${1} == "new" ]; then
+if [ ${1} = "new" ]; then
   sudo docker run -v ${DOCKERAPPDIR}:/data -v ${DOCKER_D1}/${NAME}/archive:/data/archive -it ${IMAGE} init
   sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} config --set OUTPUT_PERMISSIONS=775
   sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} config --set PUBLIC_SNAPSHOTS=True
