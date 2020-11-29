@@ -47,25 +47,24 @@ appCreateDir ${DOCKER_D1}/${NAME}/archive
 appBackup ${DOCKERDIR} ${NAME} # backup the app
 
 
-# Configs that are mainly needed for a new setup or when the schema changes
-#
-# Init the DB
-sudo docker run -v ${DOCKERAPPDIR}:/data -v ${DOCKER_D1}/${NAME}/archive:/data/archive -it ${IMAGE} init
+if [ ${SWITCH} = "new" ]; then
+  # Init the DB (also needed if/when the schema changes)
+  sudo docker run -v ${DOCKERAPPDIR}:/data -v ${DOCKER_D1}/${NAME}/archive:/data/archive -it ${IMAGE} init
+  # Create an admin account
+  sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} manage createsuperuser
+fi
+
+
 # Set default file permissions
 sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} config --set OUTPUT_PERMISSIONS=775
 # Permit public access to the pages
 sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} config --set PUBLIC_SNAPSHOTS=True
 # Turn off public access to the top level page
 sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} config --set PUBLIC_INDEX=False
-# Prevent viewing the files within the directory 
+# Prevent viewing the files within the directory
 sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} config --set PUBLIC_ADD_VIEW=False
 # Tell the bots to go away
 echo "User-agent: * Disallow: /" | sudo -u \#${DOCKER_UID} tee ${DOCKERAPPDIR}/robots.txt > /dev/null
-
-
-if [ ${SWITCH} = "new" ]; then
-  sudo docker run -v ${DOCKERAPPDIR}:/data -it ${IMAGE} manage createsuperuser
-fi
 
 
 sudo docker run --detach --restart=unless-stopped \
