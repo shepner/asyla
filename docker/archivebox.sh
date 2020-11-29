@@ -36,7 +36,7 @@ fi
 # Initial setup tasks
 if [ ${1} == "new" ]; then
   dockerStopRm ${NAME} # kill the old one
-  sudo rm -R ${DOCKERAPPDIR}
+  #sudo rm -R ${DOCKERAPPDIR}
 fi
 
 
@@ -50,7 +50,7 @@ appCreateDir ${DOCKER_D1}/${NAME}/archive
 appBackup ${DOCKERDIR} ${NAME} # backup the app
 
 
-echo "User-agent: * Disallow: /" | sudo -u \#${DOCKER_UID} tee -a ${DOCKERAPPDIR}/robots.txt > /dev/null
+echo "User-agent: * Disallow: /" | sudo -u \#${DOCKER_UID} tee ${DOCKERAPPDIR}/robots.txt > /dev/null
 
 
 # Initial setup tasks
