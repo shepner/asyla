@@ -73,9 +73,8 @@ sudo docker run --detach --restart=unless-stopped \
 `:  --cpu-shares=1024` `# default job priority` \
 `:  --env PUID=${DOCKER_UID}` \
 `:  --env PGID=${DOCKER_GID}` \
-`:  --env TZ=${LOCAL_TZ}` \
+  --env TZ=${LOCAL_TZ} \
   --network=${NETWORK} \
-  --mount type=bind,src=/etc/localtime,dst=/etc/localtime,readonly=1 \
   --mount type=bind,src=${DOCKERAPPDIR},dst=/data \
   --mount type=bind,src=${DOCKER_D1}/${NAME}/archive,dst=/data/archive \
 `:  --publish published=8000,target=8000,protocol=tcp,mode=ingress` \

@@ -56,6 +56,9 @@ sudo docker run --detach --restart=unless-stopped \
 `:  --publish published=8888,target=8888,protocol=tcp,mode=ingress` \
   ${IMAGE}
 
+
+dockerRestartProxy
+
 # To troubleshoot:
 # docker exec -it ${IMAGE} bash
 
