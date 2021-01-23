@@ -44,6 +44,7 @@ sudo docker run --detach --restart=always \
   --mount type=bind,src=${DATA1}/media,dst=/media \
   --publish published=6080,target=8080,protocol=tcp,mode=ingress \
   --publish published=6081,target=8081,protocol=tcp,mode=ingress \
+  --publish published=3389,target=3389,protocol=tcp,mode=ingress \
   ${IMAGE}
 
 dockerRestartProxy
