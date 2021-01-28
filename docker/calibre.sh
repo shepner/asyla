@@ -3,7 +3,7 @@
 
 # 8080: Calibre desktop gui. ctrl-alt-shift to access the clipboard
 # 8081: Calibre webserver
-# 3389: RDP of Calibre desktop
+# 3389: RDP of Calibre desktop (calibre:calibre)
 
 # [Customizing calibre](https://manual.calibre-ebook.com/customize.html)
 # Environment variables:
