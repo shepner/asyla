@@ -1,7 +1,10 @@
 #!/bin/sh
 
+sudo apt-get update
+
 sudo service plexmediaserver stop
 
+# https://support.plex.tv/articles/235974187-enable-repository-updating-for-supported-linux-server-distributions/
 sudo apt-get upgrade plexmediaserver
 
 # https://github.com/ZeroQI/Absolute-Series-Scanner
