@@ -1,11 +1,14 @@
 #!/bin/sh
 
+# https://support.plex.tv/articles/235974187-enable-repository-updating-for-supported-linux-server-distributions/
+echo deb https://downloads.plex.tv/repo/deb public main | sudo tee /etc/apt/sources.list.d/plexmediaserver.list
+curl https://downloads.plex.tv/plex-keys/PlexSign.key | sudo apt-key add -
 sudo apt-get update
+
 
 sudo service plexmediaserver stop
 
-# https://support.plex.tv/articles/235974187-enable-repository-updating-for-supported-linux-server-distributions/
-sudo apt-get upgrade plexmediaserver
+sudo apt-get -y upgrade plexmediaserver
 
 # https://github.com/ZeroQI/Absolute-Series-Scanner
 PLEXDIR="/var/lib/plexmediaserver/Library/Application Support/Plex Media Server/Scanners"
