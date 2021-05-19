@@ -1,6 +1,7 @@
 #!/bin/sh
 
-git pull origin master
+#git pull origin master
+git pull --ff origin master
 
 # git init
 git add .
