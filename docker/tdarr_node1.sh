@@ -30,7 +30,7 @@ appCreateDir ${DOCKERAPPDIR}/transcode_cache
 
 sudo docker run --detach --restart=unless-stopped \
   --name ${NAME} \
-  --env nodeID=MyFirstTdarrNode \
+  --env nodeID=TdarrNode1 \
 `:  --cpus=2` \
 `:  --cpu-shares=768` \
   --env TZ=${LOCAL_TZ} \
@@ -40,9 +40,11 @@ sudo docker run --detach --restart=unless-stopped \
   --mount type=bind,src=${DOCKERAPPDIR}/logs,dst=/app/logs \
   --mount type=bind,src=${DOCKERAPPDIR}/transcode_cache,dst=/tmp \
   --mount type=bind,src=/mnt/nas/data1/media/Videos/00-Handbrake,dst=/media \
-  --env nodeIP=`hostname -I | sed 's/\s.*//'` \
+`:  --env nodeIP=`hostname -I | sed 's/\s.*//'`` \
+  --env nodeIP=10.0.0.81 \
   --env nodePort=8267 \
-  --env serverIP=`hostname -I | sed 's/\s.*//'` \
+`:  --env serverIP=`hostname -I | sed 's/\s.*//'`` \
+  --env serverIP=10.0.0.81 \
   --env serverPort=8266 \
   --network=${NETWORK} \
   --publish published=8267,target=8267,protocol=tcp,mode=ingress \
