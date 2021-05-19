@@ -39,7 +39,10 @@ sudo docker run --detach --restart=unless-stopped \
   --mount type=bind,src=${CONFIGDIR},dst=/configs \
   --mount type=bind,src=${DOCKERAPPDIR}/logs,dst=/app/logs \
   --mount type=bind,src=${DOCKERAPPDIR}/transcode_cache,dst=/tmp \
-  --mount type=bind,src=/mnt/nas/data1/media/Videos/00-Handbrake,dst=/media \
+  --mount type=bind,src=/mnt/nas/data1/media/Videos/00-Handbrake/Movie/HD,dst=/media/Movie/HD \
+  --mount type=bind,src=/mnt/nas/data1/media/Videos/00-Handbrake/Movie/SD,dst=/media/Movie/SD \
+  --mount type=bind,src=/mnt/nas/data1/media/Videos/00-Handbrake/Other,dst=/media/Other \
+  --mount type=bind,src=/mnt/nas/data1/media/Videos/00-Handbrake/TV,dst=/media/TV 
   --env serverIP=10.0.0.81 \
   --env serverPort=8266 \
   --env webUIPort=8265 \
