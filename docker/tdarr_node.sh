@@ -40,9 +40,9 @@ sudo docker run --detach --restart=unless-stopped \
   --mount type=bind,src=${DOCKERAPPDIR}/logs,dst=/app/logs \
   --mount type=bind,src=${DOCKERAPPDIR}/transcode_cache,dst=/tmp \
   --mount type=bind,src=/mnt/nas/data1/media/Videos/00-Handbrake,dst=/media \
-  --env nodeIP=0.0.0.0 \
+  --env nodeIP=`hostname -I | sed 's/\s.*//'` \
   --env nodePort=8267 \
-  --env serverIP=0.0.0.0 \
+  --env serverIP=`hostname -I | sed 's/\s.*//'` \
   --env serverPort=8266 \
   --network=${NETWORK} \
   --publish published=8267,target=8267,protocol=tcp,mode=ingress \

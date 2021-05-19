@@ -40,7 +40,7 @@ sudo docker run --detach --restart=unless-stopped \
   --mount type=bind,src=${DOCKERAPPDIR}/logs,dst=/app/logs \
   --mount type=bind,src=${DOCKERAPPDIR}/transcode_cache,dst=/tmp \
   --mount type=bind,src=/mnt/nas/data1/media/Videos/00-Handbrake,dst=/media \
-  --env serverIP=0.0.0.0 \
+  --env serverIP=`hostname -I | sed 's/\s.*//'` \
   --env serverPort=8266 \
   --env webUIPort=8265 \
   --network=${NETWORK} \
