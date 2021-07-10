@@ -7,6 +7,7 @@
 # Load the global functions and default environment variables
 . ~/scripts/docker/common.sh
 
+NAME=tdarr
 
 # Setup the app specific environment vars
 IMAGE=haveagitgat/${NAME}
