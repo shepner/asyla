@@ -31,13 +31,13 @@ sudo docker run --detach --restart=unless-stopped \
   --name ${NAME} \
   --env TZ=${LOCAL_TZ} \
   --network=${NETWORK} \
-  --publish published=53,target=53,protocol=tcp,mode=ingress \
-  --publish published=53,target=53,protocol=udp,mode=ingress \
-  --publish published=80,target=80,protocol=udp,mode=ingress \
+  --publish published=5353,target=53,protocol=tcp,mode=ingress \
+  --publish published=5353,target=53,protocol=udp,mode=ingress \
+  --publish published=9080,target=80,protocol=udp,mode=ingress \
   --mount type=bind,src=${DOCKERAPPDIR}/etc-pihole,dst=/etc/pihole \
   --mount type=bind,src=${DOCKERAPPDIR}/etc-dnsmasq.d,dst=/etc/dnsmasq.d \
-  --dns=127.0.0.1 \
-  --dns=1.1.1.1 \
+  --dns=208.67.222.222 \
+  --dns=208.67.220.220 \
   --hostname pi.hole \
   --env VIRTUAL_HOST="pi.hole" \
   --env PROXY_LOCATION="pi.hole" \
