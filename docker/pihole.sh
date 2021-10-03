@@ -1,6 +1,7 @@
 #!/bin/sh
 # https://github.com/pi-hole/docker-pi-hole/#running-pi-hole-docker
-
+# https://github.com/pi-hole/docker-pi-hole/#tips-and-tricks
+# sudo docker exec -it pihole /bin/bash
 
 # Load the global functions and default environment variables
 . ~/scripts/docker/common.sh
@@ -37,12 +38,14 @@ sudo docker run --detach --restart=unless-stopped \
   --mount type=bind,src=${DOCKERAPPDIR}/hosts,dst=/etc/hosts \
   --mount type=bind,src=${DOCKERAPPDIR}/etc-pihole,dst=/etc/pihole \
   --mount type=bind,src=${DOCKERAPPDIR}/etc-dnsmasq.d,dst=/etc/dnsmasq.d \
-  --dns=208.67.222.222 \
-  --dns=208.67.220.220 \
-  --hostname pi.hole \
-  --env VIRTUAL_HOST="pi.hole" \
-  --env PROXY_LOCATION="pi.hole" \
   --env ServerIP=${IP} `: Needs to be the external IP `\
+  --env PIHOLE_DOMAIN="asyla.org" \
+  --hostname "pihole.asyla.org" \
+  --env VIRTUAL_HOST=`hostname` \
+  --dns=127.0.0.1 \
+  `: --dns=208.67.222.222 `\
+  `: --dns=208.67.220.220 `\
+  `: --env PROXY_LOCATION="pi.hole" `\
   ${IMAGE}:latest
 
 dockerRestartProxy
