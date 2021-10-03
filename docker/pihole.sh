@@ -42,7 +42,7 @@ sudo docker run --detach --restart=unless-stopped \
   --env PIHOLE_DOMAIN="asyla.org" \
   --hostname "pihole.asyla.org" \
   --env VIRTUAL_HOST=`hostname` \
-  --dns=127.0.0.1 \
+  `: --dns=127.0.0.1 `\
   `: --dns=208.67.222.222 `\
   `: --dns=208.67.220.220 `\
   `: --env PROXY_LOCATION="pi.hole" `\
