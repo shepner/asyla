@@ -34,7 +34,7 @@ sudo docker run --detach --restart=unless-stopped \
   --publish published=5353,target=53,protocol=tcp,mode=ingress \
   --publish published=5353,target=53,protocol=udp,mode=ingress \
   --publish published=9080,target=80,protocol=tcp,mode=ingress \
-  --mount type=bind,src=${DOCKERAPPDIR}/hostfile,dst=/etc/hostfile \
+  --mount type=bind,src=${DOCKERAPPDIR}/hosts,dst=/etc/hosts \
   --mount type=bind,src=${DOCKERAPPDIR}/etc-pihole,dst=/etc/pihole \
   --mount type=bind,src=${DOCKERAPPDIR}/etc-dnsmasq.d,dst=/etc/dnsmasq.d \
   --dns=208.67.222.222 \
