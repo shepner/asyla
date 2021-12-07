@@ -20,7 +20,8 @@ dockerPull ${IMAGE} # fetch the latest image
 dockerStopRm ${NAME} # kill the old one
 dockerNetworkCreate ${NETWORK} # create the network if needed
 appCreateDir ${CONFIGDIR} # create the config folder if needed
-appBackup ${DOCKERDIR} ${NAME} # backup the app
+#appBackup ${DOCKERDIR} ${NAME} # backup the app
+sudo -u \#0 tar -czf ${DOCKER_D1}/${NAME}.tgz -C ${DOCKERDIR} ${NAME}
 
 
 sudo docker run --detach --restart=unless-stopped \
