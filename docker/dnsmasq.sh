@@ -6,8 +6,13 @@
 # WARNING: This runs with privledged rights
 
 
+# Load the global functions and default environment variables
+. ~/scripts/docker/common.sh
+
+
 # Setup the app specific environment vars
-IMAGE=shepner/${NAME}
+#IMAGE=shepner/${NAME}
+IMAGE=${NAME}
 #DOCKERDIR=${DOCKER_DL} # local disk
 #DOCKERDIR=${DOCKER_D1} # NFS attached HDD
 DOCKERDIR=${DOCKER_D2} # NFS attached SSD
@@ -15,8 +20,11 @@ DOCKERAPPDIR=${DOCKERDIR}/${NAME}
 CONFIGDIR=${DOCKERAPPDIR}/config
 
 
+# fetch/build image
+sudo docker build --tag ${NAME}:latest github.com/shepner/Docker-DNSmasq
+
 # Perform setups/updates as needed
-dockerPull ${IMAGE} # fetch the latest image
+#dockerPull ${IMAGE} # fetch the latest image
 dockerStopRm ${NAME} # kill the old one
 dockerNetworkCreate ${NETWORK} # create the network if needed
 appCreateDir ${CONFIGDIR} # create the folder if needed
