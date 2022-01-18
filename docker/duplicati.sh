@@ -37,7 +37,6 @@ sudo docker run --detach --restart=unless-stopped \
   --publish published=8200,target=8200,protocol=tcp,mode=ingress \
   --mount type=bind,src=${CONFIGDIR},dst=/config \
   --mount type=bind,${DATA1}/media,dst=/source/data1/media \
-`:#  --mount type=bind,src=</path/to/backups>,dst=/backups` \
   $IMAGE
 
 dockerRestartProxy
