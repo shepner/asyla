@@ -36,7 +36,7 @@ sudo docker run --detach --restart=unless-stopped \
   --env AUTO_UPDATE=true \
   --publish published=8200,target=8200,protocol=tcp,mode=ingress \
   --mount type=bind,src=${CONFIGDIR},dst=/config \
-  --mount type=bind,src=${DATA1}/media,dst=/source/data1/media \
+  --mount type=bind,src=${DATA1}/media,dst=/source/nas01/data1/media \
   $IMAGE
 
 #  --mount type=bind,src=</path/to/backups>,dst=/backups \
