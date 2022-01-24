@@ -1,4 +1,6 @@
-# ns01
+# de01
+
+Docker Container (DCT)
 
 Alpine Linux LXC
 
@@ -7,11 +9,15 @@ Alpine Linux LXC
 
 In Proxmox:
 * Node: VM host #1 (this is permenant due to the bind mount preventing migration)
-* CT ID: 302
-* Hostname: ns01
+* CT ID: 110
+* Hostname: de01
 * Upload the SSH public key for root (which is the only ID)
 
 * Template: Alpine
+
+* Cores: 24
+
+* Memory: 102400
 
 * IPv4
   * set the IP
@@ -30,13 +36,15 @@ Docs:
 Do this from the console of the host server:
 
 ``` shell
-pct set 301 -mp0 /mnt/pve/nas-data2-docker/dnsmasq,mp=/mnt
+pct set 110 -mp0 /mnt/pve/nas-data1-docker/dnsmasq,mp=/mnt/nas/data1/docker
+pct set 110 -mp1 /mnt/pve/nas-data2-docker/dnsmasq,mp=/mnt/nas/data2/docker
 ```
 
 Or the same thing:
 ``` shell
-cat >> /etc/pve/lxc/301.conf << EOF
-mp0: /mnt/pve/nas-data2-docker/dnsmasq,mp=/mnt
+cat >> /etc/pve/lxc/110.conf << EOF
+mp0: /mnt/pve/nas-data1-docker,mp=/mnt/nas/data1/docker
+mp1: /mnt/pve/nas-data2-docker,mp=/mnt/nas/data2/docker
 EOF
 ```
 

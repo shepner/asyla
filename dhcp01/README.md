@@ -1,4 +1,4 @@
-# ns01
+# dhcp01
 
 Alpine Linux LXC
 
@@ -7,8 +7,8 @@ Alpine Linux LXC
 
 In Proxmox:
 * Node: VM host #1 (this is permenant due to the bind mount preventing migration)
-* CT ID: 302
-* Hostname: ns01
+* CT ID: 303
+* Hostname: dhcp01
 * Upload the SSH public key for root (which is the only ID)
 
 * Template: Alpine
@@ -30,12 +30,12 @@ Docs:
 Do this from the console of the host server:
 
 ``` shell
-pct set 301 -mp0 /mnt/pve/nas-data2-docker/dnsmasq,mp=/mnt
+pct set 303 -mp0 /mnt/pve/nas-data2-docker/dnsmasq,mp=/mnt
 ```
 
 Or the same thing:
 ``` shell
-cat >> /etc/pve/lxc/301.conf << EOF
+cat >> /etc/pve/lxc/303.conf << EOF
 mp0: /mnt/pve/nas-data2-docker/dnsmasq,mp=/mnt
 EOF
 ```

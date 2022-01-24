@@ -53,28 +53,28 @@ cat >> /etc/local.d/webproc.start << EOF
 #  &
 
 # DNS only
-webproc \
-  --port 8053 \
-  --configuration-file /mnt/hosts \
-  --configuration-file /mnt/resolv.conf \
-  --configuration-file /mnt/dnsmasq.leases \
-  --configuration-file /mnt/config/dnsmasq.conf \
-  dnsmasq \
-    --no-daemon \
-    --conf-file=/mnt/config/dnsmasq.conf \
-  &
-
-# DHCP only
 #webproc \
 #  --port 8053 \
 #  --configuration-file /mnt/hosts \
 #  --configuration-file /mnt/resolv.conf \
 #  --configuration-file /mnt/dnsmasq.leases \
-#  --configuration-file /mnt/config/dnsmasq_dhcp.conf \
+#  --configuration-file /mnt/config/dnsmasq.conf \
 #  dnsmasq \
 #    --no-daemon \
-#    --conf-file=/mnt/configdnsmasq_dhcp.conf \
+#    --conf-file=/mnt/config/dnsmasq.conf \
 #  &
+
+# DHCP only
+webproc \
+  --port 8053 \
+  --configuration-file /mnt/hosts \
+  --configuration-file /mnt/resolv.conf \
+  --configuration-file /mnt/dnsmasq.leases \
+  --configuration-file /mnt/config/dnsmasq_dhcp.conf \
+  dnsmasq \
+    --no-daemon \
+    --conf-file=/mnt/configdnsmasq_dhcp.conf \
+  &
 
 EOF
 chmod 754 /etc/local.d/webproc.start
