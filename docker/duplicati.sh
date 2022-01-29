@@ -21,7 +21,7 @@ dockerStopRm ${NAME} # kill the old one
 dockerNetworkCreate ${NETWORK} # create the network if needed
 appCreateDir ${CONFIGDIR} # create the config folder if needed
 appCreateDir ${DOCKERAPPDIR}/downloads
-appBackup ${DOCKERDIR} ${NAME} # backup the app
+#appBackup ${DOCKERDIR} ${NAME} # backup the app
 
 
 sudo docker run --detach --restart=unless-stopped \

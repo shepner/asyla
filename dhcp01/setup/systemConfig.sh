@@ -73,7 +73,7 @@ webproc \
   --configuration-file /mnt/config/dnsmasq_dhcp.conf \
   dnsmasq \
     --no-daemon \
-    --conf-file=/mnt/configdnsmasq_dhcp.conf \
+    --conf-file=/mnt/config/dnsmasq_dhcp.conf \
   &
 
 EOF

@@ -6,133 +6,118 @@ Alpine Linux LXC
 
 ## config container
 
-
-In Proxmox:
-* Node: VM host #1 (this is permenant due to the bind mount preventing migration)
-* CT ID: 110
-* Hostname: de01
-* Upload the SSH public key for root (which is the only ID)
-
-* Template: Alpine
-
-* Cores: 24
-
-* Memory: 102400
-
-* IPv4
-  * set the IP
-  * gateway
-* IPv6
-  * use DHCP
+``` shell
+#pct create 110 /mnt/nas/data2/vm/template/cache/alpine-3.15-default_20211202_amd64.tar.xz \
+pct create 110 nas-data2-vm:vztmpl/alpine-3.15-default_20211202_amd64.tar.xz \
+  --arch amd64 \
+  --ostype alpine \
+  --hostname de01 \
+  --cores 1 \
+  --memory 512 \
+  --swap 512 \
+  --storage nas-data1-vm \
+  --net0 name=eth0,bridge=vmbr0,gw=10.0.0.1,ip=10.0.0.12/24,ip6=dhcp,type=veth \
+  --password \
+  --features nesting=1 \
+  --start true
 
 
-## mount storage
+# patch/update
+pct exec 110 -- sh -c " \
+  apk update \
+  && apk upgrade \
+  "
 
-Docs:
+# set TZ
+# set the tz
+# https://wiki.alpinelinux.org/wiki/Setting_the_timezone
+pct exec 110 -- sh -c " \
+  apk update \
+  && apk add tzdata \
+  && cp /usr/share/zoneinfo/America/Chicago /etc/localtime \
+  && echo "America/Chicago" > /etc/timezone \
+  && apk del tzdata \
+  "
+
+
+# Install sshd
+# https://wiki.alpinelinux.org/wiki/Setting_up_a_SSH_server
+pct exec 110 -- sh -c " \
+  apk update \
+  && apk add openssh \
+  && rc-update add sshd \
+  && /etc/init.d/sshd start \
+  "
+
+# setup the external mounts
+pct exec 110 -- sh -c " \
+  mkdir -p /mnt/nas/data1/docker \
+  && mkdir -p /mnt/nas/data2/docker \
+  "
+pct stop 110 && sleep 10
+pct set 110 -mp0 /mnt/pve/nas-data1-docker,mp=/mnt/nas/data1/docker
+pct set 110 -mp1 /mnt/pve/nas-data2-docker,mp=/mnt/nas/data2/docker
+pct start 110
+
+
+# Install Docker
+# https://wiki.alpinelinux.org/wiki/Docker
+pct exec 110 -- sh -c " \
+  apk update \
+  && apk policy docker \
+  && apk add docker \
+  && addgroup root docker \
+  && rc-update add docker boot \
+  && service docker start \
+  "
+
+
+# THIS PART DOESNT WORK RIGHT
+# Install Docker Compose
+# https://wiki.alpinelinux.org/wiki/Docker
+pct exec 110 -- sh -c " \
+  apk update \
+  && apk add docker-compose \
+  && addgroup root docker \
+  && rc-update add docker boot \
+  && service docker start \
+  "
+
+```
+
+### Test to see if it works
+
+``` shell
+docker run -it --rm hello-world
+```
+
+### if you need to edit the file directly
+
+``` shell
+vi /etc/pve/lxc/110.conf
+```
+
+this is to delete the container:
+
+``` shell
+pct stop 110
+pct destroy 110
+```
+
+
+## docs/references
+
+[tinoji/proxmox_lxc_pct_provisioner.sh]([https://gist.github.com/tinoji/7e066d61a84d98374b08d2414d9524f2)
+[Create LXC Templates](https://www.chucknemeth.com/proxmox/lxc/lxc-template)
+
+### mount storage
+
 * https://pve.proxmox.com/wiki/Unprivileged_LXC_containers
 * https://www.jamescoyle.net/how-to/2019-proxmox-4-x-bind-mount-mount-storage-in-an-lxc-container
 * https://pve.proxmox.com/wiki/Linux_Container#_bind_mount_points
 
-Do this from the console of the host server:
+### Docker
 
-``` shell
-pct set 110 -mp0 /mnt/pve/nas-data1-docker/dnsmasq,mp=/mnt/nas/data1/docker
-pct set 110 -mp1 /mnt/pve/nas-data2-docker/dnsmasq,mp=/mnt/nas/data2/docker
-```
-
-Or the same thing:
-``` shell
-cat >> /etc/pve/lxc/110.conf << EOF
-mp0: /mnt/pve/nas-data1-docker,mp=/mnt/nas/data1/docker
-mp1: /mnt/pve/nas-data2-docker,mp=/mnt/nas/data2/docker
-EOF
-```
+http://docs.docker.com/
 
 
-## next steps
-
-now start the container
-
-go run `setup/systemConfig.sh`
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# ns01
-
-Ubuntu 20.04 Proxmox VM running DNS/DHCP services
-
-## Install Ubuntu
-
-Install Ubuntu 20.04 the usual way.
-
-provide a static IP address
-
-DNS: 208.67.222.222,208.67.220.220
-
-Do NOT setup disk as LVM group
-
-Install OpenSSH
-
-## Fix the UID
-
-First set the permissions of the home dir:
-
-``` shell
-sudo chown -R 1001 /home/`id -un`
-```
-
-Then change the UID accordingly in the passwd files:
-
-``` shell
-sudo vipw
-```
-
-Finally, logout and back in again
-
-## Setup ssh keys
-
-Do this from the local workstation:
-
-``` shell
-DHOST=ns01
-ssh-copy-id -i ~/.ssh/shepner_rsa.pub $DHOST
-
-#scp ~/.ssh/shepner_rsa $DHOST:.ssh/shepner_rsa
-#scp ~/.ssh/shepner_rsa.pub $DHOST:.ssh/shepner_rsa.pub
-#scp ~/.ssh/config $DHOST:.ssh/config
-#ssh $DHOST "chmod -R 700 ~/.ssh"
-```
-
-## Configure the system
-
-``` shell
-bash <(curl -s https://raw.githubusercontent.com/shepner/asyla/master/`hostname -s`/update_scripts.sh)
-
-~/scripts/`hostname -s`/setup/userConfig.sh
-~/scripts/`hostname -s`/setup/systemConfig.sh
-~/scripts/`hostname -s`/setup/nfs.sh
-~/scripts/`hostname -s`/setup/docker.sh
-
-~/update.sh
-```
