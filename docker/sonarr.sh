@@ -31,7 +31,7 @@ sudo docker run --detach --restart=unless-stopped \
   --env PGID=${DOCKER_GID} \
   --env TZ=${LOCAL_TZ} \
   --network=${NETWORK} \
-  --dns 10.0.0.5 \
+`:  --dns 10.0.0.5` \
 `:  --publish published=8989,target=8989,protocol=tcp,mode=ingress` \
   --mount type=bind,src=/etc/localtime,dst=/etc/localtime,readonly=1 \
   --mount type=bind,src=${CONFIGDIR},dst=/config \

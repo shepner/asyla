@@ -1,10 +1,20 @@
-# de01
+# Alpine continer
 
-Docker Container (DCT)
+This is for an Alpine Linux VM guest which will run docker 
 
-Alpine Linux LXC
+## create VM
 
-## config container
+``` shell
+
+
+```
+
+
+
+
+
+
+
 
 ``` shell
 #pct create 110 /mnt/nas/data2/vm/template/cache/alpine-3.15-default_20211202_amd64.tar.xz \
