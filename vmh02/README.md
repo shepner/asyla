@@ -96,3 +96,17 @@ In the event you need to remove a node and you get a "cluster not ready - no quo
 
 If needed, run the scripts in `~/scripts/vm/` which will create the VMs
 
+## VM startup delay
+
+Delay the start of the VMs so external storage can connect first.  From [here](https://forum.proxmox.com/threads/startup-delay-for-first-vm-with-remote-storage.60348/)
+``` shell
+systemctl edit pve-guests.service
+```
+
+Add the following to the file:
+
+```
+[Service]
+ExecStartPre=/bin/sleep 30
+```
+

@@ -26,7 +26,8 @@ appCreateDir ${CONFIGDIR} # create the folder if needed
 appBackup ${DOCKERDIR} ${NAME} # backup the app
 
 
-sudo docker create \
+#sudo docker create \
+sudo docker run --detach --restart=unless-stopped \
   --name ${NAME} \
 `:  --cpu-shares=1024` \
   --env PUID=${DOCKER_UID} \
