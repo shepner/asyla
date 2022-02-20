@@ -23,21 +23,17 @@ if [ ${HOSTNAME} = "d01" ]; then
   ~/scripts/docker/jackett.sh
   ~/scripts/docker/sonarr.sh
 
-  ~/scripts/docker/archivebox.sh
-  ~/scripts/docker/codimd.sh
+  # ~/scripts/docker/archivebox.sh
+  # ~/scripts/docker/codimd.sh
 
   # run this last
   ~/scripts/docker/swag.sh
 elif [ ${HOSTNAME} = "d02" ]; then
   echo ${HOSTNAME}
-  ~/scripts/docker/foldingathome.sh
+  # ~/scripts/docker/foldingathome.sh
 
 elif [ ${HOSTNAME} = "d03" ]; then
   echo ${HOSTNAME}
-
-elif [ ${HOSTNAME} = "ns01" ]; then
-  echo ${HOSTNAME}
-  ~/scripts/docker/dnsmasq.sh
 
 fi
 
