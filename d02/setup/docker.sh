@@ -3,12 +3,12 @@
 
 
 # everything following will be as root
-doas ash
+#doas ash
 
 
 # Install Docker
 
-apk update \
+doas apk update \
   && apk policy docker \
   && apk add docker \
   && apk add docker-compose \
