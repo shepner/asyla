@@ -74,6 +74,11 @@ qm set $VMID \
 
 ## Configure Alpine
 
+if needed:
+* Interface settings: `/etc/network/interfaces`
+* DNS settings: `/etc/resolv.conf`
+
+
 make it possible to ssh into the system
 
 ``` shell
@@ -87,7 +92,7 @@ echo "permit nopass :wheel" >> /etc/doas.conf
 from local workstation, copy over the ssh keys
 
 ``` shell
-DHOST=d01
+DHOST=d02
 ssh-copy-id -i ~/.ssh/shepner_rsa.pub $DHOST
 
 scp ~/.ssh/shepner_rsa $DHOST:.ssh/shepner_rsa
@@ -96,5 +101,15 @@ scp ~/.ssh/config $DHOST:.ssh/config
 ssh $DHOST "chmod -R 700 ~/.ssh"
 ```
 
-go run the setup scripts
+
+run the setup scripts:
+``` shell
+doas apk add curl git
+ash <(curl -s https://raw.githubusercontent.com/shepner/asyla/master/`hostname -s`/update_scripts.sh)
+
+~/scripts/`hostname -s`/setup/systemConfig.sh
+~/scripts/`hostname -s`/setup/docker.sh
+
+~/update.sh
+```
 

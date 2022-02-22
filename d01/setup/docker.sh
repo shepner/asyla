@@ -2,17 +2,14 @@
 # Docker
 
 
-# everything following will be as root
-doas ash
-
-
 # Install Docker
 
-apk update \
-  && apk policy docker \
-  && apk add docker \
-  && apk add docker-compose \
-  && addgroup root docker \
-  && rc-update add docker boot \
-  && service docker start
+doas apk update \
+  && doas apk policy docker \
+  && doas apk add \
+    docker \
+    docker-compose \
+  && doas addgroup root docker \
+  && doas rc-update add docker boot \
+  && doas service docker start
 

@@ -80,7 +80,7 @@ if needed:
 
 
 make it possible to ssh into the system
-p
+
 ``` shell
 adduser -g "shepner" shepner
 adduser shepner wheel
@@ -102,8 +102,7 @@ ssh $DHOST "chmod -R 700 ~/.ssh"
 ```
 
 
-
-download the scripts:
+run the setup scripts:
 ``` shell
 doas apk add curl git
 ash <(curl -s https://raw.githubusercontent.com/shepner/asyla/master/`hostname -s`/update_scripts.sh)
@@ -113,8 +112,4 @@ ash <(curl -s https://raw.githubusercontent.com/shepner/asyla/master/`hostname -
 
 ~/update.sh
 ```
-
-
-
-go run the setup scripts
 
