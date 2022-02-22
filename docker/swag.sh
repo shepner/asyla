@@ -48,10 +48,10 @@ sudo docker run --detach --restart=unless-stopped \
 
 # Needed per proxied app on this host
 # [Multiple subnets in Docker container](https://stackoverflow.com/a/39393229)
-sudo docker network connect archivebox_net ${NAME}
+#sudo docker network connect archivebox_net ${NAME}
 sudo docker network connect booksonic_net ${NAME}
 sudo docker network connect calibre_net ${NAME}
-sudo docker network connect codimd_net ${NAME}
+#sudo docker network connect codimd_net ${NAME}
 #sudo docker network connect dillinger_net ${NAME}
 sudo docker network connect heimdall_net ${NAME}
 sudo docker network connect jackett_net ${NAME}

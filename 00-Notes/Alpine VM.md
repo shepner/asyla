@@ -30,17 +30,42 @@ qm create $VMID \
 
 qm resize $VMID scsi0 16G # [resize disks](https://pve.proxmox.com/wiki/Resize_disks)
 
-qm start $VMID
+qm start $VMI
 ```
 
 
 ## configure the VM
 
+```
+setup-alpine
+
+adduser -g "shepner" shepner
+adduser shepner wheel
+apk add doas
+echo "permit nopass :wheel" >> /etc/doas.conf
+
+```
+
+
+
 ``` shell
+# everything following will be as root
+doas ash
+
+
+#https://wiki.alpinelinux.org/wiki/Enable_Community_Repository
+apk update
+cat > /etc/apk/repositories << EOF; $(echo)
+https://dl-cdn.alpinelinux.org/alpine/v$(cat /etc/alpine-release | cut -d'.' -f1,2)/main/
+https://dl-cdn.alpinelinux.org/alpine/v$(cat /etc/alpine-release | cut -d'.' -f1,2)/community/
+# https://dl-cdn.alpinelinux.org/alpine/edge/testing/
+EOF
+apk update
+
 
 # patch/update
-apk update \
-  && apk upgrade
+apk update && apk upgrade
+
 
 # set TZ
 # set the tz
@@ -51,6 +76,7 @@ apk update \
   && echo "America/Chicago" > /etc/timezone \
   && apk del tzdata
 
+
 # Install sshd
 # https://wiki.alpinelinux.org/wiki/Setting_up_a_SSH_server
 apk update \
@@ -59,39 +85,52 @@ apk update \
   && /etc/init.d/sshd start
 
 
-
-
-
-
 # QEMU agent
 # https://gitlab.alpinelinux.org/alpine/aports/-/issues/12204
-apk adda qemu-guest-agent
-rc-update add qemu-guest-agent boot
+apk update \
+  && apk add qemu-guest-agent \
+  && rc-update add qemu-guest-agent boot
+
+
+# Forward log messages
+# https://wiki.alpinelinux.org/wiki/Syslog
+cat > /etc/conf.d/syslog << EOF
+SYSLOGD_OPTS="-t -L -R 10.0.0.229"
+EOF
+rc-service syslog restart
+
+```
 
 
 
+``` shell
+# everything following will be as root
+doas ash
 
 
-
-# Docker stuff
-
-mkdir -p /mnt/nas/data1/docker \
-  && mkdir -p /mnt/nas/data2/docker
-
-
+# Install Docker
 
 apk update \
   && apk policy docker \
   && apk add docker \
-  && addgroup root docker \
-  && rc-update add docker boot \
-  && service docker start
-
-apk update \
   && apk add docker-compose \
   && addgroup root docker \
   && rc-update add docker boot \
   && service docker start
+
+
+
+
+# Setup NFS mounts
+
+mkdir -p /mnt/nas/data1/docker \
+  && mkdir -p /mnt/nas/data2/docker
+
+cat >> /etc/fstab << EOF
+10.0.0.24:/mnt/data1/docker /mnt/nas/data1/docker nfs rw 0 0
+10.0.0.24:/mnt/data2/docker /mnt/nas/data2/docker nfs rw 0 0
+EOF
+mount -a
 
 ```
 
