@@ -12,9 +12,9 @@ This will create a 1G disk of file and then logically resize it to to 256G but t
 The [qm.conf](https://pve.proxmox.com/wiki/Manual:_qm.conf) file is located in `/etc/pve/qemu-server/<VMID>.conf`
 
 ``` shell
-VMID=101
+VMID=102
 qm create $VMID \
-  --name d01 \
+  --name d02 \
   --sockets 2 \
   --cores 6 \
   --memory 25600 \
@@ -45,7 +45,7 @@ us
 us
 d01.asyla.org
 eth0
-10.0.0.70
+10.0.0.61
 255.255.255.0
 10.0.0.1
 n
@@ -67,15 +67,20 @@ reboot
 From the VM host, remove the ISO image as its not needed anymore
 
 ``` shell
-qm ??? $VMID \
+qm set $VMID \
   --ide2 none,media=cdrom
 ```
 
 
 ## Configure Alpine
 
-make it possible to ssh into the system
+if needed:
+* Interface settings: `/etc/network/interfaces`
+* DNS settings: `/etc/resolv.conf`
 
+
+make it possible to ssh into the system
+p
 ``` shell
 adduser -g "shepner" shepner
 adduser shepner wheel
@@ -87,7 +92,7 @@ echo "permit nopass :wheel" >> /etc/doas.conf
 from local workstation, copy over the ssh keys
 
 ``` shell
-DHOST=d01
+DHOST=d02
 ssh-copy-id -i ~/.ssh/shepner_rsa.pub $DHOST
 
 scp ~/.ssh/shepner_rsa $DHOST:.ssh/shepner_rsa
@@ -95,6 +100,24 @@ scp ~/.ssh/shepner_rsa.pub $DHOST:.ssh/shepner_rsa.pub
 scp ~/.ssh/config $DHOST:.ssh/config
 ssh $DHOST "chmod -R 700 ~/.ssh"
 ```
+
+
+
+download the scripts:
+``` shell
+doas apk add curl
+ash <(curl -s https://raw.githubusercontent.com/shepner/asyla/master/`hostname -s`/update_scripts.sh)
+
+~/scripts/`hostname -s`/setup/userConfig.sh
+~/scripts/`hostname -s`/setup/systemConfig.sh
+~/scripts/`hostname -s`/setup/nfs.sh
+~/scripts/`hostname -s`/setup/smb.sh
+~/scripts/`hostname -s`/setup/docker.sh
+
+~/update.sh
+```
+
+
 
 go run the setup scripts
 
