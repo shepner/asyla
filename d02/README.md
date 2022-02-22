@@ -45,7 +45,7 @@ us
 us
 d01.asyla.org
 eth0
-10.0.0.60
+10.0.0.70
 255.255.255.0
 10.0.0.1
 n
@@ -67,7 +67,7 @@ reboot
 From the VM host, remove the ISO image as its not needed anymore
 
 ``` shell
-qm set $VMID \
+qm ??? $VMID \
   --ide2 none,media=cdrom
 ```
 
