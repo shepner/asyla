@@ -1,4 +1,4 @@
 #!/bin/sh
 
-doas apk update && apk upgrade
+doas apk update && doas apk upgrade
 
