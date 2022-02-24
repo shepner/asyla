@@ -22,9 +22,11 @@ dockerStopRm () {
 }
 
 dockerServiceRm () {
-  if [`doas docker service list -q --filter "name=$1"`]; then
+  # remove a service in swarm
+  if [`doas docker service list -q --filter "name=$1"` ]; then
     echo "Stopping service"
     doas docker service rm $1
+  fi
 }
 
 dockerVolumeCreate () {
