@@ -22,6 +22,15 @@ IP=`hostname -I | awk '{print $1}'`
 dockerPull ${IMAGE} # fetch the latest image
 dockerStopRm ${NAME} # kill the old one
 dockerNetworkCreate ${NETWORK} # create the network if needed
+
+
+
+doas docker volume create --name &{VOLUME} --driver local \
+  --opt type=nfs3 \
+  --opt o=addr=nas.asyla.org,rw,noatime,rsize=8192,wsize=8192,tcp,timeo=14 \
+  --opt device=:${DOCKERDIR}/${NAME}
+
+
 #appCreateDir ${CONFIGDIR} # create the config folder if needed
 appCreateDir ${DOCKERAPPDIR}/etc-pihole
 appCreateDir ${DOCKERAPPDIR}/etc-dnsmasq.d
