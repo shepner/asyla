@@ -32,10 +32,10 @@ doas docker volume create --name &{VOLUME} --driver local \
   --opt device=:${DOCKERDIR}/${NAME}
 
 
-#appCreateDir ${CONFIGDIR} # create the config folder if needed
-appCreateDir ${DOCKERAPPDIR}/etc-pihole
-appCreateDir ${DOCKERAPPDIR}/etc-dnsmasq.d
-#appBackup ${DOCKERDIR} ${NAME} # backup the app
+##appCreateDir ${CONFIGDIR} # create the config folder if needed
+#appCreateDir ${DOCKERAPPDIR}/etc-pihole
+#appCreateDir ${DOCKERAPPDIR}/etc-dnsmasq.d
+##appBackup ${DOCKERDIR} ${NAME} # backup the app
 
 
 doas docker service create --replicas 1 \
