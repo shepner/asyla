@@ -11,7 +11,7 @@ doas apk update
 
 
 # patch/update
-doas apk update && apk upgrade
+doas apk update && doas apk upgrade
 
 
 # QEMU agent
