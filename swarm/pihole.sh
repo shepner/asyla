@@ -4,7 +4,7 @@
 # sudo docker exec -it pihole /bin/bash
 
 # Load the global functions and default environment variables
-. ~/scripts/docker/common.sh
+. ~/scripts/swarm/common.sh
 
 
 # Setup the app specific environment vars
