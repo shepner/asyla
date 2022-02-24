@@ -49,7 +49,11 @@ doas docker service create --replicas 1 \
   --mount type=volume,src=${DOCKERAPPDIR}/hosts,dst=/etc/hosts,volume-driver=local,\
     volume-opt=type=nfs,\
     volume-opt=device=nas.asyla.org:${DOCKERAPPDIR},\
-    "volume-opt=soft,timeo=180,bg,tcp,rw" \
+    volume-opt=soft,\
+    volume-opt=timeo=180,\
+    volume-opt=bg,\
+    volume-opt=tcp,\
+    volume-opt=rw \
   --env ServerIP=${IP} `: Needs to be the external IP `\
   --env PIHOLE_DOMAIN="asyla.org" \
   --hostname "pihole.asyla.org" \
