@@ -1,4 +1,4 @@
-. ~/scripts/docker/common.env
+. ~/scripts/swarm/common.env
 
 dockerPull () {
   # fetch the latest image
