@@ -46,9 +46,7 @@ doas docker service create --replicas 1 \
   --publish published=5353,target=53,protocol=tcp,mode=ingress \
   --publish published=5353,target=53,protocol=udp,mode=ingress \
   --publish published=9080,target=80,protocol=tcp,mode=ingress \
-  --mount type=volume,src=${DOCKERAPPDIR}/hosts,dst=/etc/hosts,volume-driver=local,volume-opt=type=nfs,volume-opt=device=nas.asyla.org:=${DOCKERAPPDIR},"soft,timeo=180,bg,tcp,rw"
-  
-
+  --mount type=volume,src=${DOCKERAPPDIR}/hosts,dst=/etc/hosts,volume-driver=local,volume-opt=type=nfs,volume-opt=device=nas.asyla.org:=${DOCKERAPPDIR},"soft,timeo=180,bg,tcp,rw" \
   --env ServerIP=${IP} `: Needs to be the external IP `\
   --env PIHOLE_DOMAIN="asyla.org" \
   --hostname "pihole.asyla.org" \
