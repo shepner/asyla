@@ -21,6 +21,12 @@ dockerStopRm () {
   fi
 }
 
+dockerServiceRm () {
+  if [`doas docker service list -q --filter "name=$1"`]; then
+    echo "Stopping service"
+    doas docker service rm $1
+}
+
 dockerVolumeCreate () {
   # create the volume if needed
   if [ ! `doas docker volume ls --quiet --filter "name=$1"` ]; then
