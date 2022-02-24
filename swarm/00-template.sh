@@ -5,7 +5,7 @@
 
 
 # Load the global functions and environment variables
-. ~/scripts/docker/common.sh
+. ~/scripts/swarm/common.sh
 
 
 # Setup the app specific environment vars
@@ -26,7 +26,7 @@ appCreateDir ${DOCKERAPPDIR} # create the folder if needed
 appBackup ${DOCKERDIR} ${NAME} # backup the app
 
 
-sudo docker run --detach --restart=unless-stopped \
+doas docker service create --replicas 1 \
   --name ${NAME} \
   --cpus=2 \
 `:  --cpu-shares=1024` `# default job priority` \

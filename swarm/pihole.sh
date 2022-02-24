@@ -28,8 +28,7 @@ appCreateDir ${DOCKERAPPDIR}/etc-dnsmasq.d
 #appBackup ${DOCKERDIR} ${NAME} # backup the app
 
 
-#sudo docker run --detach --restart=unless-stopped \
-doas docker service create --replicas 1
+doas docker service create --replicas 1 \
   --name ${NAME} \
   --env TZ=${LOCAL_TZ} \
   --network=${NETWORK} \
