@@ -135,3 +135,8 @@ Follow the instructions provided and run the command on each of the other (worke
 doas docker swarm join --token <TOKEN> <IP>:2377
 ```
 
+Check on the status of the cluster
+``` shell
+doas docker node ls
+```
+
