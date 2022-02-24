@@ -15,8 +15,8 @@ DOCKERDIR=${DOCKER_D1} # NFS attached HDD
 DOCKERAPPDIR=${DOCKERDIR}/${NAME}
 CONFIGDIR=${DOCKERAPPDIR}/config
 
-IP=`ip addr show eth0 | grep -oE '((1?[0-9][0-9]?|2[0-4][0-9]|25[0-5])\.){3}(
-1?[0-9][0-9]?|2[0-4][0-9]|25[0-5])'`
+IP=`ip addr show eth0 | grep -oE '((1?[0-9][0-9]?|2[0-4][0-9]|25[0-5])\.){3}(1?[0-9][0-9]?|2[0-4][0-9]|25[0-5])'`
+
 
 
 # Perform setups/updates as needed
