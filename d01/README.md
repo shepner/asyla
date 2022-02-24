@@ -113,3 +113,25 @@ ash <(curl -s https://raw.githubusercontent.com/shepner/asyla/master/`hostname -
 ~/update.sh
 ```
 
+
+## Configure Docker Swarm
+
+Manager commands
+
+``` shell
+# Initial setup
+doas docker swarm init --advertise-addr <IP>
+
+# Generate manager token
+doas docker swarm join-token manager
+
+# Generate worker token
+doas docker swarm join-token worker
+```
+
+Follow the instructions provided and run the command on each of the other (worker) nodes as appropriate:
+
+``` shell
+doas docker swarm join --token <TOKEN> <IP>:2377
+```
+

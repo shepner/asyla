@@ -12,9 +12,9 @@ This will create a 1G disk of file and then logically resize it to to 256G but t
 The [qm.conf](https://pve.proxmox.com/wiki/Manual:_qm.conf) file is located in `/etc/pve/qemu-server/<VMID>.conf`
 
 ``` shell
-VMID=102
+VMID=103
 qm create $VMID \
-  --name d02 \
+  --name d03 \
   --sockets 2 \
   --cores 6 \
   --memory 25600 \
@@ -45,7 +45,7 @@ us
 us
 d01.asyla.org
 eth0
-10.0.0.61
+10.0.0.62
 255.255.255.0
 10.0.0.1
 n
