@@ -57,5 +57,5 @@ doas docker service create --replicas 1 \
   `: --env PROXY_LOCATION="pi.hole" `\
   ${IMAGE}:latest
 
-dockerRestartProxy
+#dockerRestartProxy
 
