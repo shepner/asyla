@@ -47,7 +47,8 @@ ssh $DHOST "chmod -R 700 ~/.ssh"
 ## Configure the system
 
 ``` shell
-bash <(curl -s https://raw.githubusercontent.com/shepner/asyla/master/`hostname -s`/update_scripts.sh)
+#bash <(curl -s https://raw.githubusercontent.com/shepner/asyla/master/`hostname -s`/update_scripts.sh)
+bash <(curl -s https://raw.githubusercontent.com/shepner/asyla/master/d01-old/update_scripts.sh)
 
 ~/scripts/`hostname -s`/setup/userConfig.sh
 ~/scripts/`hostname -s`/setup/systemConfig.sh
