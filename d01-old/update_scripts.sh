@@ -19,5 +19,5 @@ git checkout master -- docker
 # ust in case permissions werent set correctly
 find $WORKDIR -name "*.sh" -exec chmod 744 {} \;
 
-mv $WORKDIR/`hostname -s`/*.sh ~
+mv $WORKDIR/d01-old/*.sh ~
 
