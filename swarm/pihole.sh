@@ -27,10 +27,10 @@ dockerNetworkCreate ${NETWORK} # create the network if needed
 
 #https://codeopolis.com/posts/mounting-nfs-shares-as-docker-volumes/
 #doas docker volume ls -q --filter "name=pihole_vol"
-#doas docker volume create --name=${VOLUME} --driver local \
-#  --opt type=nfs3 \
-#  --opt o=addr=nas.asyla.org,rw,noatime,rsize=8192,wsize=8192,tcp,timeo=14 \
-#  --opt device=:${DOCKERDIR}/${NAME}
+doas docker volume create --name=${VOLUME} --driver local \
+  --opt type=nfs3 \
+  --opt o=addr=nas.asyla.org,rw,noatime,rsize=8192,wsize=8192,tcp,timeo=14 \
+  --opt device=:${DOCKERDIR}/${NAME}
 
 
 ##appCreateDir ${CONFIGDIR} # create the config folder if needed
@@ -46,14 +46,7 @@ doas docker service create --replicas 1 \
   --publish published=5353,target=53,protocol=tcp,mode=ingress \
   --publish published=5353,target=53,protocol=udp,mode=ingress \
   --publish published=9080,target=80,protocol=tcp,mode=ingress \
-  --mount type=volume,src=${DOCKERAPPDIR}/hosts,dst=/etc/hosts,volume-driver=local,\
-    volume-opt=type=nfs,\
-    volume-opt=device=nas.asyla.org:${DOCKERAPPDIR},\
-    volume-opt=soft,\
-    volume-opt=timeo=180,\
-    volume-opt=bg,\
-    volume-opt=tcp,\
-    volume-opt=rw \
+  --mount type=volume,src=${VOLUME}/hosts,dst=/etc/hosts,volume-driver=local\
   --env ServerIP=${IP} `: Needs to be the external IP `\
   --env PIHOLE_DOMAIN="asyla.org" \
   --hostname "pihole.asyla.org" \
