@@ -79,15 +79,23 @@ if needed:
 * DNS settings: `/etc/resolv.conf`
 
 
-make it possible to ssh into the system
+### config a user account
 
 ``` shell
-adduser -g "shepner" shepner
-adduser shepner wheel
+addgroup -g 1000 asyla
+adduser -u 1001 -G asyla -g "shepner" shepner
+```
+
+### doas
+
+``` shell
+adduser shepner root
+
 apk add doas
 echo "permit nopass :wheel" >> /etc/doas.conf
 ```
 
+### SSH
 
 from local workstation, copy over the ssh keys
 
@@ -108,6 +116,8 @@ doas apk add curl git
 ash <(curl -s https://raw.githubusercontent.com/shepner/asyla/master/`hostname -s`/update_scripts.sh)
 
 ~/scripts/`hostname -s`/setup/systemConfig.sh
+~/scripts/`hostname -s`/setup/smb.sh
+~/scripts/`hostname -s`/setup/nfs.sh
 ~/scripts/`hostname -s`/setup/docker.sh
 
 ~/update.sh
