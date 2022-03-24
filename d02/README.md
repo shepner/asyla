@@ -109,6 +109,7 @@ scp ~/.ssh/config $DHOST:.ssh/config
 ssh $DHOST "chmod -R 700 ~/.ssh"
 ```
 
+### configure system
 
 run the setup scripts:
 ``` shell
