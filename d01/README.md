@@ -89,7 +89,7 @@ adduser -u 1001 -G asyla -g "shepner" shepner
 ### doas
 
 ``` shell
-adduser shepner root
+adduser shepner wheel
 
 apk add doas
 echo "permit nopass :wheel" >> /etc/doas.conf
