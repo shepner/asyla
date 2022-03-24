@@ -4,7 +4,7 @@
 # Use this for anything that has SMB enabled to avoid permission issues in certain situations
 
 doas apk update
-doas apk install cifs-utils
+doas apk add cifs-utils
 
 sh -c 'cat > ~/.smbcredentials << EOF
 username=
