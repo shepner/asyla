@@ -83,7 +83,7 @@ if needed:
 
 ``` shell
 addgroup -g 1000 asyla
-adduser -u 1001 -G asyla -g "shepner" shepner
+adduser -u 1003 -G asyla -g "docker" shepner
 ```
 
 ### doas
@@ -100,11 +100,11 @@ echo "permit nopass :wheel" >> /etc/doas.conf
 from local workstation, copy over the ssh keys
 
 ``` shell
-DHOST=d02
-ssh-copy-id -i ~/.ssh/shepner_rsa.pub $DHOST
+DHOST=d03
+ssh-copy-id -i ~/.ssh/docker_rsa.pub $DHOST
 
-scp ~/.ssh/shepner_rsa $DHOST:.ssh/shepner_rsa
-scp ~/.ssh/shepner_rsa.pub $DHOST:.ssh/shepner_rsa.pub
+scp ~/.ssh/docker_rsa $DHOST:.ssh/docker_rsa
+scp ~/.ssh/docker_rsa.pub $DHOST:.ssh/docker_rsa.pub
 scp ~/.ssh/config $DHOST:.ssh/config
 ssh $DHOST "chmod -R 700 ~/.ssh"
 ```
