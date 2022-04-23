@@ -119,6 +119,7 @@ ash <(curl -s https://raw.githubusercontent.com/shepner/asyla/master/`hostname -
 ~/scripts/`hostname -s`/setup/systemConfig.sh
 ~/scripts/`hostname -s`/setup/smb.sh
 ~/scripts/`hostname -s`/setup/nfs.sh
+~/scripts/`hostname -s`/setup/iscsi.sh
 ~/scripts/`hostname -s`/setup/docker.sh
 
 ~/update.sh
