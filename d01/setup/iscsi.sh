@@ -51,6 +51,7 @@ doas iscsiadm -m node -T $NAME_OF_TARGET -p $IP_OF_TARGET --op update -n node.co
 
 
 # update /etc/fstab
+# https://unix.stackexchange.com/a/349278
 doas mkdir -p /mnt/nas/data2/docker_01
 echo "/dev/sdb1 /mnt/nas/data2/docker_01 ext4 _netdev,rw 0 0" | doas tee -a /etc/fstab
 doas mount -a
