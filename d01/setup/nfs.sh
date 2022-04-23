@@ -8,6 +8,9 @@ doas apk add nfs-utils
 doas rc-update add nfs
 doas rc-update add nfsmount
 doas rc-update add netmount
+doas rc-update add netmount boot
+doas rc-update del netmount default
+
 
 #doas rc-service nfs start
 #doas rc-service nfsmount start

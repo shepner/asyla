@@ -14,6 +14,12 @@ doas apk add open-iscsi
 doas /etc/init.d/iscsid start
 
 
+# make sure it runs at startup
+doas rc-update add iscsid
+doas rc-update add iscsid boot
+doas rc-update del iscsid default
+
+
 # point at iscsi target
 
 IP_OF_TARGET="10.0.0.24"
@@ -46,6 +52,6 @@ doas iscsiadm -m node -T $NAME_OF_TARGET -p $IP_OF_TARGET --op update -n node.co
 
 # update /etc/fstab
 doas mkdir -p /mnt/nas/data2/docker_01
-echo "/dev/sdb1 /mnt/nas/data2/docker_01 ext4 rw 0 0" | doas tee -a /etc/fstab
+echo "/dev/sdb1 /mnt/nas/data2/docker_01 ext4 _netdev,rw 0 0" | doas tee -a /etc/fstab
 doas mount -a
 
