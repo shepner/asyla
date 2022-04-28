@@ -11,7 +11,7 @@
 IMAGE=pihole/${NAME}
 DOCKERDIR=${DOCKER_01} # iSCSI storage
 DOCKERAPPDIR=${DOCKERDIR}/${NAME}
-CONFIGDIR=${DOCKERAPPDIR}/config
+#CONFIGDIR=${DOCKERAPPDIR}/config
 
 IP=`ip addr show eth0 | grep -oE '((1?[0-9][0-9]?|2[0-4][0-9]|25[0-5])\.){3}(1?[0-9][0-9]?|2[0-4][0-9]|25[0-5])'`
 
@@ -21,14 +21,6 @@ IP=`ip addr show eth0 | grep -oE '((1?[0-9][0-9]?|2[0-4][0-9]|25[0-5])\.){3}(1?[
 dockerPull ${IMAGE} # fetch the latest image
 dockerServiceRm ${NAME} # kill the old one
 dockerNetworkCreate ${NETWORK} # create the network if needed
-
-
-#https://codeopolis.com/posts/mounting-nfs-shares-as-docker-volumes/
-#doas docker volume ls -q --filter "name=pihole_vol"
-doas docker volume create --name=${VOLUME} --driver local \
-  --opt type=nfs3 \
-  --opt o=addr=nas.asyla.org,rw,noatime,rsize=8192,wsize=8192,tcp,timeo=14 \
-  --opt device=:${DOCKERDIR}/${NAME}
 
 
 ##appCreateDir ${CONFIGDIR} # create the config folder if needed
@@ -44,7 +36,9 @@ doas docker service create --replicas 1 \
   --publish published=5353,target=53,protocol=tcp,mode=ingress \
   --publish published=5353,target=53,protocol=udp,mode=ingress \
   --publish published=9080,target=80,protocol=tcp,mode=ingress \
-  --mount type=volume,src=${VOLUME}/hosts,dst=/etc/hosts,volume-driver=local\
+  --mount type=bind,src=${DOCKERAPPDIR}/hosts,dst=/etc/hosts \
+  --mount type=bind,src=${DOCKERAPPDIR}/etc-pihole,dst=/etc/pihole \
+  --mount type=bind,src=${DOCKERAPPDIR}/etc-dnsmasq.d,dst=/etc/dnsmasq.d \
   --env ServerIP=${IP} `: Needs to be the external IP `\
   --env PIHOLE_DOMAIN="asyla.org" \
   --hostname "pihole.asyla.org" \
@@ -58,7 +52,5 @@ doas docker service create --replicas 1 \
 #dockerRestartProxy
 
 
-#  --mount type=bind,src=${DOCKERAPPDIR}/hosts,dst=/etc/hosts \
-#  --mount type=bind,src=${DOCKERAPPDIR}/etc-pihole,dst=/etc/pihole \
-#  --mount type=bind,src=${DOCKERAPPDIR}/etc-dnsmasq.d,dst=/etc/dnsmasq.d \
+
 
