@@ -7,6 +7,27 @@
 . ~/scripts/docker/common.sh
 
 
+docker stack deploy --compose-file ${NAME}.yaml ${NAME}
+#docker stack deploy --compose-file name1.yaml --compose-file name2.yaml ${NAME}
+
+#docker service ls
+#docker stack rm ${NAME}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # Setup the app specific environment vars
 IMAGE=pihole/${NAME}
 #DOCKERDIR=${DOCKER_DL} # local disk
