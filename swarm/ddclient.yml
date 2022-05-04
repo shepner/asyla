@@ -21,10 +21,10 @@ services:
     networks:  # https://docs.docker.com/compose/compose-file/#networks
       - ddclient_network
     #
-    logging:  # https://docs.docker.com/compose/compose-file/#logging
-      driver: syslog
-      options:
-        syslog-address: "tcp://10.0.0.73:514"
+    #logging:  # https://docs.docker.com/compose/compose-file/#logging
+    #  driver: syslog
+    #  options:
+    #    syslog-address: "tcp://10.0.0.73:514"
     #
     restart: unless-stopped
     #
