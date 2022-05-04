@@ -14,8 +14,8 @@ services:
     #  - PGID=1000
     #  - TZ=Europe/London
     #
-    # https://docs.docker.com/compose/compose-file/#volumes
-    volumes: /mnt/nas/data2/docker_01/ddclient/config:/config
+    volumes:  # https://docs.docker.com/compose/compose-file/#volumes
+      - /mnt/nas/data2/docker_01/ddclient/config:/config
     #ports:  # https://docs.docker.com/compose/compose-file/#ports
     #
     networks:  # https://docs.docker.com/compose/compose-file/#networks
