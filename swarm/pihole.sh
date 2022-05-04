@@ -4,32 +4,53 @@
 # sudo docker exec -it pihole /bin/bash
 
 # Load the global functions and default environment variables
-. ~/scripts/swarm/common.sh
+. ~/scripts/docker/common.sh
+
+
+docker stack deploy --compose-file ${NAME}.yaml ${NAME}
+#docker stack deploy --compose-file name1.yaml --compose-file name2.yaml ${NAME}
+
+#docker service ls
+#docker stack rm ${NAME}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 # Setup the app specific environment vars
 IMAGE=pihole/${NAME}
-DOCKERDIR=${DOCKER_01} # iSCSI storage
+#DOCKERDIR=${DOCKER_DL} # local disk
+DOCKERDIR=${DOCKER_D1} # NFS attached HDD
+#DOCKERDIR=${DOCKER_D2} # NFS attached SSD
 DOCKERAPPDIR=${DOCKERDIR}/${NAME}
-#CONFIGDIR=${DOCKERAPPDIR}/config
+CONFIGDIR=${DOCKERAPPDIR}/config
 
-IP=`ip addr show eth0 | grep -oE '((1?[0-9][0-9]?|2[0-4][0-9]|25[0-5])\.){3}(1?[0-9][0-9]?|2[0-4][0-9]|25[0-5])'`
-
+IP=`hostname -I | awk '{print $1}'`
 
 
 # Perform setups/updates as needed
 dockerPull ${IMAGE} # fetch the latest image
-dockerServiceRm ${NAME} # kill the old one
+dockerStopRm ${NAME} # kill the old one
 dockerNetworkCreate ${NETWORK} # create the network if needed
+#appCreateDir ${CONFIGDIR} # create the config folder if needed
+appCreateDir ${DOCKERAPPDIR}/etc-pihole
+appCreateDir ${DOCKERAPPDIR}/etc-dnsmasq.d
+#appBackup ${DOCKERDIR} ${NAME} # backup the app
 
 
-##appCreateDir ${CONFIGDIR} # create the config folder if needed
-#appCreateDir ${DOCKERAPPDIR}/etc-pihole
-#appCreateDir ${DOCKERAPPDIR}/etc-dnsmasq.d
-##appBackup ${DOCKERDIR} ${NAME} # backup the app
-
-
-doas docker service create --replicas 1 \
+#sudo docker run --detach --restart=unless-stopped \
+doas docker service create --replicas 1
   --name ${NAME} \
   --env TZ=${LOCAL_TZ} \
   --network=${NETWORK} \
@@ -49,8 +70,5 @@ doas docker service create --replicas 1 \
   `: --env PROXY_LOCATION="pi.hole" `\
   ${IMAGE}:latest
 
-#dockerRestartProxy
-
-
-
+dockerRestartProxy
 

@@ -20,3 +20,10 @@ doas apk update \
   && doas apk add qemu-guest-agent \
   && doas rc-update add qemu-guest-agent boot
 
+
+# Forward log messages
+# https://wiki.alpinelinux.org/wiki/Syslog
+echo 'SYSLOGD_OPTS="-t -L -R 10.0.0.73:514"' | doas tee /etc/conf.d/syslog
+doas rc-service syslog restart
+
+
