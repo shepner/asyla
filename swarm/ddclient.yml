@@ -1,6 +1,5 @@
 # https://docs.docker.com/compose/compose-file/
 
-
 services:
   ddclient:
     container_name: ddclient  # https://docs.docker.com/compose/compose-file/#container_name
@@ -43,45 +42,4 @@ services:
 
 networks:
   ddclient_network:
-
-
-
-
-
-
-services:
-  pihole:
-    image: pihole/pihole:latest
-    #env_file:  # https://docs.docker.com/compose/compose-file/#env_file
-    #- ./common.env
-    #- ./pihole.env
-    environment:  # https://docs.docker.com/compose/compose-file/#environment
-      TZ:  # ${LOCAL_TZ}
-      ServerIP:  # `hostname -I | awk '{print $1}'`
-      PIHOLE_DOMAIN: "asyla.org"
-      VIRTUAL_HOST:  # `hostname`
-    logging:  # https://docs.docker.com/compose/compose-file/#logging
-      driver: syslog
-      options:
-        syslog-address: "tcp://10.0.0.73:514"
-    networks:  # https://docs.docker.com/compose/compose-file/#networks
-      - asdfasdf # ${NETWORK}
-    ports:  # https://docs.docker.com/compose/compose-file/#ports
-      - target: 53
-        host_ip: 0.0.0.0
-        published: 5353
-        #protocol: tcp  # not specified == tcp/udp
-        mode: host
-      - target: 80
-        host_ip: 0.0.0.0
-        published: 9080
-        protocol: tcp
-        mode: host
-    volumes:  # https://docs.docker.com/compose/compose-file/#volumes
-      - type: volume
-        source: db-data
-        target: /data
-        volume:
-          nocopy: true
-
 

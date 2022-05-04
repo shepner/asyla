@@ -7,7 +7,8 @@
 NAME=`basename "${0}" ".sh"`
 BASEDIR=$(dirname "$0")
 
-docker stack deploy --compose-file ${BASEDIR}/${NAME}.yml ${NAME}
+doas docker compose -f ${BASEDIR}/${NAME}.yml start
+#docker stack deploy --compose-file ${BASEDIR}/${NAME}.yml ${NAME}
 #docker stack deploy --compose-file name1.yaml --compose-file name2.yaml ${NAME}
 
 #docker service ls
