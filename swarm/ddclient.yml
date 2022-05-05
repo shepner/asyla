@@ -1,5 +1,7 @@
 # https://docs.docker.com/compose/compose-file/
 
+version: 3.9
+
 services:
   ddclient:
     container_name: ddclient  # https://docs.docker.com/compose/compose-file/#container_name

@@ -7,9 +7,36 @@
 NAME=`basename "${0}" ".sh"`
 BASEDIR=$(dirname "$0")
 
+
+
+# https://docs.docker.com/engine/swarm/stack-deploy/
+
+
+# run the `docker service` and `docker stack` commands on the swarm master node
+#doas docker node ls
+
+
+# Start the registry as a service on your swarm
+#doas docker service create --name registry --publish published=5000,target=5000 registry:2
+#doas docker service ls
+
+
+# start the app
 doas docker compose -f ${BASEDIR}/${NAME}.yml up --detach
-#docker stack deploy --compose-file ${BASEDIR}/${NAME}.yml ${NAME}
+#doas docker compose -f ./scripts/swarm/ddclient.yml ps
+doas docker compose -f ./scripts/swarm/ddclient.yml down --volumes
+
+
+doas docker compose -f ./scripts/swarm/ddclient.yml push
+
+
+doas docker stack deploy --compose-file ./scripts/swarm/ddclient.yml ddclient
+
+
 #docker stack deploy --compose-file name1.yaml --compose-file name2.yaml ${NAME}
+doas docker stack deploy --compose-file ${BASEDIR}/${NAME}.yml ${NAME}
+
+
 
 #docker service ls
 #docker stack rm ${NAME}
