@@ -23,12 +23,7 @@ services:
     networks:  # https://docs.docker.com/compose/compose-file/#networks
       - ddclient_network
     #
-    #logging:  # https://docs.docker.com/compose/compose-file/#logging
-    #  driver: syslog
-    #  options:
-    #    syslog-address: "tcp://10.0.0.73:514"
-    #
-    restart: unless-stopped
+    restart: unless-stopped  # N/A for swarm
     #
     deploy:  # https://docs.docker.com/compose/compose-file/deploy/
       mode: replicated
