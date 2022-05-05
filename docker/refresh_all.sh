@@ -10,7 +10,7 @@ HOSTNAME=`hostname -s`
 if [ ${HOSTNAME} = "d01" ]; then
   echo ${HOSTNAME}
 
-  ~/scripts/docker/ddclient.sh
+  #~/scripts/docker/ddclient.sh
   ~/scripts/docker/heimdall.sh
   ~/scripts/docker/unifi-controller.sh
   
