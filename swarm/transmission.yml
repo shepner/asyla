@@ -1,0 +1,75 @@
+---
+version: "2.1"
+services:
+  transmission:
+    image: lscr.io/linuxserver/transmission:latest
+    container_name: transmission
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/London
+      - TRANSMISSION_WEB_HOME=/combustion-release/ #optional
+      - USER=username #optional
+      - PASS=password #optional
+      - WHITELIST=iplist #optional
+      - PEERPORT=peerport #optional
+      - HOST_WHITELIST=dnsname list #optional
+    volumes:
+      - /path/to/data:/config
+      - /path/to/downloads:/downloads
+      - /path/to/watch/folder:/watch
+    ports:
+      - 9091:9091
+      - 51413:51413
+      - 51413:51413/udp
+    restart: unless-stopped
+
+
+
+
+
+
+
+
+
+# https://docs.docker.com/compose/compose-file/
+
+version: "3.9"
+
+services:
+  ddclient:
+    container_name: ddclient  # https://docs.docker.com/compose/compose-file/#container_name
+    #
+    image: lscr.io/linuxserver/ddclient:latest
+    #
+    env_file:  # https://docs.docker.com/compose/compose-file/#env_file
+    - ./common.env
+    #- ./ddclient.env
+    #environment:  # https://docs.docker.com/compose/compose-file/#environment
+    #  - PUID=1000
+    #  - PGID=1000
+    #  - TZ=Europe/London
+    #
+    volumes:  # https://docs.docker.com/compose/compose-file/#volumes
+      - /mnt/nas/data2/docker_01/ddclient/config:/config
+    #ports:  # https://docs.docker.com/compose/compose-file/#ports
+    #
+    networks:  # https://docs.docker.com/compose/compose-file/#networks
+      - ddclient_network
+    #
+    restart: unless-stopped  # N/A for swarm
+    #
+    deploy:  # https://docs.docker.com/compose/compose-file/deploy/
+      mode: replicated
+      replicas: 1
+      resources:
+        limits:
+          cpus: '.50'
+          memory: 50M
+        reservations:
+          cpus: '0.25'
+          memory: 20M
+
+networks:
+  ddclient_network:
+

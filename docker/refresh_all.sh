@@ -19,12 +19,9 @@ if [ ${HOSTNAME} = "d01" ]; then
   ~/scripts/docker/calibre.sh
   ~/scripts/docker/booksonic.sh
   
-  ~/scripts/docker/transmission.sh
-  ~/scripts/docker/jackett.sh
-  ~/scripts/docker/sonarr.sh
-
-  # ~/scripts/docker/archivebox.sh
-  # ~/scripts/docker/codimd.sh
+  #~/scripts/docker/transmission.sh
+  #~/scripts/docker/jackett.sh
+  #~/scripts/docker/sonarr.sh
 
   # run this last
   ~/scripts/docker/swag.sh
