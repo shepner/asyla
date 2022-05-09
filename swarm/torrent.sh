@@ -30,10 +30,10 @@ BASEDIR=$(dirname "$0")
 
 
 
-#docker stack deploy --compose-file name1.yaml --compose-file name2.yaml ${NAME}
+#doas docker stack deploy --compose-file name1.yaml --compose-file name2.yaml ${NAME}
 doas docker stack deploy --compose-file ${BASEDIR}/${NAME}.yml ${NAME}
-#docker service ls
-#docker stack rm ${NAME}
+#doas docker service ls
+#doas docker stack rm ${NAME}
 
 
 
