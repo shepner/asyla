@@ -29,12 +29,16 @@ BASEDIR=$(dirname "$0")
 
 
 
-
 #doas docker stack deploy --compose-file name1.yaml --compose-file name2.yaml ${NAME}
 doas docker stack deploy --compose-file ${BASEDIR}/${NAME}.yml ${NAME}
 #doas docker service ls
-#doas docker stack rm ${NAME}
 
+#doas docker service scale torrent_sonarr=0
+#doas docker service rm torrent_sonarr
 
+#doas docker service scale torrent_jackett=0
+#doas docker service rm torrent_jackett
 
+#doas docker service scale torrent_transmission=0
+#doas docker service rm torrent_transmission
 
