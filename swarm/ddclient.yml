@@ -9,8 +9,8 @@ services:
     image: lscr.io/linuxserver/ddclient:latest
     #
     env_file:  # https://docs.docker.com/compose/compose-file/#env_file
-    - ./common.env
-    #- ./ddclient.env
+      - ./common.env
+    #  - ./ddclient.env
     #environment:  # https://docs.docker.com/compose/compose-file/#environment
     #  - PUID=1000
     #  - PGID=1000

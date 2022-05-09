@@ -11,10 +11,13 @@ services:
     #
     image: lscr.io/linuxserver/transmission:latest
     #
-    env_file:  # https://docs.docker.com/compose/compose-file/#env_file
-    - ./common.env
-    #- ./ddclient.env
-    #environment:  # https://docs.docker.com/compose/compose-file/#environment
+    #env_file:  # https://docs.docker.com/compose/compose-file/#env_file
+    #  - ./common.env
+    #  - ./ddclient.env
+    environment:  # https://docs.docker.com/compose/compose-file/#environment
+      - PUID=1003
+      - PGID=1000
+      - TZ="America/Chicago"
     #  - TRANSMISSION_WEB_HOME=/combustion-release/ #optional
     #  - USER=username #optional
     #  - PASS=password #optional
@@ -25,10 +28,10 @@ services:
     #  - PGID=1000
     #  - TZ=Europe/London
     #
-    volumes:  # https://docs.docker.com/compose/compose-file/#volumes
-      - /mnt/nas/data2/docker_01/transmission/config:/config
-      - /mnt/nas/data2/docker_01/transmission/watch:/watch
-      - /mnt/nas/data2/docker_01/transmission/downloads:/downloads
+    #volumes:  # https://docs.docker.com/compose/compose-file/#volumes
+    #  - /mnt/nas/data2/docker_01/transmission/config:/config
+    #  - /mnt/nas/data2/docker_01/transmission/downloads:/downloads
+    #  - /mnt/nas/data2/docker_01/transmission/watch:/watch
     ports:  # https://docs.docker.com/compose/compose-file/#ports
       - 9091:9091
       - 51413:51413
