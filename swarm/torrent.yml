@@ -28,10 +28,11 @@ services:
     #  - PGID=1000
     #  - TZ=Europe/London
     #
-    #volumes:  # https://docs.docker.com/compose/compose-file/#volumes
+    volumes:  # https://docs.docker.com/compose/compose-file/#volumes
     #  - /mnt/nas/data2/docker_01/transmission/config:/config
-    #  - /mnt/nas/data2/docker_01/transmission/downloads:/downloads
-    #  - /mnt/nas/data2/docker_01/transmission/watch:/watch
+      - /mnt/nas/data2/docker_01/transmission/downloads:/downloads
+      - /mnt/nas/data2/docker_01/transmission/watch:/watch
+    #
     ports:  # https://docs.docker.com/compose/compose-file/#ports
       - 9091:9091
       - 51413:51413
