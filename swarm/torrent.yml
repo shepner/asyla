@@ -2,11 +2,12 @@
 
 version: "3.9"
 
-torrent:
+services:
 
   # sonarr
-  # https://docs.linuxserver.io/images/docker-sonarr 
-  container_name: sonarr  # https://docs.docker.com/compose/compose-file/#container_name
+  # https://docs.linuxserver.io/images/docker-sonarr
+  sonarr:
+    container_name: sonarr  # https://docs.docker.com/compose/compose-file/#container_name
     #
     image: lscr.io/linuxserver/sonarr:latest
     #
@@ -43,7 +44,8 @@ torrent:
 
   # jackett
   # https://docs.linuxserver.io/images/docker-jackett
-  container_name: jackett  # https://docs.docker.com/compose/compose-file/#container_name
+  jackett:
+    container_name: jackett  # https://docs.docker.com/compose/compose-file/#container_name
     #
     image: lscr.io/linuxserver/jackett:latest
     #
@@ -81,7 +83,8 @@ torrent:
 
   # transmission
   #https://docs.linuxserver.io/images/docker-transmission
-  container_name: transmission  # https://docs.docker.com/compose/compose-file/#container_name
+  transmission:
+    container_name: transmission  # https://docs.docker.com/compose/compose-file/#container_name
     #
     image: lscr.io/linuxserver/transmission:latest
     #
