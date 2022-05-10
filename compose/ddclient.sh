@@ -21,19 +21,20 @@ BASEDIR=$(dirname "$0")
 #doas docker service ls
 
 
-# start the app
-#doas docker compose -f ${BASEDIR}/${NAME}.yml up --detach
+# run in docker
+doas docker compose -f ${BASEDIR}/${NAME}.yml up --detach
 #doas docker compose -f ./scripts/swarm/ddclient.yml ps
 #doas docker compose -f ./scripts/swarm/ddclient.yml down --volumes
 #doas docker compose -f ./scripts/swarm/ddclient.yml push
 
 
 
-
+# run on swarm 
 #docker stack deploy --compose-file name1.yaml --compose-file name2.yaml ${NAME}
-doas docker stack deploy --compose-file ${BASEDIR}/${NAME}.yml ${NAME}
-#docker service ls
-#docker stack rm ${NAME}
+#doas docker stack deploy --compose-file ${BASEDIR}/${NAME}.yml ${NAME}
+#doas docker service ls
+#doas docker service scale ddclient_ddclient=0
+#doas docker service rm ${NAME}
 
 
 
