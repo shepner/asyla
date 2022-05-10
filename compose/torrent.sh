@@ -33,6 +33,9 @@ BASEDIR=$(dirname "$0")
 doas docker stack deploy --compose-file ${BASEDIR}/${NAME}.yml ${NAME}
 #doas docker service ls
 
+# to access the shell, find the node and run:
+#doas docker exec -it ${ID} bash
+
 #doas docker service scale torrent_sonarr=0
 #doas docker service rm torrent_sonarr
 
