@@ -1,0 +1,46 @@
+# https://docs.docker.com/compose/compose-file/
+
+version: "3.9"
+
+services:
+  ddclient:
+    container_name: syncthing  # https://docs.docker.com/compose/compose-file/#container_name
+    #
+    image: lscr.io/linuxserver/syncthing:latest
+    #
+    env_file:  # https://docs.docker.com/compose/compose-file/#env_file
+      - ./common.env
+    #  - ./syncthing.env
+    #environment:  # https://docs.docker.com/compose/compose-file/#environment
+    #  - PUID=1000
+    #  - PGID=1000
+    #  - TZ=Europe/London
+    #
+    volumes:  # https://docs.docker.com/compose/compose-file/#volumes
+      - /mnt/nas/data2/docker_01/syncthing/config:/config
+      - /mnt/nas/data1/media/syncthing/in:/data1
+      - /mnt/nas/data1/media/syncthing/out:/data2
+    ports:  # https://docs.docker.com/compose/compose-file/#ports
+      - 8384:8384
+      - 22000:22000/tcp
+      - 22000:22000/udp
+      - 21027:21027/udp
+    networks:  # https://docs.docker.com/compose/compose-file/#networks
+      - syncthing_network
+    #
+    restart: unless-stopped  # N/A for swarm
+    #
+    #deploy:  # https://docs.docker.com/compose/compose-file/deploy/
+    #  mode: replicated
+    #  replicas: 1
+    #  resources:
+    #    limits:
+    #      cpus: '.50'
+    #      memory: 50M
+    #    reservations:
+    #      cpus: '0.25'
+    #      memory: 20M
+
+networks:
+  syncthing_network:
+
