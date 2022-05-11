@@ -12,9 +12,10 @@ BASEDIR=$(dirname "$0")
 #
 doas docker compose \
   -f ${BASEDIR}/ddclient.yml \
-  #-f ${BASEDIR}/torrent.yml \
   -f ${BASEDIR}/syncthing.yml \
   up --detach
+  #-f ${BASEDIR}/torrent.yml \
+
 #
 #doas docker compose -f ./scripts/compose/torrent.yml ps
 #doas docker compose -f ./scripts/compose/torrent.yml down --volumes
