@@ -18,10 +18,11 @@ services:
     #
     volumes:  # https://docs.docker.com/compose/compose-file/#volumes
       - /mnt/nas/data2/docker_01/syncthing/config:/config
-      - /mnt/nas/data1/media/syncthing/in:/data1
-      - /mnt/nas/data1/media/syncthing/out:/data2
+      - /mnt/nas/data1/media/syncthing/data1:/data1  # inbound
+      - /mnt/nas/data1/media/syncthing/data2:/data2  # outbound
+      - /mnt/nas/data1/media/Videos:/Videos  # outbound: share the specific folders from here
     ports:  # https://docs.docker.com/compose/compose-file/#ports
-      - 8384:8384
+      - 8384:8384  # web interface
       - 22000:22000/tcp
       - 22000:22000/udp
       - 21027:21027/udp
