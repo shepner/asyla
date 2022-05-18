@@ -11,10 +11,12 @@ BASEDIR=$(dirname "$0")
 # docker
 #
 doas docker compose \
-  -f ${BASEDIR}/ddclient.yml \
-  -f ${BASEDIR}/syncthing.yml \
+  -f ${BASEDIR}/openssh-server.yml \
   up --detach
-  #-f ${BASEDIR}/torrent.yml \
+  #-f ${BASEDIR}/ddclient.yml \  # using OPNsense instead
+  #-f ${BASEDIR}/torrent.yml \  # needs work
+  #-f ${BASEDIR}/syncthing.yml \
+  #-f ${BASEDIR}/wireguard.yml \  # needs ubuntu host
 
 #
 #doas docker compose -f ./scripts/compose/torrent.yml ps

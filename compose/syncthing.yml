@@ -3,7 +3,7 @@
 version: "3.9"
 
 services:
-  ddclient:
+  syncthing:  # https://docs.linuxserver.io/images/docker-syncthing
     container_name: syncthing  # https://docs.docker.com/compose/compose-file/#container_name
     #
     image: lscr.io/linuxserver/syncthing:latest
@@ -22,10 +22,11 @@ services:
       - /mnt/nas/data1/media/syncthing/data2:/data2  # outbound
       - /mnt/nas/data1/media/Videos:/Videos  # outbound: share the specific folders from here
     ports:  # https://docs.docker.com/compose/compose-file/#ports
+      # https://docs.syncthing.net/users/firewall.html
       - 8384:8384  # web interface
-      - 22000:22000/tcp
-      - 22000:22000/udp
-      - 21027:21027/udp
+      - 22000:22000/tcp  # TCP based sync protocol traffic
+      - 22000:22000/udp  # QUIC based sync protocol traffic
+      - 21027:21027/udp  # for discovery broadcasts on IPv4 and multicasts on IPv6
     networks:  # https://docs.docker.com/compose/compose-file/#networks
       - syncthing_network
     #
