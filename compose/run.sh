@@ -11,7 +11,7 @@ BASEDIR=$(dirname "$0")
 # docker
 #
 doas docker compose \
-  -f ${BASEDIR}/openssh.yml \
+  -f ${BASEDIR}/openssh-server.yml \
   up --detach
   #-f ${BASEDIR}/ddclient.yml \  # using OPNsense instead
   #-f ${BASEDIR}/torrent.yml \  # needs work
