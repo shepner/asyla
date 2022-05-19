@@ -4,13 +4,13 @@ version: "3.9"
 
 services:
   openssh-server:  # https://docs.linuxserver.io/images/docker-openssh-server
-    container_name: openssh  # https://docs.docker.com/compose/compose-file/#container_name
+    container_name: openssh-server  # https://docs.docker.com/compose/compose-file/#container_name
     #
     image: lscr.io/linuxserver/openssh-server:latest
     #
     env_file:  # https://docs.docker.com/compose/compose-file/#env_file
       - ./common.env
-    #  - ./syncthing.env
+    #  - ./openssh-server.env
     environment:  # https://docs.docker.com/compose/compose-file/#environment
     #  - PUID=1000
     #  - PGID=1000
@@ -25,11 +25,11 @@ services:
       #- USER_PASSWORD_FILE=/path/to/file #optional
       #- USER_NAME=linuxserver.io #optional
     volumes:  # https://docs.docker.com/compose/compose-file/#volumes
-      - /mnt/nas/data2/docker_01/openssh/config:/config
+      - /mnt/nas/data2/docker_01/openssh-server/config:/config
     ports:  # https://docs.docker.com/compose/compose-file/#ports
       - 2222:2222
     networks:  # https://docs.docker.com/compose/compose-file/#networks
-      - openssh_network
+      - openssh-server_network
     #
     restart: unless-stopped  # N/A for swarm
     #
@@ -45,5 +45,5 @@ services:
     #      memory: 20M
 
 networks:
-  syncthing_network:
+  openssh-server_network:
 
