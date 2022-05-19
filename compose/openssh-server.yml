@@ -25,6 +25,11 @@ services:
       #- USER_PASSWORD=password #optional
       #- USER_PASSWORD_FILE=/path/to/file #optional
       #- USER_NAME=linuxserver.io #optional
+      - USER_NAME=shepner #optional
+      # Mods
+      #   https://github.com/linuxserver/docker-mods/tree/openssh-server-ssh-tunnel
+      #   https://github.com/linuxserver/docker-mods/tree/openssh-server-openssh-client
+      - DOCKER_MODS=linuxserver/mods:openssh-server-ssh-tunnel|linuxserver/mods:openssh-server-openssh-client
     volumes:  # https://docs.docker.com/compose/compose-file/#volumes
       - /mnt/nas/data2/docker_01/openssh-server/config:/config
     ports:  # https://docs.docker.com/compose/compose-file/#ports
