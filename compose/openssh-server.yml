@@ -15,8 +15,9 @@ services:
     #  - PUID=1000
     #  - PGID=1000
     #  - TZ=Europe/London
-      - PUBLIC_KEY="ssh-rsa AAAAB3NzaC1yc2EAAAABIwAAAQEAy1Lm8RkHhF1gn+uL6li2hgVboxF2/PNoWWsugVowon56YLhf5jYjX61FzuNLgsm2oFvkJRDmR+dmdoJWgy52tByWiLuhGJjWUS/IMkrXN0Ookcg3ZTgwo+yg2n+SMe1jusazkoO6p4qXeVB18txlrj6zcwSrUxVhF8st04hHv93aNGl19G3U7NTzMVZnW+9Zkj9VvifbwEY4bKkeJtg4a/+8NtAnGB/q8JXiEWj/mbOS4KoGJu3Pv/kevSCkBJUPXJHfoW3Y5LvgO+yqpu6NoFca7Em1G8LctniNy6XctYSgP9afuWY3bxUpwCQayuRg02MCoiiFGBidrXr93uNkIw== shepner@ws01.asyla.org" #optional
+      #- PUBLIC_KEY=string #optional
       #- PUBLIC_KEY_FILE=/path/to/file #optional
+      - PUBLIC_KEY_FILE=/config/shepner_rsa.pub
       #- PUBLIC_KEY_DIR=/path/to/directory/containing/_only_/pubkeys #optional
       #- PUBLIC_KEY_URL=https://github.com/username.keys #optional
       - SUDO_ACCESS=false #optional
