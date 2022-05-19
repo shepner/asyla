@@ -17,8 +17,8 @@ services:
     #  - TZ=Europe/London
       #- PUBLIC_KEY=string #optional
       #- PUBLIC_KEY_FILE=/path/to/file #optional
-      - PUBLIC_KEY_FILE=/config/shepner_rsa.pub
       #- PUBLIC_KEY_DIR=/path/to/directory/containing/_only_/pubkeys #optional
+      - PUBLIC_KEY_DIR=/config/pubkeys
       #- PUBLIC_KEY_URL=https://github.com/username.keys #optional
       - SUDO_ACCESS=false #optional
       - PASSWORD_ACCESS=false #optional
