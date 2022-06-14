@@ -54,9 +54,9 @@ sudo docker network connect calibre_net ${NAME}
 #sudo docker network connect codimd_net ${NAME}
 #sudo docker network connect dillinger_net ${NAME}
 sudo docker network connect heimdall_net ${NAME}
-#sudo docker network connect jackett_net ${NAME}
 sudo docker network connect jupyter_net ${NAME}
 #sudo docker network connect sonarr_net ${NAME}
+#sudo docker network connect jackett_net ${NAME}
 #sudo docker network connect transmission_net ${NAME}
 sudo docker network connect unifi-controller_net ${NAME}
 

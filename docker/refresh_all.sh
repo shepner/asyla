@@ -9,6 +9,7 @@ HOSTNAME=`hostname -s`
 
 if [ ${HOSTNAME} = "d01" ]; then
   echo ${HOSTNAME}
+  ~/scripts/docker/swag.sh  # run this first
 
   #~/scripts/docker/ddclient.sh
   ~/scripts/docker/heimdall.sh
@@ -23,8 +24,7 @@ if [ ${HOSTNAME} = "d01" ]; then
   #~/scripts/docker/jackett.sh
   #~/scripts/docker/sonarr.sh
 
-  # run this last
-  ~/scripts/docker/swag.sh
+  ~/scripts/docker/swag.sh  # run this last
 elif [ ${HOSTNAME} = "d02" ]; then
   echo ${HOSTNAME}
   # ~/scripts/docker/foldingathome.sh
