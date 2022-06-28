@@ -34,7 +34,7 @@ appBackup ${DOCKERDIR} ${NAME} # backup the app
 appBackup ${DOCKER_D1}/${NAME} ${NAME} # backup the app
 
 
-sudo docker run --detach --restart=unless-stopped \
+doas docker run --detach --restart=unless-stopped \
   --name ${NAME} \
 `:  --cpu-shares=1024` \
   --env TZ=${LOCAL_TZ} \
