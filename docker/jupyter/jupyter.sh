@@ -26,7 +26,7 @@ WORKDIR=${DOCKER_D1}/${NAME}/work # location of the notebooks
 # Perform setups/updates as needed
 #dockerPull ${IMAGE} # fetch the latest image
 # build the container
-cd ${SOURCE} && sudo docker build --tag $IMAGE .
+cd ${SOURCE} && doas docker build --tag $IMAGE .
 dockerStopRm ${NAME} # kill the old one
 dockerNetworkCreate ${NETWORK} # create the network if needed
 #appCreateDir ${CONFIGDIR} # create the config folder if needed
