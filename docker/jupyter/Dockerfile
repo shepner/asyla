@@ -47,7 +47,8 @@ RUN \
 RUN \
   pip3 install \
     plotly \
-    "ipywidgets==7.5" \
+    #"ipywidgets==7.5" \
+    "ipywidgets==7.6" \
     kaleido \
   && jupyter labextension install jupyterlab-plotly@4.11.0  --no-build \
   && jupyter labextension install @jupyter-widgets/jupyterlab-manager plotlywidget@4.11.0  --no-build
