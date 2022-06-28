@@ -13,7 +13,8 @@ fi
 git clone --depth 1 --no-checkout --filter=blob:none https://github.com/$REPO.git $WORKDIR
 cd $WORKDIR
 git checkout master -- `hostname -s`
-#git checkout master -- docker
+git checkout master -- docker
+git checkout master -- docker2
 git checkout master -- compose
 
 # Just in case permissions werent set correctly
