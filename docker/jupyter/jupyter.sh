@@ -20,7 +20,8 @@ DOCKERAPPDIR=${DOCKERDIR}/${NAME}
 CONFIGDIR=${DOCKERAPPDIR}/config
 
 SOURCE=~/scripts/docker/${NAME} # location of the Dockerfile
-WORKDIR=${DOCKER_D1}/${NAME}/work # location of the notebooks
+#WORKDIR=${DOCKER_D1}/${NAME}/work # location of the notebooks
+WORKDIR=/mnt/nas/data1/docker/jupyter-work/work # location of the notebooks
 
 
 # Perform setups/updates as needed
