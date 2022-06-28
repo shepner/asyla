@@ -7,7 +7,7 @@ dockerPull () {
 
 dockerStopRm () {
   # stop and remove the image if it is running
-  if [ `sudo docker ps -q --filter "name=$1"` ]; then
+  if [ `doas docker ps -q --filter "name=$1"` ]; then
     echo "Stopping container"
     doas docker stop $1
     echo "Removing container"
@@ -15,7 +15,7 @@ dockerStopRm () {
   fi
 
   # remove the image if it exists in some other state
-  if [ `sudo docker ps -aq --filter "name=$1"` ]; then
+  if [ `doas docker ps -aq --filter "name=$1"` ]; then
     echo "Removing container"
     doas docker rm -v $1
   fi
@@ -23,7 +23,7 @@ dockerStopRm () {
 
 dockerVolumeCreate () {
   # create the volume if needed
-  if [ ! `sudo docker volume ls --quiet --filter "name=$1"` ]; then
+  if [ ! `doas docker volume ls --quiet --filter "name=$1"` ]; then
     echo "Creating volume"
     doas docker volume create $1
   fi
@@ -31,7 +31,7 @@ dockerVolumeCreate () {
 
 dockerNetworkCreate () {
   # create the network if needed
-  if [ ! `sudo docker network ls --quiet --filter "name=$1"` ]; then
+  if [ ! `doas docker network ls --quiet --filter "name=$1"` ]; then
     echo "Creating network"
     doas docker network create $1
   fi
@@ -39,14 +39,14 @@ dockerNetworkCreate () {
 
 dockerServiceUpdate () {
   # update the service to the latest image
-  if [ `sudo docker service ls --quiet --filter "name=$1"` ]; then
+  if [ `doas docker service ls --quiet --filter "name=$1"` ]; then
     doas docker service update --force $1
   fi
 }
 
 dockerNetworkCreate () {
   # [docker network create](https://docs.docker.com/engine/reference/commandline/network_create/)
-  if [ ! `sudo docker network ls --quiet --filter "name=$1"` ]; then
+  if [ ! `doas docker network ls --quiet --filter "name=$1"` ]; then
     doas docker network create --driver overlay --attachable $1
   fi
 }
@@ -54,7 +54,7 @@ dockerNetworkCreate () {
 dockerNetworkCreate_general () {
   # [docker network create](https://docs.docker.com/engine/reference/commandline/network_create/)
   dockerNetworkCreate_general_NAME=general
-  if [ ! `sudo docker network ls --quiet --filter "name=${dockerNetworkCreate_general_NAME}"` ]; then
+  if [ ! `doas docker network ls --quiet --filter "name=${dockerNetworkCreate_general_NAME}"` ]; then
     doas docker network create \
       --driver overlay \
       --attachable \
@@ -67,7 +67,7 @@ dockerNetworkCreate_general () {
 dockerRestartProxy () {
   # this is to quick-restart the proxy service without running its script
   PROXY_NAME=swag
-  if [ `sudo docker ps -q --filter "name=${PROXY_NAME}"` ]; then
+  if [ `doas docker ps -q --filter "name=${PROXY_NAME}"` ]; then
     echo "Restarting ${PROXY_NAME}"
     doas docker stop ${PROXY_NAME}
     doas docker start ${PROXY_NAME}
