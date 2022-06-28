@@ -63,13 +63,13 @@ RUN \
 #https://github.com/jupyter/jupyter/wiki/Jupyter-kernels
 #https://vatlab.github.io/sos-docs/
 #https://github.com/vatlab/SOS
-RUN \
-  pip3 install \
-    sos \
-    sos-notebook \
-  && python3 -m sos_notebook.install \
-  && jupyter labextension install transient-display-data --no-build \
-  && jupyter labextension install jupyterlab-sos --no-build
+#RUN \
+#  pip3 install \
+#    sos \
+#    sos-notebook \
+#  && python3 -m sos_notebook.install \
+#  && jupyter labextension install transient-display-data --no-build \
+#  && jupyter labextension install jupyterlab-sos --no-build
 
 #https://github.com/jupyterlab/jupyterlab-toc
 RUN jupyter labextension install @jupyterlab/toc --no-build
