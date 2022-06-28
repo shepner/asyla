@@ -12,7 +12,8 @@
 
 # Setup the app specific environment vars
 IMAGE=${NAME}
-DOCKERDIR=${DOCKER_DL} # local disk
+DOCKERDIR=/mnt/nas/data2/docker_01
+#DOCKERDIR=${DOCKER_DL} # local disk
 #DOCKERDIR=${DOCKER_D1} # NFS attached HDD
 #DOCKERDIR=${DOCKER_D2} # NFS attached SSD
 DOCKERAPPDIR=${DOCKERDIR}/${NAME}
