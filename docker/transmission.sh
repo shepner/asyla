@@ -8,8 +8,9 @@
 
 # Setup the app specific environment vars
 IMAGE=ghcr.io/linuxserver/${NAME}
+DOCKERDIR=/mnt/nas/data2/docker_01
 #DOCKERDIR=${DOCKER_DL} # local disk
-DOCKERDIR=${DOCKER_D1} # NFS attached HDD
+#DOCKERDIR=${DOCKER_D1} # NFS attached HDD
 #DOCKERDIR=${DOCKER_D2} # NFS attached SSD
 DOCKERAPPDIR=${DOCKERDIR}/${NAME}
 CONFIGDIR=${DOCKERAPPDIR}/config
@@ -25,7 +26,7 @@ appCreateDir ${DOCKERAPPDIR}/downloads
 #appBackup ${DOCKERDIR} ${NAME} # backup the app
 
 
-sudo docker run --detach --restart=unless-stopped \
+doas docker run --detach --restart=unless-stopped \
   --name ${NAME} \
   --cpus=2 \
   --cpu-shares=768 \

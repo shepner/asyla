@@ -11,7 +11,8 @@
 
 # Setup the app specific environment vars
 IMAGE=ghcr.io/linuxserver/${NAME}
-DOCKERDIR=${DOCKER_DL} # local disk
+DOCKERDIR=/mnt/nas/data2/docker_01
+#DOCKERDIR=${DOCKER_DL} # local disk
 #DOCKERDIR=${DOCKER_D1} # NFS attached HDD
 #DOCKERDIR=${DOCKER_D2} # NFS attached SSD
 DOCKERAPPDIR=${DOCKERDIR}/${NAME}
@@ -27,7 +28,7 @@ appBackup ${DOCKERDIR} ${NAME} # backup the app
 
 
 #sudo docker create \
-sudo docker run --detach --restart=unless-stopped \
+doas docker run --detach --restart=unless-stopped \
   --name ${NAME} \
 `:  --cpu-shares=1024` \
   --env PUID=${DOCKER_UID} \
@@ -48,20 +49,20 @@ sudo docker run --detach --restart=unless-stopped \
 
 # Needed per proxied app on this host
 # [Multiple subnets in Docker container](https://stackoverflow.com/a/39393229)
-#sudo docker network connect archivebox_net ${NAME}
-sudo docker network connect booksonic_net ${NAME}
-sudo docker network connect calibre_net ${NAME}
-#sudo docker network connect codimd_net ${NAME}
-#sudo docker network connect dillinger_net ${NAME}
-sudo docker network connect heimdall_net ${NAME}
-sudo docker network connect jupyter_net ${NAME}
-#sudo docker network connect sonarr_net ${NAME}
-#sudo docker network connect jackett_net ${NAME}
-#sudo docker network connect transmission_net ${NAME}
-sudo docker network connect unifi-controller_net ${NAME}
+#doas docker network connect archivebox_net ${NAME}
+doas docker network connect booksonic_net ${NAME}
+doas docker network connect calibre_net ${NAME}
+#doas docker network connect codimd_net ${NAME}
+#doas docker network connect dillinger_net ${NAME}
+doas docker network connect heimdall_net ${NAME}
+doas docker network connect jupyter_net ${NAME}
+doas docker network connect sonarr_net ${NAME}
+doas docker network connect jackett_net ${NAME}
+doas docker network connect transmission_net ${NAME}
+doas docker network connect unifi-controller_net ${NAME}
 
 # Dont forget to also setup a config file per app:
 # /docker/swag/config/nginx/proxy-confs
 
-sudo docker start ${NAME}
+doas docker start ${NAME}
 
