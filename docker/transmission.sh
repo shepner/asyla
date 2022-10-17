@@ -23,7 +23,9 @@ dockerNetworkCreate ${NETWORK} # create the network if needed
 appCreateDir ${CONFIGDIR} # create the config folder if needed
 appCreateDir ${DOCKERAPPDIR}/watch
 appCreateDir ${DOCKERAPPDIR}/downloads
-#appBackup ${DOCKERDIR} ${NAME} # backup the app
+#appBackup ${DOCKERDIR} ${NAME} # backup the appa
+echo "backup running"
+doas docker tar -czf /mnt/nas/data1/docker/${NAME}.tgz -C ${DOCKERAPPDIR} ${NAME}
 
 
 doas docker run --detach --restart=unless-stopped \
