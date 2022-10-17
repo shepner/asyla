@@ -8,8 +8,7 @@
 
 # Setup the app specific environment vars
 IMAGE=ghcr.io/linuxserver/${NAME}
-DOCKERDIR=/mnt/nas/data2/docker_01
-#DOCKERDIR=${DOCKER_DL} # local disk
+DOCKERDIR=${DOCKER_DL} # local disk
 #DOCKERDIR=${DOCKER_D1} # NFS attached HDD
 #DOCKERDIR=${DOCKER_D2} # NFS attached SSD
 DOCKERAPPDIR=${DOCKERDIR}/${NAME}
@@ -23,9 +22,9 @@ dockerNetworkCreate ${NETWORK} # create the network if needed
 appCreateDir ${CONFIGDIR} # create the config folder if needed
 appCreateDir ${DOCKERAPPDIR}/watch
 appCreateDir ${DOCKERAPPDIR}/downloads
-#appBackup ${DOCKERDIR} ${NAME} # backup the appa
-echo "backup running"
-doas -u docker tar -czf /mnt/nas/data1/docker/${NAME}.tgz -C ${DOCKERAPPDIR} ${NAME}
+appBackup ${DOCKERDIR} ${NAME} # backup the appa
+#echo "backup running"
+#doas tar -czf /mnt/nas/data1/docker/${NAME}.tgz -C ${DOCKERDIR} ${NAME}
 
 
 doas docker run --detach --restart=unless-stopped \

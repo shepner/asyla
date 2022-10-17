@@ -79,14 +79,14 @@ dockerRestartProxy () {
 appCreateDir () {
   # create the spedified directory if needed
   if [ ! -d ${1} ]; then
-    doas docker mkdir -p ${1}
+    doas mkdir -p ${1}
   fi
 }
 
 appBackup () {
   # Backup the specified Docker app config folder to a common location
   echo "Making a backup"
-  doas docker tar -czf ${DOCKER_D1}/${2}.tgz -C ${1} ${2}
+  doas tar -czf ${DOCKER_D1}/${2}.tgz -C ${1} ${2}
   echo "Backup complete"
 }
 
