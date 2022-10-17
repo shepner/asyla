@@ -25,7 +25,7 @@ appCreateDir ${DOCKERAPPDIR}/watch
 appCreateDir ${DOCKERAPPDIR}/downloads
 #appBackup ${DOCKERDIR} ${NAME} # backup the appa
 echo "backup running"
-doas docker tar -czf /mnt/nas/data1/docker/${NAME}.tgz -C ${DOCKERAPPDIR} ${NAME}
+doas -u docker tar -czf /mnt/nas/data1/docker/${NAME}.tgz -C ${DOCKERAPPDIR} ${NAME}
 
 
 doas docker run --detach --restart=unless-stopped \
