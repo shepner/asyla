@@ -11,8 +11,7 @@
 
 # Setup the app specific environment vars
 IMAGE=ghcr.io/linuxserver/${NAME}
-DOCKERDIR=/mnt/nas/data2/docker_01
-#DOCKERDIR=${DOCKER_DL} # local disk
+DOCKERDIR=${DOCKER_DL} # local disk
 #DOCKERDIR=${DOCKER_D1} # NFS attached HDD
 #DOCKERDIR=${DOCKER_D2} # NFS attached SSD
 DOCKERAPPDIR=${DOCKERDIR}/${NAME}
@@ -55,9 +54,9 @@ doas docker network connect calibre_net ${NAME}
 #doas docker network connect codimd_net ${NAME}
 #doas docker network connect dillinger_net ${NAME}
 doas docker network connect heimdall_net ${NAME}
+doas docker network connect jackett_net ${NAME}
 doas docker network connect jupyter_net ${NAME}
 doas docker network connect sonarr_net ${NAME}
-doas docker network connect jackett_net ${NAME}
 doas docker network connect transmission_net ${NAME}
 doas docker network connect unifi-controller_net ${NAME}
 

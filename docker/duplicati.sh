@@ -8,8 +8,7 @@
 
 # Setup the app specific environment vars
 IMAGE=lscr.io/linuxserver/${NAME}
-DOCKERDIR=/mnt/nas/data2/docker_01
-#DOCKERDIR=${DOCKER_DL} # local disk
+DOCKERDIR=${DOCKER_DL} # local disk
 #DOCKERDIR=${DOCKER_D1} # NFS attached HDD
 #DOCKERDIR=${DOCKER_D2} # NFS attached SSD
 DOCKERAPPDIR=${DOCKERDIR}/${NAME}
@@ -22,7 +21,7 @@ dockerStopRm ${NAME} # kill the old one
 dockerNetworkCreate ${NETWORK} # create the network if needed
 appCreateDir ${CONFIGDIR} # create the config folder if needed
 appCreateDir ${DOCKERAPPDIR}/downloads
-#appBackup ${DOCKERDIR} ${NAME} # backup the app
+appBackup ${DOCKERDIR} ${NAME} # backup the app
 
 
 doas docker run --detach --restart=unless-stopped \

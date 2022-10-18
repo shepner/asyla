@@ -8,8 +8,7 @@
 
 # Setup the app specific environment vars
 IMAGE=ghcr.io/linuxserver/${NAME}
-DOCKERDIR=/mnt/nas/data2/docker_01
-#DOCKERDIR=${DOCKER_DL} # local disk
+DOCKERDIR=${DOCKER_DL} # local disk
 #DOCKERDIR=${DOCKER_D1} # NFS attached HDD
 #DOCKERDIR=${DOCKER_D2} # NFS attached SSD
 DOCKERAPPDIR=${DOCKERDIR}/${NAME}
@@ -34,9 +33,9 @@ doas docker run --detach --restart=unless-stopped \
   --env TZ=${LOCAL_TZ} \
   --network=${NETWORK} \
   --env AUTO_UPDATE=true \
-`:  --publish published=9117,target=9117,protocol=tcp,mode=ingress` \
   --mount type=bind,src=${CONFIGDIR},dst=/config \
   --mount type=bind,src=${DOCKERAPPDIR}/downloads,dst=/downloads \
+`:  --publish published=9117,target=9117,protocol=tcp,mode=ingress` \
   $IMAGE
 
 dockerRestartProxy

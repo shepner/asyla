@@ -22,9 +22,7 @@ dockerNetworkCreate ${NETWORK} # create the network if needed
 appCreateDir ${CONFIGDIR} # create the config folder if needed
 appCreateDir ${DOCKERAPPDIR}/watch
 appCreateDir ${DOCKERAPPDIR}/downloads
-appBackup ${DOCKERDIR} ${NAME} # backup the appa
-#echo "backup running"
-#doas tar -czf /mnt/nas/data1/docker/${NAME}.tgz -C ${DOCKERDIR} ${NAME}
+appBackup ${DOCKERDIR} ${NAME} # backup the app
 
 
 doas docker run --detach --restart=unless-stopped \
@@ -35,12 +33,12 @@ doas docker run --detach --restart=unless-stopped \
   --env PGID=${DOCKER_GID} \
   --env TZ=${LOCAL_TZ} \
   --network=${NETWORK} \
-`:  --publish published=9091,target=9091,protocol=tcp,mode=ingress` \
-  --publish published=51413,target=51413,protocol=tcp,mode=ingress \
-  --publish published=51413,target=51413,protocol=udp,mode=ingress \
   --mount type=bind,src=${CONFIGDIR},dst=/config \
   --mount type=bind,src=${DOCKERAPPDIR}/watch,dst=/watch \
   --mount type=bind,src=${DOCKERAPPDIR}/downloads,dst=/downloads \
+  `:  --publish published=9091,target=9091,protocol=tcp,mode=ingress` \
+  --publish published=51413,target=51413,protocol=tcp,mode=ingress \
+  --publish published=51413,target=51413,protocol=udp,mode=ingress \
   ${IMAGE}
 
 dockerRestartProxy
