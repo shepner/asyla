@@ -18,10 +18,9 @@ DOCKERDIR=${DOCKER_DL} # local disk
 DOCKERAPPDIR=${DOCKERDIR}/${NAME}
 CONFIGDIR=${DOCKERAPPDIR}/config
 
-SOURCE=~/scripts/docker/${NAME} # location of the Dockerfile
-#WORKDIR=${DOCKER_D1}/${NAME}/work # location of the notebooks
-WORKDIR=/mnt/nas/data1/docker/jupyter-work/work # location of the notebooks
+WORKDIR=${DOCKER_D1}/${NAME}-work # parent dir for the notebooks
 
+SOURCE=~/scripts/docker/${NAME} # location of the Dockerfile
 
 # Perform setups/updates as needed
 #dockerPull ${IMAGE} # fetch the latest image
@@ -32,7 +31,8 @@ dockerNetworkCreate ${NETWORK} # create the network if needed
 #appCreateDir ${CONFIGDIR} # create the config folder if needed
 appCreateDir ${DOCKERAPPDIR}/work
 appBackup ${DOCKERDIR} ${NAME} # backup the app
-appBackup ${DOCKER_D1}/${NAME} ${NAME} # backup the app
+echo "Backup the data separately"
+doas tar -czf ${WORKDIR}/work.tgz -C ${WORKDIR} work
 
 
 doas docker run --detach --restart=unless-stopped \
@@ -50,7 +50,7 @@ doas docker run --detach --restart=unless-stopped \
   --env RESTARTABLE=yes \
   --env JUPYTER_ALLOW_INSECURE_WRITES=true \
   --mount type=bind,src=${DOCKERAPPDIR},dst=/home/${DOCKER_UNAME} \
-  --mount type=bind,src=${WORKDIR},dst=/home/${DOCKER_UNAME}/work \
+  --mount type=bind,src=${WORKDIR}/work,dst=/home/${DOCKER_UNAME}/work \
   --user root \
   --workdir /home/${DOCKER_UNAME}/work \
   --env CHOWN_HOME=yes \
