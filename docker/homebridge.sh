@@ -26,7 +26,7 @@ appCreateDir ${DOCKERAPPDIR} # create the folder if needed
 appBackup ${DOCKERDIR} ${NAME} # backup the app
 
 
-sudo docker run --detach --restart=unless-stopped \
+doas docker run --detach --restart=unless-stopped \
   --name ${NAME} \
   --cpus=2 \
   --env TZ=${LOCAL_TZ} \
@@ -34,7 +34,7 @@ sudo docker run --detach --restart=unless-stopped \
   --network=${NETWORK} \
 `:  --network=host` \
   --mount type=bind,src=${DOCKERAPPDIR},dst=/homebridge \
-`:  --publish published=8581,target=8581,protocol=tcp,mode=ingress` \
+  --publish published=8581,target=8581,protocol=tcp,mode=ingress \
   ${IMAGE}
 
 dockerRestartProxy

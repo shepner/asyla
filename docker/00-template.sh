@@ -26,7 +26,7 @@ appCreateDir ${DOCKERAPPDIR} # create the folder if needed
 appBackup ${DOCKERDIR} ${NAME} # backup the app
 
 
-sudo docker run --detach --restart=unless-stopped \
+doas docker run --detach --restart=unless-stopped \
   --name ${NAME} \
   --cpus=2 \
 `:  --cpu-shares=1024` `# default job priority` \
