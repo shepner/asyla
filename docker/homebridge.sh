@@ -3,6 +3,8 @@
 # https://github.com/oznu/docker-homebridge
 # https://homebridge.io/
 #
+# Homebridge uses port 8581
+#
 # Camera stuff:
 # https://github.com/seydx/homebridge-camera-ui
 #   Uses port 8081 by default
@@ -40,7 +42,7 @@ doas docker run --detach --restart=unless-stopped \
 `:  --network=host` \
   --mount type=bind,src=${DOCKERAPPDIR},dst=/homebridge \
   --publish published=8581,target=8581,protocol=tcp,mode=ingress \
-  --publish published=8081,target=8081,protocol=tcp,mode=ingress \
+  --publish published=8181,target=8081,protocol=tcp,mode=ingress \
   ${IMAGE}
 
 dockerRestartProxy
