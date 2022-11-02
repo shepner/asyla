@@ -2,6 +2,11 @@
 # https://github.com/homebridge/homebridge/wiki/Install-Homebridge-on-Docker
 # https://github.com/oznu/docker-homebridge
 # https://homebridge.io/
+#
+# Camera stuff:
+# https://github.com/seydx/homebridge-camera-ui
+#   Uses port 8081 by default
+# https://securitycamcenter.com/rtsp-commands-axis-cameras/
 
 
 # Load the global functions and environment variables
@@ -35,6 +40,7 @@ doas docker run --detach --restart=unless-stopped \
 `:  --network=host` \
   --mount type=bind,src=${DOCKERAPPDIR},dst=/homebridge \
   --publish published=8581,target=8581,protocol=tcp,mode=ingress \
+  --publish published=8081,target=8081,protocol=tcp,mode=ingress \
   ${IMAGE}
 
 dockerRestartProxy
