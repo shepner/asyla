@@ -5,14 +5,13 @@
 ##
 # Camera stuff:
 # https://github.com/seydx/homebridge-camera-ui
-#   Uses port 8081 by default
 # https://securitycamcenter.com/rtsp-commands-axis-cameras/
 #
 # #  Ports:
 #  - 8581: Homebridge web UI
 #  - 8181: Camera-UI web UI
 #  - 51956: Homebridge service
-#  - 33223: camera (axis-b8a44f522e4a)
+#  - <random>: camera (axis-b8a44f522e4a)
 
 
 
@@ -44,15 +43,16 @@ doas docker run --detach --restart=unless-stopped \
   --cpus=2 \
   --env TZ=${LOCAL_TZ} \
   --env ENABLE_AVAHI=1 \
-  --network=${NETWORK} \
-`:  --network=host` \
+`:  --network=${NETWORK}` \
+  --network=host \
   --mount type=bind,src=${DOCKERAPPDIR},dst=/homebridge \
-  --publish published=8581,target=8581,protocol=tcp,mode=ingress \
-`:  --publish published=8181,target=8081,protocol=tcp,mode=ingress` \
-  --publish published=8181,target=8181,protocol=tcp,mode=ingress \
-  --publish published=51956,target=51956,protocol=tcp,mode=ingress \
-  --publish published=33223,target=33223,protocol=tcp,mode=ingress \
   ${IMAGE}
 
 dockerRestartProxy
+
+
+#  --publish published=8581,target=8581,protocol=tcp,mode=ingress \
+#`:  --publish published=8181,target=8081,protocol=tcp,mode=ingress` \
+#  --publish published=8181,target=8181,protocol=tcp,mode=ingress \
+#  --publish published=51956,target=51956,protocol=tcp,mode=ingress \
 
