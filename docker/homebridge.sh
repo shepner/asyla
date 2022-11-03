@@ -43,7 +43,6 @@ doas docker run --detach --restart=unless-stopped \
   --cpus=2 \
   --env TZ=${LOCAL_TZ} \
   --env ENABLE_AVAHI=1 \
-`:  --network=${NETWORK}` \
   --network=host \
   --mount type=bind,src=${DOCKERAPPDIR},dst=/homebridge \
   ${IMAGE}
@@ -51,6 +50,7 @@ doas docker run --detach --restart=unless-stopped \
 dockerRestartProxy
 
 
+#`:  --network=${NETWORK}` \
 #  --publish published=8581,target=8581,protocol=tcp,mode=ingress \
 #`:  --publish published=8181,target=8081,protocol=tcp,mode=ingress` \
 #  --publish published=8181,target=8181,protocol=tcp,mode=ingress \
