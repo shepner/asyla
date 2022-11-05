@@ -2,10 +2,12 @@
 # https://github.com/homebridge/homebridge/wiki/Install-Homebridge-on-Docker
 # https://github.com/oznu/docker-homebridge
 # https://homebridge.io/
-##
+#
 # Camera stuff:
 # https://github.com/seydx/homebridge-camera-ui
 # https://securitycamcenter.com/rtsp-commands-axis-cameras/
+# - rtsp://username:password@device-IP-Address/mpeg4/media.amp
+# - rtsp://username:password@device-IP-Address/mpeg4/media.amp?camera=<number>
 #
 # #  Ports:
 #  - 8581: Homebridge web UI
