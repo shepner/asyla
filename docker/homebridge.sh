@@ -16,8 +16,6 @@
 #  - <random>: camera (axis-b8a44f522e4a)
 
 
-
-
 # Load the global functions and environment variables
 . ~/scripts/docker/common.sh
 
@@ -49,7 +47,7 @@ doas docker run --detach --restart=unless-stopped \
   --mount type=bind,src=${DOCKERAPPDIR},dst=/homebridge \
   ${IMAGE}
 
-dockerRestartProxy
+#dockerRestartProxy
 
 
 #`:  --network=${NETWORK}` \

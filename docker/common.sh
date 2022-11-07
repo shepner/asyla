@@ -80,6 +80,7 @@ appCreateDir () {
   # create the spedified directory if needed
   if [ ! -d ${1} ]; then
     doas mkdir -p ${1}
+    doas chown docker:asyla ${1}
   fi
 }
 
