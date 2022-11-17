@@ -28,7 +28,7 @@ qm create $VMID \
   --numa 0 \
   --agent 1,fstrim_cloned_disks=1
 
-qm resize $VMID scsi0 32G # [resize disks](https://pve.proxmox.com/wiki/Resize_disks)
+qm resize $VMID scsi0 64G # [resize disks](https://pve.proxmox.com/wiki/Resize_disks)
 
 qm start $VMID
 ```
@@ -125,6 +125,10 @@ ash <(curl -s https://raw.githubusercontent.com/shepner/asyla/master/`hostname -
 ~/update.sh
 ```
 
+---
+
+!!! WARNING
+  Skip this part unless there is a way to mount a local disk across multiple servers.  Or if there are NO databases
 
 ## Configure Docker Swarm
 
