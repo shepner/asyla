@@ -47,7 +47,9 @@ dockerServiceUpdate () {
 dockerNetworkCreate () {
   # [docker network create](https://docs.docker.com/engine/reference/commandline/network_create/)
   if [ ! `doas docker network ls --quiet --filter "name=$1"` ]; then
-    doas docker network create --driver overlay --attachable $1
+    # use overlay with swarm
+    #doas docker network create --driver overlay --attachable $1
+    doas docker network create --driver bridge --attachable $1
   fi
 }
 
