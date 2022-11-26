@@ -42,9 +42,11 @@ doas docker run --detach --restart=unless-stopped \
   --env ONLY_SUBDOMAINS=false \
   --env STAGING=false \
 `:  --env DOCKER_MODS=linuxserver/mods:swag-dashboard` \
+  --env DOCKER_MODS=linuxserver/mods:swag-dashboard| \
   --mount type=bind,src=${CONFIGDIR},dst=/config \
   --publish published=80,target=80,protocol=tcp,mode=ingress \
   --publish published=443,target=443,protocol=tcp,mode=ingress \
+  --publish published=81,target=81,protocol=tcp,mode=ingress \
   ${IMAGE}
 
 # Needed per proxied app on this host
