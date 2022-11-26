@@ -21,12 +21,25 @@ doas rc-update del iscsid default
 
 
 # point at iscsi target
-
 IP_OF_TARGET="10.0.0.24"
-#doas iscsiadm --mode discovery --type sendtargets --portal $IP_OF_TARGET
 
-NAME_OF_TARGET="iqn.2005-10.org.freenas.ctl:data2:docker:02"  # update as appropriate
+# https://github.com/open-iscsi/open-iscsi
+
+# Discover targets at a given IP address
+#doas iscsiadm --mode discovery --type sendtargets --portal $IP_OF_TARGET
+#doas iscsiadm --mode discoverydb --type sendtargets --portal $IP_OF_TARGET --discover
+
+NAME_OF_TARGET="iqn.2005-10.org.freenas.ctl:nas01:d03:01"  # update as appropriate
+
+# Connect to the target
 doas iscsiadm --mode node --targetname $NAME_OF_TARGET --portal $IP_OF_TARGET --login
+
+# Disconnect from the target
+#doas iscsiadm --mode node --targetname $NAME_OF_TARGET --portal $IP_OF_TARGET --logout 
+
+# List node records
+#doas iscsiadm --mode node
+
 doas iscsiadm -m node -T $NAME_OF_TARGET -p $IP_OF_TARGET --op update -n node.conn[0].startup -v automatic
 
 
@@ -41,7 +54,7 @@ doas iscsiadm -m node -T $NAME_OF_TARGET -p $IP_OF_TARGET --op update -n node.co
   # n (create new partition)
   # p (create primary partition)
   # 1 (create primary partition #1)
-  # 4096 (first sector assuming 4096 byte sectors)
+  # 512 (first sector assuming 512 byte sectors)
   # <take the default last sector>
   # w (write to disk)
 #doas fdisk -l  # validate changes
@@ -52,7 +65,7 @@ doas iscsiadm -m node -T $NAME_OF_TARGET -p $IP_OF_TARGET --op update -n node.co
 
 # update /etc/fstab
 # https://unix.stackexchange.com/a/349278
-doas mkdir -p /mnt/nas/data2/docker_02
-echo "/dev/sdb1 /mnt/nas/data2/docker_02 ext4 _netdev,rw 0 0" | doas tee -a /etc/fstab
+doas mkdir -p /mnt/docker
+echo "/dev/sdb1 /mnt/docker ext4 _netdev,rw 0 0" | doas tee -a /etc/fstab
 doas mount -a
 

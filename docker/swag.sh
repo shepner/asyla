@@ -35,12 +35,13 @@ doas docker run --detach --restart=unless-stopped \
   --env TZ=${LOCAL_TZ} \
   --cap-add=NET_ADMIN \
   --env URL=${MY_DOMAIN} \
-  --env SUBDOMAINS=archivebox,booksonic,calibre,codimd,jackett,jupyter,sonarr,transmission,unifi,www, \
+  --env SUBDOMAINS=booksonic,calibre,jackett,jupyter,sonarr,transmission,unifi,www \
   --env VALIDATION=dns \
   --env DNSPLUGIN=cloudflare \
   --env EMAIL=${MY_EMAIL} \
   --env ONLY_SUBDOMAINS=false \
   --env STAGING=false \
+  --env DOCKER_MODS=linuxserver/mods:swag-dashboard \
   --mount type=bind,src=${CONFIGDIR},dst=/config \
   --publish published=80,target=80,protocol=tcp,mode=ingress \
   --publish published=443,target=443,protocol=tcp,mode=ingress \
