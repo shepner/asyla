@@ -19,10 +19,8 @@ CONFIGDIR=${DOCKERAPPDIR}/plexmediaserver
 # Perform setups/updates as needed
 dockerPull ${IMAGE} # fetch the latest image
 dockerStopRm ${NAME} # kill the old one
-#dockerNetworkCreate ${NETWORK} # create the network if needed
-appCreateDir ${DOCKERAPPDIR} # create the folder if needed
 #appCreateDir ${CONFIGDIR} # create the folder if needed
-appBackup ${DOCKERDIR} ${NAME} # backup the app
+#appBackup ${DOCKERDIR} ${NAME} # backup the app
 
 
 doas docker run --detach --restart=unless-stopped \
@@ -41,5 +39,4 @@ doas docker run --detach --restart=unless-stopped \
 `:  --publish published=32400,target=32400,protocol=tcp,mode=ingress` \
   ${IMAGE}:latest
 
-#dockerRestartProxy
 
