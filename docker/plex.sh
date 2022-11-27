@@ -7,7 +7,7 @@
 
 
 # Setup the app specific environment vars
-IMAGE=ghcr.io/linuxserver/${NAME}
+IMAGE=ghcr.io/linuxserver/${NAME}:latest
 #DOCKERDIR=${DOCKER_DL} # local disk
 DOCKERDIR=/mnt/docker # local disk
 #DOCKERDIR=${DOCKER_D1} # NFS attached HDD
@@ -37,5 +37,5 @@ doas docker run --detach --restart=unless-stopped \
   --mount type=bind,src=${CONFIGDIR},dst=/config \
   --mount type=bind,src=/mnt/nas/data1/media,dst=/data \
 `:  --publish published=32400,target=32400,protocol=tcp,mode=ingress` \
-  ${IMAGE}:latest
+  ${IMAGE}
 
