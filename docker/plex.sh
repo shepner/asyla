@@ -35,7 +35,7 @@ doas docker run --detach --restart=unless-stopped \
   --env CMD_DOMAIN=${NAME}.${MY_DOMAIN} \
   --env CMD_PROTOCOL_USESSL=true \
   --mount type=bind,src=${CONFIGDIR},dst=/config \
-  --mount type=bind,src=/mnt/nas/data1/media,dst=/mnt/nas/data1/media \
+  --mount type=bind,src=/mnt/nas/data1/media,dst=/data/Videos \
 `:  --publish published=32400,target=32400,protocol=tcp,mode=ingress` \
   ${IMAGE}:latest
 
