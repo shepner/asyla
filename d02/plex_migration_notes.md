@@ -44,7 +44,7 @@ From the new Alpine host, run rsync (WARNING SLOW):
 
 ``` shell
 # Test that it will work
-#doas rsync --dry-run -v -a -e "ssh" --rsync-path="sudo rsync" shepner@plex:/var/lib/plexmediaserver /mnt/iscsi/plex
+#doas rsync --dry-run --progress -a -e "ssh" --rsync-path="sudo rsync" shepner@plex:/var/lib/plexmediaserver /mnt/iscsi/plex
 doas rsync --progress -a -e "ssh" --rsync-path="sudo rsync" shepner@plex:/var/lib/plexmediaserver /mnt/iscsi/plex
 ```
 
