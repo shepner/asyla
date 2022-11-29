@@ -16,7 +16,8 @@ if [ ${HOSTNAME} = "d01" ]; then
 
   ~/scripts/docker/unifi-controller.sh
   ~/scripts/docker/homebridge.sh
-  
+  ~/scripts/docker/duplicati.sh
+
   ~/scripts/docker/jupyter/jupyter.sh
 
   ~/scripts/docker/calibre.sh
