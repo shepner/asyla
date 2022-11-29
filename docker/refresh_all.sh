@@ -13,7 +13,9 @@ if [ ${HOSTNAME} = "d01" ]; then
 
   #~/scripts/docker/ddclient.sh
   ~/scripts/docker/heimdall.sh
+
   ~/scripts/docker/unifi-controller.sh
+  ~/scripts/docker/homebridge.sh
   
   ~/scripts/docker/jupyter/jupyter.sh
 
