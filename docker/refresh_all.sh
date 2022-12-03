@@ -24,6 +24,7 @@ if [ ${HOSTNAME} = "d01" ]; then
   ~/scripts/docker/booksonic.sh
   
   ~/scripts/docker/transmission.sh
+  ~/scripts/docker/flaresolverr.sh
   ~/scripts/docker/jackett.sh
   ~/scripts/docker/sonarr.sh
 
