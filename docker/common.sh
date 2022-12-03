@@ -69,13 +69,15 @@ dockerNetworkCreate_general () {
 dockerRestartProxy () {
   # this is to quick-restart the proxy service without running its script
   PROXY_NAME=swag
-  if [ `doas docker ps -q --filter "name=${PROXY_NAME}"` ]; then
-    echo "Restarting ${PROXY_NAME}"
-    doas docker stop ${PROXY_NAME}
-    doas docker start ${PROXY_NAME}
-  else
-    echo "WARNING: ${PROXY_NAME} was not running!"
-  fi
+  #if [ `doas docker ps -q --filter "name=${PROXY_NAME}"` ]; then
+  #  echo "Restarting ${PROXY_NAME}"
+  #  doas docker stop ${PROXY_NAME}
+  #  doas docker start ${PROXY_NAME}
+  #else
+  #  echo "WARNING: ${PROXY_NAME} was not running!"
+  #fi
+  echo "Restarting ${PROXY_NAME}"
+  ~/scripts/docker/swag.sh
 }
 
 appCreateDir () {

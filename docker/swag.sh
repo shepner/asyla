@@ -56,7 +56,7 @@ doas docker network connect booksonic_net ${NAME}
 doas docker network connect calibre_net ${NAME}
 #doas docker network connect codimd_net ${NAME}
 #doas docker network connect dillinger_net ${NAME}
-doas docker network connect flaresolerr_net ${NAME}
+doas docker network connect flaresolverr_net ${NAME}
 doas docker network connect heimdall_net ${NAME}
 doas docker network connect jackett_net ${NAME}
 doas docker network connect jupyter_net ${NAME}
