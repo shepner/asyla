@@ -31,12 +31,10 @@ doas docker run --detach --restart=unless-stopped \
   --env PGID=${DOCKER_GID} \
   --env TZ=${LOCAL_TZ} \
   --network=${NETWORK} \
-`:  --dns 10.0.0.5` \
   --mount type=bind,src=/etc/localtime,dst=/etc/localtime,readonly=1 \
   --mount type=bind,src=${CONFIGDIR},dst=/config \
   --mount type=bind,src=/mnt/nas/data1/media/Videos,dst=/tv \
-`:  --mount type=bind,src=/mnt/nas/data1/docker/transmission/downloads/complete,dst=/downloads` \
-  --mount type=bind,src=/mnt/nas/data2/docker_01/transmission/downloads/complete,dst=/downloads \
+  --mount type=bind,src=/mnt/docker/transmission/downloads/complete,dst=/downloads \
 `:  --publish published=8989,target=8989,protocol=tcp,mode=ingress` \
   ${IMAGE}
 
