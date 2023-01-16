@@ -6,5 +6,4 @@
 
 ~/scripts/docker/refresh_all
 
-#doas docker pull ghcr.io/linuxserver/plex:latest
 
