@@ -1,5 +1,8 @@
 #!/bin/sh
 
+# update the system
+~/update.sh
+
 # update all of the configs
 ~/update_scripts.sh
 
