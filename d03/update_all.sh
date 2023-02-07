@@ -4,6 +4,6 @@
 
 ~/update.sh
 
-~/scripts/docker/refresh_all
+~/scripts/docker/refresh_all.sh
 
 
