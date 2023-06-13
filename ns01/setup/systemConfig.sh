@@ -23,9 +23,11 @@ apk update \
 
 
 # Forward log messages
+# increase log size and history
 # https://wiki.alpinelinux.org/wiki/Syslog
 cat > /etc/conf.d/syslog << EOF
-SYSLOGD_OPTS="-t -L -R 10.0.0.73"
+#SYSLOGD_OPTS="-t -L -R 10.0.0.73"
+SYSLOGD_OPTS="-t -s 2048 -b 10 -L -R 10.0.0.73"
 EOF
 rc-service syslog restart
 
