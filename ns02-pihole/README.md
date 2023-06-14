@@ -15,11 +15,11 @@ The [qm.conf](https://pve.proxmox.com/wiki/Manual:_qm.conf) file is located in `
 VMID=305
 qm create $VMID \
   --name ns02-pihole \
-  --sockets 2 \
-  --cores 6 \
-  --memory 1024 \
+  --sockets 1 \
+  --cores 4 \
+  --memory 2048 \
   --ostype l26 \
-  --ide2 nas-data1-iso:iso/alpine-virt-3.18.0-x86_64.iso,media=cdrom \
+  --ide2 nas-data1-iso:iso/alpine-virt-3.18.2-x86_64.iso,media=cdrom \
   --scsi0 nas-data1-vm:1,format=qcow2,discard=on,ssd=1 \
   --scsihw virtio-scsi-pci \
   --bootdisk scsi0 \
@@ -27,15 +27,23 @@ qm create $VMID \
   --onboot 1 \
   --numa 0 \
   --agent 1,fstrim_cloned_disks=1
+```
 
+Wait a min or 2
+
+``` shell
 qm resize $VMID scsi0 64G # [resize disks](https://pve.proxmox.com/wiki/Resize_disks)
+```
 
+Wait a min or 2
+
+``` shell
 qm start $VMID
 ```
 
 ## Install Alpine
 
-login from the console and do the following
+login from the console (root, no passwd) and do the following
 
 ``` shell
 setup-alpine
@@ -50,13 +58,15 @@ eth0
 10.0.0.1
 n
 asyla.org
-10.0.0.10, 10.0.0.11
+10.0.0.11, 10.0.0.10
 <password>
 <password>
 America/Chicago
 none
 1
+no
 openssh
+prohibit-password
 sda
 sys
 y
@@ -64,7 +74,7 @@ y
 reboot
 ```
 
-From the VM host, remove the ISO image as its not needed anymore
+From the VM host, remove the ISO image as its not needed anymore:
 
 ``` shell
 qm set $VMID \
@@ -83,16 +93,16 @@ if needed:
 
 ``` shell
 addgroup -g 1000 asyla
-adduser -u 1003 -G asyla -g "docker" shepner
+adduser -u 1003 -G asyla -g "docker" docker
 ```
 
 ### doas
 
 ``` shell
-adduser shepner wheel
+adduser docker wheel
 
 apk add doas
-echo "permit nopass :wheel" >> /etc/doas.conf
+echo "permit nopass :wheel" >> /etc/doas.d/doas.conf
 ```
 
 ### SSH
@@ -117,7 +127,6 @@ doas apk add curl git
 ash <(curl -s https://raw.githubusercontent.com/shepner/asyla/master/`hostname -s`/update_scripts.sh)
 
 ~/scripts/`hostname -s`/setup/systemConfig.sh
-~/scripts/`hostname -s`/setup/smb.sh
 ~/scripts/`hostname -s`/setup/nfs.sh
 ~/scripts/`hostname -s`/setup/iscsi.sh
 ~/scripts/`hostname -s`/setup/docker.sh

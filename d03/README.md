@@ -89,7 +89,7 @@ adduser -u 1003 -G asyla -g "docker" shepner
 ### doas
 
 ``` shell
-adduser shepner wheel
+adduser docker wheel
 
 apk add doas
 echo "permit nopass :wheel" >> /etc/doas.conf
