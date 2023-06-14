@@ -122,15 +122,27 @@ ssh $DHOST "chmod -R 700 ~/.ssh"
 ### configure system
 
 run the setup scripts:
+
 ``` shell
 doas apk add curl git
 ash <(curl -s https://raw.githubusercontent.com/shepner/asyla/master/`hostname -s`/update_scripts.sh)
 
 ~/scripts/`hostname -s`/setup/systemConfig.sh
-~/scripts/`hostname -s`/setup/nfs.sh
+```
+
+run this by hand the first time
+
+``` shell
 ~/scripts/`hostname -s`/setup/iscsi.sh
+```
+
+
+``` shell
+~/scripts/`hostname -s`/setup/nfs.sh
 ~/scripts/`hostname -s`/setup/docker.sh
 
 ~/update.sh
+
+doas reboot
 ```
 
