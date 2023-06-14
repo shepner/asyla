@@ -20,7 +20,8 @@ DOCKERAPPDIR=${DOCKERDIR}/${NAME}
 dockerPull ${IMAGE} # fetch the latest image
 dockerStopRm ${NAME} # kill the old one
 dockerNetworkCreate ${NETWORK} # create the network if needed
-appCreateDir ${DOCKERAPPDIR} # create the folder if needed
+appCreateDir ${DOCKERAPPDIR}/etc-pihole # create the folder if needed
+appCreateDir ${DOCKERAPPDIR}/etc-dnsmasq.d # create the folder if needed
 #appCreateDir ${CONFIGDIR} # create the folder if needed
 appBackup ${DOCKERDIR} ${NAME} # backup the app
 
