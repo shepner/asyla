@@ -58,7 +58,7 @@ eth0
 10.0.0.1
 n
 asyla.org
-10.0.0.11, 10.0.0.10
+1.1.1.1.1, 1.0.0.1
 <password>
 <password>
 America/Chicago
