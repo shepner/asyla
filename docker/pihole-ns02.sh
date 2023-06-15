@@ -28,10 +28,15 @@ appBackup ${DOCKERDIR} ${NAME} # backup the app
 
 doas docker run --detach --restart=unless-stopped \
   --name ${NAME} \
+`:  --hostname ns02.asyla.org` \
+  --dns=1.1.1.1 \
   --env TZ=${LOCAL_TZ} \
   --env CMD_DOMAIN=${NAME}.${MY_DOMAIN} \
   --env CMD_PROTOCOL_USESSL=true \
-`:  --env WEBPASSWORD=''` `# set a secure password here or it will be random` \
+  --env WEBPASSWORD='' `# set a password or it will be random` \
+`:  --env VIRTUAL_HOST="pi.hole"` \
+`:  --env PROXY_LOCATION="pi.hole"` \
+`:  --env FTLCONF_LOCAL_IPV4="127.0.0.1"` \
   --mount type=bind,src=${DOCKERAPPDIR}/etc-pihole,dst=/etc/pihole \
   --mount type=bind,src=${DOCKERAPPDIR}/etc-dnsmasq.d,dst=/etc/dnsmasq.d \
   --cap-add=NET_ADMIN `# Required if you are using Pi-hole as your DHCP server, else not needed` \
