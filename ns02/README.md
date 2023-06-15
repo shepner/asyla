@@ -15,8 +15,8 @@ The [qm.conf](https://pve.proxmox.com/wiki/Manual:_qm.conf) file is located in `
 VMID=305
 qm create $VMID \
   --name ns02-pihole \
-  --sockets 1 \
-  --cores 4 \
+  --sockets 2 \
+  --cores 2 \
   --memory 2048 \
   --ostype l26 \
   --ide2 nas-data1-iso:iso/alpine-virt-3.18.2-x86_64.iso,media=cdrom \
