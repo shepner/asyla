@@ -51,7 +51,7 @@ setup-alpine
 
 us
 us
-ns02.asyla.org
+ns01.asyla.org
 eth0
 10.0.0.10
 255.255.255.0
@@ -67,6 +67,7 @@ none
 no
 openssh
 prohibit-password
+none
 sda
 sys
 y
@@ -110,7 +111,7 @@ echo "permit nopass :wheel" >> /etc/doas.d/doas.conf
 from local workstation, copy over the ssh keys
 
 ``` shell
-DHOST=ns02
+DHOST=ns01
 ssh-copy-id -i ~/.ssh/docker_rsa.pub $DHOST
 
 scp ~/.ssh/docker_rsa $DHOST:.ssh/docker_rsa
