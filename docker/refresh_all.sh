@@ -33,13 +33,9 @@ elif [ ${HOSTNAME} = "d02" ]; then
 elif [ ${HOSTNAME} = "d03" ]; then
   echo ${HOSTNAME}
 
-fi
-
 elif [ ${HOSTNAME} = "ns01" ]; then
   echo ${HOSTNAME}
    ~/scripts/docker/pihole-ns01.sh
-
-fi
 
 elif [ ${HOSTNAME} = "ns02" ]; then
   echo ${HOSTNAME}
