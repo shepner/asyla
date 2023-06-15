@@ -34,12 +34,12 @@ doas docker run --detach --restart=unless-stopped \
   --env WEBPASSWORD='' `# set a secure password here or it will be random` \
   --mount type=bind,src=${DOCKERAPPDIR}/etc-pihole,dst=/etc/pihole \
   --mount type=bind,src=${DOCKERAPPDIR}/etc-dnsmasq.d,dst=/etc/dnsmasq.d \
-  --network=host `# For DHCP it is recommended to remove these ports and instead add: network_mode: "host"` \
+  --cap-add=NET_ADMIN `# Required if you are using Pi-hole as your DHCP server, else not needed` \
+  --net=host `# For DHCP it is recommended to remove these ports and instead add: network_mode: "host"` \
 `:  --publish published=53,target=53,protocol=tcp,mode=ingress` \
 `:  --publish published=53,target=53,protocol=udp,mode=ingress` \
 `:  --publish published=67,target=67,protocol=udp,mode=ingress` \
 `:  --publish published=80,target=80,protocol=tcp,mode=ingress` \
-  --cap-add=NET_ADMIN `# Required if you are using Pi-hole as your DHCP server, else not needed` \
   ${IMAGE}
 
 #dockerRestartProxy
