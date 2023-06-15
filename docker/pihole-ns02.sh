@@ -39,7 +39,7 @@ doas docker run --detach --restart=unless-stopped \
 `:  --env FTLCONF_LOCAL_IPV4="127.0.0.1"` \
   --mount type=bind,src=${DOCKERAPPDIR}/etc-pihole,dst=/etc/pihole \
   --mount type=bind,src=${DOCKERAPPDIR}/etc-dnsmasq.d,dst=/etc/dnsmasq.d \
-  --mount type=bind,src=${DOCKER_D2}/dnsmasq/hosts,dst=/etc/hosts \
+  --mount type=bind,src=${DOCKER_D2}/pihole/hosts,dst=/etc/hosts \
   --cap-add=NET_ADMIN `# Required if you are using Pi-hole as your DHCP server, else not needed` \
   --net=host `# For DHCP it is recommended to remove these ports and instead add: network_mode: "host"` \
 `:  --publish published=53,target=53,protocol=tcp,mode=ingress` \
