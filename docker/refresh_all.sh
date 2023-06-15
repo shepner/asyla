@@ -35,4 +35,16 @@ elif [ ${HOSTNAME} = "d03" ]; then
 
 fi
 
+elif [ ${HOSTNAME} = "ns01" ]; then
+  echo ${HOSTNAME}
+   ~/scripts/docker/pihole-ns01.sh
+
+fi
+
+elif [ ${HOSTNAME} = "ns02" ]; then
+  echo ${HOSTNAME}
+   ~/scripts/docker/pihole-ns02.sh
+
+fi
+
 
