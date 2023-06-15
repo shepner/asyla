@@ -25,6 +25,7 @@ appCreateDir ${DOCKERAPPDIR}/etc-dnsmasq.d # create the folder if needed
 #appCreateDir ${CONFIGDIR} # create the folder if needed
 appBackup ${DOCKERDIR} ${NAME} # backup the app
 
+doas cp ${DOCKER_D2}/pihole/05-pihole-custom-cname.conf ${DOCKERAPPDIR}/etc-dnsmasq.d/
 
 doas docker run --detach --restart=unless-stopped \
   --name ${NAME} \
