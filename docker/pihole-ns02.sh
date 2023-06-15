@@ -31,7 +31,7 @@ doas docker run --detach --restart=unless-stopped \
   --env TZ=${LOCAL_TZ} \
   --env CMD_DOMAIN=${NAME}.${MY_DOMAIN} \
   --env CMD_PROTOCOL_USESSL=true \
-  --env WEBPASSWORD='' `# set a secure password here or it will be random` \
+`:  --env WEBPASSWORD=''` `# set a secure password here or it will be random` \
   --mount type=bind,src=${DOCKERAPPDIR}/etc-pihole,dst=/etc/pihole \
   --mount type=bind,src=${DOCKERAPPDIR}/etc-dnsmasq.d,dst=/etc/dnsmasq.d \
   --cap-add=NET_ADMIN `# Required if you are using Pi-hole as your DHCP server, else not needed` \
