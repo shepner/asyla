@@ -30,7 +30,7 @@ doas cp ${DOCKER_D2}/pihole/03-lan-dns.conf ${DOCKERAPPDIR}/etc-dnsmasq.d/
 doas docker run --detach --restart=unless-stopped \
   --name ${NAME} \
 `:  --hostname ns02.asyla.org` \
-`:  --dns=1.1.1.1` \
+  --dns=1.1.1.1 \
   --env TZ=${LOCAL_TZ} \
   --env CMD_DOMAIN=${NAME}.${MY_DOMAIN} \
   --env CMD_PROTOCOL_USESSL=true \
