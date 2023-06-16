@@ -25,11 +25,12 @@ appCreateDir ${DOCKERAPPDIR}/etc-dnsmasq.d # create the folder if needed
 #appCreateDir ${CONFIGDIR} # create the folder if needed
 appBackup ${DOCKERDIR} ${NAME} # backup the app
 
+doas cp ${DOCKER_D2}/pihole/03-lan-dns.conf ${DOCKERAPPDIR}/etc-dnsmasq.d/
 
 doas docker run --detach --restart=unless-stopped \
   --name ${NAME} \
 `:  --hostname ns01.asyla.org` \
-  --dns=1.1.1.1 \
+`:  --dns=1.1.1.1` \
   --env TZ=${LOCAL_TZ} \
   --env CMD_DOMAIN=${NAME}.${MY_DOMAIN} \
   --env CMD_PROTOCOL_USESSL=true \
@@ -49,4 +50,7 @@ doas docker run --detach --restart=unless-stopped \
   ${IMAGE}
 
 #dockerRestartProxy
+
+# enter shell to troubleshoot:
+#doas docker exec -it pihole-ns01 /bin/bash
 
