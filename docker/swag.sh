@@ -29,13 +29,13 @@ appBackup ${DOCKERDIR} ${NAME} # backup the app
 #sudo docker create \
 doas docker run --detach --restart=unless-stopped \
   --name ${NAME} \
-`:  --cpu-shares=1024` \
   --env PUID=${DOCKER_UID} \
   --env PGID=${DOCKER_GID} \
   --env TZ=${LOCAL_TZ} \
   --cap-add=NET_ADMIN \
   --env URL=${MY_DOMAIN} \
-  --env SUBDOMAINS=booksonic,calibre,flaresolverr,jackett,jupyter,sonarr,transmission,unifi,www \
+`:  --env SUBDOMAINS=booksonic,calibre,flaresolverr,jackett,jupyter,sonarr,transmission,unifi,www` \
+  --env SUBDOMAINS=booksonic \
   --env VALIDATION=dns \
   --env DNSPLUGIN=cloudflare \
   --env EMAIL=${MY_EMAIL} \
