@@ -60,7 +60,7 @@ doas docker network connect flaresolverr_net ${NAME}
 doas docker network connect heimdall_net ${NAME}
 doas docker network connect jackett_net ${NAME}
 doas docker network connect jupyter_net ${NAME}
-doas docker network connect overseerr_net ${NAME}
+#doas docker network connect overseerr_net ${NAME}
 doas docker network connect sonarr_net ${NAME}
 doas docker network connect transmission_net ${NAME}
 doas docker network connect unifi-controller_net ${NAME}
