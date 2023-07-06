@@ -34,7 +34,7 @@ doas docker run --detach --restart=unless-stopped \
   --env TZ=${LOCAL_TZ} \
   --cap-add=NET_ADMIN \
   --env URL=${MY_DOMAIN} \
-`:  --env SUBDOMAINS=booksonic,calibre,flaresolverr,jackett,jupyter,overseerr,sonarr,transmission,unifi,www` \
+`:  --env SUBDOMAINS="booksonic,calibre,flaresolverr,jackett,jupyter,overseerr,sonarr,transmission,unifi,www"` \
   --env SUBDOMAINS="booksonic,calibre,flaresolverr,jackett,jupyter,sonarr,transmission,unifi,www" \
 `:  --env SUBDOMAINS="booksonic"` \
   --env VALIDATION=dns \
@@ -60,7 +60,7 @@ doas docker network connect flaresolverr_net ${NAME}
 doas docker network connect heimdall_net ${NAME}
 doas docker network connect jackett_net ${NAME}
 doas docker network connect jupyter_net ${NAME}
-#doas docker network connect overseerr_net ${NAME}
+doas docker network connect overseerr_net ${NAME}
 doas docker network connect sonarr_net ${NAME}
 doas docker network connect transmission_net ${NAME}
 doas docker network connect unifi-controller_net ${NAME}
