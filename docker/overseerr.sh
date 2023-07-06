@@ -1,7 +1,7 @@
 #!/bin/sh
-# https://docs.linuxserver.io/images/docker-codimd
-# https://hedgedoc.org
-# https://github.com/hedgedoc/hedgedoc/tree/HEAD/docs
+# https://docs.linuxserver.io/images/docker-overseerr
+# https://overseerr.dev/
+# https://docs.overseerr.dev/getting-started/installation
 
 
 # Load the global functions and environment variables
@@ -9,7 +9,7 @@
 
 
 # Setup the app specific environment vars
-IMAGE=ghcr.io/linuxserver/${NAME}
+IMAGE=lscr.io/linuxserver/${NAME}:latest
 DOCKERDIR=${DOCKER_DL} # local disk
 #DOCKERDIR=${DOCKER_D1} # NFS attached HDD
 #DOCKERDIR=${DOCKER_D2} # NFS attached SSD
@@ -34,7 +34,7 @@ doas docker run --detach --restart=unless-stopped \
   --env PGID=${DOCKER_GID} \
   --env TZ=${LOCAL_TZ} \
   --network=${NETWORK} \
-`:  --publish published=3000,target=3000,protocol=tcp,mode=ingress` \
+`:  --publish published=5055,target=5055,protocol=tcp,mode=ingress` \
   --mount type=bind,src=${DOCKERAPPDIR},dst=/config \
   ${IMAGE}
 
