@@ -1,5 +1,5 @@
 #!/bin/sh
-# https://docs.linuxserver.io/images/docker-sonarr
+# https://docs.linuxserver.io/images/docker-radarr
 
 
 # Load the global functions and default environment variables
@@ -34,7 +34,8 @@ doas docker run --detach --restart=unless-stopped \
 `:  --publish published=7878,target=7878,protocol=tcp,mode=ingress` \
   --mount type=bind,src=${CONFIGDIR},dst=/config \
   --mount type=bind,src=/mnt/nas/data1/media/Videos,dst=/movies \
-  --mount type=bind,src=/mnt/docker/transmission/downloads/complete,dst=/downloads \
+`:  --mount type=bind,src=/mnt/docker/transmission/downloads/complete,dst=/downloads` \
+  --mount type=bind,src=/mnt/docker/transmission/downloads,dst=/downloads \
   ${IMAGE}
 
 #dockerRestartProxy
