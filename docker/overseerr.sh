@@ -34,9 +34,9 @@ doas docker run --detach --restart=unless-stopped \
   --env PGID=${DOCKER_GID} \
   --env TZ=${LOCAL_TZ} \
   --network=${NETWORK} \
-`:  --publish published=5055,target=5055,protocol=tcp,mode=ingress` \
+  --publish published=5055,target=5055,protocol=tcp,mode=ingress \
   --mount type=bind,src=${DOCKERAPPDIR},dst=/config \
   ${IMAGE}
 
-dockerRestartProxy
+#dockerRestartProxy
 
