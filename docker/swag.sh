@@ -19,7 +19,7 @@ CONFIGDIR=${DOCKERAPPDIR}/config
 
 
 # Perform setups/updates as needed
-dockerPull ${IMAGE} # fetch the latest image
+#dockerPull ${IMAGE} # fetch the latest image
 dockerStopRm ${NAME} # kill the old one
 dockerNetworkCreate ${NETWORK} # create the network if needed
 appCreateDir ${CONFIGDIR} # create the folder if needed
