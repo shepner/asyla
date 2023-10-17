@@ -32,7 +32,7 @@ dockerNetworkCreate ${NETWORK} # create the network if needed
 appCreateDir ${DOCKERAPPDIR}/work
 appBackup ${DOCKERDIR} ${NAME} # backup the app
 echo "Backup the data separately"
-doas tar -czf ${WORKDIR}/work.tgz -C ${WORKDIR} work
+#doas tar -czf ${WORKDIR}/work.tgz -C ${WORKDIR} work
 
 
 doas docker run --detach --restart=unless-stopped \
