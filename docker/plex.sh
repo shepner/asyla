@@ -7,7 +7,7 @@
 
 
 # Setup the app specific environment vars
-IMAGE=ghcr.io/linuxserver/${NAME}:latest
+IMAGE=lscr.io/linuxserver/${NAME}:latest
 #DOCKERDIR=${DOCKER_DL} # local disk
 DOCKERDIR=/mnt/docker # local disk
 #DOCKERDIR=${DOCKER_D1} # NFS attached HDD

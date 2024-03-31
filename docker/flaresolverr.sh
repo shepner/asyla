@@ -7,7 +7,7 @@
 
 
 # Setup the app specific environment vars
-IMAGE=ghcr.io/flaresolverr/${NAME}:latest
+IMAGE=lscr.io/flaresolverr/${NAME}:latest
 #DOCKERDIR=${DOCKER_DL} # local disk
 #DOCKERDIR=${DOCKER_D1} # NFS attached HDD
 #DOCKERDIR=${DOCKER_D2} # NFS attached SSD

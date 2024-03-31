@@ -7,7 +7,7 @@
 
 
 # Setup the app specific environment vars
-IMAGE=ghcr.io/linuxserver/${NAME}
+IMAGE=lscr.io/linuxserver/${NAME}
 DOCKERDIR=${DOCKER_DL} # local disk
 #DOCKERDIR=${DOCKER_D1} # NFS attached HDD
 #DOCKERDIR=${DOCKER_D2} # NFS attached SSD
@@ -42,4 +42,7 @@ doas docker run --detach --restart=unless-stopped \
   ${IMAGE}
 
 dockerRestartProxy
+
+# enter shell to troubleshoot:
+#doas docker exec -it transmission /bin/bash
 
