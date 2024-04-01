@@ -32,7 +32,7 @@ doas docker run --detach --restart=unless-stopped \
   --env PGID=${DOCKER_GID} \
   --env TZ=${LOCAL_TZ} \
   --mount type=bind,src=${DOCKERAPPDIR}/db,dst=/data/db \
-  --mount type=bind,src=${DOCKERAPPDIR}/init-mongo.js,dst=/docker-entrypoint-initdb.d/init-mongo.js,readonly \
+`:  --mount type=bind,src=${DOCKERAPPDIR}/init-mongo.js,dst=/docker-entrypoint-initdb.d/init-mongo.js,readonly` \
   ${IMAGE}
 
 #dockerRestartProxy
