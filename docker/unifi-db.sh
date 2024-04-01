@@ -8,7 +8,7 @@
 
 # Setup the app specific environment vars
 #IMAGE=lscr.io/linuxserver/${NAME}
-IMAGE=docker.io/mongo:7.0.4-ubuntu2204
+IMAGE=docker.io/mongo:7.0
 DOCKERDIR=${DOCKER_DL} # local disk
 #DOCKERDIR=${DOCKER_D1} # NFS attached HDD
 #DOCKERDIR=${DOCKER_D2} # NFS attached SSD
