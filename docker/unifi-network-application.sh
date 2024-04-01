@@ -19,12 +19,13 @@
 
 # Setup the app specific environment vars
 IMAGE=lscr.io/linuxserver/${NAME}
-#IMAGE=lscr.io/linuxserver/unifi-network-application:latest
 DOCKERDIR=${DOCKER_DL} # local disk
 #DOCKERDIR=${DOCKER_D1} # NFS attached HDD
 #DOCKERDIR=${DOCKER_D2} # NFS attached SSD
 DOCKERAPPDIR=${DOCKERDIR}/${NAME}
 CONFIGDIR=${DOCKERAPPDIR}/config
+
+. ${DOCKERAPPDIR}/mongo-env.sh
 
 
 # Perform setups/updates as needed
@@ -41,7 +42,7 @@ doas docker run --detach --restart=unless-stopped \
   --env PGID=${DOCKER_GID} \
   --env TZ=${LOCAL_TZ} \
   --env MONGO_USER=unifi \
-  --env MONGO_PASS= \
+  --env MONGO_PASS=${MONGO_PASSWORD} \
   --env MONGO_HOST=unifi-db \
   --env MONGO_PORT=27017 \
   --env MONGO_DBNAME=unifi \
