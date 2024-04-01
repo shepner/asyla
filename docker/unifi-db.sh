@@ -22,7 +22,7 @@ dockerStopRm ${NAME} # kill the old one
 #dockerNetworkCreate ${NETWORK} # create the network if needed
 dockerNetworkCreate unifi-network-application_net # create the network if needed
 #appCreateDir ${CONFIGDIR} # create the folder if needed
-appCreateDir ${DOCKERDIR}/db # create the folder if needed
+appCreateDir ${DOCKERAPPDIR}/db # create the folder if needed
 appBackup ${DOCKERDIR} ${NAME} # backup the app
 
 
@@ -31,8 +31,8 @@ doas docker run --detach --restart=unless-stopped \
   --env PUID=${DOCKER_UID} \
   --env PGID=${DOCKER_GID} \
   --env TZ=${LOCAL_TZ} \
-  --mount type=bind,src=${DOCKERDIR}/db,dst=/data/db \
-  --mount type=bind,src=${DOCKERDIR}/init-mongo.js,dst=/docker-entrypoint-initdb.d/init-mongo.js,readonly \
+  --mount type=bind,src=${DOCKERAPPDIR}/db,dst=/data/db \
+  --mount type=bind,src=${DOCKERAPPDIR}/init-mongo.js,dst=/docker-entrypoint-initdb.d/init-mongo.js,readonly \
   ${IMAGE}
 
 #dockerRestartProxy
