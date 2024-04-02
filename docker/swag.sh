@@ -64,7 +64,9 @@ doas docker network connect jupyter_net ${NAME}
 doas docker network connect radarr_net ${NAME}
 doas docker network connect sonarr_net ${NAME}
 doas docker network connect transmission_net ${NAME}
-doas docker network connect unifi-controller_net ${NAME}
+#doas docker network connect unifi-controller_net ${NAME}
+doas docker network connect unifi-network-application_net ${NAME}
+
 
 # Dont forget to also setup a config file per app:
 # /docker/swag/config/nginx/proxy-confs
