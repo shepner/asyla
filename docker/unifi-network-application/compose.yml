@@ -1,0 +1,47 @@
+networks:
+  unifi-network-application
+
+unifi-network-application:
+  container_name: unifi-network-application
+  image: lscr.io/linuxserver/unifi-network-application:8.1.113-ls36
+  restart: unless-stopped
+
+  depends_on:
+    - unifi-network-application-db
+  env_file:
+    - ./common.env
+    - ./secret.env
+  environment:
+    - MONGO_HOST=unifi-network-application-db
+    - MONGO_PORT=27017
+    - MONGO_DBNAME=unifi
+  networks:
+    - unifi-network-application_net
+  ports:
+    - 1900:1900/udp # Required for 'Make controller discoverable on L2 network' option
+    - 3478:3478/udp # Unifi STUN port
+    - 5514:5514/udp # Remote syslog port
+    - 6789:6789 # For mobile throughput test
+    - 8080:8080 # Required for device communication
+    - 8443:8443 # Unifi web admin, guest portal HTTPS redirect port
+    - 8843:8843 # Unifi guest portal HTTPS redirect port
+    - 8880:8880 # Unifi guest portal HTTP redirect port
+    - 10001:10001/udp # Required for AP discovery
+  volumes:
+    - ${SERVICE_DATA_DIR}/unifi-network-application:/config
+
+unifi-network-application-db:
+  container_name: unifi-network-application-db
+  image: mongo:4.4.25-focal
+  restart: unless-stopped
+  user: ${PUID}:${PGID}
+
+  env_file:
+    - ./common.env
+    - ./secret.env
+  networks:
+    - unifi-network-application_net
+  volumes:
+    - ${SERVICE_DATA_DIR}/unifi-network-application-db/data:/data/db
+    - ${SERVICE_DATA_DIR}/unifi-network-application-db/docker-entrypoint-initdb.d/init-mongo.js:/docker-entrypoint-initdb.d/init-mongo.js:ro
+
