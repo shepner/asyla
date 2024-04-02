@@ -1,6 +1,9 @@
 #!/bin/sh
 # https://docs.linuxserver.io/images/docker-unifi-network-application/#setting-up-your-external-database
 
+# this needs to run on the same network as 'unifi-network-application'
+# Only mount `init-mongo.js` the first time to initialize the DB
+
 
 # Load the global functions and environment variables
 . ~/scripts/docker/common.sh
