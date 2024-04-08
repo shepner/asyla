@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 #
 #Adapted from here:
 #https://github.com/GiuseppeGalilei/Unifi-Network-Application
