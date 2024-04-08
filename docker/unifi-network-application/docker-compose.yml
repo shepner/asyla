@@ -8,15 +8,11 @@ services:
       - PUID=1003
       - TZ="America/Chicago"
     ports:
-      - target: 27017
-        published: 27017
-        protocol: tcp
+      - 27017:27017/tcp
     restart: unless-stopped
     volumes:
       - ./init-mongo.js:/docker-entrypoint-initdb.d/init-mongo.js
-      - type: bind
-        source: ${INSTALL_FOLDER}/unifi/unifi-db
-        target: /data/db
+      - ${INSTALL_FOLDER}/unifi/unifi-db:/data/db
     networks:
       - unifi-network-application_net
     privileged: false
@@ -36,43 +32,22 @@ services:
       - TZ="America/Chicago"
     image: lscr.io/linuxserver/unifi-network-application:latest
     ports:
-      - target: 8443
-        published: 8443
-        protocol: tcp
-      - target: 3478
-        published: 3478
-        protocol: udp
-      - target: 10001
-        published: 10001
-        protocol: udp
-      - target: 8080
-        published: 8080
-        protocol: tcp
-      - target: 1900 #optional
-        published: 1900
-        protocol: udp
-      - target: 8843 #optional
-        published: 8843
-        protocol: tcp
-      - target: 8880 #optional
-        published: 8880
-        protocol: tcp
-      - target: 6789 #optional
-        published: 6789
-        protocol: tcp
-      - target: 5514 #optional
-        published: 5514
-        protocol: udp
+      - 1900:1900/udp # Required for 'Make controller discoverable on L2 network' option
+      - 3478:3478/udp # Unifi STUN port
+      - 5514:5514/udp # Remote syslog port
+      - 6789:6789 # For mobile throughput test
+      - 8080:8080 # Required for device communication
+      - 8443:8443 # Unifi web admin, guest portal HTTPS redirect port
+      - 8843:8843 # Unifi guest portal HTTPS redirect port
+      - 8880:8880 # Unifi guest portal HTTP redirect port
+      - 10001:10001/udp # Required for AP discovery
     restart: unless-stopped
     volumes:
-      - type: bind
-        source: ${INSTALL_FOLDER}/unifi/unifi-network-application
-        target: /config
+      - ${INSTALL_FOLDER}/unifi/unifi-network-application:/config
     networks:
       - unifi-network-application_net
     privileged: false
 
 networks:
-  unifi-network-application_net:
-    driver: bridge
+  unifi-network-application_net
 
