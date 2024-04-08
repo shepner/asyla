@@ -86,7 +86,7 @@ EOL
 
 #install
 #container_names=("unifi-db" "unifi-network-application")
-container_names="unifi-db" "unifi-network-application"
+container_names="unifi-db unifi-network-application"
 
 # Check and remove containers and volumes
 #for container_name in "${container_names[@]}"; do
