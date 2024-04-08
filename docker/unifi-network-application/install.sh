@@ -24,7 +24,8 @@ else
     exit 1
 fi
 
-dependencies=("docker")
+#dependencies=("docker")
+dependencies="docker"
 for dependency in "${dependencies[@]}"; do
     if ! command -v "$dependency" &> /dev/null; then
         echo "Error: $dependency is not installed."
@@ -85,7 +86,8 @@ db.getSiblingDB("unifi-db_stat").createUser({user: "unifi", pwd: "$password", ro
 EOL
 
 #install
-container_names=("unifi-db" "unifi-network-application")
+#container_names=("unifi-db" "unifi-network-application")
+container_names="unifi-db" "unifi-network-application"
 
 # Check and remove containers and volumes
 for container_name in "${container_names[@]}"; do
