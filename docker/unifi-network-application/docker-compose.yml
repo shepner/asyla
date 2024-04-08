@@ -1,7 +1,7 @@
 name: unifi-network-application
 
 networks:
-  unifi-network-application_net
+  unifi-network-application_net:
 
 services:
   unifi-db:
