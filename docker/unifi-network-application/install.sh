@@ -25,13 +25,12 @@ else
 fi
 
 #dependencies=("docker")
-dependencies="docker"
-for dependency in "${dependencies[@]}"; do
-    if ! command -v "$dependency" &> /dev/null; then
-        echo "Error: $dependency is not installed."
-        exit 1
-    fi
-done
+#for dependency in "${dependencies[@]}"; do
+#    if ! command -v "$dependency" &> /dev/null; then
+#        echo "Error: $dependency is not installed."
+#        exit 1
+#    fi
+#done
 
 #if ! docker info > /dev/null 2>&1; then
 if ! doas docker info > /dev/null 2>&1; then
@@ -90,7 +89,8 @@ EOL
 container_names="unifi-db" "unifi-network-application"
 
 # Check and remove containers and volumes
-for container_name in "${container_names[@]}"; do
+#for container_name in "${container_names[@]}"; do
+for container_name in "${container_names}"; do
     #if docker ps -a --format '{{.Names}}' | grep -q "^$container_name$"; then
     if doas docker ps -a --format '{{.Names}}' | grep -q "^$container_name$"; then
         echo "Stopping and removing container $container_name..."
