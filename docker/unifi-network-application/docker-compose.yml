@@ -1,4 +1,8 @@
 name: unifi-network-application
+
+networks:
+  unifi-network-application_net
+
 services:
   unifi-db:
     container_name: unifi-db
@@ -47,7 +51,4 @@ services:
     networks:
       - unifi-network-application_net
     privileged: false
-
-networks:
-  unifi-network-application_net
 
