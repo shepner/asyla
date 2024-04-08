@@ -3,10 +3,15 @@ name: unifi-network-application
 networks:
   unifi-network-application_net:
 
+
 services:
+
   unifi-db:
     container_name: unifi-db
-    image: docker.io/mongo:3.6
+    # image: docker.io/mongo:3.6
+    image: mongo:4.4.25-focal
+    # user: ${PUID}:${PGID}
+    user: 1003:1000
     environment:
       - PGID=1000
       - PUID=1003
@@ -19,7 +24,7 @@ services:
       - ${INSTALL_FOLDER}/unifi/unifi-db:/data/db
     networks:
       - unifi-network-application_net
-    privileged: false
+
   unifi-network-application:
     container_name: unifi-network-application
     depends_on:
@@ -50,5 +55,4 @@ services:
       - ${INSTALL_FOLDER}/unifi/unifi-network-application:/config
     networks:
       - unifi-network-application_net
-    privileged: false
 

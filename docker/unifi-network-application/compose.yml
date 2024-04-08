@@ -1,5 +1,5 @@
 networks:
-  unifi-network-application
+  unifi-network-application_net:
 
 unifi-network-application:
   container_name: unifi-network-application
