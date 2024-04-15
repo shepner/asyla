@@ -1,30 +1,44 @@
 #!/bin/sh
 # Docker
+# https://docs.docker.com/engine/install/debian/
+# https://docs.docker.com/compose/
 
 
-# Install Docker
-
-doas apk update \
-  && doas apk policy docker \
-  && doas apk add \
-    docker \
-    docker-compose \
-  && doas addgroup root docker \
-  && doas rc-update add docker boot \
-  && doas service docker start
+# uninstall all conflicting packages 
+for pkg in docker.io docker-doc docker-compose podman-docker containerd runc; do sudo apt-get remove $pkg; done
 
 
-# Install Docker Compose v2
-# https://docs.docker.com/compose/cli-command/
+# Set up Docker's apt repository
 
-doas mkdir -p /root/.docker/cli-plugins/
-doas curl -SL https://github.com/docker/compose/releases/download/v2.2.3/docker-compose-linux-x86_64 -o /root/.docker/cli-plugins/docker-compose
-doas chmod +x /root/.docker/cli-plugins/docker-compose
+# Add Docker's official GPG key:
+sudo apt-get update
+sudo apt-get install ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
 
-# Show the version
-doas docker compose version
+# Add the repository to Apt sources:
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian \
+  $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt-get update
 
 
-# Uninstall v2
-# doas rm /root/.docker/cli-plugins/docker-compose
+# Install the Docker packages
+sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+
+# Verify that the installation is successful by running the hello-world image
+#sudo docker run hello-world
+
+
+# Update the package index, and install the latest version of Docker Compose
+sudo apt-get update
+sudo apt-get install docker-compose-plugin
+
+
+# Verify that Docker Compose is installed correctly by checking the version
+#sudo docker compose version
+
 
