@@ -61,15 +61,32 @@ rm debian-12*.qcow2
 wget $DEBIANURL
 
 
-#######################################
+#####################################
+
+# install qemu client upon first start
+virt-customize -a $DEBIAN --install qemu-guest-agent
+
+# Set TZ
+virt-customize -a $DEBIAN --timezone "America/Chicago"
+
+# These settings are for kubernetes
+virt-customize -a $DEBIAN \
+  --append-line '/etc/sysctl.d/99-k8s-cni.conf:' \
+  --append-line '/etc/sysctl.d/99-k8s-cni.conf:net.bridge.bridge-nf-call-iptables=1' \
+  --append-line '/etc/sysctl.d/99-k8s-cni.conf:net.bridge.bridge-nf-call-ip6tables=1'
+
+# Truncating this ensures each clone gets a new machine ID
+virt-customize -a $DEBIAN --truncate /etc/machine-id
+
+
+#--------------------------------------
 # Install software that has to be in place before first boot
 
 TEMP_MOUNT=/mnt/temp
-guestunmount $TEMP_MOUNT
-rmdir $TEMP_MOUNT
-mkdir -p $TEMP_MOUNT
 
 # mount the image for direct access
+guestunmount $TEMP_MOUNT
+mkdir -p $TEMP_MOUNT
 guestmount -a ~/$DEBIAN -m /dev/sda1 $TEMP_MOUNT
 
 # add an package repo with more recent packages
@@ -81,41 +98,22 @@ Suites: sid
 Components: main
 EOF
 
+guestunmount $TEMP_MOUNT
+rmdir $TEMP_MOUNT
+
+
 # Install (current) cloud-init
 virt-customize -a ~/$DEBIAN --run-command "apt-get update"
 virt-customize -a ~/$DEBIAN --run-command "apt-get install -y cloud-init"
 
 
-# NFS
-
-# iSCSI
 
 # Docker
+#virt-customize -a ~/$DEBIAN --run-command '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/shepner/asyla/master/d03/setup/docker.sh)"'
 
 
+#--------------------------------------
 
-
-# cleanup
-guestunmount $TEMP_MOUNT
-rmdir $TEMP_MOUNT
-
-#######################################
-
-
-# install qemu client upon first start
-virt-customize -a $DEBIAN --install qemu-guest-agent
-
-# Set TZ
-virt-customize -a $DEBIAN --timezone "America/Chicago"
-
-# These settings are likely for kubernetes
-virt-customize -a $DEBIAN \
-  --append-line '/etc/sysctl.d/99-k8s-cni.conf:' \
-  --append-line '/etc/sysctl.d/99-k8s-cni.conf:net.bridge.bridge-nf-call-iptables=1' \
-  --append-line '/etc/sysctl.d/99-k8s-cni.conf:net.bridge.bridge-nf-call-ip6tables=1'
-
-# Truncating this ensures each clone gets a new machine ID
-virt-customize -a $DEBIAN --truncate /etc/machine-id
 
 # update all software upon first start
 #virt-customize -a $DEBIAN --update
@@ -173,6 +171,18 @@ qm set $VMID \
 `: # --cicustom "user=local:snippets/user-data.yml"`
 # done now dump the user
 #qm cloudinit dump $VMID user
+
+
+
+
+qm set $VMID --ipconfig0 ip=dhcp
+
+
+
+
+
+
+
 
 # configure networking
 qm set $VMID \
