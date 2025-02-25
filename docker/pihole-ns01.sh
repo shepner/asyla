@@ -23,13 +23,12 @@ dockerStopRm ${NAME} # kill the old one
 appCreateDir ${DOCKERAPPDIR}/etc-pihole # create the folder if needed
 appCreateDir ${DOCKERAPPDIR}/etc-dnsmasq.d # create the folder if needed
 #appCreateDir ${CONFIGDIR} # create the folder if needed
-#appBackup ${DOCKERDIR} ${NAME} # backup the app
+appBackup ${DOCKERDIR} ${NAME} # backup the app
 
 doas cp ${DOCKER_D2}/pihole/03-lan-dns.conf ${DOCKERAPPDIR}/etc-dnsmasq.d/
 
 doas docker run --detach --restart=unless-stopped \
   --name ${NAME} \
-`:  --hostname ns01.asyla.org` \
   --dns=1.1.1.1 \
   --dns=1.0.0.1 \
   --dns=2606:4700:4700::1111 \
@@ -46,6 +45,7 @@ doas docker run --detach --restart=unless-stopped \
   --mount type=bind,src=${DOCKERAPPDIR}/etc-dnsmasq.d,dst=/etc/dnsmasq.d \
   --mount type=bind,src=${DOCKER_D2}/pihole/hosts,dst=/etc/hosts \
   --cap-add=NET_ADMIN `# Required if you are using Pi-hole as your DHCP server, else not needed` \
+  --cap-add=SYS_NICE `# Optional, if Pi-hole should get some more processing time` \
   --net=host `# For DHCP it is recommended to remove these ports and instead add: network_mode: "host"` \
 `:  --publish published=53,target=53,protocol=tcp,mode=ingress` \
 `:  --publish published=53,target=53,protocol=udp,mode=ingress` \
