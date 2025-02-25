@@ -30,14 +30,17 @@ doas cp ${DOCKER_D2}/pihole/03-lan-dns.conf ${DOCKERAPPDIR}/etc-dnsmasq.d/
 doas docker run --detach --restart=unless-stopped \
   --name ${NAME} \
 `:  --hostname ns01.asyla.org` \
-  --dns=1.1.1.1;1.0.0.1;2606:4700:4700::1111;2606:4700:4700::1001 \
+  --dns=1.1.1.1 \
+  --dns=1.0.0.1 \
+  --dns=2606:4700:4700::1111 \
+  --dns=2606:4700:4700::1001 \
   --env TZ=${LOCAL_TZ} \
   --env FTLCONF_webserver_api_password='' `# set a password here or remove for random one` \
   --env FTLCONF_dns_listeningMode='all' \
   --env PIHOLE_UID=${DOCKER_UID} \
   --env PIHOLE_GID=${DOCKER_GID} \
   --env FTLCONF_dns_dnssec='true' \
-  --env FTLCONF_dns_domain==${NAME}.${MY_DOMAIN} \
+  --env FTLCONF_dns_domain=${NAME}.${MY_DOMAIN} \
   --env FTLCONF_misc_etc_dnsmasq_d=true `# Load custom user configuration files from /etc/dnsmasq.d/` \
   --mount type=bind,src=${DOCKERAPPDIR}/etc-pihole,dst=/etc/pihole \
   --mount type=bind,src=${DOCKERAPPDIR}/etc-dnsmasq.d,dst=/etc/dnsmasq.d \
