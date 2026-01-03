@@ -1,0 +1,178 @@
+---
+description: Guidelines for automatic rule creation and updates based on new requirements
+globs: ["**/*.mdc", "**/*.{py,rs,pl,js,ts,sql}", "**/*.{json,yaml,yml,toml}"]
+alwaysApply: true
+---
+---
+description: Rule Automation Guidelines
+globs: ["**/*"]
+alwaysApply: true
+---
+
+# Rule Automation Guidelines
+
+Guidelines for automatically creating and updating rules based on new requirements and patterns.
+
+<rule>
+name: rule-automation
+description: Standards for automatic rule creation and updates
+filters:
+  # Match rule files
+  - type: file_extension
+    pattern: "\\.mdc$"
+
+actions:
+  - type: validate
+    conditions:
+      # Check rule portability
+      - check: "has_required_properties"
+        message: "Missing required properties"
+      - check: "no_forbidden_properties"
+        message: "Contains forbidden properties"
+      - check: "os_compatibility"
+        message: "OS compatibility check failed"
+
+  - type: automate
+    conditions:
+      # Create new rules
+      - check: "detect_new_requirements"
+        action: "create_rule"
+        priority: "high"
+      # Update existing rules
+      - check: "detect_code_changes"
+        action: "update_rule"
+        priority: "medium"
+      # Optimize rules
+      - check: "detect_performance_issues"
+        action: "optimize_rule"
+        priority: "medium"
+      # Fix rule issues
+      - check: "detect_error_patterns"
+        action: "fix_rule"
+        priority: "high"
+
+  - type: report
+    conditions:
+      # Generate automation report
+      - check: "generate_report"
+        action: "create_report"
+        format: "json"
+        include: ["created_rules", "updated_rules", "optimizations", "fixes"]
+
+functions:
+  detect_new_requirements: |
+    def detect():
+      """
+      Detect new requirements that need rules.
+      Returns (has_requirements, requirements).
+      """
+      try:
+        requirements = []
+        # Check documentation for new requirements
+        for doc in get_documentation_files():
+          reqs = extract_requirements(doc)
+          requirements.extend(reqs)
+        # Check code for implicit requirements
+        for code_file in get_source_files():
+          reqs = analyze_code_requirements(code_file)
+          requirements.extend(reqs)
+        return len(requirements) > 0, requirements
+      except Exception as e:
+        log_error("Requirement detection failed", e)
+        return False, []
+
+  create_rule: |
+    def create(requirements):
+      """
+      Create new rules based on requirements.
+      Returns (success, rule_info).
+      """
+      try:
+        rule_info = []
+        for req in requirements:
+          rule = generate_rule(req)
+          if validate_rule(rule):
+            save_rule(rule)
+            rule_info.append({
+              "name": rule.name,
+              "requirement": req,
+              "status": "created"
+            })
+        return len(rule_info) > 0, rule_info
+      except Exception as e:
+        log_error("Rule creation failed", e)
+        return False, []
+
+  optimize_rule: |
+    def optimize(rule):
+      """
+      Optimize rule performance.
+      Returns (optimized, metrics).
+      """
+      try:
+        metrics = measure_rule_performance(rule)
+        if needs_optimization(metrics):
+          optimized = apply_optimizations(rule)
+          new_metrics = measure_rule_performance(optimized)
+          return True, {
+            "before": metrics,
+            "after": new_metrics,
+            "improvement": calculate_improvement(metrics, new_metrics)
+          }
+        return False, metrics
+      except Exception as e:
+        log_error("Rule optimization failed", e)
+        return False, {}
+
+examples:
+  - input: |
+      # Good: Automated rule creation
+      ---
+      description: "Example automated rule"
+      globs: ["**/*.mdc"]
+      alwaysApply: true
+      config:
+        automation:
+          triggers:
+            - type: "new_requirements"
+              priority: "high"
+              action: "create_rule"
+
+      # Bad: Manual rule creation
+      ---
+      description: "Example manual rule"
+      globs: ["/home/user/.cursor/rules/**/*.mdc"]
+      manual_update: true
+      user_settings:
+        update_path: "/home/user/.cursor/updates"
+
+metrics:
+  - name: rule_creation_attempts
+    type: counter
+    labels: ["result", "requirement_type"]
+  - name: rule_updates
+    type: counter
+    labels: ["rule_name", "update_type"]
+  - name: optimization_attempts
+    type: counter
+    labels: ["rule_name", "result"]
+  - name: error_fixes
+    type: counter
+    labels: ["rule_name", "error_type"]
+  - name: automation_duration
+    type: histogram
+    labels: ["action_type"]
+  - name: automation_errors
+    type: counter
+    labels: ["error_type", "action_type"]
+
+metadata:
+  priority: high
+  version: 1.0
+  tags:
+    - automation
+    - rules
+    - optimization
+    - error-handling
+  changelog:
+    - 1.0: Initial version with comprehensive automation capabilities 

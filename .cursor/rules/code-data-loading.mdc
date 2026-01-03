@@ -1,0 +1,282 @@
+---
+description: Guidelines for data loading and processing
+globs: ["*.py", "*.sql", "*.json", "*.yaml", "*.yml", "*.parquet", "*.csv"]
+alwaysApply: true
+---
+---
+description: Standards for loading, processing, and validating data
+globs: ["**/*.{py,sql,parquet,csv,json,yml,yaml}"]
+alwaysApply: false
+---
+
+# Data Loading Guidelines
+
+Rules for consistent data loading and processing across the codebase.
+
+<rule>
+name: data-loading
+description: Standards for loading, processing, and validating data
+filters:
+  # Match Python files
+  - type: file_extension
+    pattern: "\\.py$"
+  # Match SQL files
+  - type: file_extension
+    pattern: "\\.sql$"
+  # Match data files
+  - type: file_extension
+    pattern: "\\.(parquet|csv|json|ya?ml)$"
+  # Match data loading related content
+  - type: content
+    pattern: "(load|process|batch|chunk|merge|validate|temp|temporary|insert|upsert|copy|import|etl|extract|transform)"
+
+actions:
+  - type: reject
+    conditions:
+      # Reject direct table writes without validation
+      - pattern: "table\\.insert_rows\\(.*\\)"
+        message: "Do not insert data directly. Use a validated loading process."
+      # Reject unsafe merge operations
+      - pattern: "MERGE\\s+INTO.*WHEN\\s+MATCHED.*UPDATE\\s+SET\\s+[^=]+=\\s*source\\.[^=]+(?!\\s+AND)"
+        message: "Include validation conditions in MERGE UPDATE clauses"
+      # Reject truncate without backup
+      - pattern: "TRUNCATE\\s+TABLE(?!.*backup)"
+        message: "Create a backup before truncating tables"
+      # Reject unsafe temporary table cleanup
+      - pattern: "DROP\\s+TABLE\\s+temp_"
+        message: "Use IF EXISTS when dropping temporary tables"
+      # Reject unsafe file handling
+      - pattern: "pd\\.read_csv\\(.*\\)(?!.*error_bad_lines)"
+        message: "Specify error handling for CSV reading"
+      # Reject unbounded memory operations
+      - pattern: "df\\.(to_sql|to_parquet)\\(.*\\)(?!.*chunksize)"
+        message: "Use chunked operations for large data writes"
+
+  - type: suggest
+    message: |
+      When loading and processing data:
+
+      1. Temporary Tables:
+         - Use unique temporary table names
+         - Clean up after use
+         - Verify data loaded successfully
+         - Handle concurrent access
+         - Monitor temporary storage
+         - Implement cleanup timeout
+         - Use transaction isolation when needed
+
+      2. Data Merging:
+         - Use appropriate MERGE statements
+         - Handle DELETE operations before INSERT
+         - Verify merge conditions
+         - Track merge statistics
+         - Handle merge conflicts
+         - Log merge operations
+         - Implement retry logic for deadlocks
+
+      3. Data Validation:
+         - Verify required columns exist
+         - Check data types match schema
+         - Validate foreign key relationships
+         - Handle missing values
+         - Check data constraints
+         - Log validation results
+         - Implement data quality scores
+
+      4. Batch Processing:
+         - Use appropriate batch sizes
+         - Handle partial batch failures
+         - Monitor batch progress
+         - Implement checkpoints
+         - Track batch statistics
+         - Log batch completion
+         - Use parallel processing when appropriate
+
+      5. Data Quality:
+         - Check for duplicates
+         - Validate data ranges
+         - Verify data consistency
+         - Handle outliers
+         - Monitor data patterns
+         - Log quality metrics
+         - Track data lineage
+
+      6. Error Recovery:
+         - Implement retry mechanisms
+         - Use exponential backoff
+         - Log failed records
+         - Maintain error tables
+         - Track error patterns
+         - Implement circuit breakers
+         - Provide recovery procedures
+
+      7. Resource Management:
+         - Monitor memory usage
+         - Implement connection pooling
+         - Handle timeouts gracefully
+         - Clean up resources properly
+         - Track resource utilization
+         - Set appropriate limits
+         - Implement resource quotas
+
+examples:
+  - input: |
+      # Bad: Unsafe data loading practices
+      def load_data(data):
+          table.insert_rows(data)  # Direct insert without validation
+          
+          # Unsafe CSV reading
+          df = pd.read_csv("data.csv")  # No error handling
+          
+          # Unbounded memory operation
+          df.to_sql("table", engine)  # No chunking
+      
+      query = """
+          MERGE INTO target t
+          USING source s ON t.id = s.id
+          WHEN MATCHED THEN UPDATE SET t.value = s.value  # Missing validation
+      """
+      
+      cursor.execute("TRUNCATE TABLE my_table")  # No backup
+      cursor.execute("DROP TABLE temp_staging")  # No IF EXISTS
+
+      # Good: Safe data loading with validation and resource management
+      def load_data_safely(data, table_id):
+          # Create unique temporary table with timestamp
+          temp_table_id = f"temp_{table_id}_{int(time.time())}"
+          
+          try:
+              # Set up resource monitoring
+              with resource_monitor() as monitor:
+                  # Load to temporary table first
+                  temp_table = create_temp_table(temp_table_id, schema)
+                  
+                  # Validate data before loading
+                  validation_results = validate_data(data, schema)
+                  if validation_results.has_errors:
+                      raise ValidationError(f"Data validation failed: {validation_results.errors}")
+                  
+                  # Track data quality metrics
+                  quality_score = calculate_quality_score(data)
+                  if quality_score < QUALITY_THRESHOLD:
+                      raise QualityError(f"Data quality score {quality_score} below threshold")
+                  
+                  # Load data in batches with monitoring and parallel processing
+                  with concurrent.futures.ThreadPoolExecutor(max_workers=WORKER_COUNT) as executor:
+                      futures = []
+                      for batch in chunk_data(data, size=BATCH_SIZE):
+                          futures.append(executor.submit(load_batch, temp_table, batch))
+                          
+                      # Handle batch results and errors
+                      for future in concurrent.futures.as_completed(futures):
+                          try:
+                              batch_result = future.result()
+                              monitor.track_metrics(batch_result)
+                          except Exception as e:
+                              handle_batch_error(e, retry_policy)
+                  
+                  # Verify loaded data with checksums
+                  verify_loaded_data(temp_table, data)
+                  
+                  # Merge into final table with validation and retry logic
+                  merge_query = """
+                      MERGE INTO target t
+                      USING source s ON t.id = s.id
+                      WHEN MATCHED AND t.version < s.version 
+                          AND s.value BETWEEN min_valid AND max_valid
+                      THEN UPDATE SET 
+                          t.value = s.value,
+                          t.updated_at = CURRENT_TIMESTAMP,
+                          t.checksum = s.checksum
+                  """
+                  with retry_handler(max_retries=3, backoff_factor=2):
+                      execute_merge(merge_query)
+                  
+          except Exception as e:
+              # Log detailed error information
+              logging.error("Data load failed", extra={
+                  'error': str(e),
+                  'table': table_id,
+                  'metrics': monitor.get_metrics(),
+                  'quality_score': quality_score
+              })
+              raise
+              
+          finally:
+              # Clean up temporary resources safely with timeout
+              with timeout(seconds=30):
+                  cleanup_query = "DROP TABLE IF EXISTS {temp_table_id}"
+                  execute_with_retry(cleanup_query)
+
+functions:
+  validate_loading: |
+    def check():
+      """
+      Validate data loading.
+      Returns (is_valid, issues).
+      """
+      issues = []
+      # Check backup requirement
+      if not has_backup():
+        issues.append("Missing backup")
+      # Check validation
+      if not has_validation():
+        issues.append("Missing validation")
+      # Check batch size
+      if batch_size > config.loading.max_batch_size:
+        issues.append("Batch size too large")
+      # Check memory usage
+      if memory_mb > config.loading.max_memory_mb:
+        issues.append("Memory usage too high")
+      return len(issues) == 0, issues
+
+  check_performance: |
+    def check():
+      """
+      Check loading performance.
+      Returns (is_valid, issues).
+      """
+      issues = []
+      # Check pattern complexity
+      if pattern_complexity > config.performance.max_pattern_complexity:
+        issues.append("Pattern too complex")
+      # Check validation time
+      if validation_time_ms > config.performance.max_validation_time_ms:
+        issues.append("Validation too slow")
+      return len(issues) == 0, issues
+
+metrics:
+  - name: data_loaded
+    type: counter
+    labels: ["source_type"]
+  - name: processing_time
+    type: histogram
+    labels: ["operation_type"]
+  - name: validation_time
+    type: histogram
+    labels: ["check_type"]
+  - name: pattern_complexity
+    type: gauge
+    labels: ["pattern_type"]
+  - name: memory_usage
+    type: gauge
+    labels: ["operation_type"]
+  - name: loading_violations
+    type: counter
+    labels: ["violation_type"]
+  - name: auto_fixes
+    type: counter
+    labels: ["fix_type"]
+
+metadata:
+  priority: high
+  version: 1.0
+  tags:
+    - data-loading
+    - processing
+    - validation
+    - quality
+    - monitoring
+  changelog:
+    - 1.0: Initial version with comprehensive data loading guidelines
+    - 1.1: Added resource management, parallel processing, and quality metrics 

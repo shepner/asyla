@@ -1,0 +1,257 @@
+---
+description: Guidelines for detecting, resolving, and learning from rule conflicts
+globs: ["**/*.mdc"]
+alwaysApply: true
+---
+---
+description: Rule Conflict Resolution Guidelines
+globs: ["**/*.mdc"]
+alwaysApply: false
+---
+
+# Rule Conflict Resolution Guidelines
+
+Guidelines for managing conflicts between rules and using resolutions to improve the rule system.
+
+<rule>
+name: rule-conflict-resolution
+description: Standards for detecting and resolving rule conflicts
+filters:
+  # Match rule files
+  - type: file_extension
+    pattern: "\\.mdc$"
+  # Match rule relationships
+  - type: content
+    pattern: "<rule>.*?</rule>"
+  # Match rule applications
+  - type: event
+    pattern: "(rule_applied|rule_violated|rule_updated)"
+
+actions:
+  - type: detect
+    conditions:
+      # Detect contradictory actions
+      - pattern: "action:\\s*\"([^\"]+)\".*action:\\s*\"(?!\\1)[^\"]+\""
+        message: "Conflicting actions detected between rules"
+        severity: "critical"
+      # Detect overlapping patterns
+      - pattern: "pattern:\\s*\"([^\"]+)\".*pattern:\\s*\"\\1\""
+        message: "Overlapping patterns detected"
+        severity: "major"
+      # Detect competing priorities
+      - pattern: "priority:\\s*(high|critical).*priority:\\s*(high|critical)"
+        message: "Competing high-priority rules"
+        severity: "major"
+      # Detect resource conflicts
+      - pattern: "resource:\\s*\"([^\"]+)\".*resource:\\s*\"\\1\""
+        message: "Resource conflict detected"
+        severity: "major"
+
+  - type: analyze
+    tasks:
+      # Analyze conflict impact
+      - trigger: "conflict_detected"
+        action: "analyze_impact"
+        output: "impact_report"
+      # Generate resolution options
+      - trigger: "impact_analyzed"
+        action: "generate_options"
+        output: "resolution_options"
+      # Learn from resolution
+      - trigger: "conflict_resolved"
+        action: "update_rules"
+        output: "rule_improvements"
+
+  - type: prompt
+    conditions:
+      # Prompt for critical conflicts
+      - severity: "critical"
+        template: "critical_conflict_template"
+        timeout: "none"  # Must be resolved
+      # Prompt for major conflicts
+      - severity: "major"
+        template: "major_conflict_template"
+        timeout: "4h"
+      # Prompt for minor conflicts
+      - severity: "minor"
+        template: "minor_conflict_template"
+        timeout: "24h"
+
+functions:
+  analyze_conflict: |
+    def analyze(rules):
+      """
+      Analyze potential conflicts between rules.
+      Returns (conflicts, impact_analysis).
+      """
+      conflicts = []
+      for rule1, rule2 in combinations(rules, 2):
+        if conflict_exists(rule1, rule2):
+          conflicts.append({
+            'rules': (rule1, rule2),
+            'type': detect_conflict_type(rule1, rule2),
+            'severity': assess_severity(rule1, rule2),
+            'impact': analyze_impact(rule1, rule2)
+          })
+      return conflicts
+
+  generate_resolution_options: |
+    def generate_options(conflict):
+      """
+      Generate possible resolution options for a conflict.
+      Returns list of options with pros/cons.
+      """
+      options = []
+      # Option 1: Modify rule priorities
+      if can_adjust_priority(conflict):
+        options.append(create_priority_option(conflict))
+      # Option 2: Refine rule patterns
+      if can_refine_patterns(conflict):
+        options.append(create_pattern_option(conflict))
+      # Option 3: Merge rules
+      if can_merge_rules(conflict):
+        options.append(create_merge_option(conflict))
+      # Option 4: Split rules
+      if can_split_rules(conflict):
+        options.append(create_split_option(conflict))
+      return options
+
+  learn_from_resolution: |
+    def learn(conflict, resolution):
+      """
+      Learn from conflict resolution to improve rules.
+      Returns improvement suggestions.
+      """
+      improvements = []
+      # Analyze resolution pattern
+      pattern = extract_resolution_pattern(resolution)
+      # Generate rule improvements
+      improvements.extend(generate_rule_updates(pattern))
+      # Update conflict detection
+      improvements.extend(update_conflict_patterns(pattern))
+      # Document learning
+      document_resolution_learning(conflict, resolution, improvements)
+      return improvements
+
+examples:
+  - input: |
+      # Conflict detected between performance and security rules
+      
+      # Rule 1: Performance Optimization
+      <rule>
+      name: query-performance
+      priority: high
+      actions:
+        - type: reject
+          conditions:
+            - pattern: "SELECT.*WHERE.*ORDER BY"
+              message: "Add LIMIT for performance"
+      </rule>
+      
+      # Rule 2: Data Completeness
+      <rule>
+      name: data-completeness
+      priority: high
+      actions:
+        - type: reject
+          conditions:
+            - pattern: "SELECT.*LIMIT"
+              message: "Full dataset required for compliance"
+      </rule>
+      
+      # Conflict Resolution Prompt
+      [CONFLICT DETECTED] Critical priority conflict:
+      - Rule 'query-performance' requires LIMIT clause
+      - Rule 'data-completeness' prohibits LIMIT clause
+      
+      Resolution options:
+      1. Create context-aware rule:
+      ```mdc
+      <rule>
+      name: query-optimization
+      conditions:
+        - context: "compliance_required"
+          apply: "data-completeness"
+        - context: "standard_operation"
+          apply: "query-performance"
+      </rule>
+      ```
+      
+      2. Modify patterns:
+      ```mdc
+      # Update performance rule
+      pattern: "SELECT.*WHERE.*ORDER BY(?!.*compliance_required)"
+      
+      # Update completeness rule
+      pattern: "SELECT.*LIMIT(?=.*compliance_required)"
+      ```
+
+  - input: |
+      # Conflict detected in error handling approaches
+      
+      # Rule 1: Fast Fail
+      <rule>
+      name: fast-fail
+      priority: high
+      actions:
+        - type: enforce
+          conditions:
+            - pattern: "try\\s*\\{[^}]*\\}"
+              message: "Fail fast on errors"
+      </rule>
+      
+      # Rule 2: Graceful Degradation
+      <rule>
+      name: graceful-degradation
+      priority: high
+      actions:
+        - type: enforce
+          conditions:
+            - pattern: "catch\\s*\\([^)]*\\)\\s*\\{\\s*return"
+              message: "Provide fallback on errors"
+      </rule>
+      
+      # Resolution Learning
+      [IMPROVEMENT] Created new context-aware error handling rule:
+      ```mdc
+      <rule>
+      name: smart-error-handling
+      conditions:
+        - context: "critical_operation"
+          apply: "fast-fail"
+        - context: "user_facing"
+          apply: "graceful-degradation"
+      metrics:
+        - name: error_recovery_success
+          threshold: 0.95
+      </rule>
+      ```
+
+metrics:
+  - name: conflicts_detected
+    type: counter
+    labels: ["conflict_type", "severity"]
+  - name: resolution_time
+    type: histogram
+    labels: ["conflict_type", "resolution_type"]
+  - name: resolution_success
+    type: gauge
+    labels: ["resolution_type"]
+  - name: learning_events
+    type: counter
+    labels: ["learning_type", "improvement_type"]
+  - name: prompt_responses
+    type: histogram
+    labels: ["conflict_type", "response_type"]
+
+metadata:
+  priority: critical
+  version: 1.0
+  tags:
+    - conflict-resolution
+    - rule-improvement
+    - automation
+    - learning
+  changelog:
+    - 1.0: Initial version with conflict detection and resolution capabilities
+</rule> 

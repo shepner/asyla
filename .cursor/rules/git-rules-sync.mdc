@@ -1,0 +1,228 @@
+---
+description: "Global rules shared across all projects"
+globs: ["**/*.mdc"]
+alwaysApply: true
+---
+---
+description: "Maintain cursor rules in a dedicated GitHub repository and sync changes bidirectionally."
+globs: ["**/*"]
+alwaysApply: true
+---
+
+# GitHub Rules Sync
+
+Maintain cursor rules in a dedicated GitHub repository and sync changes bidirectionally.
+
+<rule>
+name: github-rules-sync
+description: Sync rules with GitHub repository
+filters:
+  - type: file_extension
+    pattern: "\\.mdc$"
+  - type: event
+    pattern: "(file_create|file_modify|file_delete)"
+  - type: path
+    include:
+      - ".cursor/rules/**/*.mdc"     # Workspace rules
+      - "~/.cursor/rules/**/*.mdc"   # Global rules
+
+actions:
+  - type: validate
+    conditions:
+      - pattern: "^(workspace|global)/[0-9]+-[a-z-]+/"
+        message: "Rules must be organized in workspace/ or global/ directories with proper category prefixes"
+      - pattern: "\\.mdc$"
+        message: "Rule files must have .mdc extension"
+
+  - type: execute
+    command: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      
+      # Configuration
+      REPO_DIR="$HOME/src/cursor-rules"
+      WORKSPACE_RULES_DIR=".cursor/rules"
+      GLOBAL_RULES_DIR="$HOME/.cursor/rules"
+      GITHUB_REPO="shepner/cursor-rules"
+      BRANCH="main"
+      
+      # Logging functions
+      log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
+      error() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $1" >&2; }
+      
+      # Function to ensure repository is set up
+      setup_repo() {
+        if [[ ! -d "$REPO_DIR" ]]; then
+          log "Cloning repository..."
+          git clone "https://github.com/$GITHUB_REPO.git" "$REPO_DIR"
+        fi
+        
+        cd "$REPO_DIR"
+        
+        # Ensure we're on the right branch
+        current_branch=$(git symbolic-ref --short HEAD)
+        if [[ "$current_branch" != "$BRANCH" ]]; then
+          log "Switching to branch $BRANCH..."
+          git checkout "$BRANCH" || git checkout -b "$BRANCH"
+        fi
+        
+        # Pull latest changes
+        log "Pulling latest changes..."
+        git pull origin "$BRANCH" || {
+          error "Failed to pull latest changes"
+          return 1
+        }
+      }
+      
+      # Function to sync rules
+      sync_rules() {
+        local source_dir="$1"
+        local target_subdir="$2"
+        local target_dir="$REPO_DIR/rules/$target_subdir"
+        
+        if [[ ! -d "$source_dir" ]]; then
+          log "Source directory $source_dir does not exist, skipping..."
+          return 0
+        fi
+        
+        log "Syncing $target_subdir rules..."
+        mkdir -p "$target_dir"
+        rsync -av --delete "$source_dir/" "$target_dir/" || {
+          error "Failed to sync $target_subdir rules"
+          return 1
+        }
+      }
+      
+      # Function to commit and push changes
+      commit_changes() {
+        cd "$REPO_DIR"
+        
+        if [[ -n "$(git status --porcelain)" ]]; then
+          log "Changes detected, committing..."
+          git add .
+          git commit -m "rules: Update $(date '+%Y-%m-%d %H:%M:%S')" || {
+            error "Failed to commit changes"
+            return 1
+          }
+          
+          log "Pushing changes..."
+          git push origin "$BRANCH" || {
+            error "Failed to push changes"
+            return 1
+          }
+          
+          log "Successfully pushed changes"
+        else
+          log "No changes to commit"
+        fi
+      }
+      
+      # Main sync process
+      main() {
+        # Ensure repository is set up
+        setup_repo || {
+          error "Failed to set up repository"
+          return 1
+        }
+        
+        # Sync workspace-specific rules
+        sync_rules "$WORKSPACE_RULES_DIR" "workspace" || {
+          error "Failed to sync workspace rules"
+          return 1
+        }
+        
+        # Sync global rules
+        sync_rules "$GLOBAL_RULES_DIR" "global" || {
+          error "Failed to sync global rules"
+          return 1
+        }
+        
+        # Commit and push changes
+        commit_changes || {
+          error "Failed to commit and push changes"
+          return 1
+        }
+        
+        log "Sync completed successfully"
+      }
+      
+      # Run main process
+      main || exit 1
+
+  - type: suggest
+    message: |
+      Rules are organized into two categories:
+      
+      1. Workspace-specific rules (in .cursor/rules/):
+         - GitHub sync configuration
+         - Project-specific dependency rules
+         - Project-specific organization rules
+      
+      2. Global rules (in ~/.cursor/rules/):
+         - General code quality rules
+         - Security guidelines
+         - Version control best practices
+         - Rule automation and enforcement
+      
+      The rules are synchronized with:
+      - Repository: https://github.com/shepner/cursor-rules
+      - Branch: main
+      - Structure:
+        ```
+        rules/
+        ├── workspace/  # Project-specific rules
+        │   ├── 00-meta/
+        │   ├── 20-dependencies/
+        │   └── 10-code/organization/
+        └── global/     # Shared rules across projects
+            ├── 00-meta/
+            ├── 10-code/
+            │   ├── quality/
+            │   └── security/
+            └── 40-version-control/
+                ├── git/
+                └── licensing/
+        ```
+
+examples:
+  - input: |
+      # Update workspace-specific rule
+      .cursor/rules/20-dependencies/dependency-management.mdc
+    output: |
+      [2024-03-08 15:45:00] Syncing workspace rules...
+      Updated rules/workspace/20-dependencies/dependency-management.mdc
+      [2024-03-08 15:45:01] Changes detected, committing...
+      [2024-03-08 15:45:02] Successfully pushed changes
+
+  - input: |
+      # Update global rule
+      ~/.cursor/rules/10-code/quality/code-style.mdc
+    output: |
+      [2024-03-08 15:45:00] Syncing global rules...
+      Updated rules/global/10-code/quality/code-style.mdc
+      [2024-03-08 15:45:01] Changes detected, committing...
+      [2024-03-08 15:45:02] Successfully pushed changes
+
+metrics:
+  - name: sync_operations
+    type: counter
+    labels: ["rule_type", "operation", "category"]
+  - name: sync_errors
+    type: counter
+    labels: ["error_type", "rule_type"]
+  - name: sync_duration
+    type: histogram
+    labels: ["rule_type", "category"]
+  - name: rule_validation
+    type: counter
+    labels: ["rule_type", "validation_type"]
+
+metadata:
+  priority: high
+  version: 1.0.0
+  tags:
+    - github
+    - synchronization
+    - workspace-specific
+    - global-rules
+</rule> 

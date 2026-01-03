@@ -1,0 +1,116 @@
+---
+description: Standards for implementing generic, reusable code designs
+globs: ["*.py", "*.js", "*.ts", "*.java", "*.cpp", "*.h", "*.hpp", "*.cs", "*.mdc", "*.rules"]
+alwaysApply: true
+---
+---
+description: "Code Design Principles"
+globs: ["**/*.{py,js,ts,java,cpp,h,hpp,cs,mdc,rules,json,yaml,yml,xml,ini,conf,config,toml}"]
+alwaysApply: false
+---
+
+# Code Design Principles
+
+Rules for ensuring code is designed with generic, reusable principles in mind.
+
+<rule>
+name: code-design-principles
+description: Standards for writing generic, reusable code designs
+filters:
+  # Match implementation files
+  - type: file_extension
+    pattern: "\\.(py|js|ts|java|cpp|h|hpp|cs|mdc|rules)$"
+  # Match configuration files
+  - type: file_extension
+    pattern: "\\.(json|yaml|yml|xml|ini|conf|config|toml)$"
+
+actions:
+  - type: validate
+    conditions:
+      # Check for hardcoded values
+      - pattern: "\\b\\d+\\b"
+        message: "Consider using configuration for numeric values"
+      # Check for specific implementations
+      - pattern: "if\\s*\\([^)]*\\b(?:mysql|postgres|sqlite)\\b"
+        message: "Use database abstraction layer instead of specific implementations"
+      # Check for tight coupling
+      - pattern: "new\\s+\\w+\\([^)]*\\)"
+        message: "Consider using dependency injection for better testability"
+
+  - type: suggest
+    message: |
+      When implementing solutions:
+
+      1. Design Principles:
+         - Prefer generic solutions over specific ones
+         - Use configuration over hard-coding
+         - Design for extensibility
+         - Make assumptions explicit
+         - Document design decisions
+         - Consider future use cases
+
+      2. Code Organization:
+         - Separate generic logic from specific implementations
+         - Use interfaces/abstract classes for common patterns
+         - Extract shared functionality into utilities
+         - Keep domain-specific code isolated
+         - Use dependency injection for flexibility
+         - Implement feature flags for specific behaviors
+
+      3. Error Handling:
+         - Design error handling for general cases
+         - Use type-agnostic error patterns
+         - Implement flexible recovery strategies
+         - Make error handling configurable
+         - Log errors with context
+         - Support custom error handlers
+
+      4. Data Handling:
+         - Use generic data structures
+         - Support multiple data formats
+         - Implement flexible parsing
+         - Allow custom data transformations
+         - Support different storage backends
+         - Make data validation configurable
+
+examples:
+  - input: |
+      # Bad: Specific implementation
+      class MySQLDatabase:
+          def __init__(self, host, port):
+              self.connection = mysql.connector.connect(
+                  host=host,
+                  port=port
+              )
+
+      # Good: Generic implementation
+      class Database:
+          def __init__(self, connection_string):
+              self.connection = self._create_connection(connection_string)
+          
+          def _create_connection(self, connection_string):
+              # Factory method for creating connections
+              pass
+
+  - input: |
+      # Bad: Hardcoded values
+      def process_data(data):
+          if len(data) > 1000:
+              raise ValueError("Too many records")
+          return data[:1000]
+
+      # Good: Configurable values
+      def process_data(data, max_records=1000):
+          if len(data) > max_records:
+              raise ValueError(f"Too many records (max: {max_records})")
+          return data[:max_records]
+
+metadata:
+  priority: high
+  version: 1.0
+  tags:
+    - design
+    - architecture
+    - patterns
+  changelog:
+    - 1.0: Initial version with comprehensive design principles 

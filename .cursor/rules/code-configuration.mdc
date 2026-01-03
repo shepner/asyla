@@ -1,0 +1,119 @@
+---
+description: Standards for managing application configuration and settings
+globs: ["*.py", "*.js", "*.ts", "*.java", "*.cpp", "*.cs", "*.go", "*.rs", "*.rb", "*.php", "*.{json,yaml,yml,toml,ini,conf}"]
+alwaysApply: true
+---
+---
+description: "Configuration Management Guidelines"
+globs: ["**/*.{json,yaml,yml,toml,ini,conf,py,js,ts,java,cpp,cs,go,rs,rb,php}"]
+alwaysApply: false
+---
+
+# Configuration Management Guidelines
+
+Rules for managing application configuration and settings in a maintainable way.
+
+<rule>
+name: code-configuration
+description: Standards for managing application configuration and settings
+filters:
+  # Match configuration files
+  - type: file_extension
+    pattern: "\\.(json|yaml|yml|toml|ini|conf)$"
+  # Match source files that might contain configuration
+  - type: file_extension
+    pattern: "\\.(py|js|ts|java|cpp|cs|go|rs|rb|php)$"
+  # Match configuration patterns
+  - type: content
+    pattern: "(config|settings|environment|env|\.env)"
+
+actions:
+  - type: validate
+    conditions:
+      # Check for hardcoded configuration
+      - pattern: "\\b(?:password|secret|key|token)\\s*=\\s*['\"][^'\"]+['\"]"
+        message: "Use environment variables for sensitive values"
+      # Check for missing configuration validation
+      - pattern: "config\\s*=\\s*load_config\\(\\)"
+        not_pattern: "validate_config\\(config\\)"
+        message: "Validate configuration after loading"
+      # Check for environment-specific code
+      - pattern: "if\\s*\\([^)]*\\b(?:prod|dev|test)\\b"
+        message: "Use configuration for environment-specific behavior"
+
+  - type: suggest
+    message: |
+      When managing configuration:
+
+      1. Configuration Structure:
+         - Use hierarchical configuration
+         - Group related settings
+         - Use clear section names
+         - Document all options
+         - Provide default values
+         - Validate configuration
+         - Support environment overrides
+
+      2. Environment Variables:
+         - Use environment variables
+         - Provide .env.example
+         - Document required vars
+         - Validate env vars
+         - Use sensible defaults
+         - Support different envs
+         - Handle missing vars
+
+      3. Security:
+         - Never commit secrets
+         - Use secure storage
+         - Encrypt sensitive data
+         - Rotate credentials
+         - Use access controls
+         - Audit configuration
+         - Monitor changes
+
+      4. Validation:
+         - Validate all config
+         - Check required fields
+         - Validate data types
+         - Check value ranges
+         - Validate relationships
+         - Handle errors
+         - Provide feedback
+
+examples:
+  - input: |
+      # Bad: Hardcoded configuration
+      class Database:
+          def __init__(self):
+              self.host = "localhost"
+              self.port = 5432
+              self.password = "secret123"
+
+      # Good: Configuration management
+      class Database:
+          def __init__(self, config):
+              self.host = config.get("host", "localhost")
+              self.port = config.get("port", 5432)
+              self.password = os.getenv("DB_PASSWORD")
+              self._validate_config()
+
+  - input: |
+      # Bad: Environment-specific code
+      if environment == "production":
+          log_level = "ERROR"
+      else:
+          log_level = "DEBUG"
+
+      # Good: Configuration-based
+      log_level = config.get("logging.level", "INFO")
+
+metadata:
+  priority: high
+  version: 1.0
+  tags:
+    - configuration
+    - environment
+    - security
+  changelog:
+    - 1.0: Initial version with comprehensive configuration guidelines 

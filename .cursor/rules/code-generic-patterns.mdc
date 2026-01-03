@@ -1,0 +1,136 @@
+---
+description: Guidelines for ensuring generic, reusable implementations
+globs: ["*.py", "*.js", "*.ts", "*.java", "*.cpp", "*.h", "*.hpp", "*.cs", "*.mdc", "*.rules"]
+alwaysApply: true
+---
+---
+description: Generic Implementation Guidelines
+globs: ["**/*.{py,js,ts,java,cpp,h,hpp,cs,mdc,rules,json,yaml,yml,xml,ini,conf,config,toml}"]
+alwaysApply: false
+---
+
+# Generic Implementation Guidelines
+
+Rules for ensuring code and configurations are implemented in a generic, reusable manner.
+
+<rule>
+name: generic_implementation
+description: Standards for writing generic, reusable code and configurations
+filters:
+  # Match implementation files
+  - type: file_extension
+    pattern: "\\.(py|js|ts|java|cpp|h|hpp|cs|mdc|rules)$"
+  # Match configuration files
+  - type: file_extension
+    pattern: "\\.(json|yaml|yml|xml|ini|conf|config|toml)$"
+
+actions:
+  - type: suggest
+    message: |
+      When implementing solutions:
+
+      1. Design Principles:
+         - Prefer generic solutions over specific ones
+         - Use configuration over hard-coding
+         - Design for extensibility
+         - Make assumptions explicit
+         - Document design decisions
+         - Consider future use cases
+
+      2. Code Organization:
+         - Separate generic logic from specific implementations
+         - Use interfaces/abstract classes for common patterns
+         - Extract shared functionality into utilities
+         - Keep domain-specific code isolated
+         - Use dependency injection for flexibility
+         - Implement feature flags for specific behaviors
+
+      3. Configuration Management:
+         - Use configuration files for variable elements
+         - Support environment-based configuration
+         - Make specific behaviors configurable
+         - Document configuration options
+         - Provide sensible defaults
+         - Allow override of default behaviors
+
+      4. Error Handling:
+         - Design error handling for general cases
+         - Use type-agnostic error patterns
+         - Implement flexible recovery strategies
+         - Make error handling configurable
+         - Log errors with context
+         - Support custom error handlers
+
+      5. Data Handling:
+         - Use generic data structures
+         - Support multiple data formats
+         - Implement flexible parsing
+         - Allow custom data transformations
+         - Support different storage backends
+         - Make data validation configurable
+
+      6. Integration Points:
+         - Design modular interfaces
+         - Support multiple integration patterns
+         - Use standard protocols
+         - Allow custom implementations
+         - Support different authentication methods
+         - Make endpoints configurable
+
+examples:
+  - input: |
+      # Bad: Specific Implementation
+      def process_bigquery_data(data):
+          # Hard-coded for BigQuery
+          client = bigquery.Client()
+          table = client.get_table("my_specific_table")
+          table.insert_rows(data)
+
+      # Good: Generic Implementation
+      class DataProcessor:
+          def __init__(self, client, config):
+              self.client = client
+              self.config = config
+
+          def process_data(self, data):
+              # Generic processing logic
+              validator = self.config.get_validator()
+              transformer = self.config.get_transformer()
+              storage = self.config.get_storage_backend()
+              
+              validated_data = validator.validate(data)
+              transformed_data = transformer.transform(validated_data)
+              return storage.store(transformed_data)
+
+  - input: |
+      # Bad: Specific Configuration
+      BIGQUERY_TABLE = "my_project.dataset.table"
+      MAX_RETRIES = 3
+      TIMEOUT = 30
+
+      # Good: Generic Configuration
+      config = {
+          "storage": {
+              "type": "bigquery",
+              "options": {
+                  "project": "${PROJECT_ID}",
+                  "dataset": "${DATASET}",
+                  "table": "${TABLE}"
+              }
+          },
+          "retry": {
+              "max_attempts": "${MAX_RETRIES:-3}",
+              "timeout": "${TIMEOUT:-30}"
+          }
+      }
+
+metadata:
+  priority: high
+  version: 1.0
+  tags:
+    - design
+    - implementation
+    - best-practices
+  changelog:
+    - 1.0: Initial version with comprehensive guidelines for generic implementation
+</rule> 

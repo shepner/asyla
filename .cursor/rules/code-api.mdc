@@ -1,0 +1,171 @@
+---
+description: Standards for designing and implementing APIs
+globs: ["*.py", "*.js", "*.ts", "*.java", "*.cpp", "*.cs", "*.go", "*.rs", "*.rb", "*.php", "*.{json,yaml,yml}"]
+alwaysApply: true
+---
+---
+description: "API Design Standards"
+globs: ["**/*.{py,js,ts,java,cpp,cs,go,rs,rb,php,json,yaml,yml}"]
+alwaysApply: false
+---
+
+# API Design Standards
+
+Rules for designing and implementing consistent, well-documented APIs.
+
+<rule>
+name: code-api
+description: Standards for designing and implementing APIs
+filters:
+  # Match API-related files
+  - type: file_extension
+    pattern: "\\.(py|js|ts|java|cpp|cs|go|rs|rb|php|json|yaml|yml)$"
+  # Match API patterns
+  - type: content
+    pattern: "(api|endpoint|route|controller|@RequestMapping|@RestController)"
+
+actions:
+  - type: validate
+    conditions:
+      # Check for API versioning
+      - pattern: "/api/v\\d+/"
+        not_pattern: "/api/v\\d+/.*"
+        message: "API endpoints should include version number"
+      # Check for proper error responses
+      - pattern: "return\\s+\\{\\s*\"error\":"
+        not_pattern: "return\\s+\\{\\s*\"error\":.*?\"code\":"
+        message: "Error responses should include error code"
+      # Check for rate limiting
+      - pattern: "@RateLimit"
+        not_pattern: "@RateLimit\\(.*?\\)"
+        message: "Rate limiting should specify limits"
+
+  - type: suggest
+    message: |
+      When designing APIs:
+
+      1. API Design:
+         - Use RESTful principles
+         - Follow consistent naming
+         - Use proper HTTP methods
+         - Implement versioning
+         - Design for extensibility
+         - Use proper status codes
+         - Handle errors consistently
+
+      2. Documentation:
+         - Document all endpoints
+         - Include request/response examples
+         - Document error responses
+         - Specify authentication
+         - Document rate limits
+         - Include usage examples
+         - Keep docs up to date
+
+      3. Security:
+         - Implement authentication
+         - Use HTTPS only
+         - Validate all inputs
+         - Implement rate limiting
+         - Use secure headers
+         - Handle CORS properly
+         - Monitor API usage
+
+      4. Performance:
+         - Implement caching
+         - Use pagination
+         - Optimize responses
+         - Handle timeouts
+         - Monitor performance
+         - Use compression
+         - Implement retries
+
+examples:
+  - input: |
+      # Bad: Poor API design
+      @app.route("/users")
+      def get_users():
+          return jsonify(db.get_all_users())
+
+      # Good: Well-designed API
+      @app.route("/api/v1/users")
+      @rate_limit(limit=100, period=60)
+      @require_auth
+      def get_users():
+          try:
+              page = request.args.get("page", 1, type=int)
+              per_page = request.args.get("per_page", 20, type=int)
+              
+              users = db.get_users_paginated(page, per_page)
+              total = db.get_users_count()
+              
+              return jsonify({
+                  "data": users,
+                  "meta": {
+                      "page": page,
+                      "per_page": per_page,
+                      "total": total
+                  }
+              }), 200
+          except Exception as e:
+              return jsonify({
+                  "error": {
+                      "code": "USERS_FETCH_ERROR",
+                      "message": str(e)
+                  }
+              }), 500
+
+  - input: |
+      # Bad: Missing API documentation
+      def create_user(data):
+          user = User(**data)
+          db.save(user)
+          return user
+
+      # Good: Well-documented API
+      @app.route("/api/v1/users", methods=["POST"])
+      @swag_from({
+          "parameters": [
+              {
+                  "name": "body",
+                  "in": "body",
+                  "required": True,
+                  "schema": {
+                      "type": "object",
+                      "properties": {
+                          "name": {"type": "string"},
+                          "email": {"type": "string", "format": "email"}
+                      },
+                      "required": ["name", "email"]
+                  }
+              }
+          ],
+          "responses": {
+              "201": "User created successfully",
+              "400": "Invalid input",
+              "409": "User already exists"
+          }
+      })
+      def create_user():
+          data = request.get_json()
+          try:
+              user = User(**data)
+              db.save(user)
+              return jsonify(user), 201
+          except ValidationError as e:
+              return jsonify({
+                  "error": {
+                      "code": "VALIDATION_ERROR",
+                      "message": str(e)
+                  }
+              }), 400
+
+metadata:
+  priority: high
+  version: 1.0
+  tags:
+    - api
+    - rest
+    - documentation
+  changelog:
+    - 1.0: Initial version with comprehensive API guidelines 

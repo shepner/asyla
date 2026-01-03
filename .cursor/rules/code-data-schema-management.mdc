@@ -1,0 +1,170 @@
+---
+description: Guidelines for managing and evolving database schemas
+globs: ["*.py", "*.sql", "*.json", "*.yaml", "*.yml"]
+alwaysApply: true
+---
+---
+description: "Data types rule. Update this description."
+globs: ["**/*.{py,sql,json,yaml,yml}"]
+alwaysApply: false
+---
+
+# Schema Management Guidelines
+
+Rules for consistent schema management and evolution across the codebase.
+
+<rule>
+name: schema-management
+description: Standards for managing database schemas, updates, and validation
+filters:
+  # Match Python files
+  - type: file_extension
+    pattern: "\\.py$"
+  # Match SQL files
+  - type: file_extension
+    pattern: "\\.sql$"
+  # Match config files
+  - type: file_extension
+    pattern: "\\.(json|ya?ml)$"
+  # Match schema related content
+  - type: content
+    pattern: "(schema|table|column|field|type|constraint|alter|modify|index|primary|foreign|key|unique|not\\s+null|migration|version)"
+
+actions:
+  - type: validate
+    conditions:
+      # Check table structure
+      - pattern: "CREATE\\s+TABLE(?!.*PARTITION)"
+        message: "Consider partitioning for large tables"
+      # Check index count
+      - pattern: "CREATE\\s+INDEX"
+        message: "Monitor index count and performance impact"
+      # Check column count
+      - pattern: "CREATE\\s+TABLE[^)]+\\([^)]{1000,}\\)"
+        message: "Too many columns in table definition"
+      # Check migration safety
+      - pattern: "ALTER\\s+TABLE.*DROP"
+        message: "Ensure data preservation before dropping"
+
+  - type: suggest
+    message: |
+      When managing database schemas:
+
+      1. Schema Design:
+         - Use appropriate data types
+         - Implement constraints
+         - Plan for scalability
+         - Consider partitioning
+         - Optimize indexes
+         - Document relationships
+         - Version schemas
+
+      2. Migration Safety:
+         - Backup before changes
+         - Use transactions
+         - Test migrations
+         - Plan rollbacks
+         - Monitor performance
+         - Validate data
+         - Handle errors
+
+      3. Schema Evolution:
+         - Track versions
+         - Document changes
+         - Test compatibility
+         - Monitor impact
+         - Update dependencies
+         - Maintain history
+         - Plan upgrades
+
+      4. Performance:
+         - Monitor query patterns
+         - Optimize indexes
+         - Check constraints
+         - Analyze impact
+         - Test scalability
+         - Profile queries
+         - Track metrics
+
+functions:
+  validate_schema: |
+    def check():
+      """
+      Validate schema structure and constraints.
+      Returns (is_valid, issues).
+      """
+      issues = []
+      # Check table columns
+      if table_columns > config.schema.max_table_columns:
+        issues.append("Too many columns")
+      # Check index count
+      if index_count > config.schema.max_index_count:
+        issues.append("Too many indexes")
+      # Check backup requirement
+      if not has_backup():
+        issues.append("Missing backup")
+      # Check versioning
+      if not has_versioning():
+        issues.append("Missing version control")
+      return len(issues) == 0, issues
+
+  check_performance: |
+    def check():
+      """
+      Check schema performance impact.
+      Returns (is_valid, issues).
+      """
+      issues = []
+      # Check pattern complexity
+      if pattern_complexity > config.performance.max_pattern_complexity:
+        issues.append("Pattern too complex")
+      # Check validation time
+      if validation_time_ms > config.performance.max_validation_time_ms:
+        issues.append("Validation too slow")
+      # Check batch size
+      if batch_size > config.performance.batch_size:
+        issues.append("Batch size too large")
+      return len(issues) == 0, issues
+
+metrics:
+  - name: schema_changes
+    type: counter
+    labels: ["change_type", "table"]
+  - name: migration_duration
+    type: histogram
+    labels: ["operation_type"]
+  - name: validation_time
+    type: histogram
+    labels: ["check_type"]
+  - name: table_metrics
+    type: gauge
+    labels: ["table", "metric_type"]
+  - name: index_metrics
+    type: gauge
+    labels: ["table", "index_type"]
+  - name: constraint_violations
+    type: counter
+    labels: ["table", "constraint_type"]
+  - name: backup_size
+    type: gauge
+    labels: ["table"]
+  - name: schema_violations
+    type: counter
+    labels: ["violation_type"]
+  - name: auto_fixes
+    type: counter
+    labels: ["fix_type"]
+
+metadata:
+  priority: high
+  version: 1.0
+  tags:
+    - schema
+    - database
+    - migration
+    - validation
+    - performance
+    - monitoring
+  changelog:
+    - 1.0: Initial version with comprehensive schema management standards
+    - 1.1: Added performance monitoring and validation metrics 

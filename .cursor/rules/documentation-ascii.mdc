@@ -1,0 +1,144 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+---
+description: "Standards for formatting ASCII filesystem trees and aligning comments for readability and consistency. Applies to all programming languages and documentation files."
+globs: ["**/*"]
+alwaysApply: true
+---
+
+# ASCII Filesystem Representation Guidelines
+
+Rules for ensuring consistent and readable ASCII-based filesystem representations.
+
+<rule>
+name: ascii-filesystem-formatting
+description: Standards for formatting ASCII filesystem trees with aligned comments
+filters:
+  # Match documentation files
+  - type: file_extension
+    pattern: "\\.(md|rst|txt|doc|docx)$"
+  # Match filesystem representations
+  - type: content
+    pattern: "(├──|└──|│)"
+
+actions:
+  - type: reject
+    conditions:
+      # Reject misaligned comments
+      - pattern: "^\\s*[├└]──\\s+\\w+\\s+#.*$(?!\\n.*[├└]──\\s+\\w+\\s+#\\s*)"
+        message: "Comments in filesystem trees must be aligned vertically"
+      # Reject inconsistent spacing before comments
+      - pattern: "[├└]──\\s+\\w+\\s{2,}#"
+        message: "Use single space before comment marker"
+      # Reject missing spaces after comment marker
+      - pattern: "#\\S"
+        message: "Include space after comment marker"
+
+  - type: suggest
+    message: |
+      When creating ASCII filesystem trees:
+
+      1. Use consistent indentation:
+         ```
+         project/
+         ├── src/            # Source code directory
+         │   ├── main.py     # Application entry point
+         │   └── utils.py    # Utility functions
+         └── tests/          # Test suite directory
+             ├── unit/       # Unit tests
+             └── e2e/        # End-to-end tests
+         ```
+
+      2. Align all comments:
+         - Find the longest filename + indentation
+         - Add single space after filename
+         - Add spaces until comment markers align
+         - Add single space after comment marker
+
+      3. Use standard tree characters:
+         - `├──` for non-last items
+         - `└──` for last items
+         - `│` for vertical lines
+         - Two spaces after markers
+
+examples:
+  - input: |
+      # Bad: Misaligned comments
+      project/
+      ├── src/ # Source directory
+      │   ├── main.py # Main entry point
+      │   └── utils.py        # Utilities
+      └── tests/   # Test directory
+          ├── unit/ # Unit tests
+          └── e2e/  # End-to-end tests
+
+      # Good: Properly aligned comments
+      project/
+      ├── src/              # Source directory
+      │   ├── main.py      # Main entry point
+      │   └── utils.py     # Utilities
+      └── tests/           # Test directory
+          ├── unit/        # Unit tests
+          └── e2e/         # End-to-end tests
+
+  - input: |
+      # Bad: Inconsistent spacing
+      app/
+      ├── core/  # Core components
+      │   ├── scheduler.py# Scheduler service
+      │   └── config.py    #Configuration
+      └── utils/#Utilities
+
+      # Good: Consistent spacing
+      app/
+      ├── core/           # Core components
+      │   ├── scheduler.py # Scheduler service
+      │   └── config.py   # Configuration
+      └── utils/          # Utilities
+
+functions:
+  calculate_alignment: |
+    def calculate(tree_lines):
+      """Calculate proper alignment for comments."""
+      max_length = 0
+      for line in tree_lines:
+        if '#' in line:
+          content = line.split('#')[0].rstrip()
+          max_length = max(max_length, len(content))
+      return max_length + 1
+
+  format_tree: |
+    def format(tree_lines):
+      """Format tree with aligned comments."""
+      alignment = calculate_alignment(tree_lines)
+      formatted = []
+      for line in tree_lines:
+        if '#' in line:
+          content, comment = line.split('#', 1)
+          padding = ' ' * (alignment - len(content.rstrip()))
+          formatted.append(f"{content.rstrip()}{padding}# {comment.lstrip()}")
+        else:
+          formatted.append(line)
+      return formatted
+
+metrics:
+  - name: comment_alignment
+    type: gauge
+    labels: ["file_path"]
+  - name: formatting_fixes
+    type: counter
+    labels: ["fix_type"]
+
+metadata:
+  priority: medium
+  version: 1.0
+  tags:
+    - formatting
+    - documentation
+    - readability
+  changelog:
+    - 1.0: Initial version with comment alignment rules
+</rule> 

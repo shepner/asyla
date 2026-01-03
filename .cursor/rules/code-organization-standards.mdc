@@ -1,0 +1,312 @@
+---
+description: Guidelines for code organization, documentation, and best practices
+globs: ["*.py", "*.js", "*.ts", "*.java", "*.cpp", "*.cs", "*.go", "*.rs", "*.rb", "*.php"]
+alwaysApply: true
+---
+---
+description: Code Organization Guidelines
+globs: ["**/*.{py,js,ts,java,cpp,cs,go,rs,rb,php}"]
+alwaysApply: false
+---
+
+# Code Organization Guidelines
+
+Rules for ensuring code is well-organized, documented, and follows language best practices.
+
+<rule>
+name: code-organization
+description: Standards for code organization, documentation, and maintainability
+filters:
+  # Match source code files
+  - type: file_extension
+    pattern: "\\.(py|js|ts|java|cpp|cs|go|rs|rb|php)$"
+  # Match code organization patterns
+  - type: content
+    pattern: "(class|function|method|def|interface|struct|module|package|namespace)"
+  # Match documentation patterns
+  - type: content
+    pattern: "(#|//|/\\*|'''|\"\"\"|///|<!--)"
+
+actions:
+  - type: reject
+    conditions:
+      # Reject missing module/file documentation
+      - pattern: "^(?!(\\s*[#/*'\"].*@file|\\s*[#/*'\"].*@module|\\s*[#/*'\"].*@package))"
+        message: "Add file-level documentation explaining the module's purpose"
+      # Reject undocumented public functions/classes
+      - pattern: "^\\s*(public\\s+|export\\s+)?(?:class|function|def)\\s+\\w+.*?(?!\\s*[#/*'\"])"
+        message: "Document public functions and classes with description, parameters, and return values"
+      # Reject overly long functions (>50 lines)
+      - pattern: "(?s)(function|def).*?\\{.*^.{50,}\\}"
+        message: "Break down long functions into smaller, focused units"
+      # Reject deep nesting (>3 levels)
+      - pattern: "^\\s{12,}"
+        message: "Avoid deep nesting. Extract logic into well-named functions"
+      # Reject unclear variable names
+      - pattern: "\\b[a-z]\\b|\\b[ixn]\\b"
+        message: "Use descriptive variable names that explain their purpose"
+      # Reject missing error handling
+      - pattern: "try\\s*\\{[^}]*\\}\\s*catch\\s*\\([^)]*\\)\\s*\\{\\s*\\}"
+        message: "Implement proper error handling with logging and recovery"
+
+  - type: suggest
+    message: |
+      When organizing code:
+
+      1. File Structure:
+         - Start with file-level documentation
+         - Group imports logically
+         - Define constants and configurations
+         - Declare types and interfaces
+         - Implement main functionality
+         - Include helper functions last
+         - Keep files focused and cohesive
+
+      2. Documentation Standards:
+         - File/module purpose and overview
+         - Class/function descriptions
+         - Parameter explanations
+         - Return value details
+         - Example usage
+         - Edge cases and limitations
+         - Complex logic explanations
+         - Update history if needed
+
+      3. Code Organization:
+         - Group related functionality
+         - Use consistent naming patterns
+         - Keep functions focused
+         - Limit function length
+         - Maintain clear hierarchy
+         - Use meaningful separation
+         - Follow language conventions
+
+      4. Function Structure:
+         - Document purpose and usage
+         - Validate inputs first
+         - Handle errors explicitly
+         - Keep logic linear
+         - Extract complex operations
+         - Return early when possible
+         - Clean up resources properly
+
+      5. Readability:
+         - Use descriptive names
+         - Add clarifying comments
+         - Format consistently
+         - Break up complex logic
+         - Use whitespace effectively
+         - Keep lines reasonable length
+         - Follow style guides
+
+      6. Maintainability:
+         - Write self-documenting code
+         - Avoid magic numbers
+         - Extract configurations
+         - Use constants for values
+         - Implement error handling
+         - Add logging points
+         - Consider future changes
+
+examples:
+  - input: |
+      # Bad: Poor organization and documentation
+      def p(x):
+          y = []
+          for i in x:
+              if i > 0:
+                  y.append(i * 2)
+          return y
+
+      # Good: Well-organized and documented code
+      """
+      @file: data_processor.py
+      Data processing utilities for transforming and validating numeric sequences.
+      
+      This module provides functions for processing numeric data, including
+      filtering, transformation, and validation operations.
+      """
+
+      from typing import List, Optional
+      import logging
+
+      # Constants for configuration
+      MIN_VALUE = 0
+      MULTIPLIER = 2
+
+      def process_positive_numbers(numbers: List[float]) -> List[float]:
+          """
+          Process a list of numbers, doubling all positive values.
+          
+          Args:
+              numbers: List of numeric values to process
+                      Each value should be a float or integer
+          
+          Returns:
+              List of processed values, containing only doubled positive numbers
+          
+          Example:
+              >>> process_positive_numbers([1, -2, 3])
+              [2, 6]
+          """
+          try:
+              # Input validation
+              if not numbers:
+                  logging.warning("Empty input list provided")
+                  return []
+              
+              # Process numbers using list comprehension for efficiency
+              processed = [
+                  num * MULTIPLIER 
+                  for num in numbers 
+                  if num > MIN_VALUE
+              ]
+              
+              # Log processing results
+              logging.debug(
+                  "Processed %d numbers, retained %d positives",
+                  len(numbers),
+                  len(processed)
+              )
+              
+              return processed
+              
+          except TypeError as e:
+              logging.error("Invalid input type: %s", str(e))
+              raise ValueError("Input must be a list of numbers") from e
+
+  - input: |
+      // Bad: Unclear organization and missing documentation
+      class DataHandler {
+          process(data) {
+              let result = {};
+              for(let i in data) {
+                  if(data[i].active) {
+                      let v = data[i].value;
+                      if(v > 0) {
+                          result[i] = v * 2;
+                      }
+                  }
+              }
+              return result;
+          }
+      }
+
+      // Good: Clear organization with comprehensive documentation
+      /**
+       * @file DataProcessor.ts
+       * Handles data processing and transformation operations.
+       * 
+       * This module provides utilities for processing structured data,
+       * with support for filtering, validation, and transformation.
+       */
+
+      import { Logger } from './logger';
+      import { 
+          ProcessingConfig,
+          ProcessingResult,
+          DataItem 
+      } from './types';
+
+      // Configuration constants
+      const CONFIG = {
+          MULTIPLIER: 2,
+          MIN_VALUE: 0,
+          MAX_BATCH_SIZE: 1000
+      } as const;
+
+      /**
+       * Handles data processing operations with validation and transformation.
+       */
+      export class DataProcessor {
+          private readonly logger: Logger;
+          
+          constructor(logger: Logger) {
+              this.logger = logger;
+          }
+          
+          /**
+           * Process active data items, doubling positive values.
+           * 
+           * @param data - Map of data items to process
+           * @param config - Optional processing configuration
+           * @returns Processed data items
+           * 
+           * @example
+           * const processor = new DataProcessor(logger);
+           * const result = processor.processActiveItems({
+           *     item1: { active: true, value: 5 }
+           * });
+           * // result: { item1: 10 }
+           */
+          public processActiveItems(
+              data: Record<string, DataItem>,
+              config?: ProcessingConfig
+          ): ProcessingResult {
+              try {
+                  // Input validation
+                  this.validateInput(data);
+                  
+                  // Initialize result object
+                  const result: ProcessingResult = {};
+                  
+                  // Process each item
+                  Object.entries(data).forEach(([key, item]) => {
+                      if (this.shouldProcessItem(item)) {
+                          result[key] = this.transformValue(item.value);
+                      }
+                  });
+                  
+                  // Log processing results
+                  this.logger.debug(
+                      `Processed ${Object.keys(data).length} items, ` +
+                      `retained ${Object.keys(result).length}`
+                  );
+                  
+                  return result;
+                  
+              } catch (error) {
+                  this.logger.error('Processing failed:', error);
+                  throw new Error('Data processing failed');
+              }
+          }
+          
+          /**
+           * Determine if an item should be processed based on its state.
+           * @private
+           */
+          private shouldProcessItem(item: DataItem): boolean {
+              return item.active && item.value > CONFIG.MIN_VALUE;
+          }
+          
+          /**
+           * Transform a value according to processing rules.
+           * @private
+           */
+          private transformValue(value: number): number {
+              return value * CONFIG.MULTIPLIER;
+          }
+          
+          /**
+           * Validate input data structure and types.
+           * @private
+           */
+          private validateInput(data: Record<string, DataItem>): void {
+              if (!data || typeof data !== 'object') {
+                  throw new Error('Invalid input: must be an object');
+              }
+          }
+      }
+
+metadata:
+  priority: high
+  version: 1.0
+  tags:
+    - code-organization
+    - documentation
+    - best-practices
+    - readability
+    - maintainability
+  changelog:
+    - 1.0: Initial version with comprehensive code organization guidelines
+</rule> 

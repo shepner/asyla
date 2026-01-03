@@ -1,0 +1,294 @@
+---
+description: Guidelines for strict enforcement of all Cursor rules
+globs: ["**/*"]
+alwaysApply: true
+---
+---
+description: Rule Enforcement Guidelines
+globs: ["**/*"]
+alwaysApply: true
+---
+
+# Rule Enforcement Guidelines
+
+Guidelines for ensuring strict compliance with all Cursor rules.
+
+<rule>
+name: rule-enforcement
+description: Standards for enforcing rule compliance
+filters:
+  # Match all relevant files
+  - type: any_file
+    pattern: ".*"
+  # Match git operations
+  - type: git_event
+    pattern: "(commit|push|merge)"
+  # Match IDE operations
+  - type: ide_event
+    pattern: "(save|open|close)"
+
+actions:
+  - type: validate
+    conditions:
+      # Basic validation
+      - check: "has_required_properties"
+        message: "Missing required properties"
+      - check: "no_forbidden_properties"
+        message: "Contains forbidden properties"
+      - check: "os_compatibility"
+        message: "OS compatibility check failed"
+      
+      # Structure validation
+      - check: "validate_file_structure"
+        message: "Invalid file structure"
+      - check: "validate_metadata"
+        message: "Invalid metadata"
+      - check: "validate_examples"
+        message: "Insufficient examples"
+      
+      # Documentation validation
+      - check: "validate_documentation"
+        message: "Insufficient documentation"
+      - check: "validate_descriptions"
+        message: "Missing or unclear descriptions"
+      
+      # Dependency validation
+      - check: "validate_dependencies"
+        message: "Invalid dependencies"
+      - check: "validate_references"
+        message: "Invalid references"
+      
+      # Performance validation
+      - check: "validate_performance"
+        message: "Performance requirements not met"
+      - check: "validate_patterns"
+        message: "Pattern complexity exceeds limit"
+
+  - type: enforce
+    conditions:
+      # Enforce rule compliance
+      - check: "rule_compliance"
+        action: "block_operation"
+        message: "Operation blocked due to rule violation"
+      - check: "dependency_compliance"
+        action: "block_operation"
+        message: "Operation blocked due to dependency violation"
+      - check: "performance_compliance"
+        action: "warn"
+        message: "Performance warning: rule processing slow"
+
+  - type: report
+    conditions:
+      # Generate compliance report
+      - check: "generate_report"
+        action: "create_report"
+        format: "json"
+        include: [
+          "violations",
+          "suggestions",
+          "compliance_score",
+          "performance_metrics",
+          "dependency_graph",
+          "documentation_coverage"
+        ]
+
+functions:
+  has_required_properties: |
+    def check():
+      """
+      Check if all required properties are present.
+      Returns (is_compliant, missing_properties).
+      """
+      required = config.validation.required_properties
+      missing = []
+      for prop in required:
+        if not has_property(prop):
+          missing.append(prop)
+      return len(missing) == 0, missing
+
+  no_forbidden_properties: |
+    def check():
+      """
+      Check if any forbidden properties are present.
+      Returns (is_compliant, forbidden_properties).
+      """
+      forbidden = config.validation.forbidden_properties
+      found = []
+      for prop in forbidden:
+        if has_property(prop):
+          found.append(prop)
+      return len(found) == 0, found
+
+  os_compatibility: |
+    def check():
+      """
+      Check OS compatibility.
+      Returns (is_compatible, issues).
+      """
+      current_os = get_current_os()
+      supported = config.compatibility.supported_os
+      return current_os in supported, []
+
+  validate_file_structure: |
+    def check():
+      """
+      Validate rule file structure.
+      Returns (is_valid, issues).
+      """
+      issues = []
+      # Check file size
+      if file_size_kb > config.validation.max_file_size_kb:
+        issues.append("File exceeds size limit")
+      # Check required sections
+      for section in config.validation.required_properties:
+        if not has_section(section):
+          issues.append(f"Missing required section: {section}")
+      return len(issues) == 0, issues
+
+  validate_metadata: |
+    def check():
+      """
+      Validate rule metadata.
+      Returns (is_valid, issues).
+      """
+      issues = []
+      # Check required metadata
+      for field in config.validation.required_metadata:
+        if not has_metadata(field):
+          issues.append(f"Missing required metadata: {field}")
+      # Check metadata format
+      if not is_valid_version(metadata.version):
+        issues.append("Invalid version format")
+      if not is_valid_priority(metadata.priority):
+        issues.append("Invalid priority value")
+      return len(issues) == 0, issues
+
+  validate_documentation: |
+    def check():
+      """
+      Validate rule documentation.
+      Returns (is_valid, issues).
+      """
+      issues = []
+      # Check documentation length
+      if len(description) < config.validation.min_documentation_length:
+        issues.append("Documentation too short")
+      # Check examples
+      if len(examples) < config.validation.min_examples:
+        issues.append("Insufficient examples")
+      # Check documentation quality
+      if not has_clear_descriptions():
+        issues.append("Unclear descriptions")
+      return len(issues) == 0, issues
+
+  validate_dependencies: |
+    def check():
+      """
+      Validate rule dependencies.
+      Returns (is_valid, issues).
+      """
+      issues = []
+      # Check dependency graph
+      if has_circular_dependencies():
+        issues.append("Circular dependencies detected")
+      # Check dependency references
+      if has_invalid_references():
+        issues.append("Invalid dependency references")
+      # Check dependency versions
+      if has_incompatible_versions():
+        issues.append("Incompatible dependency versions")
+      return len(issues) == 0, issues
+
+  validate_performance: |
+    def check():
+      """
+      Validate rule performance.
+      Returns (is_valid, issues).
+      """
+      issues = []
+      # Check validation time
+      if validation_time_ms > config.performance.max_validation_time_ms:
+        issues.append("Validation too slow")
+      # Check pattern complexity
+      if pattern_complexity > config.performance.max_pattern_complexity:
+        issues.append("Pattern too complex")
+      # Check resource usage
+      if exceeds_resource_limits():
+        issues.append("Exceeds resource limits")
+      return len(issues) == 0, issues
+
+examples:
+  - input: |
+      # Bad: Non-compliant rule
+      ---
+      description: "Example rule"
+      globs: ["${workspace}/**/*"]
+      user_settings:
+        path: "/home/user/.cursor"
+
+      # Good: Compliant rule
+      ---
+      description: "Example rule with comprehensive documentation"
+      globs: ["**/*.mdc"]
+      alwaysApply: true
+      config:
+        validation:
+          required_properties: ["description", "globs"]
+        compatibility:
+          supported_os: ["linux", "darwin", "windows"]
+      filters:
+        - type: file_extension
+          pattern: "\\.mdc$"
+      actions:
+        - type: validate
+          conditions:
+            - check: "has_required_properties"
+      examples:
+        - input: "Bad example"
+          output: "Good example"
+      metadata:
+        priority: high
+        version: 1.0
+        tags: ["validation", "compliance"]
+        changelog:
+          - 1.0: Initial version
+
+metrics:
+  - name: rule_violations
+    type: counter
+    labels: ["rule_name", "violation_type"]
+  - name: enforcement_actions
+    type: counter
+    labels: ["action_type", "result"]
+  - name: validation_performance
+    type: histogram
+    labels: ["check_type"]
+  - name: blocked_operations
+    type: counter
+    labels: ["operation_type", "reason"]
+  - name: auto_fixes
+    type: counter
+    labels: ["rule_name", "fix_type"]
+  - name: dependency_issues
+    type: counter
+    labels: ["rule_name", "issue_type"]
+  - name: documentation_coverage
+    type: gauge
+    labels: ["rule_name"]
+  - name: performance_metrics
+    type: histogram
+    labels: ["metric_type", "rule_name"]
+
+metadata:
+  priority: critical
+  version: 1.0
+  tags:
+    - enforcement
+    - compliance
+    - validation
+    - monitoring
+    - performance
+    - documentation
+  changelog:
+    - 1.0: Initial version with comprehensive enforcement capabilities
+</rule> 

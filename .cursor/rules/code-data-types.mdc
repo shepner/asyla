@@ -1,0 +1,110 @@
+---
+description: Guidelines for handling data types and type conversions
+globs: ["*.py", "*.sql", "*.json", "*.yaml", "*.yml"]
+alwaysApply: true
+---
+---
+description: "Data types rule. Update this description."
+globs: ["**/*.py"]
+alwaysApply: false
+---
+
+# Data Types Guidelines
+
+Rules for consistent data type handling and conversions across the codebase.
+
+<rule>
+name: data_types
+description: Standards for handling data types, conversions, and validation
+filters:
+  # Match Python files
+  - type: file_extension
+    pattern: "\\.py$"
+  # Match SQL files
+  - type: file_extension
+    pattern: "\\.sql$"
+  # Match config files
+  - type: file_extension
+    pattern: "\\.(json|ya?ml)$"
+  # Match data type related content
+  - type: content
+    pattern: "(dtype|astype|convert|cast|type)"
+
+actions:
+  - type: suggest
+    message: |
+      When handling data types:
+
+      1. BigQuery Type Mapping:
+         - Use INTEGER instead of INT64 for integer fields
+         - Use FLOAT instead of FLOAT64 for floating-point fields
+         - Use DATETIME for datetime fields (not TIMESTAMP)
+         - Use BOOLEAN for boolean fields
+         - Use STRING for text fields
+
+      2. Pandas DataFrame Conversions:
+         - Always check column types before and after conversion using df.dtypes.to_dict()
+         - Use pd.to_numeric(errors='coerce') for numeric conversions
+         - Use astype('Int64') for nullable integer columns
+         - Log raw values before attempting any type conversion
+         - Handle NULL/None values explicitly before type conversion
+         - Verify data type consistency after conversion
+
+      3. Type Validation:
+         - Validate all column types match BigQuery schema
+         - Check for type mismatches before upload
+         - Handle type conversion errors gracefully
+         - Log type conversion failures with sample data
+         - Ensure consistent type mapping across all operations
+
+      4. DATETIME vs TIMESTAMP:
+         - Always use DATETIME for datetime fields in BigQuery
+         - Convert pandas datetime64[ns] to DATETIME in BigQuery
+         - When schema type mismatches occur between DATETIME and TIMESTAMP:
+           - Drop and recreate the table with the correct DATETIME type
+           - Log the schema change for tracking
+         - Handle timezone information appropriately:
+           - DATETIME stores local time without timezone
+           - Ensure consistent timezone handling across the pipeline
+
+examples:
+  - input: |
+      # Bad: Using TIMESTAMP instead of DATETIME
+      df['timestamp'] = pd.to_datetime(df['timestamp'])
+      bq_table.schema = [
+          bigquery.SchemaField("timestamp", "TIMESTAMP"),
+      ]
+
+      # Good: Using DATETIME with proper handling
+      def handle_datetime_conversion(df, column):
+          # Log original values
+          original_values = df[column].head()
+          logging.debug(f"Converting {column}, sample values: {original_values}")
+          
+          # Convert to datetime if needed
+          if not pd.api.types.is_datetime64_any_dtype(df[column].dtype):
+              df[column] = pd.to_datetime(df[column], errors='coerce')
+          
+          # Log converted values
+          logging.debug(f"Converted {column} to {df[column].dtype}")
+          return df
+
+      # Handle schema type mismatch
+      if type_mismatches:
+          logging.info("Schema type mismatches detected. Dropping and recreating table...")
+          client.delete_table(table_ref, not_found_ok=True)
+          table = bigquery.Table(table_ref, schema=new_schema)
+          client.create_table(table)
+          logging.info("Table recreated with DATETIME schema")
+
+metadata:
+  priority: high
+  version: 1.1
+  tags:
+    - data-types
+    - conversion
+    - validation
+    - datetime
+  changelog:
+    - 1.0: Initial version with comprehensive type handling guidelines
+    - 1.1: Added DATETIME vs TIMESTAMP handling guidelines 

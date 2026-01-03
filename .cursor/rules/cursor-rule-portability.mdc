@@ -1,0 +1,191 @@
+---
+description: Guidelines for ensuring rules are portable across workspaces
+globs: ["**/*.mdc"]
+alwaysApply: true
+---
+---
+description: Rule Portability Guidelines
+globs: ["**/*.mdc"]
+alwaysApply: false
+---
+
+# Rule Portability Guidelines
+
+Guidelines for ensuring rules can be easily migrated between workspaces.
+
+<rule>
+name: rule-portability
+description: Standards for making rules portable across workspaces
+filters:
+  # Match rule files
+  - type: file_extension
+    pattern: "\\.mdc$"
+  # Match potential portability issues
+  - type: content
+    pattern: "(path|directory|location|workspace|user|environment)"
+
+actions:
+  - type: validate
+    conditions:
+      # Check for absolute paths
+      - pattern: "[\"\']?/[\\w/.-]+"
+        message: "Use relative paths instead of absolute paths"
+        fix: "convert_to_relative_path"
+      # Check for workspace-specific references
+      - pattern: "\\$\\{workspace\\}"
+        message: "Use portable workspace references"
+        fix: "use_portable_reference"
+      # Check for user-specific settings
+      - pattern: "\\$\\{user\\.|\\$\\{home\\."
+        message: "Avoid user-specific settings"
+        fix: "use_configurable_setting"
+
+  - type: migrate
+    tasks:
+      # Prepare for migration
+      - trigger: "pre_migration"
+        action: "validate_portability"
+        halt_on_error: true
+      # Perform migration
+      - trigger: "during_migration"
+        action: "adapt_to_workspace"
+        preserve_history: true
+      # Verify migration
+      - trigger: "post_migration"
+        action: "verify_migration"
+        run_tests: true
+
+  - type: maintain
+    conditions:
+      # Track rule usage
+      - check: "rule_usage_tracking"
+        action: "update_usage_stats"
+      # Monitor compatibility
+      - check: "compatibility_check"
+        action: "flag_compatibility_issues"
+      # Update references
+      - check: "reference_validation"
+        action: "update_references"
+
+functions:
+  validate_portability: |
+    def validate():
+      """
+      Validate that rules are portable.
+      Returns (is_portable, issues).
+      """
+      issues = []
+      # Check for absolute paths
+      issues.extend(find_absolute_paths())
+      # Check for workspace-specific refs
+      issues.extend(find_workspace_refs())
+      # Check for user-specific settings
+      issues.extend(find_user_settings())
+      return len(issues) == 0, issues
+
+  adapt_to_workspace: |
+    def adapt(new_workspace):
+      """
+      Adapt rules to new workspace.
+      Returns (success, adaptations).
+      """
+      adaptations = []
+      # Update paths
+      adaptations.extend(update_paths(new_workspace))
+      # Update references
+      adaptations.extend(update_references(new_workspace))
+      # Update configurations
+      adaptations.extend(update_configs(new_workspace))
+      return all(a['success'] for a in adaptations), adaptations
+
+  verify_migration: |
+    def verify():
+      """
+      Verify successful rule migration.
+      Returns (success, verification_results).
+      """
+      results = []
+      # Verify rule loading
+      results.append(verify_rule_loading())
+      # Verify rule application
+      results.append(verify_rule_application())
+      # Verify rule interactions
+      results.append(verify_rule_interactions())
+      return all(r['success'] for r in results), results
+
+examples:
+  - input: |
+      # Bad: Non-portable rule
+      <rule>
+      name: build-process
+      actions:
+        - type: execute
+          command: "/home/user/scripts/build.sh"
+          working_directory: "/absolute/path/to/workspace"
+      environment:
+        USER_CONFIG: "${user.config_dir}/settings.json"
+      </rule>
+
+      # Good: Portable rule
+      <rule>
+      name: build-process
+      actions:
+        - type: execute
+          command: "${scripts}/build.sh"
+          working_directory: "${workspace}"
+      environment:
+        USER_CONFIG: "${config}/settings.json"
+      </rule>
+
+  - input: |
+      # Migrating rules between workspaces
+      
+      # Source workspace structure:
+      .cursor/rules/
+      ├── 00-meta/
+      ├── 10-code/
+      ├── 20-data/
+      └── ...
+      
+      # Migration process:
+      1. Validate portability
+      2. Copy directory structure
+      3. Adapt paths and references
+      4. Verify functionality
+      
+      # Verification results:
+      [SUCCESS] All rules migrated successfully:
+      - 17 rules validated
+      - 0 absolute paths found
+      - 0 workspace-specific refs
+      - 0 user-specific settings
+      - All tests passing
+
+metrics:
+  - name: migration_attempts
+    type: counter
+    labels: ["source_workspace", "target_workspace"]
+  - name: portability_issues
+    type: counter
+    labels: ["issue_type", "rule_name"]
+  - name: migration_success
+    type: gauge
+    labels: ["workspace"]
+  - name: adaptation_count
+    type: counter
+    labels: ["adaptation_type"]
+  - name: verification_results
+    type: histogram
+    labels: ["check_type", "result"]
+
+metadata:
+  priority: high
+  version: 1.0
+  tags:
+    - portability
+    - migration
+    - workspace
+    - compatibility
+  changelog:
+    - 1.0: Initial version with comprehensive portability guidelines
+</rule> 

@@ -1,0 +1,115 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+---
+description: "Markdown Documentation Standards"
+globs: ["**/*.md"]
+alwaysApply: false
+---
+
+# Markdown Documentation Standards
+
+## Overview
+Standards for maintaining consistent markdown documentation across the repository.
+
+<rule>
+name: markdown-documentation
+description: Standards for markdown documentation structure and formatting
+filters:
+  # Match markdown files
+  - type: file_extension
+    pattern: "\\.md$"
+  # Match frontmatter and navigation sections
+  - type: content
+    pattern: "(---|Parent::|Child::|tags:)"
+
+actions:
+  - type: validate
+    conditions:
+      # Check for frontmatter
+      - pattern: "^---\\n.*?\\n---"
+        message: "Document must start with YAML frontmatter"
+      # Check for navigation section
+      - pattern: "\\*\\*Navigation:\\*\\*\\s*\\n\\s*-\\s*Parent::"
+        message: "Include navigation section with Parent/Peer/Child links"
+      # Check for main heading
+      - pattern: "^#\\s+[A-Za-z0-9]"
+        message: "Document must have a main heading"
+      # Check for tags
+      - pattern: "tags:\\s*\\n\\s*-\\s*"
+        message: "Include relevant tags in frontmatter"
+
+  - type: suggest
+    message: |
+      When writing markdown documentation:
+
+      1. Document Structure:
+         - Start with YAML frontmatter
+         - Include navigation section
+         - Use clear main heading
+         - Add relevant tags
+         - Include source if applicable
+
+      2. Navigation:
+         - Link to parent document
+         - List peer documents
+         - List child documents
+         - Use relative paths
+         - Maintain bidirectional links
+
+      3. Content Organization:
+         - Use hierarchical headings
+         - Include overview section
+         - Add table of contents for long docs
+         - Use consistent formatting
+         - Include examples where appropriate
+
+      4. Metadata:
+         - Use appropriate tags
+         - Include source references
+         - Add last updated date
+         - Note related documents
+         - Track version history
+
+examples:
+  - input: |
+      ---
+      source: internal
+      tags:
+        - security
+        - architecture
+      ---
+
+      **Navigation:**
+
+      - Parent:: [Security Architecture](mdc:../Security/Architecture.md)
+      - Peer:: [Controls](mdc:../Controls/Controls.md)
+      - Child:: [Implementation](mdc:Implementation.md)
+
+      # Document Title
+
+      ## Overview
+
+      Brief overview of the document's purpose.
+
+      ## Table of Contents
+
+      1. [Section One](mdc:#section-one)
+      2. [Section Two](mdc:#section-two)
+
+      ## Section One
+
+      Content for section one...
+
+metadata:
+  priority: high
+  version: 1.0
+  tags:
+    - documentation
+    - markdown
+    - structure
+  changelog:
+    - 1.0: Initial version with comprehensive markdown standards
+</rule> 

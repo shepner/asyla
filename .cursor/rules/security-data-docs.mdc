@@ -1,0 +1,139 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+---
+description: "Standards for documenting data classification, security controls, and compliance requirements."
+globs: ["Data/**/*.md", "Controls/**/*.md"]
+alwaysApply: false
+---
+
+# Data Classification and Security Documentation Standards
+
+## Overview
+Standards for documenting data classification, security controls, and compliance requirements.
+
+<rule>
+name: data-security-docs
+description: Standards for data classification and security documentation
+filters:
+  # Match data classification and security files
+  - type: file_pattern
+    pattern: "(Data/.*|Controls/.*)\\.md$"
+  # Match content patterns
+  - type: content
+    pattern: "(Classification:|Security Level:|Controls:|Compliance:)"
+
+actions:
+  - type: validate
+    conditions:
+      # Check for required sections
+      - pattern: "^##\\s*Classification"
+        message: "Include Classification section"
+      - pattern: "^##\\s*Security Requirements"
+        message: "Include Security Requirements section"
+      - pattern: "^##\\s*Controls"
+        message: "Include Controls section"
+      - pattern: "^##\\s*Compliance"
+        message: "Include Compliance section"
+      # Check for classification level
+      - pattern: "Classification:\\s*(Public|Internal|Confidential|Restricted)"
+        message: "Classification must be one of: Public, Internal, Confidential, Restricted"
+      # Check for security level
+      - pattern: "Security Level:\\s*(Low|Medium|High|Critical)"
+        message: "Security Level must be one of: Low, Medium, High, Critical"
+
+  - type: suggest
+    message: |
+      When documenting data classification and security:
+
+      1. Classification Structure:
+         - Clear data classification level
+         - Security impact level
+         - Required controls
+         - Compliance requirements
+         - Handling procedures
+
+      2. Classification Levels:
+         - Public: No restrictions
+         - Internal: Company use only
+         - Confidential: Limited access
+         - Restricted: Strictly controlled
+
+      3. Security Requirements:
+         - Access controls
+         - Encryption requirements
+         - Monitoring needs
+         - Retention periods
+         - Disposal methods
+
+      4. Documentation Elements:
+         - Data types covered
+         - Security controls
+         - Compliance mappings
+         - Risk assessment
+         - Incident response
+
+examples:
+  - input: |
+      ---
+      source: internal
+      tags:
+        - data
+        - security
+        - classification
+      ---
+
+      **Navigation:**
+
+      - Parent:: [Data Classification Index](mdc:../Data.md)
+      - Peer:: [PII Data](mdc:PII-Data.md)
+      - Child:: 
+
+      # Financial Data Classification
+
+      ## Classification
+
+      Classification: Restricted
+      Security Level: Critical
+
+      ## Security Requirements
+
+      - End-to-end encryption required
+      - Multi-factor authentication
+      - Audit logging mandatory
+      - Regular access reviews
+
+      ## Controls
+
+      ### Technical Controls
+      - Encryption at rest and in transit
+      - Access control lists
+      - Activity monitoring
+
+      ### Administrative Controls
+      - Access approval process
+      - Regular training
+      - Periodic audits
+
+      ## Compliance
+
+      - SOX requirements
+      - PCI DSS standards
+      - Internal audit controls
+
+      ## Related Documents
+
+      - [Security Controls](mdc:../Controls/Financial-Controls.md)
+      - [Encryption Standards](mdc:../Controls/Encryption.md)
+
+metadata:
+  priority: high
+  version: 1.0
+  tags:
+    - data
+    - security
+    - classification
+  changelog:
+    - 1.0: Initial version with comprehensive data security standards 

@@ -1,0 +1,252 @@
+---
+description: Standards for implementing secure coding practices and handling sensitive data
+globs: ["*.py", "*.js", "*.ts", "*.java", "*.cpp", "*.cs", "*.go", "*.rs", "*.rb", "*.php", "*.{json,yaml,yml,toml,ini,conf}"]
+alwaysApply: true
+---
+---
+description: Security Best Practices
+globs: ["**/*.{py,js,ts,java,cpp,cs,go,rs,rb,php}"]
+alwaysApply: false
+---
+
+# Security Standards
+
+Rules for implementing secure coding practices and handling sensitive data.
+
+<rule>
+name: code-security
+description: Standards for implementing secure coding practices and handling sensitive data
+filters:
+  # Match source code files
+  - type: file_extension
+    pattern: "\\.(py|js|ts|java|cpp|cs|go|rs|rb|php)$"
+  # Match configuration files
+  - type: file_extension
+    pattern: "\\.(json|yaml|yml|toml|ini|conf)$"
+  # Match security patterns
+  - type: content
+    pattern: "(password|secret|key|token|credential|encrypt|decrypt|hash|salt)"
+
+actions:
+  - type: validate
+    conditions:
+      # Check for hardcoded secrets
+      - pattern: "\\b(?:password|secret|key|token)\\s*=\\s*['\"][^'\"]+['\"]"
+        message: "Do not hardcode sensitive values"
+      # Check for unsafe SQL
+      - pattern: "execute\\(['\"].*?\\$\\{.*?\\}.*?['\"]\\)"
+        message: "Use parameterized queries to prevent SQL injection"
+      # Check for unsafe file operations
+      - pattern: "open\\(.*?\\+.*?['\"]w['\"]\\)"
+        message: "Use safe file operations with proper permissions"
+
+  - type: suggest
+    message: |
+      When implementing security:
+
+      1. Data Protection:
+         - Encrypt sensitive data
+         - Use secure algorithms
+         - Implement proper key management
+         - Hash passwords with salt
+         - Secure data transmission
+         - Implement access controls
+         - Audit data access
+
+      2. Input Validation:
+         - Validate all inputs
+         - Sanitize user data
+         - Prevent injection attacks
+         - Use parameterized queries
+         - Implement rate limiting
+         - Validate file uploads
+         - Check data types
+
+      3. Authentication:
+         - Use secure authentication
+         - Implement proper session management
+         - Use secure password policies
+         - Implement MFA where possible
+         - Handle failed login attempts
+         - Secure password reset
+         - Use secure tokens
+
+      4. Configuration:
+         - Secure configuration storage
+         - Use environment variables
+         - Implement secrets management
+         - Secure API keys
+         - Use secure defaults
+         - Regular security updates
+         - Monitor security events
+
+examples:
+  - input: |
+      # Bad: Insecure password handling
+      def check_password(password):
+          if password == "admin123":
+              return True
+          return False
+
+      # Good: Secure password handling
+      from passlib.hash import pbkdf2_sha256
+      from secrets import token_bytes
+
+      def check_password(password: str, stored_hash: str) -> bool:
+          salt = token_bytes(16)
+          return pbkdf2_sha256.verify(password, stored_hash)
+
+  - input: |
+      # Bad: SQL injection vulnerability
+      def get_user(username):
+          query = f"SELECT * FROM users WHERE username = '{username}'"
+          return execute(query)
+
+      # Good: Parameterized query
+      def get_user(username: str):
+          query = "SELECT * FROM users WHERE username = %s"
+          return execute(query, (username,))
+
+metadata:
+  priority: high
+  version: 1.0
+  tags:
+    - security
+    - encryption
+    - authentication
+  changelog:
+    - 1.0: Initial version with comprehensive security guidelines
+
+## Overview
+Standards for implementing secure coding practices across the project.
+
+## Configuration
+globs: ["*.py", "*.sql", "*.sh"]
+priority: critical
+
+## Rules
+
+### Input Validation
+1. User Input
+   - Validate all input data
+   - Use parameterized queries
+   - Sanitize user input
+   - Implement input size limits
+   - Check data types
+
+2. API Security
+   - Validate API responses
+   - Handle timeouts appropriately
+   - Implement rate limiting
+   - Use secure protocols (HTTPS)
+   - Monitor API usage
+
+### Data Protection
+1. Sensitive Data
+   - Never hardcode credentials
+   - Use environment variables
+   - Encrypt sensitive data
+   - Implement access controls
+   - Log access attempts
+
+2. Error Handling
+   - Don't expose system details
+   - Log securely
+   - Handle errors gracefully
+   - Implement timeouts
+   - Use secure defaults
+
+## Examples
+
+### Secure API Handling
+```python
+import requests
+from urllib.parse import urljoin
+from typing import Optional
+import os
+
+def fetch_api_data(endpoint: str, params: Optional[dict] = None) -> dict:
+    """Securely fetch data from API with proper error handling.
+    
+    Args:
+        endpoint: API endpoint path
+        params: Optional query parameters
+        
+    Returns:
+        API response data
+        
+    Raises:
+        APIError: If API request fails
+        ValidationError: If response validation fails
+    """
+    api_key = os.getenv('API_KEY')
+    if not api_key:
+        raise SecurityError("API key not configured")
+        
+    base_url = "https://api.torn.com/v2/"
+    url = urljoin(base_url, endpoint)
+    
+    try:
+        response = requests.get(
+            url,
+            params=params,
+            headers={'Authorization': f'Bearer {api_key}'},
+            timeout=30
+        )
+        response.raise_for_status()
+        
+        data = response.json()
+        validate_response(data)
+        return data
+        
+    except requests.exceptions.Timeout:
+        raise APIError("API request timed out")
+    except requests.exceptions.RequestException as e:
+        raise APIError(f"API request failed: {e}")
+```
+
+### Secure SQL Query
+```python
+from google.cloud import bigquery
+from typing import List, Any
+
+def query_member_data(member_ids: List[int]) -> List[dict]:
+    """Securely query member data using parameterized query.
+    
+    Args:
+        member_ids: List of member IDs to query
+        
+    Returns:
+        List of member data records
+    """
+    client = bigquery.Client()
+    
+    query = """
+        SELECT 
+            m.id,
+            m.name,
+            m.level
+        FROM `torncity-402423.torn_data.v2_faction_members` m
+        WHERE m.id IN UNNEST(@member_ids)
+    """
+    
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ArrayQueryParameter(
+                "member_ids",
+                "INT64",
+                member_ids
+            )
+        ]
+    )
+    
+    try:
+        query_job = client.query(query, job_config=job_config)
+        return [dict(row) for row in query_job]
+    finally:
+        client.close()
+```
+
+## Version History
+- 1.0: Initial version
+- 1.1: Added TCdatalogger specific security examples 

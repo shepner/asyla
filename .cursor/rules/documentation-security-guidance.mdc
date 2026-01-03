@@ -1,0 +1,156 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+---
+description: "Standards for documenting security guidance, procedures, and best practices."
+globs: ["**/*.md"]
+alwaysApply: false
+---
+
+# Security Guidance Documentation Standards
+
+## Overview
+Standards for documenting security guidance, procedures, and best practices.
+
+<rule>
+name: guidance-docs
+description: Standards for security guidance documentation
+filters:
+  # Match guidance files
+  - type: file_pattern
+    pattern: "Guidance/.*\\.md$"
+  # Match content patterns
+  - type: content
+    pattern: "(Purpose:|Scope:|Guidelines:|Implementation:)"
+
+actions:
+  - type: validate
+    conditions:
+      # Check for required sections
+      - pattern: "^##\\s*Purpose"
+        message: "Include Purpose section"
+      - pattern: "^##\\s*Scope"
+        message: "Include Scope section"
+      - pattern: "^##\\s*Guidelines"
+        message: "Include Guidelines section"
+      - pattern: "^##\\s*Implementation"
+        message: "Include Implementation section"
+      # Check for metadata
+      - pattern: "^---\\n(.*\\n)*tags:"
+        message: "Include YAML frontmatter with tags"
+      # Check for navigation
+      - pattern: "\\*\\*Navigation:\\*\\*"
+        message: "Include navigation section"
+
+  - type: suggest
+    message: |
+      When writing security guidance documentation:
+
+      1. Document Structure:
+         - Clear purpose statement
+         - Well-defined scope
+         - Detailed guidelines
+         - Implementation steps
+         - References and resources
+
+      2. Content Organization:
+         - Executive summary
+         - Technical details
+         - Process flows
+         - Best practices
+         - Common pitfalls
+
+      3. Implementation Guide:
+         - Step-by-step instructions
+         - Configuration examples
+         - Validation steps
+         - Troubleshooting tips
+         - Success criteria
+
+      4. Supporting Elements:
+         - Diagrams and visuals
+         - Code examples
+         - Reference architectures
+         - Compliance mappings
+         - Review checklist
+
+examples:
+  - input: |
+      ---
+      source: internal
+      tags:
+        - guidance
+        - security
+        - best-practices
+      ---
+
+      **Navigation:**
+
+      - Parent:: [Security Guidance](mdc:../Guidance.md)
+      - Peer:: [Access Control](mdc:Access-Control.md)
+      - Child:: 
+
+      # Multi-Factor Authentication Implementation Guide
+
+      ## Purpose
+
+      This document provides guidance for implementing Multi-Factor Authentication (MFA) across enterprise applications.
+
+      ## Scope
+
+      - All production systems
+      - User-facing applications
+      - Administrative interfaces
+      - Remote access systems
+
+      ## Guidelines
+
+      ### Authentication Methods
+      - Something you know (password)
+      - Something you have (token)
+      - Something you are (biometric)
+
+      ### Security Requirements
+      - Minimum token length
+      - Acceptable authenticator apps
+      - Hardware token standards
+      - Backup procedures
+
+      ## Implementation
+
+      ### Step 1: Planning
+      - System inventory
+      - Risk assessment
+      - User impact analysis
+
+      ### Step 2: Configuration
+      - Identity provider setup
+      - Application integration
+      - User enrollment process
+
+      ### Step 3: Testing
+      - Unit tests
+      - Integration tests
+      - User acceptance
+
+      ### Step 4: Deployment
+      - Phased rollout
+      - User communication
+      - Support procedures
+
+      ## Related Documents
+
+      - [Identity Management](mdc:../Controls/Identity.md)
+      - [Access Control Policy](mdc:../Controls/Access-Control.md)
+
+metadata:
+  priority: high
+  version: 1.0
+  tags:
+    - guidance
+    - security
+    - documentation
+  changelog:
+    - 1.0: Initial version with comprehensive guidance standards 

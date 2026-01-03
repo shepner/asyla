@@ -1,0 +1,141 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+---
+description: "Standards for implementing security best practices across the project."
+globs: ["**/*.py", "**/*.sql", "**/*.sh", "**/Dockerfile", "**/docker-compose.yml"]
+alwaysApply: false
+---
+
+# Security Best Practices
+
+## Overview
+Standards for implementing security best practices across the project.
+
+## Configuration
+globs: ["*.py", "*.sql", "*.sh", "Dockerfile", "docker-compose.yml"]
+priority: critical
+
+## Rules
+
+### API Security
+1. API Key Management
+   - Never commit API keys to source control
+   - Use environment variables or secure vaults
+   - Rotate keys regularly
+   - Monitor API usage
+
+2. Authentication & Authorization
+   - Implement proper authentication
+   - Use role-based access control
+   - Validate all requests
+   - Log access attempts
+
+### Data Security
+1. Sensitive Data Handling
+   - Encrypt sensitive data at rest
+   - Use secure transport (HTTPS/TLS)
+   - Implement data masking
+   - Regular security audits
+
+2. Database Security
+   - Use principle of least privilege
+   - Implement connection pooling
+   - Regular backup procedures
+   - Monitor database access
+
+### Container Security
+1. Docker Security
+   - Use official base images
+   - Keep images updated
+   - Run as non-root user
+   - Scan for vulnerabilities
+
+2. Runtime Security
+   - Limit container capabilities
+   - Use read-only file systems
+   - Monitor container resources
+   - Implement health checks
+
+## Examples
+
+### Secure API Key Handling
+```python
+import os
+from google.cloud import secretmanager
+
+def get_api_key() -> str:
+    """Securely retrieve API key from environment or secret manager."""
+    # Try environment variable first
+    api_key = os.getenv('TORN_API_KEY')
+    if api_key:
+        return api_key
+        
+    # Fall back to Secret Manager
+    client = secretmanager.SecretManagerServiceClient()
+    name = f"projects/{project_id}/secrets/torn-api-key/versions/latest"
+    response = client.access_secret_version(request={"name": name})
+    return response.payload.data.decode("UTF-8")
+```
+
+### Secure Dockerfile
+```dockerfile
+# Use specific version
+FROM python:3.11-slim
+
+# Create non-root user
+RUN groupadd -r appuser && useradd -r -g appuser appuser
+
+# Set working directory
+WORKDIR /app
+
+# Copy requirements first for better caching
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY . .
+
+# Set ownership
+RUN chown -R appuser:appuser /app
+
+# Use non-root user
+USER appuser
+
+# Use read-only filesystem where possible
+VOLUME ["/app/data", "/app/logs"]
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s \
+  CMD curl -f http://localhost/health || exit 1
+
+CMD ["python", "main.py"]
+```
+
+### Secure Database Access
+```python
+from contextlib import contextmanager
+from google.cloud import bigquery
+
+@contextmanager
+def get_bigquery_client():
+    """Get a secure BigQuery client with proper credentials."""
+    client = None
+    try:
+        client = bigquery.Client()
+        yield client
+    finally:
+        if client:
+            client.close()
+
+def query_data(query: str) -> bigquery.table.RowIterator:
+    """Execute BigQuery query with secure client."""
+    with get_bigquery_client() as client:
+        return client.query(query).result()
+```
+
+## Version History
+- 1.0: Initial version
+- 1.1: Added Torn City specific security examples 

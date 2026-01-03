@@ -1,0 +1,28 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+---
+description: "Rules for implementing comprehensive security isolation capabilities."
+globs: ["**/*.{py,js,ts,java,cpp,cs,go,rs,rb,php,yaml,yml,json,xml,conf,properties}"]
+alwaysApply: false
+---
+
+# Security Isolation Standards
+
+Rules for implementing comprehensive security isolation capabilities.
+
+<rule>
+# Security Isolation Standards
+
+Rules for implementing comprehensive security isolation capabilities.
+
+<rule>
+# Security Isolation Standards
+
+Rules for implementing comprehensive security isolation capabilities.
+
+<rule>
+name: security-isolate
+// ... existing code ... 

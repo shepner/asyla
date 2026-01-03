@@ -1,0 +1,191 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+---
+description: Rules for implementing comprehensive security detection capabilities.
+globs: ["**/*"]
+alwaysApply: true
+---
+
+# Security Detection Standards
+
+Rules for implementing comprehensive security detection capabilities.
+
+<rule>
+name: code-detect
+description: Standards for implementing security detection mechanisms aligned with security capabilities
+filters:
+  - type: file_extension
+    pattern: "\\.(py|js|ts|java|cpp|cs|go|rs|rb|php|log|yaml|yml|json|xml|conf|properties)$"
+  - type: content
+    pattern: "(monitor|detect|alert|log|audit|event|incident|anomaly|threat|intrusion)"
+
+actions:
+  - type: validate
+    conditions:
+      # Logging Validations
+      - pattern: "\\b(?:error|exception|failure).*?\\b(?:print|console\\.log)\\b"
+        message: "Use proper logging mechanisms instead of print statements"
+      
+      - pattern: "\\b(?:password|secret|key|token).*?\\b(?:log|print|debug)\\b"
+        message: "Do not log sensitive information"
+      
+      # Monitoring Validations
+      - pattern: "\\b(?:while\\s*true|infinite\\s*loop)\\b"
+        message: "Implement proper monitoring intervals and timeouts"
+      
+      - pattern: "\\b(?:catch|except)\\s*{\\s*}\\b"
+        message: "Do not suppress exceptions without proper handling and logging"
+      
+      # Detection Validations
+      - pattern: "\\b(?:admin|root).*?\\b(?:login|access|auth)\\b"
+        message: "Monitor and log privileged access attempts"
+      
+      - pattern: "\\b(?:delete|drop|truncate).*?\\b(?:database|table|collection)\\b"
+        message: "Monitor and alert on critical data operations"
+
+  - type: suggest
+    message: |
+      Implement detection following these capability areas:
+
+      1. Logging and Monitoring:
+         - Centralized Logging
+         - Log Aggregation
+         - Log Analysis
+         - Performance Monitoring
+         - Resource Monitoring
+         - User Activity Monitoring
+         - System State Monitoring
+
+      2. Security Event Detection:
+         - Intrusion Detection
+         - Threat Detection
+         - Anomaly Detection
+         - Behavioral Analysis
+         - Pattern Recognition
+         - Signature Detection
+         - Heuristic Analysis
+
+      3. Incident Detection:
+         - Security Incidents
+         - Performance Incidents
+         - Availability Incidents
+         - Data Incidents
+         - Access Incidents
+         - Compliance Incidents
+         - Service Incidents
+
+      4. Alert Management:
+         - Alert Generation
+         - Alert Prioritization
+         - Alert Correlation
+         - Alert Routing
+         - Alert Escalation
+         - Alert Resolution
+         - False Positive Management
+
+      5. Audit Capabilities:
+         - Access Auditing
+         - Change Auditing
+         - Configuration Auditing
+         - Data Auditing
+         - Process Auditing
+         - Security Auditing
+         - Compliance Auditing
+
+      6. Detection Response:
+         - Automated Response
+         - Manual Response
+         - Incident Triage
+         - Threat Containment
+         - Evidence Collection
+         - Impact Assessment
+         - Response Documentation
+
+examples:
+  - input: |
+      # Bad: Poor detection implementation
+      def process_login(user, password):
+          try:
+              if check_credentials(user, password):
+                  print(f"User {user} logged in")  # Poor logging
+                  return True
+          except:  # Bare except
+              pass  # Silent failure
+          return False
+      
+      # Good: Comprehensive detection
+      from typing import Optional
+      import logging
+      from datetime import datetime
+      import json
+
+      class SecurityMonitor:
+          def __init__(self):
+              self._logger = logging.getLogger("security")
+              self._alert_threshold = 3
+              self._failed_attempts = {}
+              
+          def monitor_login(self, user: str, ip_address: str, success: bool) -> None:
+              """Monitor login attempts with proper logging and alerting."""
+              try:
+                  event = {
+                      "timestamp": datetime.utcnow().isoformat(),
+                      "event_type": "login_attempt",
+                      "user": user,
+                      "ip_address": ip_address,
+                      "success": success,
+                      "location": self._get_location(ip_address)
+                  }
+                  
+                  # Log the event
+                  self._logger.info("Login attempt", extra={"event": json.dumps(event)})
+                  
+                  # Monitor for suspicious activity
+                  if not success:
+                      self._track_failed_attempt(user, ip_address)
+                      
+                  # Audit logging for successful attempts
+                  if success:
+                      self._audit_successful_login(event)
+                      
+              except Exception as e:
+                  self._logger.error(f"Monitoring error: {str(e)}", exc_info=True)
+                  self._alert_monitoring_failure(e)
+                  
+          def _track_failed_attempt(self, user: str, ip_address: str) -> None:
+              """Track failed login attempts and detect potential threats."""
+              key = f"{user}:{ip_address}"
+              current = self._failed_attempts.get(key, 0) + 1
+              self._failed_attempts[key] = current
+              
+              if current >= self._alert_threshold:
+                  self._alert_suspicious_activity(user, ip_address, current)
+                  
+          def _alert_suspicious_activity(self, user: str, ip_address: str, attempts: int) -> None:
+              """Generate security alert for suspicious activity."""
+              alert = {
+                  "severity": "HIGH",
+                  "type": "suspicious_login",
+                  "user": user,
+                  "ip_address": ip_address,
+                  "failed_attempts": attempts,
+                  "timestamp": datetime.utcnow().isoformat()
+              }
+              self._logger.warning("Suspicious login activity detected", 
+                                 extra={"alert": json.dumps(alert)})
+
+metadata:
+  priority: critical
+  version: 1.0
+  tags:
+    - security
+    - detection
+    - monitoring
+    - logging
+    - alerting
+    - auditing
+  changelog:
+    - 1.0: Initial version with comprehensive detection capabilities 

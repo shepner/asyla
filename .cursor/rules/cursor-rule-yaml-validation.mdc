@@ -1,0 +1,197 @@
+---
+description: Validates YAML frontmatter in Cursor rules
+globs: ["rules/*.mdc"]
+alwaysApply: true
+---
+---
+description: Rule YAML Frontmatter Validation
+globs: ["**/*.mdc"]
+alwaysApply: false
+---
+
+# YAML Frontmatter Validation
+
+This rule ensures that all Cursor rules have valid YAML frontmatter with required properties.
+
+## Description
+
+Validates the YAML frontmatter of Cursor rules to ensure they contain all required properties and don't contain forbidden ones.
+
+## Config
+
+```yaml
+validation:
+  required_properties:
+    - description
+    - globs
+    - alwaysApply
+  forbidden_properties:
+    - absolute_paths
+    - workspace_specific_refs
+    - user_specific_settings
+```
+
+## Filters
+
+```python
+def check(file_path: str) -> bool:
+    """Check if file is a Cursor rule."""
+    return file_path.endswith('.mdc') and file_path.startswith('rules/')
+```
+
+## Actions
+
+```python
+def validate_yaml_frontmatter(file_path: str) -> tuple[bool, list[str]]:
+    """Validate YAML frontmatter in a rule file."""
+    issues = []
+    
+    try:
+        with open(file_path, 'r') as f:
+            content = f.read()
+            
+        # Extract YAML frontmatter
+        parts = content.split('---')
+        if len(parts) < 2:
+            issues.append("Missing YAML frontmatter (no --- markers)")
+            return False, issues
+            
+        yaml_content = parts[1].strip()
+        try:
+            yaml_data = yaml.safe_load(yaml_content) or {}
+        except yaml.YAMLError as e:
+            issues.append(f"Invalid YAML: {str(e)}")
+            return False, issues
+            
+        # Check required properties
+        for prop in ['description', 'globs', 'alwaysApply']:
+            if prop not in yaml_data:
+                issues.append(f"Missing required property: {prop}")
+                
+        # Check forbidden properties
+        for prop in ['absolute_paths', 'workspace_specific_refs', 'user_specific_settings']:
+            if prop in yaml_data:
+                issues.append(f"Contains forbidden property: {prop}")
+                
+        return len(issues) == 0, issues
+        
+    except Exception as e:
+        return False, [f"Error validating YAML: {str(e)}"]
+
+def apply_fix(file_path: str, issue: str) -> bool:
+    """Apply a fix for a YAML validation issue."""
+    try:
+        with open(file_path, 'r') as f:
+            content = f.read()
+            
+        # Handle missing YAML frontmatter
+        if "Missing YAML frontmatter" in issue:
+            new_content = "---\ndescription: \"Rule description goes here\"\nglobs: [\"*.py\"]\nalwaysApply: true\n---\n\n" + content
+            with open(file_path, 'w') as f:
+                f.write(new_content)
+            return True
+            
+        # Handle missing required properties
+        if "Missing required property" in issue:
+            prop = issue.split(": ")[1]
+            parts = content.split('---')
+            if len(parts) >= 2:
+                yaml_content = parts[1].strip()
+                try:
+                    yaml_data = yaml.safe_load(yaml_content) or {}
+                    if prop == 'description':
+                        yaml_data[prop] = "Rule description goes here"
+                    elif prop == 'globs':
+                        yaml_data[prop] = ["*.py"]
+                    elif prop == 'alwaysApply':
+                        yaml_data[prop] = True
+                        
+                    new_yaml = yaml.dump(yaml_data, default_flow_style=False)
+                    new_content = parts[0] + "---\n" + new_yaml + "\n---" + "".join(parts[2:])
+                    with open(file_path, 'w') as f:
+                        f.write(new_content)
+                    return True
+                except:
+                    return False
+                    
+        # Handle forbidden properties
+        if "Contains forbidden property" in issue:
+            prop = issue.split(": ")[1]
+            parts = content.split('---')
+            if len(parts) >= 2:
+                yaml_content = parts[1].strip()
+                try:
+                    yaml_data = yaml.safe_load(yaml_content) or {}
+                    if prop in yaml_data:
+                        del yaml_data[prop]
+                        new_yaml = yaml.dump(yaml_data, default_flow_style=False)
+                        new_content = parts[0] + "---\n" + new_yaml + "\n---" + "".join(parts[2:])
+                        with open(file_path, 'w') as f:
+                            f.write(new_content)
+                        return True
+                except:
+                    return False
+                    
+    except Exception as e:
+        print(f"Error applying fix: {str(e)}")
+        
+    return False
+```
+
+## Examples
+
+Example 1: Valid YAML frontmatter
+```yaml
+---
+description: "Valid rule description"
+globs: ["*.py"]
+alwaysApply: true
+---
+
+# Rule content here
+```
+
+Example 2: Invalid YAML frontmatter (missing required properties)
+```yaml
+---
+# Missing description and globs
+alwaysApply: true
+---
+
+# Rule content here
+```
+
+## Metrics
+
+```python
+def collect_metrics(file_path: str) -> dict:
+    """Collect metrics about YAML validation."""
+    with open(file_path, 'r') as f:
+        content = f.read()
+        
+    parts = content.split('---')
+    if len(parts) < 2:
+        return {"has_yaml": False}
+        
+    yaml_content = parts[1].strip()
+    try:
+        yaml_data = yaml.safe_load(yaml_content) or {}
+        return {
+            "has_yaml": True,
+            "has_required_props": all(prop in yaml_data for prop in ['description', 'globs', 'alwaysApply']),
+            "has_forbidden_props": any(prop in yaml_data for prop in ['absolute_paths', 'workspace_specific_refs', 'user_specific_settings'])
+        }
+    except yaml.YAMLError:
+        return {"has_yaml": False}
+```
+
+## Metadata
+
+```yaml
+category: validation
+severity: error
+tags:
+  - yaml
+  - frontmatter
+  - validation
+``` 

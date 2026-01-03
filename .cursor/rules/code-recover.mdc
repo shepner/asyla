@@ -1,0 +1,212 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+---
+description: Security Recovery Standards
+globs: ["**/*.{py,js,ts,java,cpp,cs,go,rs,rb,php,yaml,yml,json,xml,conf,properties}"]
+alwaysApply: false
+---
+
+# Security Recovery Standards
+
+Rules for implementing comprehensive security recovery capabilities.
+
+<rule>
+name: code-recover
+description: Standards for implementing security recovery mechanisms aligned with security capabilities
+filters:
+  - type: file_extension
+    pattern: "\\.(py|js|ts|java|cpp|cs|go|rs|rb|php|yaml|yml|json|xml|conf|properties)$"
+  - type: content
+    pattern: "(recover|restore|backup|failover|rollback|revert|repair|heal|archive)"
+
+actions:
+  - type: validate
+    conditions:
+      # Recovery Process Validations
+      - pattern: "\\b(?:restore|recover).*?\\b(?:without|no).*?\\b(?:verify|validate)\\b"
+        message: "Validate all recovery operations"
+      
+      - pattern: "\\b(?:backup|archive).*?\\b(?:plain|clear|unencrypted)\\b"
+        message: "Ensure backups are encrypted"
+      
+      # Failover Validations
+      - pattern: "\\b(?:failover|switchover).*?\\b(?:without|no).*?\\b(?:test|check)\\b"
+        message: "Validate failover operations"
+      
+      # Data Recovery Validations
+      - pattern: "\\b(?:restore|recover).*?\\b(?:data|backup).*?\\b(?:skip|bypass).*?\\b(?:integrity|validation)\\b"
+        message: "Verify data integrity during recovery"
+
+  - type: suggest
+    message: |
+      Implement recovery following these capability areas:
+
+      1. System Recovery:
+         - Recovery Planning
+         - Recovery Procedures
+         - Recovery Testing
+         - Recovery Validation
+         - Recovery Documentation
+         - Recovery Metrics
+         - Recovery Review
+
+      2. Data Recovery:
+         - Backup Management
+         - Restore Procedures
+         - Data Validation
+         - Integrity Checks
+         - Version Control
+         - Archive Management
+         - Recovery Testing
+
+      3. Service Recovery:
+         - Service Restoration
+         - Failover Procedures
+         - Load Balancing
+         - Health Checks
+         - Performance Recovery
+         - Capacity Management
+         - Service Testing
+
+      4. Access Recovery:
+         - Identity Recovery
+         - Credential Reset
+         - Permission Recovery
+         - Access Validation
+         - Session Management
+         - Token Management
+         - Access Testing
+
+      5. Business Recovery:
+         - Business Continuity
+         - Disaster Recovery
+         - Impact Assessment
+         - Recovery Priorities
+         - Stakeholder Communication
+         - Resource Management
+         - Recovery Metrics
+
+      6. Infrastructure Recovery:
+         - Network Recovery
+         - System Recovery
+         - Storage Recovery
+         - Database Recovery
+         - Application Recovery
+         - Configuration Recovery
+         - Infrastructure Testing
+
+examples:
+  - input: |
+      # Bad: Poor recovery implementation
+      def restore_backup(backup_file):
+          with open(backup_file, 'rb') as f:
+              data = f.read()
+          restore_data(data)  # No validation
+          return True  # No verification
+      
+      # Good: Comprehensive recovery
+      from typing import Optional, Dict, Any
+      import logging
+      from datetime import datetime
+      import hashlib
+      import json
+
+      class SystemRecovery:
+          def __init__(self):
+              self._logger = logging.getLogger("security.recovery")
+              self._backup_manager = BackupManager()
+              self._integrity_checker = IntegrityChecker()
+              
+          def recover_system(self, recovery_point: str) -> bool:
+              """Perform system recovery with proper validation and logging."""
+              try:
+                  # Log recovery initiation
+                  recovery_id = self._log_recovery_start(recovery_point)
+                  
+                  # Validate recovery point
+                  if not self._validate_recovery_point(recovery_point):
+                      raise ValueError("Invalid recovery point")
+                  
+                  # Create recovery plan
+                  plan = self._create_recovery_plan(recovery_point)
+                  
+                  # Execute recovery with validation
+                  success = self._execute_recovery(recovery_id, plan)
+                  
+                  # Verify recovery
+                  if success:
+                      success = self._verify_recovery(recovery_id, plan)
+                  
+                  # Document recovery
+                  self._document_recovery(recovery_id, plan, success)
+                  
+                  return success
+                  
+              except Exception as e:
+                  self._logger.error(f"Recovery error: {str(e)}", exc_info=True)
+                  self._handle_recovery_failure(recovery_point, e)
+                  return False
+                  
+          def _execute_recovery(self, recovery_id: str, plan: Dict[str, Any]) -> bool:
+              """Execute recovery plan with proper validation and logging."""
+              try:
+                  for step in plan["steps"]:
+                      # Log step initiation
+                      self._log_recovery_step(recovery_id, step, "start")
+                      
+                      # Execute step with validation
+                      if step["type"] == "restore":
+                          success = self._execute_restore(step)
+                      elif step["type"] == "reconfigure":
+                          success = self._execute_reconfigure(step)
+                      elif step["type"] == "validate":
+                          success = self._execute_validation(step)
+                      
+                      # Log step completion
+                      self._log_recovery_step(recovery_id, step, "complete", success)
+                      
+                      if not success:
+                          self._handle_step_failure(recovery_id, step)
+                          return False
+                          
+                  return True
+                  
+              except Exception as e:
+                  self._logger.error(f"Recovery execution error: {str(e)}", 
+                                   exc_info=True)
+                  return False
+                  
+          def _verify_recovery(self, recovery_id: str, plan: Dict[str, Any]) -> bool:
+              """Verify recovery success with comprehensive checks."""
+              try:
+                  checks = [
+                      self._verify_system_state(),
+                      self._verify_data_integrity(),
+                      self._verify_service_health(),
+                      self._verify_access_controls(),
+                      self._verify_configurations()
+                  ]
+                  
+                  return all(checks)
+                  
+              except Exception as e:
+                  self._logger.error(f"Recovery verification error: {str(e)}", 
+                                   exc_info=True)
+                  return False
+
+metadata:
+  priority: critical
+  version: 1.0
+  tags:
+    - security
+    - recovery
+    - backup
+    - restore
+    - failover
+    - business-continuity
+    - disaster-recovery
+  changelog:
+    - 1.0: Initial version with comprehensive recovery capabilities 

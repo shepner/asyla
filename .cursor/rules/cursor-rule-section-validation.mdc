@@ -1,0 +1,194 @@
+---
+description: Validates required sections in Cursor rules
+globs: ["rules/*.mdc"]
+alwaysApply: true
+---
+---
+description: Rule Section Validation
+globs: ["**/*.mdc"]
+alwaysApply: false
+---
+
+# Section Validation
+
+This rule ensures that all Cursor rules have the required sections in their markdown content.
+
+## Description
+
+Validates that each Cursor rule contains all required sections in its markdown content, such as Description, Config, Filters, Actions, Examples, Metrics, and Metadata.
+
+## Config
+
+```yaml
+validation:
+  required_sections:
+    - Description
+    - Config
+    - Filters
+    - Actions
+    - Examples
+    - Metrics
+    - Metadata
+```
+
+## Filters
+
+```python
+def check(file_path: str) -> bool:
+    """Check if file is a Cursor rule."""
+    return file_path.endswith('.mdc') and file_path.startswith('rules/')
+```
+
+## Actions
+
+```python
+def validate_sections(file_path: str) -> tuple[bool, list[str]]:
+    """Validate required sections in a rule file."""
+    issues = []
+    
+    try:
+        with open(file_path, 'r') as f:
+            content = f.read()
+            
+        # Skip YAML frontmatter
+        parts = content.split('---')
+        if len(parts) >= 3:
+            content = parts[2]
+            
+        # Find all section headers
+        section_headers = set()
+        for line in content.split('\n'):
+            if line.startswith('## '):
+                section_headers.add(line[3:].strip())
+                
+        # Check required sections
+        required_sections = {
+            'Description', 'Config', 'Filters', 'Actions',
+            'Examples', 'Metrics', 'Metadata'
+        }
+        
+        missing_sections = required_sections - section_headers
+        if missing_sections:
+            issues.extend(f"Missing required section: {section}" for section in missing_sections)
+            
+        return len(issues) == 0, issues
+        
+    except Exception as e:
+        return False, [f"Error validating sections: {str(e)}"]
+
+def apply_fix(file_path: str, issue: str) -> bool:
+    """Apply a fix for a missing section."""
+    try:
+        with open(file_path, 'r') as f:
+            content = f.read()
+            
+        # Extract the section name from the issue
+        section = issue.split(": ")[1]
+        
+        # Skip YAML frontmatter
+        parts = content.split('---')
+        if len(parts) >= 3:
+            content = parts[2]
+            
+        # Add the missing section
+        new_section = f"\n## {section}\n\n"
+        if section == 'Examples':
+            new_section += "Example 1:\n```python\n# Example code here\n```\n\n"
+            new_section += "Example 2:\n```python\n# Another example here\n```\n"
+        elif section in ['Description', 'Config', 'Filters', 'Actions', 'Metrics', 'Metadata']:
+            new_section += f"{section} content goes here\n"
+            
+        # Write the updated content
+        new_content = parts[0] + "---" + parts[1] + "---" + content + new_section
+        with open(file_path, 'w') as f:
+            f.write(new_content)
+        return True
+        
+    except Exception as e:
+        print(f"Error applying fix: {str(e)}")
+        
+    return False
+```
+
+## Examples
+
+Example 1: Valid sections
+```markdown
+# Rule Title
+
+## Description
+Rule description here...
+
+## Config
+Config content...
+
+## Filters
+Filter content...
+
+## Actions
+Action content...
+
+## Examples
+Example content...
+
+## Metrics
+Metrics content...
+
+## Metadata
+Metadata content...
+```
+
+Example 2: Invalid sections (missing required sections)
+```markdown
+# Rule Title
+
+## Description
+Rule description here...
+
+## Config
+Config content...
+
+# Missing Filters, Actions, Examples, Metrics, and Metadata sections
+```
+
+## Metrics
+
+```python
+def collect_metrics(file_path: str) -> dict:
+    """Collect metrics about section validation."""
+    with open(file_path, 'r') as f:
+        content = f.read()
+        
+    # Skip YAML frontmatter
+    parts = content.split('---')
+    if len(parts) >= 3:
+        content = parts[2]
+        
+    # Find all section headers
+    section_headers = set()
+    for line in content.split('\n'):
+        if line.startswith('## '):
+            section_headers.add(line[3:].strip())
+            
+    required_sections = {
+        'Description', 'Config', 'Filters', 'Actions',
+        'Examples', 'Metrics', 'Metadata'
+    }
+    
+    return {
+        "total_sections": len(section_headers),
+        "missing_sections": len(required_sections - section_headers),
+        "has_all_required": required_sections.issubset(section_headers)
+    }
+```
+
+## Metadata
+
+```yaml
+category: validation
+severity: error
+tags:
+  - sections
+  - structure
+  - validation
+``` 

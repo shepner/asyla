@@ -1,0 +1,120 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+---
+description: "Standards for Git usage and version control practices across the project."
+globs: ["**/*"]
+alwaysApply: true
+---
+
+# Git Best Practices
+
+## Overview
+Standards for Git usage and version control practices across the project.
+
+## Configuration
+globs: ["*.git*", "*.md", "*.py", "*.sql", "*.sh"]
+priority: high
+
+## Rules
+
+### Commit Guidelines
+1. Commit Messages
+   - Use clear, descriptive commit messages
+   - Start with a verb in imperative mood
+   - Keep first line under 50 characters
+   - Add detailed description if needed
+   - Reference issues/tickets when applicable
+
+2. Commit Content
+   - Make atomic commits (one logical change)
+   - Don't mix refactoring with feature changes
+   - Don't commit generated files
+   - Don't commit sensitive information
+
+### Branch Management
+1. Branch Naming
+   - feature/description
+   - bugfix/description
+   - hotfix/description
+   - release/version
+
+2. Branch Strategy
+   - Keep main/master branch stable
+   - Create feature branches for new work
+   - Delete branches after merging
+   - Regular rebasing to avoid conflicts
+
+### Repository Organization
+1. Essential Files
+   - README.md with project overview
+   - .gitignore for project-specific exclusions
+   - LICENSE file
+   - Documentation in /docs
+
+2. Git Configuration
+   - Use .gitattributes for file handling
+   - Configure line endings appropriately
+   - Set up pre-commit hooks
+
+## Examples
+
+### Good Commit Messages
+```
+Add faction crime success rate calculation
+
+- Implement new SQL query for crime success rates
+- Add data validation for member participation
+- Update BigQuery schema for new metrics
+- Add unit tests for calculations
+
+Resolves #123
+```
+
+### .gitignore Example
+```gitignore
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+*.so
+.env
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Project specific
+config/TC_API_key.txt
+config/credentials.json
+*.log
+```
+
+### Pre-commit Hook Example
+```bash
+#!/bin/bash
+
+# Check for API keys
+if git diff --cached | grep -i "api[_-]key"; then
+    echo "WARNING: Possible API key in commit"
+    exit 1
+fi
+
+# Run tests
+python -m pytest
+if [ $? -ne 0 ]; then
+    echo "Tests must pass before commit"
+    exit 1
+fi
+```
+
+## Version History
+- 1.0: Initial version
+- 1.1: Added TCdatalogger specific examples 

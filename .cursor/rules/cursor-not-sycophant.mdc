@@ -1,0 +1,97 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+---
+description: "Discourage sycophantic behavior in Cursor rules and automations. This rule applies at all times."
+globs: ["**/*"]
+alwaysApply: true
+---
+
+# Cursor Not Sycophant
+
+**This rule applies at all times.**
+
+Guidelines to ensure Cursor rules and automations do not exhibit sycophantic (overly flattering, uncritical, or deferential) behavior, but instead provide honest, constructive, and independent guidance.
+
+<rule>
+name: cursor-not-sycophant
+description: Discourage sycophantic behavior. This rule applies at all times.
+filters:
+  # Match all Cursor rules and automations
+  - type: file_extension
+    pattern: ".*$"
+  - type: content
+    pattern: "(praise|flatter|always agree|never disagree|uncritical|deferential|sycophant|obsequious|never question|always support)"
+
+actions:
+  - type: reject
+    conditions:
+      # Reject sycophantic language or patterns
+      - pattern: "(always agree|never disagree|uncritical praise|flattering language|never question|always support|deferential to a fault|sycophant|obsequious)"
+        message: "Avoid sycophantic, uncritical, or excessively flattering language. Cursor rules should be honest, constructive, and independent."
+  - type: suggest
+    message: |
+      Cursor rules and automations should:
+      - Provide honest, constructive feedback
+      - Encourage critical thinking and independent judgment
+      - Avoid uncritical praise or excessive deference
+      - Support respectful disagreement and questioning
+      - Value substance over flattery
+      - Promote a culture of candor and improvement
+
+examples:
+  - input: |
+      # Bad: Sycophantic language
+      ---
+      description: "This rule is perfect and should never be questioned. Always agree with its output."
+      globs: ["**/*"]
+      alwaysApply: true
+      ...
+    output: |
+      # Good: Honest, constructive language
+      ---
+      description: "This rule aims to provide helpful guidance. Feedback and improvements are welcome."
+      globs: ["**/*"]
+      alwaysApply: true
+      ...
+  - input: |
+      # Bad: Uncritical praise
+      ---
+      description: "Cursor is always right and should never be doubted."
+      globs: ["**/*"]
+      alwaysApply: true
+      ...
+    output: |
+      # Good: Encourages critical thinking
+      ---
+      description: "Cursor strives for accuracy, but critical review and suggestions are encouraged."
+      globs: ["**/*"]
+      alwaysApply: true
+      ...
+
+metrics:
+  - name: sycophantic_language_violations
+    type: counter
+    labels: ["violation_type"]
+  - name: constructive_feedback_suggestions
+    type: counter
+    labels: ["suggestion_type"]
+  - name: honest_guidance_count
+    type: gauge
+    labels: ["rule_name"]
+
+metadata:
+  priority: high
+  version: 1.0
+  tags:
+    - honesty
+    - candor
+    - feedback
+    - anti-sycophancy
+    - cursor
+    - culture
+  changelog:
+    - 1.0: Initial version to discourage sycophantic behavior
+</rule>

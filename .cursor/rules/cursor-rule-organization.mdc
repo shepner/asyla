@@ -1,0 +1,195 @@
+---
+description: Guidelines for organizing and naming Cursor rules in a hierarchical structure
+globs: ["**/*.mdc"]
+alwaysApply: true
+---
+---
+description: Cursor Rules Organization
+globs: ["**/*.mdc"]
+alwaysApply: false
+---
+
+# Cursor Rules Organization
+
+Guidelines for organizing and naming Cursor rule files in a hierarchical structure.
+
+<rule>
+name: cursor-rules-organization
+description: Standards for organizing and naming Cursor rule files
+filters:
+  # Match rule files
+  - type: file_extension
+    pattern: ${config.patterns.rule_file}
+  # Match rule content
+  - type: content
+    pattern: ${config.patterns.rule_content}
+    max_complexity: ${config.performance.max_pattern_complexity}
+
+actions:
+  - type: reject
+    conditions:
+      # Directory structure validation
+      - pattern: "^(?!\\.\\/\\.cursor\\/rules\\)"
+        message: "Place rule files in appropriate directory"
+      # File extension validation
+      - pattern: "^(?!.*\\.mdc$)"
+        message: "Use .mdc extension for cursor rule files"
+        cache_result: true
+        cache_ttl: ${config.performance.cache_ttl_seconds}
+      # Naming convention validation
+      - pattern: "[A-Z]"
+        message: "Use kebab-case for rule file and directory names"
+        batch_size: ${config.performance.batch_size}
+      # Category prefix validation
+      - pattern: "^(?!.*/(code-|cursor-|git-|docker-))"
+        message: "Rule files must use appropriate category prefix"
+      # File size validation
+      - check: "file_size_kb <= ${config.validation.max_file_size_kb}"
+        message: "Rule file exceeds maximum size limit of 500KB"
+
+  - type: validate
+    conditions:
+      # Required sections validation
+      - check: "has_required_sections(${config.validation.required_sections})"
+        message: "Missing required sections in rule file"
+      # Required metadata validation
+      - check: "has_required_metadata(${config.validation.required_metadata})"
+        message: "Missing required metadata fields"
+      # Rule dependencies validation
+      - check: "validate_dependencies"
+        message: "Invalid rule dependencies"
+      # Documentation validation
+      - check: "validate_documentation"
+        message: "Insufficient documentation"
+      # Performance monitoring
+      - check: "performance_metrics_within_limits"
+        message: "Rule processing exceeds performance thresholds"
+
+  - type: suggest
+    message: |
+      When organizing Cursor rules:
+
+      1. File Structure:
+         - Keep files focused and single-purpose
+         - Maximum file size: 500KB
+         - Use kebab-case for filenames
+         - Follow category prefixes:
+           * code-* for code-related rules
+           * cursor-* for Cursor IDE specific rules
+           * git-* for git-related rules
+           * docker-* for Docker-related rules
+         - Use descriptive, specific names
+         - Place in appropriate directory structure
+
+      2. Rule Dependencies:
+         - Higher-level rules can reference lower-level rules
+         - Avoid circular dependencies
+         - Document rule relationships
+         - Use consistent references
+         - Validate dependencies on load
+         - Keep dependency graph acyclic
+         - Document dependency requirements
+
+      3. Documentation:
+         - Include clear descriptions
+         - Provide examples
+         - Document configuration options
+         - Explain rule interactions
+         - Keep documentation up to date
+         - Include usage guidelines
+         - Document edge cases
+
+      4. Performance:
+         - Use caching for expensive operations
+         - Implement batch processing
+         - Monitor rule processing
+         - Keep patterns simple
+         - Optimize validation
+         - Use efficient algorithms
+         - Profile rule execution
+
+      5. Version Control:
+         - Keep rules in version control
+         - Use meaningful commit messages
+         - Maintain a changelog
+         - Tag rule versions
+         - Document breaking changes
+         - Track rule history
+         - Support rollbacks
+
+      6. Portability:
+         - Avoid absolute paths
+         - Use relative paths
+         - Use environment variables
+         - Make rules workspace-agnostic
+         - Document workspace requirements
+         - Support cross-platform
+         - Handle path differences
+
+      7. Monitoring:
+         - Track rule violations
+         - Monitor performance
+         - Keep rules updated
+         - Remove obsolete rules
+         - Track usage patterns
+         - Monitor effectiveness
+         - Report issues
+
+examples:
+  - input: |
+      # Bad: Poor organization
+      .cursor/rules/00-meta/cursor-rules.mdc
+      /rules/error-handling.mdc
+      data-types.mdc
+      .cursor/rules/30-ops/docker/docker-optimization.mdc
+
+      # Good: Proper organization
+      .cursor/rules/
+      ├── code/
+      │   ├── code-style.mdc
+      │   ├── code-testing.mdc
+      │   └── code-security.mdc
+      ├── cursor/
+      │   ├── cursor-rule-organization.mdc
+      │   └── cursor-rule-enforcement.mdc
+      ├── git/
+      │   ├── git-best-practices.mdc
+      │   └── git-rules-sync.mdc
+      └── docker/
+          └── docker-optimization.mdc
+
+metrics:
+  - name: rule_processing_time
+    type: histogram
+    labels: ["rule_name", "action_type"]
+  - name: cache_hit_ratio
+    type: gauge
+    labels: ["rule_name"]
+  - name: validation_errors
+    type: counter
+    labels: ["rule_name", "error_type"]
+  - name: dependency_issues
+    type: counter
+    labels: ["rule_name", "issue_type"]
+  - name: documentation_coverage
+    type: gauge
+    labels: ["rule_name"]
+  - name: performance_metrics
+    type: histogram
+    labels: ["metric_type", "rule_name"]
+
+metadata:
+  priority: high
+  version: 2.0
+  tags:
+    - organization
+    - structure
+    - naming
+    - hierarchy
+    - validation
+    - performance
+    - documentation
+  changelog:
+    - 2.0: Updated with comprehensive organization, validation, and monitoring requirements
+    - 1.0: Initial version with basic organization guidelines
+</rule>

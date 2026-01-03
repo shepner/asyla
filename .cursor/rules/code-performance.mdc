@@ -1,0 +1,189 @@
+---
+description: Standards for optimizing code performance and resource usage
+globs: ["*.py", "*.js", "*.ts", "*.java", "*.cpp", "*.cs", "*.go", "*.rs", "*.rb", "*.php"]
+alwaysApply: true
+---
+---
+description: Standards for optimizing code performance and resource usage
+globs: ["**/*.{py,js,ts,java,cpp,cs,go,rs,rb,php}"]
+alwaysApply: false
+---
+
+# Performance Standards
+
+Rules for optimizing code performance and resource usage.
+
+<rule>
+name: code-performance
+description: Standards for optimizing code performance and resource usage
+filters:
+  # Match source code files
+  - type: file_extension
+    pattern: "\\.(py|js|ts|java|cpp|cs|go|rs|rb|php)$"
+  # Match performance patterns
+  - type: content
+    pattern: "(for\\s+.*?in|while|loop|cache|memory|optimize|performance)"
+
+actions:
+  - type: validate
+    conditions:
+      # Resource limits
+      - check: "validate_resource_usage"
+        message: "Resource usage exceeds limits"
+      # Performance metrics
+      - check: "validate_performance_metrics"
+        message: "Performance metrics outside acceptable range"
+      # Pattern complexity
+      - check: "validate_pattern_complexity"
+        message: "Pattern complexity too high"
+      # Optimization checks
+      - check: "validate_optimizations"
+        message: "Missing required optimizations"
+
+  - type: suggest
+    message: |
+      When optimizing performance:
+
+      1. Algorithm Optimization:
+         - Use efficient algorithms
+         - Optimize data structures
+         - Minimize iterations
+         - Use built-in functions
+         - Implement caching
+         - Batch operations
+         - Use async/await
+
+      2. Memory Management:
+         - Monitor memory usage
+         - Clean up resources
+         - Use generators
+         - Implement pagination
+         - Optimize data structures
+         - Handle large datasets
+         - Use memory profiling
+
+      3. Database Optimization:
+         - Use indexes
+         - Optimize queries
+         - Implement caching
+         - Use connection pooling
+         - Batch operations
+         - Monitor query performance
+         - Use appropriate types
+
+      4. Resource Management:
+         - Monitor system resources
+         - Implement rate limiting
+         - Use connection pooling
+         - Handle timeouts
+         - Track metrics
+         - Set limits
+         - Handle errors
+
+functions:
+  validate_resource_usage: |
+    def check():
+      """
+      Validate resource usage against limits.
+      Returns (is_valid, issues).
+      """
+      issues = []
+      # Check memory usage
+      if memory_usage > config.performance.limits.max_memory:
+        issues.append("Memory usage too high")
+      # Check CPU usage
+      if cpu_usage > config.performance.limits.max_cpu:
+        issues.append("CPU usage too high")
+      # Check connections
+      if connection_count > config.performance.limits.max_connections:
+        issues.append("Too many connections")
+      return len(issues) == 0, issues
+
+  validate_performance_metrics: |
+    def check():
+      """
+      Validate performance metrics.
+      Returns (is_valid, issues).
+      """
+      issues = []
+      # Check validation time
+      if validation_time_ms > config.performance.validation.max_validation_time_ms:
+        issues.append("Validation too slow")
+      # Check batch size
+      if batch_size > config.performance.validation.batch_size:
+        issues.append("Batch size too large")
+      # Check cache TTL
+      if cache_ttl > config.performance.validation.cache_ttl_seconds:
+        issues.append("Cache TTL too long")
+      return len(issues) == 0, issues
+
+  validate_pattern_complexity: |
+    def check():
+      """
+      Validate pattern complexity.
+      Returns (is_valid, issues).
+      """
+      issues = []
+      # Check pattern complexity
+      if pattern_complexity > config.performance.validation.max_pattern_complexity:
+        issues.append("Pattern too complex")
+      return len(issues) == 0, issues
+
+  validate_optimizations: |
+    def check():
+      """
+      Validate required optimizations.
+      Returns (is_valid, issues).
+      """
+      issues = []
+      # Check loop optimization
+      if config.performance.optimization.loops and not has_loop_optimization():
+        issues.append("Missing loop optimization")
+      # Check memory optimization
+      if config.performance.optimization.memory and not has_memory_optimization():
+        issues.append("Missing memory optimization")
+      # Check database optimization
+      if config.performance.optimization.database and not has_database_optimization():
+        issues.append("Missing database optimization")
+      # Check caching
+      if config.performance.optimization.caching and not has_caching():
+        issues.append("Missing caching")
+      return len(issues) == 0, issues
+
+metrics:
+  - name: resource_usage
+    type: gauge
+    labels: ["resource_type"]
+  - name: validation_time
+    type: histogram
+    labels: ["check_type"]
+  - name: pattern_complexity
+    type: gauge
+    labels: ["pattern_type"]
+  - name: optimization_coverage
+    type: gauge
+    labels: ["optimization_type"]
+  - name: performance_violations
+    type: counter
+    labels: ["violation_type"]
+  - name: auto_fixes
+    type: counter
+    labels: ["fix_type"]
+  - name: cache_metrics
+    type: histogram
+    labels: ["operation_type"]
+  - name: batch_metrics
+    type: histogram
+    labels: ["operation_type"]
+
+metadata:
+  priority: high
+  version: 1.0
+  tags:
+    - performance
+    - optimization
+    - monitoring
+    - validation
+  changelog:
+    - 1.0: Initial version with comprehensive performance standards
+    - 1.1: Added validation functions and metrics tracking 

@@ -1,0 +1,142 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+---
+description: Security Best Practices
+globs: ["**/*.{py,sql,sh,Dockerfile,yml,yaml}"]
+alwaysApply: false
+---
+
+# Security Best Practices
+
+Standards for implementing security best practices across the project.
+
+<rule>
+name: security-best-practices
+description: Comprehensive security guidelines for the project
+filters:
+  - type: file_extension
+    pattern: "\\.(py|sql|sh|Dockerfile|yml|yaml)$"
+
+actions:
+  - type: enforce
+    message: |
+      Security Best Practices:
+
+      1. API Security:
+         - Never commit API keys to source control
+         - Use environment variables or secure vaults
+         - Rotate keys regularly
+         - Monitor API usage
+         - Implement proper authentication
+         - Use role-based access control
+         - Validate all requests
+         - Log access attempts
+
+      2. Data Security:
+         - Encrypt sensitive data at rest
+         - Use secure transport (HTTPS/TLS)
+         - Implement data masking
+         - Regular security audits
+         - Use principle of least privilege
+         - Implement connection pooling
+         - Regular backup procedures
+         - Monitor database access
+
+      3. Container Security:
+         - Use official base images
+         - Keep images updated
+         - Run as non-root user
+         - Scan for vulnerabilities
+         - Limit container capabilities
+         - Use read-only file systems
+         - Monitor container resources
+         - Implement health checks
+
+examples:
+  - input: |
+      # Bad: Hardcoded API key
+      API_KEY = "sk_live_123456789"
+      
+      # Good: Using environment variables
+      import os
+      from google.cloud import secretmanager
+      
+      def get_api_key() -> str:
+          """Securely retrieve API key from environment or secret manager."""
+          api_key = os.getenv('API_KEY')
+          if api_key:
+              return api_key
+              
+          client = secretmanager.SecretManagerServiceClient()
+          name = f"projects/{project_id}/secrets/api-key/versions/latest"
+          response = client.access_secret_version(request={"name": name})
+          return response.payload.data.decode("UTF-8")
+
+  - input: |
+      # Bad: Insecure Dockerfile
+      FROM python:latest
+      COPY . .
+      RUN pip install -r requirements.txt
+      CMD ["python", "app.py"]
+      
+      # Good: Secure Dockerfile
+      FROM python:3.11-slim
+      
+      RUN groupadd -r appuser && useradd -r -g appuser appuser
+      WORKDIR /app
+      
+      COPY requirements.txt .
+      RUN pip install --no-cache-dir -r requirements.txt
+      
+      COPY . .
+      RUN chown -R appuser:appuser /app
+      
+      USER appuser
+      VOLUME ["/app/data", "/app/logs"]
+      
+      HEALTHCHECK --interval=30s --timeout=3s \
+        CMD curl -f http://localhost/health || exit 1
+      
+      CMD ["python", "app.py"]
+
+  - input: |
+      # Bad: Insecure database access
+      def query_data(query):
+          client = bigquery.Client()
+          return client.query(query).result()
+      
+      # Good: Secure database access
+      from contextlib import contextmanager
+      from google.cloud import bigquery
+      
+      @contextmanager
+      def get_bigquery_client():
+          """Get a secure BigQuery client with proper credentials."""
+          client = None
+          try:
+              client = bigquery.Client()
+              yield client
+          finally:
+              if client:
+                  client.close()
+      
+      def query_data(query: str) -> bigquery.table.RowIterator:
+          """Execute BigQuery query with secure client."""
+          with get_bigquery_client() as client:
+              return client.query(query).result()
+
+metadata:
+  priority: critical
+  version: 1.1
+  tags:
+    - security
+    - best-practices
+    - api-security
+    - data-security
+    - container-security
+  changelog:
+    - 1.0: Initial version
+    - 1.1: Added comprehensive security examples 

@@ -1,0 +1,128 @@
+---
+description: Standards for implementing comprehensive test coverage and test practices
+globs: ["*.py", "*.js", "*.ts", "*.java", "*.cpp", "*.cs", "*.go", "*.rs", "*.rb", "*.php", "*_test.*", "test_*.py", "*.spec.*"]
+alwaysApply: true
+---
+---
+description: Testing Standards
+globs: ["**/*.{py,js,ts,java,cpp,cs,go,rs,rb,php}"]
+alwaysApply: false
+---
+
+# Testing Standards
+
+Rules for implementing comprehensive test coverage and maintaining test quality.
+
+<rule>
+name: code-testing
+description: Standards for implementing comprehensive test coverage and test practices
+filters:
+  # Match test files
+  - type: file_extension
+    pattern: "\\.(py|js|ts|java|cpp|cs|go|rs|rb|php)$"
+  # Match test patterns
+  - type: content
+    pattern: "(test_|_test|spec\\.|describe\\(|it\\(|test\\(|assert)"
+
+actions:
+  - type: validate
+    conditions:
+      # Check for test coverage
+      - pattern: "def\\s+test_.*?:"
+        not_pattern: "def\\s+test_.*?:.*?assert"
+        message: "Test function missing assertions"
+      # Check for test isolation
+      - pattern: "def\\s+test_.*?:.*?global\\s+\\w+"
+        message: "Test should not use global variables"
+      # Check for test naming
+      - pattern: "def\\s+(?!test_).*?:.*?assert"
+        message: "Test function should be named test_*"
+
+  - type: suggest
+    message: |
+      When writing tests:
+
+      1. Test Coverage:
+         - Write unit tests for all functions
+         - Test edge cases and error conditions
+         - Maintain high coverage percentage
+         - Test critical paths thoroughly
+         - Include integration tests
+         - Add end-to-end tests
+         - Test error handling
+
+      2. Test Structure:
+         - Use appropriate test framework
+         - Follow AAA pattern (Arrange-Act-Assert)
+         - Keep tests focused and small
+         - Use descriptive test names
+         - Group related tests
+         - Use test fixtures
+         - Mock external dependencies
+
+      3. Test Quality:
+         - Write readable tests
+         - Use meaningful assertions
+         - Avoid test interdependence
+         - Clean up test data
+         - Handle test isolation
+         - Use appropriate matchers
+         - Document test requirements
+
+      4. Test Maintenance:
+         - Keep tests up to date
+         - Remove obsolete tests
+         - Refactor test code
+         - Use test helpers
+         - Share common fixtures
+         - Maintain test documentation
+         - Review test coverage
+
+examples:
+  - input: |
+      # Bad: Poor test implementation
+      def process_data_test():
+          data = [1, 2, 3]
+          result = process_data(data)
+          print(result)  # No assertions
+
+      # Good: Well-structured test
+      def test_process_data():
+          # Arrange
+          test_data = [1, 2, 3]
+          expected = {1: True, 2: True, 3: True}
+          
+          # Act
+          result = process_data(test_data)
+          
+          # Assert
+          assert result == expected
+          assert len(result) == len(test_data)
+          assert all(isinstance(k, int) for k in result.keys())
+
+  - input: |
+      # Bad: Test with global state
+      global_config = {"timeout": 30}
+
+      def test_with_global():
+          global global_config
+          global_config["timeout"] = 60
+          result = process_with_timeout()
+          assert result.success
+
+      # Good: Test with proper isolation
+      def test_with_timeout():
+          config = {"timeout": 60}
+          result = process_with_timeout(config)
+          assert result.success
+          assert result.duration <= config["timeout"]
+
+metadata:
+  priority: high
+  version: 1.0
+  tags:
+    - testing
+    - quality
+    - coverage
+  changelog:
+    - 1.0: Initial version with comprehensive testing guidelines 

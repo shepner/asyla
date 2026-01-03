@@ -1,0 +1,54 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+---
+description: "Git workflow rules"
+globs: ["**/*"]
+alwaysApply: true
+---
+
+# Git workflow rules
+
+# Default behaviors for common git commands
+commands:
+  commit_and_push:
+    patterns:
+      - "commit and push"
+      - "commit & push"
+      - "commit then push"
+    behavior:
+      - "Always add all changes with git add ."
+      - "Generate descriptive commit messages based on the changes made"
+      - "Push immediately after commit"
+    default_command: "git add . && git commit -m \"${MESSAGE}\" && git push"
+
+# Commit message guidelines
+commit_messages:
+  format: "${TYPE}: ${DESCRIPTION}"
+  types:
+    - "feat" # New feature
+    - "fix" # Bug fix
+    - "docs" # Documentation changes
+    - "style" # Formatting, missing semicolons, etc
+    - "refactor" # Code restructuring
+    - "test" # Adding tests
+    - "chore" # Maintenance tasks
+  description:
+    - "Start with a verb in imperative mood"
+    - "Keep under 50 characters"
+    - "No period at the end"
+
+# Branch naming conventions
+branch_naming:
+  format: "${TYPE}/${DESCRIPTION}"
+  types:
+    - "feature"
+    - "bugfix"
+    - "hotfix"
+    - "release"
+    - "support"
+  description:
+    - "Use kebab-case"
+    - "Be descriptive but concise" 

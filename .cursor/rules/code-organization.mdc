@@ -1,0 +1,160 @@
+---
+description: Standards for organizing and structuring code files and modules
+globs: ["*.py", "*.js", "*.ts", "*.java", "*.cpp", "*.cs", "*.go", "*.rs", "*.rb", "*.php"]
+alwaysApply: true
+---
+---
+description: Code Organization Standards
+globs: ["**/*.{py,js,ts,java,cpp,cs,go,rs,rb,php}"]
+alwaysApply: false
+---
+
+# Code Organization Standards
+
+Standards for organizing and structuring code files and modules.
+
+<rule>
+name: code-organization
+description: Standards for code organization and structure
+filters:
+  # Match source code files
+  - type: file_extension
+    pattern: "\\.(py|js|ts|java|cpp|cs|go|rs|rb|php)$"
+  # Match code organization patterns
+  - type: content
+    pattern: "(class|function|method|def|interface|struct|module|package|namespace)"
+
+actions:
+  - type: reject
+    conditions:
+      # Reject long functions
+      - pattern: "^\\s*(?:def|function|fn)\\s+\\w+.*?\\n(?:[^\\n]*\\n){0,50}"
+        message: "Function exceeds maximum length"
+      # Reject long classes
+      - pattern: "^\\s*class\\s+\\w+.*?\\n(?:[^\\n]*\\n){0,200}"
+        message: "Class exceeds maximum length"
+      # Reject import after code
+      - pattern: "^(?!import|from|require|include|using).*\\n(?:import|from|require|include|using)"
+        message: "Imports must be at the top"
+
+  - type: suggest
+    message: |
+      When organizing code:
+
+      1. File Structure:
+         - Keep files focused
+         - Limit file length
+         - Group related code
+         - Use clear hierarchy
+
+      2. Function Organization:
+         - Keep functions small
+         - Use clear names
+         - Group by purpose
+         - Document purpose
+
+      3. Class Organization:
+         - Keep classes focused
+         - Use inheritance wisely
+         - Group methods logically
+         - Document design
+
+      4. Module Organization:
+         - Use clear imports
+         - Group by dependency
+         - Avoid circular imports
+         - Document exports
+
+examples:
+  - input: |
+      # Bad: Poor organization
+      def process_data():
+          # 100+ lines of code
+          pass
+
+      import pandas as pd
+      import numpy as np
+
+      # Good: Well-organized code
+      import pandas as pd
+      import numpy as np
+
+      def process_data():
+          """Process input data."""
+          # 50 lines or less
+          pass
+
+functions:
+  validate_organization: |
+    def check():
+      """
+      Validate code organization.
+      Returns (is_valid, issues).
+      """
+      issues = []
+      # Check file length
+      if file_length > config.organization.max_file_length:
+        issues.append("File too long")
+      # Check function length
+      if function_length > config.organization.max_function_length:
+        issues.append("Function too long")
+      # Check class length
+      if class_length > config.organization.max_class_length:
+        issues.append("Class too long")
+      # Check import count
+      if import_count > config.organization.max_imports:
+        issues.append("Too many imports")
+      return len(issues) == 0, issues
+
+  check_performance: |
+    def check():
+      """
+      Check organization performance.
+      Returns (is_valid, issues).
+      """
+      issues = []
+      # Check pattern complexity
+      if pattern_complexity > config.performance.max_pattern_complexity:
+        issues.append("Pattern too complex")
+      # Check validation time
+      if validation_time_ms > config.performance.max_validation_time_ms:
+        issues.append("Validation too slow")
+      return len(issues) == 0, issues
+
+metrics:
+  - name: file_lengths
+    type: histogram
+    labels: ["language"]
+  - name: function_lengths
+    type: histogram
+    labels: ["language"]
+  - name: class_lengths
+    type: histogram
+    labels: ["language"]
+  - name: import_counts
+    type: histogram
+    labels: ["language"]
+  - name: validation_time
+    type: histogram
+    labels: ["check_type"]
+  - name: pattern_complexity
+    type: gauge
+    labels: ["pattern_type"]
+  - name: organization_violations
+    type: counter
+    labels: ["violation_type"]
+  - name: auto_fixes
+    type: counter
+    labels: ["fix_type"]
+
+metadata:
+  priority: high
+  version: 1.0
+  tags:
+    - organization
+    - structure
+    - performance
+    - validation
+  changelog:
+    - 1.0: Initial version with comprehensive organization standards
+    - 1.1: Added performance monitoring and optimization 

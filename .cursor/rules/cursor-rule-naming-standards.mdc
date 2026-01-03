@@ -1,0 +1,126 @@
+---
+description: Standards for naming rules and their files
+globs: ["**/*.mdc"]
+alwaysApply: true
+---
+---
+description: Rule Naming Standards
+globs: ["**/*.mdc"]
+alwaysApply: false
+---
+
+# Rule Naming Standards
+
+Standards for naming rules and their files.
+
+<rule>
+name: rule-naming
+description: Standards for naming rule files
+filters:
+  # Match rule files
+  - type: file_extension
+    pattern: "\\.mdc$"
+  # Match rule content
+  - type: content
+    pattern: "^(---|#)"
+
+actions:
+  - type: reject
+    conditions:
+      # Reject invalid prefixes
+      - pattern: "^(?!cursor-|cursor-rule-|code-|code-gcp-|code-aws-|code-azure-|git-|docker-|documentation-)"
+        message: "File must start with a valid prefix"
+      # Reject invalid characters
+      - pattern: "[^a-z0-9-]"
+        message: "Use only lowercase letters, numbers, and hyphens"
+      # Reject invalid length
+      - pattern: "^.{0,9}|.{51,}"
+        message: "Filename length must be between 10 and 50 characters"
+      # Reject invalid extension
+      - pattern: "(?!\\.mdc$)"
+        message: "Use .mdc extension"
+
+  - type: suggest
+    message: |
+      When naming rule files:
+
+      1. Use appropriate prefix:
+         - cursor-* for Cursor IDE configuration and settings
+         - cursor-rule-* for rules about how to write Cursor rules
+         - code-* for general coding standards
+         - code-gcp-* for Google Cloud Platform standards
+         - code-aws-* for AWS standards
+         - code-azure-* for Azure standards
+         - git-* for Git-related standards
+         - docker-* for Docker-related standards
+
+      2. Follow naming conventions:
+         - Use kebab-case (lowercase with hyphens)
+         - Keep names descriptive but concise
+         - Avoid special characters
+         - Use .mdc extension
+
+      3. Group related rules:
+         - Use consistent prefixes for related rules
+         - Group cloud-specific rules by provider
+         - Maintain clear categorization
+
+examples:
+  - input: |
+      # Bad: Invalid naming
+      CursorRule.md
+      code_style.mdc
+      GCP_BigQuery.mdc
+      aws-s3-rules.txt
+      dockerfile_standards.mdc
+
+      # Good: Valid naming
+      cursor-rule-automation.mdc  # Rule about writing Cursor rules
+      cursor-settings.mdc        # Cursor IDE settings
+      code-style.mdc             # General coding style
+      code-gcp-bigquery.mdc      # GCP-specific coding standards
+      code-aws-s3.mdc            # AWS-specific coding standards
+      docker-optimization.mdc    # Docker-specific standards
+
+functions:
+  validate_naming: |
+    def check():
+      """
+      Validate rule file naming.
+      Returns (is_valid, issues).
+      """
+      issues = []
+      # Check prefix
+      if not has_valid_prefix():
+        issues.append("Invalid prefix")
+      # Check pattern
+      if not matches_naming_pattern():
+        issues.append("Invalid naming pattern")
+      # Check length
+      if not is_valid_length():
+        issues.append("Invalid length")
+      return len(issues) == 0, issues
+
+metrics:
+  - name: naming_violations
+    type: counter
+    labels: ["violation_type"]
+  - name: auto_renames
+    type: counter
+    labels: ["old_name", "new_name"]
+  - name: prefix_usage
+    type: counter
+    labels: ["prefix"]
+
+metadata:
+  priority: high
+  version: 1.0
+  tags:
+    - naming
+    - standards
+    - organization
+    - automation
+  changelog:
+    - 1.0: Initial version with comprehensive naming standards
+    - 1.1: Added cloud provider prefixes (gcp, aws, azure)
+    - 1.2: Clarified distinction between Cursor-specific and general coding rules 

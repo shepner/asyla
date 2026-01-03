@@ -1,0 +1,129 @@
+---
+description: Standards for database design, queries, and operations
+globs: ["*.py", "*.js", "*.ts", "*.java", "*.cpp", "*.cs", "*.go", "*.rs", "*.rb", "*.php", "*.sql"]
+alwaysApply: true
+---
+---
+description: "Standards for database design, queries, and operations"
+globs: ["**/*.{py,js,ts,java,cpp,cs,go,rs,rb,php,sql}"]
+alwaysApply: false
+---
+
+# Database Standards
+
+Rules for designing and implementing database operations.
+
+<rule>
+name: code-database
+description: Standards for database design, queries, and operations
+filters:
+  # Match database-related files
+  - type: file_extension
+    pattern: "\\.(py|js|ts|java|cpp|cs|go|rs|rb|php|sql)$"
+  # Match database patterns
+  - type: content
+    pattern: "(SELECT|INSERT|UPDATE|DELETE|CREATE TABLE|ALTER TABLE|CREATE INDEX)"
+
+actions:
+  - type: validate
+    conditions:
+      # Check for proper table naming
+      - pattern: "CREATE TABLE\\s+[A-Z]"
+        message: "Table names should use snake_case"
+      # Check for missing indexes
+      - pattern: "WHERE\\s+\\w+\\s*=\\s*\\?"
+        not_pattern: "CREATE INDEX.*\\w+\\s*=\\s*\\?"
+        message: "Add index for frequently queried columns"
+      # Check for transaction handling
+      - pattern: "INSERT|UPDATE|DELETE"
+        not_pattern: "BEGIN|START TRANSACTION"
+        message: "Use transactions for data modifications"
+
+  - type: suggest
+    message: |
+      When working with databases:
+
+      1. Database Design:
+         - Use appropriate data types
+         - Implement proper constraints
+         - Design for scalability
+         - Use consistent naming
+         - Document schema
+         - Plan for growth
+         - Consider partitioning
+
+      2. Query Optimization:
+         - Use appropriate indexes
+         - Optimize query patterns
+         - Avoid N+1 queries
+         - Use prepared statements
+         - Implement caching
+         - Monitor query performance
+         - Use EXPLAIN
+
+      3. Data Integrity:
+         - Use transactions
+         - Implement constraints
+         - Handle NULL values
+         - Validate data
+         - Use foreign keys
+         - Implement checksums
+         - Regular backups
+
+      4. Migration Management:
+         - Version migrations
+         - Support rollbacks
+         - Test migrations
+         - Document changes
+         - Handle data migration
+         - Use migration tools
+         - Backup before migration
+
+examples:
+  - input: |
+      # Bad: Poor database design
+      CREATE TABLE Users (
+          id INT,
+          name VARCHAR(100),
+          email VARCHAR(100)
+      );
+
+      # Good: Well-designed table
+      CREATE TABLE users (
+          id SERIAL PRIMARY KEY,
+          name VARCHAR(100) NOT NULL,
+          email VARCHAR(100) NOT NULL UNIQUE,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE INDEX idx_users_email ON users(email);
+
+  - input: |
+      # Bad: Inefficient query
+      def get_user_posts(user_id):
+          posts = []
+          for post_id in db.query("SELECT id FROM posts WHERE user_id = ?", [user_id]):
+              post = db.query("SELECT * FROM posts WHERE id = ?", [post_id])
+              posts.append(post)
+          return posts
+
+      # Good: Optimized query
+      def get_user_posts(user_id):
+          return db.query("""
+              SELECT p.*, u.name as author_name
+              FROM posts p
+              JOIN users u ON p.user_id = u.id
+              WHERE p.user_id = ?
+              ORDER BY p.created_at DESC
+          """, [user_id])
+
+metadata:
+  priority: high
+  version: 1.0
+  tags:
+    - database
+    - sql
+    - optimization
+  changelog:
+    - 1.0: Initial version with comprehensive database guidelines 

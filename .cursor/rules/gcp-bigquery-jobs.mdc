@@ -1,0 +1,162 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+---
+description: "Standards for implementing and managing Google BigQuery jobs."
+globs: ["**/*.{sql,py}"]
+alwaysApply: false
+---
+
+# BigQuery Job Standards
+
+Standards for implementing and managing Google BigQuery jobs.
+
+<rule>
+name: bigquery-jobs
+description: Standards for BigQuery job implementation and management
+filters:
+  # Match BigQuery SQL files
+  - type: file_extension
+    pattern: "\\.sql$"
+  # Match Python files with BigQuery code
+  - type: file_extension
+    pattern: "\\.py$"
+  # Match BigQuery job patterns
+  - type: content
+    pattern: "(CREATE|INSERT|UPDATE|DELETE|MERGE|LOAD|EXPORT)"
+
+actions:
+  - type: reject
+    conditions:
+      # Reject missing job configuration
+      - pattern: "^(?!.*job_config.*)"
+        message: "Include job configuration with appropriate limits"
+      # Reject legacy SQL
+      - pattern: "use_legacy_sql.*true"
+        message: "Use standard SQL instead of legacy SQL"
+      # Reject missing partitioning
+      - pattern: "CREATE TABLE.*(?!PARTITION BY)"
+        message: "Include partitioning for large tables"
+      # Reject missing clustering
+      - pattern: "CREATE TABLE.*(?!CLUSTER BY)"
+        message: "Include clustering for better performance"
+      # Reject missing error handling
+      - pattern: "^(?!.*try.*except.*BigQueryError)"
+        message: "Include proper error handling for BigQuery operations"
+
+  - type: suggest
+    message: |
+      When implementing BigQuery jobs:
+
+      1. Job Configuration:
+         - Set appropriate byte limits
+         - Configure timeouts
+         - Enable retries
+         - Use query cache when possible
+
+      2. Query Optimization:
+         - Use standard SQL
+         - Implement partitioning
+         - Add clustering
+         - Optimize joins
+         - Use appropriate data types
+
+      3. Error Handling:
+         - Catch BigQueryError
+         - Log error details
+         - Implement retries
+         - Clean up resources
+
+      4. Performance:
+         - Monitor query costs
+         - Use appropriate table types
+         - Implement caching
+         - Optimize data loading
+
+      5. Security:
+         - Use service accounts
+         - Implement row-level security
+         - Encrypt sensitive data
+         - Audit access
+
+examples:
+  - input: |
+      # Bad: Missing configuration and error handling
+      CREATE TABLE dataset.table AS
+      SELECT * FROM source_table;
+
+      # Good: Proper configuration and error handling
+      from google.cloud import bigquery
+      from google.api_core import retry
+
+      client = bigquery.Client()
+      job_config = bigquery.QueryJobConfig(
+          maximum_bytes_processed=1000000000,
+          use_query_cache=True
+      )
+
+      try:
+          query_job = client.query(
+              """
+              CREATE OR REPLACE TABLE `dataset.table`
+              PARTITION BY DATE(created_at)
+              CLUSTER BY type
+              AS
+              SELECT * FROM source_table
+              """,
+              job_config=job_config
+          )
+          query_job.result()  # Wait for query to complete
+      except bigquery.BigQueryError as e:
+          logging.error(f"BigQuery error: {e}")
+          raise
+
+functions:
+  validate_bigquery_job: |
+    def check():
+      """
+      Validate BigQuery job implementation.
+      Returns (is_valid, issues).
+      """
+      issues = []
+      # Check job configuration
+      if not has_job_config():
+        issues.append("Missing job configuration")
+      # Check SQL standards
+      if uses_legacy_sql():
+        issues.append("Using legacy SQL")
+      # Check optimization
+      if not has_optimization():
+        issues.append("Missing optimization")
+      return len(issues) == 0, issues
+
+metrics:
+  - name: bigquery_job_executions
+    type: counter
+    labels: ["job_type", "status"]
+  - name: query_costs
+    type: gauge
+    labels: ["query_id"]
+  - name: performance_metrics
+    type: histogram
+    labels: ["metric_type"]
+  - name: error_rates
+    type: counter
+    labels: ["error_type"]
+  - name: optimization_impact
+    type: gauge
+    labels: ["optimization_type"]
+
+metadata:
+  priority: high
+  version: 1.0
+  tags:
+    - bigquery
+    - gcp
+    - data
+    - performance
+    - security
+  changelog:
+    - 1.0: Initial version with comprehensive BigQuery standards 
