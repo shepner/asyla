@@ -32,6 +32,14 @@ elif [ ${HOSTNAME} = "d02" ]; then
 
 elif [ ${HOSTNAME} = "d03" ]; then
   echo ${HOSTNAME}
+  # d03 uses docker-compose instead of shell scripts
+  if [ -f ~/scripts/d03/docker-compose.yml ]; then
+    cd ~/scripts/d03 || exit 1
+    docker compose pull
+    docker compose up -d
+  else
+    echo "docker-compose.yml not found for d03"
+  fi
 
 elif [ ${HOSTNAME} = "ns01" ]; then
   echo ${HOSTNAME}

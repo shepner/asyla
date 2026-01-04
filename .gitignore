@@ -52,3 +52,32 @@ tags
 [._]*.un~
 
 # End of https://www.toptal.com/developers/gitignore/api/vim,macos
+
+### Sensitive Files - DO NOT COMMIT ###
+# Credentials and secrets
+.smbcredentials
+*.env
+*.secret
+*secret*
+*credential*
+*password*
+*.key
+*.pem
+*.p12
+*.pfx
+
+# SSH keys (private)
+*.rsa
+*.ed25519
+*.ecdsa
+id_rsa
+id_ed25519
+id_ecdsa
+*.pub  # Keep public keys, but be careful
+
+# Configuration files with sensitive data
+config/*.txt
+config/*.key
+config/*.json
+**/credentials.json
+**/secrets.json
