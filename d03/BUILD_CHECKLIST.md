@@ -54,6 +54,12 @@ This checklist guides you through the complete build process for the new d03 VM.
 
 ### Step 2: Initial VM Login and Bootstrap
 
+**✅ Automated by cloud-init:**
+- Docker user created automatically
+- SSH public key configured automatically
+- Network configured automatically
+
+**Manual steps:**
 - [ ] Wait ~30-60 seconds for cloud-init to complete (first boot)
 - [ ] SSH to VM: `ssh docker@10.0.0.62` (no password - SSH key authentication)
 - [ ] Verify network configuration:
@@ -68,16 +74,29 @@ This checklist guides you through the complete build process for the new d03 VM.
   - `id docker` (should show uid=1003 gid=1000 groups=1000(asyla),27(sudo),999(docker))
   - `groups docker` (should include: asyla docker sudo)
 
+**Note**: Bootstrap script could be automated via custom cloud-init user-data (see `d03/setup/cloud-init-userdata.yml`), but currently requires manual execution.
+
 ### Step 3: Complete SSH Key Setup
 
+**✅ Automated by cloud-init:**
+- SSH public key already configured (enables passwordless SSH to d03)
+
+**Manual steps (required for SSH to other docker hosts):**
 - [ ] From workstation, copy SSH private key: `scp ~/.ssh/docker_rsa d03:.ssh/docker_rsa`
 - [ ] Copy SSH config: `scp ~/.ssh/config d03:.ssh/config`
 - [ ] Set permissions: `ssh d03 "chmod -R 700 ~/.ssh"`
 - [ ] Test SSH access: `ssh d03 "hostname"` (should return: d03)
 - [ ] Test SSH to other docker hosts: `ssh d01 "hostname"` (should work with same key)
 
+**Note**: Private key and config must be copied manually for security reasons (not stored in cloud-init).
+
 ### Step 4: Run Setup Scripts
 
+**Could be automated (via custom cloud-init user-data):**
+- Fetching scripts from repository
+- Running systemConfig.sh (safe to automate)
+
+**Must remain manual (requires verification/credentials):**
 - [ ] SSH to d03: `ssh d03`
 - [ ] Update scripts from repository: `curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/update_scripts.sh | bash`
 - [ ] Run systemConfig.sh: `~/scripts/d03/setup/systemConfig.sh`
@@ -87,6 +106,11 @@ This checklist guides you through the complete build process for the new d03 VM.
 - [ ] Run iscsi.sh: `~/scripts/d03/setup/iscsi.sh` (verify TrueNAS when prompted)
 - [ ] Run docker.sh: `~/scripts/d03/setup/docker.sh`
 - [ ] Run system update: `~/update.sh`
+
+**Note**: Script fetching could be automated via custom cloud-init user-data, but execution must remain manual as some scripts require:
+- SMB credentials (security-sensitive)
+- iSCSI target verification (safety check)
+- Manual review of configuration changes
 
 ### Step 5: Verify Mounts
 
