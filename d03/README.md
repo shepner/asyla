@@ -187,24 +187,24 @@ qm resize $VMID scsi0 64G
 # 5. Configure VGA display for console access
 qm set $VMID --vga std
 
-# 6. Copy SSH public key to Proxmox host (if not already there)
-# From workstation, copy the SSH public key to Proxmox host:
-scp ~/.ssh/docker_rsa.pub root@vmh02:/tmp/docker_rsa.pub
+# 6. Copy cloud-init user-data file to Proxmox snippets directory
+# From workstation, copy the cloud-init user-data file to Proxmox host:
+scp d03/setup/cloud-init-userdata.yml root@vmh02:/var/lib/vz/snippets/d03-cloud-init.yml
 
-# 7. Configure cloud-init for docker user, SSH keys, and network
-# This creates the docker user with SSH key authentication
-# Note: UID/GID and groups will be configured by bootstrap script (see Step 5)
+# 7. Configure cloud-init using custom user-data file
+# This automates: docker user creation, groups (asyla, docker), UID/GID (1003/1000),
+# SSH keys, network configuration, and initial package installation
+# Note: --cicustom REPLACES the auto-generated config, so network is included in user-data
 qm set $VMID \
-  --ciuser docker \
-  --sshkeys /tmp/docker_rsa.pub \
-  --ipconfig0 ip=10.0.0.62/24,gw=10.0.0.1 \
-  --nameserver '10.0.0.10 10.0.0.11' \
-  --searchdomain asyla.org
+  --cicustom user=local:snippets/d03-cloud-init.yml
 
-# 8. (Optional) Configure custom cloud-init user-data for advanced automation
-# This enables automatic group creation, UID/GID setup, and bootstrap script execution
-# See d03/setup/cloud-init-userdata.yml for the user-data file
-# To use it, create a custom cloud-init ISO or use qm cloudinit update after VM creation
+# Alternative: Use Proxmox built-in cloud-init (simpler but requires bootstrap script)
+# qm set $VMID \
+#   --ciuser docker \
+#   --sshkeys /tmp/docker_rsa.pub \
+#   --ipconfig0 ip=10.0.0.62/24,gw=10.0.0.1 \
+#   --nameserver '10.0.0.10 10.0.0.11' \
+#   --searchdomain asyla.org
 
 # 9. Set boot order to disk (scsi0) - IMPORTANT: Prevents network boot loop
 qm set $VMID --boot order=scsi0
@@ -224,15 +224,17 @@ qm start $VMID
 - VGA display (`--vga std`) enables console access via VNC/noVNC in Proxmox web UI
 - Initial credentials: `root` / `TempPassword123!` - **change immediately after first login**
 
-### Step 5: Initial VM Login and Bootstrap
+### Step 5: Initial VM Login
 
 **⚠️ IMPORTANT: Cloud-init Setup**
 
-Cloud-init was configured during VM creation with:
-- **User**: `docker` (created automatically)
+Cloud-init was configured during VM creation with custom user-data that automates:
+- **User**: `docker` (created automatically with UID 1003, GID 1000)
+- **Groups**: `asyla` (GID 1000), `docker`, `sudo` (all configured automatically)
 - **SSH Key**: Public key uploaded (no password needed)
 - **IP Address**: `10.0.0.62` (configured via cloud-init)
 - **Network**: Fully configured (DNS, gateway, search domain)
+- **Packages**: curl, git installed automatically
 
 **Access the VM:**
 1. Wait ~30-60 seconds for cloud-init to complete (first boot takes longer)
@@ -242,18 +244,14 @@ Cloud-init was configured during VM creation with:
    ```
    No password needed - SSH key authentication is configured!
 
-**Run Bootstrap Script:**
-The bootstrap script configures groups, UID/GID, and completes initial setup:
-
+**Verify Configuration:**
 ```bash
-# SSH to d03
-ssh docker@10.0.0.62
+# Verify docker user is configured correctly
+id docker
+# Should show: uid=1003(docker) gid=1000(asyla) groups=1000(asyla),27(sudo),999(docker)
 
-# Run bootstrap script (fetches from repo and executes)
-curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/setup/bootstrap.sh | sudo bash
-
-# Or if scripts are already fetched:
-sudo bash ~/scripts/d03/setup/bootstrap.sh
+groups docker
+# Should include: asyla docker sudo
 ```
 
 **Copy SSH Private Key and Config:**
@@ -266,11 +264,7 @@ scp ~/.ssh/config d03:.ssh/config
 ssh d03 "chmod -R 700 ~/.ssh"
 ```
 
-**Note**: The bootstrap script automatically:
-- Creates `asyla` group (GID 1000)
-- Configures `docker` user (UID 1003, GID 1000)
-- Adds `docker` user to `docker` and `sudo` groups
-- Sets correct permissions on home directory and `.ssh`
+**Note**: When using custom cloud-init user-data (`--cicustom`), groups, UID/GID, and permissions are configured automatically. No bootstrap script needed!
 
 **Network Configuration** (if not using cloud-init):
 - IP: 10.0.0.62/24

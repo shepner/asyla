@@ -44,22 +44,25 @@ This checklist guides you through the complete build process for the new d03 VM.
 - [x] Configure disk: `qm set 103 --scsi0 ...`
 - [x] Resize disk: `qm resize 103 scsi0 64G`
 - [x] Configure VGA: `qm set 103 --vga std`
-- [x] Copy SSH public key to Proxmox host: `scp ~/.ssh/docker_rsa.pub root@vmh02:/tmp/docker_rsa.pub`
-- [x] Configure cloud-init: `qm set 103 --ciuser docker --sshkeys /tmp/docker_rsa.pub --ipconfig0 ip=10.0.0.62/24,gw=10.0.0.1 --nameserver '10.0.0.10 10.0.0.11' --searchdomain asyla.org`
+- [ ] Copy cloud-init user-data to Proxmox: `scp d03/setup/cloud-init-userdata.yml root@vmh02:/var/lib/vz/snippets/d03-cloud-init.yml`
+- [ ] Configure cloud-init with custom user-data: `qm set 103 --cicustom user=local:snippets/d03-cloud-init.yml`
 - [x] Set boot order: `qm set 103 --boot order=scsi0` (prevents network boot loop)
 - [x] Verify configuration: `qm config 103 | grep -E '^boot:|^ciuser:|^ipconfig0:'`
 - [x] Start VM: `qm start 103`
 - [x] Verify VM is running: `qm status 103`
 - [x] Verify VM boots from disk (not network) via console
 
-### Step 2: Initial VM Login and Bootstrap
+### Step 2: Initial VM Login
 
-**✅ Automated by cloud-init:**
-- Docker user created automatically
+**✅ Fully automated by custom cloud-init user-data:**
+- Docker user created automatically (UID 1003, GID 1000)
+- Groups created automatically (asyla GID 1000, docker, sudo)
 - SSH public key configured automatically
-- Network configured automatically
+- Network configured automatically (IP, gateway, DNS, search domain)
+- Initial packages installed (curl, git)
+- Setup scripts fetched automatically
 
-**Manual steps:**
+**Manual verification steps:**
 - [ ] Wait ~30-60 seconds for cloud-init to complete (first boot)
 - [ ] SSH to VM: `ssh docker@10.0.0.62` (no password - SSH key authentication)
 - [ ] Verify network configuration:
@@ -67,14 +70,12 @@ This checklist guides you through the complete build process for the new d03 VM.
   - Gateway: `ip route show` (should show default via 10.0.0.1)
   - DNS: `cat /etc/resolv.conf` (should show 10.0.0.10, 10.0.0.11)
   - Test connectivity: `ping -c 3 10.0.0.1`
-- [ ] Run bootstrap script to configure groups and UID/GID:
-  - `curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/setup/bootstrap.sh | sudo bash`
-  - Or: `sudo bash ~/scripts/d03/setup/bootstrap.sh` (if scripts already fetched)
 - [ ] Verify docker user configuration:
   - `id docker` (should show uid=1003 gid=1000 groups=1000(asyla),27(sudo),999(docker))
   - `groups docker` (should include: asyla docker sudo)
+- [ ] Verify setup scripts were fetched: `ls ~/scripts/d03/setup/`
 
-**Note**: Bootstrap script could be automated via custom cloud-init user-data (see `d03/setup/cloud-init-userdata.yml`), but currently requires manual execution.
+**Note**: Using `--cicustom` with `d03/setup/cloud-init-userdata.yml` automates everything. No bootstrap script needed!
 
 ### Step 3: Complete SSH Key Setup
 
@@ -92,13 +93,12 @@ This checklist guides you through the complete build process for the new d03 VM.
 
 ### Step 4: Run Setup Scripts
 
-**Could be automated (via custom cloud-init user-data):**
-- Fetching scripts from repository
-- Running systemConfig.sh (safe to automate)
+**✅ Automated by custom cloud-init user-data:**
+- Scripts fetched automatically from repository
 
 **Must remain manual (requires verification/credentials):**
 - [ ] SSH to d03: `ssh d03`
-- [ ] Update scripts from repository: `curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/update_scripts.sh | bash`
+- [ ] Verify scripts were fetched: `ls ~/scripts/d03/setup/` (should show all setup scripts)
 - [ ] Run systemConfig.sh: `~/scripts/d03/setup/systemConfig.sh`
 - [ ] Run nfs.sh: `~/scripts/d03/setup/nfs.sh`
 - [ ] Run smb.sh: `~/scripts/d03/setup/smb.sh`

@@ -1,6 +1,22 @@
 #cloud-config
 # Cloud-init user-data for d03 VM
-# This file automates initial system setup including user creation, groups, SSH keys, and initial scripts
+# This file automates initial system setup including user creation, groups, SSH keys, network, and initial scripts
+# Use with Proxmox: qm set <VMID> --cicustom user=local:snippets/d03-cloud-init.yml
+
+# Network configuration
+network:
+  version: 2
+  ethernets:
+    eth0:
+      addresses:
+        - 10.0.0.62/24
+      gateway4: 10.0.0.1
+      nameservers:
+        addresses:
+          - 10.0.0.10
+          - 10.0.0.11
+        search:
+          - asyla.org
 
 # Create groups
 groups:
@@ -19,79 +35,17 @@ users:
     ssh_authorized_keys:
       - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCejokU+gb5+7sHSY9KkS/jJ1UzwiRwNFhnRQunoyeb+otkOXXqs1wMWg4qPamOOQTiieQNAvaomGcga5PWp35RUp9iQeq2EYzoOZTALruqZpMTuvuFs1dK58mrmsNVOg1s/1AF/S3WOURWPyou+k18LN+tRDu7JrGCs63JquCsNTBf04hiCtUptqP2LCUnJznNJ5B/KbGQbkqtUzuQFR+BImLN0t8U7A4CvmcHniuyYXzC0fmsqTFAw+NVx5WZRtKAVztFWnMLn7a/diiXXHfi84FhBukr4qbiB+LlWIGCUvZOPJrUdsS19L/iDsFS+F88mEnG+UXeopHAPtAUsntN docker@asyla.org
 
-# Write bootstrap script and systemd service
-write_files:
-  - path: /usr/local/bin/d03-bootstrap.sh
-    owner: root:root
-    permissions: '0755'
-    content: |
-      #!/bin/bash
-      # Bootstrap script for d03 VM - automatically configures groups and UID/GID
-      set -euo pipefail
-      
-      # Create asyla group with GID 1000 if it doesn't exist
-      if ! getent group asyla > /dev/null 2>&1; then
-          groupadd -g 1000 asyla
-      fi
-      
-      # Modify docker user to have correct UID/GID and groups
-      if id docker > /dev/null 2>&1; then
-          CURRENT_UID=$(id -u docker)
-          CURRENT_GID=$(id -g docker)
-          
-          # Change primary group to asyla if needed
-          if [ "$CURRENT_GID" != "1000" ]; then
-              usermod -g asyla docker
-          fi
-          
-          # Change UID if needed
-          if [ "$CURRENT_UID" != "1003" ]; then
-              usermod -u 1003 docker
-              chown -R docker:asyla /home/docker
-          fi
-          
-          # Ensure docker user is in required groups
-          usermod -aG docker,sudo docker
-          
-          # Ensure home directory ownership is correct
-          chown -R docker:asyla /home/docker
-      fi
-      
-      # Ensure .ssh directory exists with correct permissions
-      mkdir -p /home/docker/.ssh
-      chmod 700 /home/docker/.ssh
-      chown -R docker:asyla /home/docker/.ssh
-      
-      # Disable this service so it only runs once
-      systemctl disable d03-bootstrap.service
-      
-  - path: /etc/systemd/system/d03-bootstrap.service
-    owner: root:root
-    permissions: '0644'
-    content: |
-      [Unit]
-      Description=d03 Bootstrap Script
-      After=cloud-init.service
-      Requires=cloud-init.service
-      
-      [Service]
-      Type=oneshot
-      ExecStart=/usr/local/bin/d03-bootstrap.sh
-      RemainAfterExit=yes
-      
-      [Install]
-      WantedBy=multi-user.target
-
 # Run commands on first boot
 runcmd:
-  # Enable and start bootstrap service
-  - systemctl enable d03-bootstrap.service
-  - systemctl start d03-bootstrap.service
-  
   # Update system packages
   - apt-get update
   - apt-get upgrade -y
   - apt-get install -y curl git
+  
+  # Ensure .ssh directory permissions are correct (cloud-init may create it before user exists)
+  - mkdir -p /home/docker/.ssh
+  - chmod 700 /home/docker/.ssh
+  - chown -R docker:asyla /home/docker/.ssh || true
   
   # Fetch setup scripts (will be run manually later)
   - |
