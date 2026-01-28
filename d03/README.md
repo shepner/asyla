@@ -62,16 +62,40 @@ Before creating the VM, ensure:
 - This is the "nocloud" variant - suitable for local QEMU/Proxmox VMs
 
 **Upload to Proxmox:**
+
+**Option 1: Upload via SCP (from workstation)**
 ```bash
-# From Proxmox host (vmh01 or vmh02) as root
-# Upload the qcow2 file to ISO storage
-# Example (adjust path to your ISO storage location):
-scp debian-13-nocloud-amd64.qcow2 root@vmh01:/mnt/pve/nas-data1-iso/template/iso/
+# Find the correct path on Proxmox host first:
+ssh root@vmh02 "pvesm path nas-data1-iso"
+
+# Then upload from workstation:
+scp ~/Downloads/debian-13-nocloud-amd64.qcow2 root@vmh02:/mnt/nas/data1/iso/template/iso/
 ```
 
-**Or use Proxmox web interface:**
+**Option 2: Upload via Proxmox web interface**
 - Go to Datacenter → Storage → nas-data1-iso → Content → Upload
 - Upload the `debian-13-nocloud-amd64.qcow2` file
+- Note the path where it's stored (usually `template/iso/` subdirectory)
+
+**Option 3: File already on Proxmox host**
+If the file is already on the Proxmox host (anywhere), you can use it directly:
+```bash
+# Find the file location:
+ssh root@vmh02 "find /mnt -name 'debian-13-nocloud-amd64.qcow2' 2>/dev/null"
+
+# Or check common locations:
+ssh root@vmh02 "ls -lh /mnt/nas/data1/iso/template/iso/debian-13-nocloud-amd64.qcow2"
+ssh root@vmh02 "ls -lh /mnt/pve/nas-data1-iso/template/iso/debian-13-nocloud-amd64.qcow2"
+```
+
+**Verify file location before proceeding:**
+```bash
+# On Proxmox host, verify the file exists and note the full path
+ssh root@vmh02 "ls -lh /mnt/nas/data1/iso/template/iso/debian-13-nocloud-amd64.qcow2"
+# Or if using different storage:
+ssh root@vmh02 "pvesm path nas-data1-iso"
+# Then check: <path_from_pvesm>/template/iso/debian-13-nocloud-amd64.qcow2
+```
 
 ### Step 2: Verify TrueNAS (nas01) iSCSI Configuration
 
@@ -131,10 +155,25 @@ qm create $VMID \
   --agent 1,fstrim_cloned_disks=1
 
 # 2. Import Debian 13 cloud image as disk
-# Note: Cloud image must be uploaded to Proxmox storage first
-# Path on Proxmox host: /mnt/nas/data1/iso/template/iso/debian-13-nocloud-amd64.qcow2
+# IMPORTANT: Verify the cloud image file path first!
+# Common locations:
+#   - /mnt/nas/data1/iso/template/iso/debian-13-nocloud-amd64.qcow2
+#   - /mnt/pve/nas-data1-iso/template/iso/debian-13-nocloud-amd64.qcow2
+#   - Or wherever you uploaded it (check with: find /mnt -name 'debian-13-nocloud-amd64.qcow2')
+
+# Verify file exists before importing:
+IMAGE_PATH="/mnt/nas/data1/iso/template/iso/debian-13-nocloud-amd64.qcow2"
+if [ ! -f "$IMAGE_PATH" ]; then
+  echo "ERROR: Cloud image not found at $IMAGE_PATH"
+  echo "Searching for file..."
+  find /mnt -name 'debian-13-nocloud-amd64.qcow2' 2>/dev/null
+  echo "Please update IMAGE_PATH variable with the correct path"
+  exit 1
+fi
+
+# Import the disk (adjust IMAGE_PATH if file is in different location)
 qm disk import $VMID \
-  /mnt/nas/data1/iso/template/iso/debian-13-nocloud-amd64.qcow2 \
+  "$IMAGE_PATH" \
   nas-data1-vm \
   --format qcow2
 
@@ -160,6 +199,7 @@ qm start $VMID
 
 **Important Notes**:
 - The cloud image will boot directly - no installation needed
+- **Cloud image path**: Verify the `IMAGE_PATH` variable matches where you uploaded the file. If uploaded via web UI, check the storage path with `pvesm path nas-data1-iso` and adjust accordingly
 - **Boot order must be explicitly set to `scsi0`** to prevent network boot attempts
 - VGA display (`--vga std`) enables console access via VNC/noVNC in Proxmox web UI
 - You'll need to configure network and user account via console or cloud-init
