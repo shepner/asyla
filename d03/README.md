@@ -187,23 +187,32 @@ qm resize $VMID scsi0 64G
 # 5. Configure VGA display for console access
 qm set $VMID --vga std
 
-# 6. Configure cloud-init for initial user access and network
-# This creates a temporary user/password for initial login
-# IMPORTANT: Change password after first login!
+# 6. Copy SSH public key to Proxmox host (if not already there)
+# From workstation, copy the SSH public key to Proxmox host:
+scp ~/.ssh/docker_rsa.pub root@vmh02:/tmp/docker_rsa.pub
+
+# 7. Configure cloud-init for docker user, SSH keys, and network
+# This creates the docker user with SSH key authentication
+# Note: UID/GID and groups will be configured by bootstrap script (see Step 5)
 qm set $VMID \
-  --ciuser root \
-  --cipassword 'TempPassword123!' \
+  --ciuser docker \
+  --sshkeys /tmp/docker_rsa.pub \
   --ipconfig0 ip=10.0.0.62/24,gw=10.0.0.1 \
   --nameserver '10.0.0.10 10.0.0.11' \
   --searchdomain asyla.org
 
-# 7. Set boot order to disk (scsi0) - IMPORTANT: Prevents network boot loop
+# 8. (Optional) Configure custom cloud-init user-data for advanced automation
+# This enables automatic group creation, UID/GID setup, and bootstrap script execution
+# See d03/setup/cloud-init-userdata.yml for the user-data file
+# To use it, create a custom cloud-init ISO or use qm cloudinit update after VM creation
+
+# 9. Set boot order to disk (scsi0) - IMPORTANT: Prevents network boot loop
 qm set $VMID --boot order=scsi0
 
-# 8. Verify configuration
+# 10. Verify configuration
 qm config $VMID | grep -E '^boot:|^ciuser:|^ipconfig0:'
 
-# 9. Start the VM
+# 11. Start the VM
 qm start $VMID
 ```
 
@@ -215,28 +224,53 @@ qm start $VMID
 - VGA display (`--vga std`) enables console access via VNC/noVNC in Proxmox web UI
 - Initial credentials: `root` / `TempPassword123!` - **change immediately after first login**
 
-### Step 5: Initial VM Login
+### Step 5: Initial VM Login and Bootstrap
 
-**⚠️ IMPORTANT: Cloud-init Credentials**
+**⚠️ IMPORTANT: Cloud-init Setup**
 
-Cloud-init was configured during VM creation. Use these credentials for initial login:
-
-- **Username**: `root`
-- **Password**: `TempPassword123!` (⚠️ **CHANGE IMMEDIATELY** after first login!)
+Cloud-init was configured during VM creation with:
+- **User**: `docker` (created automatically)
+- **SSH Key**: Public key uploaded (no password needed)
 - **IP Address**: `10.0.0.62` (configured via cloud-init)
+- **Network**: Fully configured (DNS, gateway, search domain)
 
 **Access the VM:**
 1. Wait ~30-60 seconds for cloud-init to complete (first boot takes longer)
-2. Access via console (Proxmox web UI → VM 103 → Console) or SSH:
+2. SSH to the VM using your SSH key:
    ```bash
-   ssh root@10.0.0.62
+   ssh docker@10.0.0.62
    ```
-3. **Immediately change the password** after first login:
-   ```bash
-   passwd
-   ```
+   No password needed - SSH key authentication is configured!
 
-**Note**: Network is already configured via cloud-init, so SSH should work once cloud-init completes.
+**Run Bootstrap Script:**
+The bootstrap script configures groups, UID/GID, and completes initial setup:
+
+```bash
+# SSH to d03
+ssh docker@10.0.0.62
+
+# Run bootstrap script (fetches from repo and executes)
+curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/setup/bootstrap.sh | sudo bash
+
+# Or if scripts are already fetched:
+sudo bash ~/scripts/d03/setup/bootstrap.sh
+```
+
+**Copy SSH Private Key and Config:**
+To enable SSH to other docker hosts (d01, d02) using the same identity:
+
+```bash
+# From your workstation
+scp ~/.ssh/docker_rsa d03:.ssh/docker_rsa
+scp ~/.ssh/config d03:.ssh/config
+ssh d03 "chmod -R 700 ~/.ssh"
+```
+
+**Note**: The bootstrap script automatically:
+- Creates `asyla` group (GID 1000)
+- Configures `docker` user (UID 1003, GID 1000)
+- Adds `docker` user to `docker` and `sudo` groups
+- Sets correct permissions on home directory and `.ssh`
 
 **Network Configuration** (if not using cloud-init):
 - IP: 10.0.0.62/24
@@ -244,29 +278,26 @@ Cloud-init was configured during VM creation. Use these credentials for initial 
 - DNS: 10.0.0.10, 10.0.0.11
 - Search Domain: asyla.org
 
-### Step 6: Configure User Account and SSH
+### Step 6: Verify User Account and SSH Setup
 
-**Create user account:**
+**Verify docker user is configured correctly:**
 ```bash
 # On d03 VM
-sudo groupadd -g 1000 asyla
-sudo useradd -u 1003 -g asyla -G docker,sudo -m -s /bin/bash docker
+id docker
+# Should show: uid=1003(docker) gid=1000(asyla) groups=1000(asyla),27(sudo),999(docker)
+
+groups docker
+# Should include: asyla docker sudo
 ```
 
-**Copy SSH keys from workstation:**
+**Verify SSH access:**
 ```bash
-# From your local workstation
-DHOST=d03
-ssh-copy-id -i ~/.ssh/docker_rsa.pub $DHOST
-
-# Copy both keys to enable SSH to other docker hosts
-scp ~/.ssh/docker_rsa $DHOST:.ssh/docker_rsa
-scp ~/.ssh/docker_rsa.pub $DHOST:.ssh/docker_rsa.pub
-scp ~/.ssh/config $DHOST:.ssh/config
-ssh $DHOST "chmod -R 700 ~/.ssh"
+# From workstation, test SSH access
+ssh docker@10.0.0.62 "hostname"
+# Should return: d03
 ```
 
-**Note**: Copying both keys enables d03 to SSH to other Docker hosts (d01, d02) using the same key identity.
+**Note**: User account and SSH public key are already configured via cloud-init. The bootstrap script handles groups and UID/GID. Private key and config are copied manually to enable SSH to other docker hosts.
 
 ### Step 7: Run Setup Scripts
 

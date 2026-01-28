@@ -51,31 +51,29 @@ This checklist guides you through the complete build process for the new d03 VM.
 - [x] Verify VM is running: `qm status 103`
 - [x] Verify VM boots from disk (not network) via console
 
-### Step 2: Initial VM Login
+### Step 2: Initial VM Login and Bootstrap
 
 - [ ] Wait ~30-60 seconds for cloud-init to complete (first boot)
-- [ ] Access VM console (via Proxmox web interface) or SSH: `ssh root@10.0.0.62`
-- [ ] Login with credentials:
-  - Username: `root`
-  - Password: `TempPassword123!`
-- [ ] **IMMEDIATELY change password**: `passwd`
+- [ ] SSH to VM: `ssh docker@10.0.0.62` (no password - SSH key authentication)
 - [ ] Verify network configuration:
   - IP: `ip addr show` (should show 10.0.0.62/24)
   - Gateway: `ip route show` (should show default via 10.0.0.1)
   - DNS: `cat /etc/resolv.conf` (should show 10.0.0.10, 10.0.0.11)
   - Test connectivity: `ping -c 3 10.0.0.1`
-- [ ] Create user account: `docker` (UID 1003, GID 1000)
-- [ ] Add user to `sudo` group
-- [ ] Test network connectivity: `ping 10.0.0.1`
+- [ ] Run bootstrap script to configure groups and UID/GID:
+  - `curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/setup/bootstrap.sh | sudo bash`
+  - Or: `sudo bash ~/scripts/d03/setup/bootstrap.sh` (if scripts already fetched)
+- [ ] Verify docker user configuration:
+  - `id docker` (should show uid=1003 gid=1000 groups=1000(asyla),27(sudo),999(docker))
+  - `groups docker` (should include: asyla docker sudo)
 
-### Step 3: SSH Key Setup
+### Step 3: Complete SSH Key Setup
 
-- [ ] From workstation, copy SSH public key: `ssh-copy-id -i ~/.ssh/docker_rsa.pub d03`
-- [ ] Copy private key: `scp ~/.ssh/docker_rsa d03:.ssh/docker_rsa`
-- [ ] Copy public key: `scp ~/.ssh/docker_rsa.pub d03:.ssh/docker_rsa.pub`
+- [ ] From workstation, copy SSH private key: `scp ~/.ssh/docker_rsa d03:.ssh/docker_rsa`
 - [ ] Copy SSH config: `scp ~/.ssh/config d03:.ssh/config`
 - [ ] Set permissions: `ssh d03 "chmod -R 700 ~/.ssh"`
-- [ ] Test SSH access: `ssh d03 "hostname"`
+- [ ] Test SSH access: `ssh d03 "hostname"` (should return: d03)
+- [ ] Test SSH to other docker hosts: `ssh d01 "hostname"` (should work with same key)
 
 ### Step 4: Run Setup Scripts
 

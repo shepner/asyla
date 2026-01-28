@@ -1,0 +1,118 @@
+#cloud-config
+# Cloud-init user-data for d03 VM
+# This file automates initial system setup including user creation, groups, SSH keys, and initial scripts
+
+# Create groups
+groups:
+  - asyla: 1000
+  - docker
+
+# Create/modify users
+users:
+  - name: docker
+    uid: 1003
+    primary_group: asyla
+    groups: [asyla, docker, sudo]
+    shell: /bin/bash
+    lock_passwd: false
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    ssh_authorized_keys:
+      - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCejokU+gb5+7sHSY9KkS/jJ1UzwiRwNFhnRQunoyeb+otkOXXqs1wMWg4qPamOOQTiieQNAvaomGcga5PWp35RUp9iQeq2EYzoOZTALruqZpMTuvuFs1dK58mrmsNVOg1s/1AF/S3WOURWPyou+k18LN+tRDu7JrGCs63JquCsNTBf04hiCtUptqP2LCUnJznNJ5B/KbGQbkqtUzuQFR+BImLN0t8U7A4CvmcHniuyYXzC0fmsqTFAw+NVx5WZRtKAVztFWnMLn7a/diiXXHfi84FhBukr4qbiB+LlWIGCUvZOPJrUdsS19L/iDsFS+F88mEnG+UXeopHAPtAUsntN docker@asyla.org
+
+# Write bootstrap script and systemd service
+write_files:
+  - path: /usr/local/bin/d03-bootstrap.sh
+    owner: root:root
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      # Bootstrap script for d03 VM - automatically configures groups and UID/GID
+      set -euo pipefail
+      
+      # Create asyla group with GID 1000 if it doesn't exist
+      if ! getent group asyla > /dev/null 2>&1; then
+          groupadd -g 1000 asyla
+      fi
+      
+      # Modify docker user to have correct UID/GID and groups
+      if id docker > /dev/null 2>&1; then
+          CURRENT_UID=$(id -u docker)
+          CURRENT_GID=$(id -g docker)
+          
+          # Change primary group to asyla if needed
+          if [ "$CURRENT_GID" != "1000" ]; then
+              usermod -g asyla docker
+          fi
+          
+          # Change UID if needed
+          if [ "$CURRENT_UID" != "1003" ]; then
+              usermod -u 1003 docker
+              chown -R docker:asyla /home/docker
+          fi
+          
+          # Ensure docker user is in required groups
+          usermod -aG docker,sudo docker
+          
+          # Ensure home directory ownership is correct
+          chown -R docker:asyla /home/docker
+      fi
+      
+      # Ensure .ssh directory exists with correct permissions
+      mkdir -p /home/docker/.ssh
+      chmod 700 /home/docker/.ssh
+      chown -R docker:asyla /home/docker/.ssh
+      
+      # Disable this service so it only runs once
+      systemctl disable d03-bootstrap.service
+      
+  - path: /etc/systemd/system/d03-bootstrap.service
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=d03 Bootstrap Script
+      After=cloud-init.service
+      Requires=cloud-init.service
+      
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/bin/d03-bootstrap.sh
+      RemainAfterExit=yes
+      
+      [Install]
+      WantedBy=multi-user.target
+
+# Run commands on first boot
+runcmd:
+  # Enable and start bootstrap service
+  - systemctl enable d03-bootstrap.service
+  - systemctl start d03-bootstrap.service
+  
+  # Update system packages
+  - apt-get update
+  - apt-get upgrade -y
+  - apt-get install -y curl git
+  
+  # Fetch setup scripts (will be run manually later)
+  - |
+    curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/update_scripts.sh | bash || true
+  
+  # Note: Setup scripts (systemConfig.sh, nfs.sh, smb.sh, iscsi.sh, docker.sh) 
+  # should be run manually as some require configuration or verification
+
+# Final message
+final_message: |
+  d03 VM setup complete!
+  
+  Next steps:
+  1. SSH to d03: ssh docker@10.0.0.62
+  2. Copy SSH private key and config from workstation:
+     scp ~/.ssh/docker_rsa d03:.ssh/docker_rsa
+     scp ~/.ssh/config d03:.ssh/config
+     ssh d03 "chmod -R 700 ~/.ssh"
+  3. Run remaining setup scripts:
+     ~/scripts/d03/setup/nfs.sh
+     ~/scripts/d03/setup/smb.sh  # (then edit ~/.smbcredentials)
+     ~/scripts/d03/setup/iscsi.sh
+     ~/scripts/d03/setup/docker.sh
+  4. Run system update: ~/update.sh
