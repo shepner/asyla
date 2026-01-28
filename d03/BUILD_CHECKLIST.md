@@ -44,7 +44,8 @@ This checklist guides you through the complete build process for the new d03 VM.
 - [x] Configure disk: `qm set 103 --scsi0 ...`
 - [x] Resize disk: `qm resize 103 scsi0 64G`
 - [x] Configure VGA: `qm set 103 --vga std`
-- [x] Configure cloud-init: `qm set 103 --ciuser root --cipassword 'TempPassword123!' --ipconfig0 ip=10.0.0.62/24,gw=10.0.0.1 --nameserver '10.0.0.10 10.0.0.11' --searchdomain asyla.org`
+- [x] Copy SSH public key to Proxmox host: `scp ~/.ssh/docker_rsa.pub root@vmh02:/tmp/docker_rsa.pub`
+- [x] Configure cloud-init: `qm set 103 --ciuser docker --sshkeys /tmp/docker_rsa.pub --ipconfig0 ip=10.0.0.62/24,gw=10.0.0.1 --nameserver '10.0.0.10 10.0.0.11' --searchdomain asyla.org`
 - [x] Set boot order: `qm set 103 --boot order=scsi0` (prevents network boot loop)
 - [x] Verify configuration: `qm config 103 | grep -E '^boot:|^ciuser:|^ipconfig0:'`
 - [x] Start VM: `qm start 103`
