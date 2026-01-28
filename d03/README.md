@@ -187,13 +187,24 @@ qm resize $VMID scsi0 64G
 # 5. Configure VGA display for console access
 qm set $VMID --vga std
 
-# 6. Set boot order to disk (scsi0) - IMPORTANT: Prevents network boot loop
+# 6. Configure cloud-init for initial user access
+# This creates a temporary user/password for initial login
+# IMPORTANT: Change password after first login!
+qm set $VMID \
+  --ciuser root \
+  --cipassword 'TempPassword123!' \
+  --sshkeys ~/.ssh/id_rsa.pub \
+  --ipconfig0 ip=10.0.0.62/24,gw=10.0.0.1 \
+  --nameserver '10.0.0.10 10.0.0.11' \
+  --searchdomain asyla.org
+
+# 7. Set boot order to disk (scsi0) - IMPORTANT: Prevents network boot loop
 qm set $VMID --boot order=scsi0
 
-# 7. Verify boot configuration
+# 8. Verify boot configuration
 qm config $VMID | grep '^boot:'
 
-# 8. Start the VM
+# 9. Start the VM
 qm start $VMID
 ```
 
@@ -206,9 +217,49 @@ qm start $VMID
 
 ### Step 5: Initial VM Configuration
 
-**Access the VM console** (via Proxmox web interface or SSH to Proxmox host):
-- Default user may be `debian` or `root` (check cloud image documentation)
-- You'll need to set up network, user account, and SSH access
+**⚠️ IMPORTANT: Cloud-init Credentials**
+
+Debian cloud images **do not have default credentials**. They must be configured via cloud-init.
+
+**If cloud-init was configured during VM creation:**
+- Username: `root`
+- Password: `TempPassword123!` (change immediately after first login!)
+- Or use SSH key if configured
+
+**If cloud-init was NOT configured (VM already running):**
+
+You have two options:
+
+**Option A: Configure cloud-init and regenerate (recommended)**
+```bash
+# On Proxmox host
+VMID=103
+
+# Stop the VM
+qm stop $VMID
+
+# Configure cloud-init
+qm set $VMID \
+  --ciuser root \
+  --cipassword 'TempPassword123!' \
+  --sshkeys ~/.ssh/id_rsa.pub \
+  --ipconfig0 ip=10.0.0.62/24,gw=10.0.0.1 \
+  --nameserver '10.0.0.10 10.0.0.11' \
+  --searchdomain asyla.org
+
+# Regenerate cloud-init data (forces cloud-init to run on next boot)
+qm cloudinit update $VMID
+
+# Start the VM
+qm start $VMID
+```
+
+**Option B: Manual console access (if cloud-init fails)**
+- Access console via Proxmox web UI (VNC/noVNC)
+- If you see a login prompt, try:
+  - Username: `debian` (no password - may not work)
+  - Username: `root` (no password - may not work)
+- If neither works, you'll need to boot into single-user mode or recovery mode
 
 **Network Configuration** (if not using cloud-init):
 - IP: 10.0.0.62/24
