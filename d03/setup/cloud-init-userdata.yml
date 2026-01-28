@@ -1,8 +1,29 @@
 #cloud-config
 # Cloud-init user-data for d03 VM
-# This file automates initial system setup including user creation, groups, SSH keys, and initial scripts
-# Use with Proxmox: qm set <VMID> --cicustom user=local:snippets/d03-cloud-init.yml --ipconfig0 ip=10.0.0.62/24,gw=10.0.0.1 --nameserver '10.0.0.10 10.0.0.11' --searchdomain asyla.org
-# Note: Network configuration is handled by Proxmox's built-in --ipconfig0 option
+# This file automates initial system setup including user creation, groups, SSH keys, network, and initial scripts
+# Use with Proxmox: qm set <VMID> --cicustom user=local:snippets/d03-cloud-init.yml
+# Note: --cicustom REPLACES Proxmox's built-in config, so network must be included here
+
+# Network configuration (Debian 13 uses ens18 for virtio adapters)
+network:
+  version: 2
+  ethernets:
+    ens18:
+      addresses:
+        - 10.0.0.62/24
+      gateway4: 10.0.0.1
+      nameservers:
+        addresses:
+          - 10.0.0.10
+          - 10.0.0.11
+        search:
+          - asyla.org
+
+# Install packages
+packages:
+  - openssh-server
+  - curl
+  - git
 
 # Create groups
 groups:
@@ -23,10 +44,13 @@ users:
 
 # Run commands on first boot
 runcmd:
-  # Update system packages
+  # Update system packages (packages are installed via 'packages' directive above)
   - apt-get update
   - apt-get upgrade -y
-  - apt-get install -y curl git
+  
+  # Ensure SSH service is enabled and started
+  - systemctl enable sshd || systemctl enable ssh
+  - systemctl start sshd || systemctl start ssh
   
   # Ensure .ssh directory permissions are correct (cloud-init may create it before user exists)
   - mkdir -p /home/docker/.ssh
