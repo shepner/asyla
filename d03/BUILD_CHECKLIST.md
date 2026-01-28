@@ -44,20 +44,26 @@ This checklist guides you through the complete build process for the new d03 VM.
 - [x] Configure disk: `qm set 103 --scsi0 ...`
 - [x] Resize disk: `qm resize 103 scsi0 64G`
 - [x] Configure VGA: `qm set 103 --vga std`
+- [x] Configure cloud-init: `qm set 103 --ciuser root --cipassword 'TempPassword123!' --ipconfig0 ip=10.0.0.62/24,gw=10.0.0.1 --nameserver '10.0.0.10 10.0.0.11' --searchdomain asyla.org`
 - [x] Set boot order: `qm set 103 --boot order=scsi0` (prevents network boot loop)
-- [x] Verify boot order: `qm config 103 | grep '^boot:'` (should show `boot: order=scsi0`)
+- [x] Verify configuration: `qm config 103 | grep -E '^boot:|^ciuser:|^ipconfig0:'`
 - [x] Start VM: `qm start 103`
 - [x] Verify VM is running: `qm status 103`
 - [x] Verify VM boots from disk (not network) via console
 
-### Step 2: Initial VM Configuration
+### Step 2: Initial VM Login
 
-- [ ] Access VM console (via Proxmox web interface)
-- [ ] Configure network (if not using cloud-init):
-  - IP: 10.0.0.62/24
-  - Gateway: 10.0.0.1
-  - DNS: 10.0.0.10, 10.0.0.11
-  - Search Domain: asyla.org
+- [ ] Wait ~30-60 seconds for cloud-init to complete (first boot)
+- [ ] Access VM console (via Proxmox web interface) or SSH: `ssh root@10.0.0.62`
+- [ ] Login with credentials:
+  - Username: `root`
+  - Password: `TempPassword123!`
+- [ ] **IMMEDIATELY change password**: `passwd`
+- [ ] Verify network configuration:
+  - IP: `ip addr show` (should show 10.0.0.62/24)
+  - Gateway: `ip route show` (should show default via 10.0.0.1)
+  - DNS: `cat /etc/resolv.conf` (should show 10.0.0.10, 10.0.0.11)
+  - Test connectivity: `ping -c 3 10.0.0.1`
 - [ ] Create user account: `docker` (UID 1003, GID 1000)
 - [ ] Add user to `sudo` group
 - [ ] Test network connectivity: `ping 10.0.0.1`
