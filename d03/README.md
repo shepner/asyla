@@ -117,29 +117,52 @@ qm list | grep d03
 # From Proxmox host (vmh01 or vmh02) as root via SSH
 VMID=103
 
+# 1. Create VM without disk (we'll import the cloud image separately)
 qm create $VMID \
   --name d03 \
   --sockets 2 \
   --cores 6 \
   --memory 25600 \
   --ostype l26 \
-  --ide2 nas-data1-iso:iso/debian-13-nocloud-amd64.qcow2,media=cdrom \
-  --scsi0 nas-data1-vm:103,format=qcow2,discard=on,ssd=1 \
   --scsihw virtio-scsi-pci \
-  --bootdisk scsi0 \
   --net0 virtio,bridge=vmbr1,firewall=1,tag=100 \
   --onboot 1 \
   --numa 0 \
   --agent 1,fstrim_cloned_disks=1
 
-# Resize disk to 64GB
+# 2. Import Debian 13 cloud image as disk
+# Note: Cloud image must be uploaded to Proxmox storage first
+# Path on Proxmox host: /mnt/nas/data1/iso/template/iso/debian-13-nocloud-amd64.qcow2
+qm disk import $VMID \
+  /mnt/nas/data1/iso/template/iso/debian-13-nocloud-amd64.qcow2 \
+  nas-data1-vm \
+  --format qcow2
+
+# 3. Configure imported disk as scsi0 with desired properties
+qm set $VMID \
+  --scsi0 nas-data1-vm:$VMID/vm-$VMID-disk-0.qcow2,discard=on,ssd=1
+
+# 4. Resize disk to 64GB
 qm resize $VMID scsi0 64G
 
-# Start the VM
+# 5. Configure VGA display for console access
+qm set $VMID --vga std
+
+# 6. Set boot order to disk (scsi0) - IMPORTANT: Prevents network boot loop
+qm set $VMID --boot order=scsi0
+
+# 7. Verify boot configuration
+qm config $VMID | grep '^boot:'
+
+# 8. Start the VM
 qm start $VMID
 ```
 
-**Note**: The cloud image will boot directly - no installation needed. You'll need to configure it via console or cloud-init.
+**Important Notes**:
+- The cloud image will boot directly - no installation needed
+- **Boot order must be explicitly set to `scsi0`** to prevent network boot attempts
+- VGA display (`--vga std`) enables console access via VNC/noVNC in Proxmox web UI
+- You'll need to configure network and user account via console or cloud-init
 
 ### Step 5: Initial VM Configuration
 

@@ -6,37 +6,49 @@ This checklist guides you through the complete build process for the new d03 VM.
 
 ### Prerequisites Verification
 
-- [ ] SSH keys available on workstation (`~/.ssh/docker_rsa` and `~/.ssh/docker_rsa.pub`)
-- [ ] Proxmox hosts (vmh01/vmh02) accessible via SSH with root key
-- [ ] TrueNAS (nas01) accessible for iSCSI verification
-- [ ] Debian 13 cloud image downloaded: `debian-13-nocloud-amd64.qcow2`
-- [ ] Cloud image uploaded to Proxmox ISO storage (`nas-data1-iso:iso/`)
+- [x] SSH keys available on workstation (`~/.ssh/docker_rsa` and `~/.ssh/docker_rsa.pub`)
+- [x] Proxmox hosts (vmh01/vmh02) accessible via SSH with root key
+- [x] TrueNAS (nas01) accessible for iSCSI verification
+- [x] Debian 13 cloud image downloaded: `debian-13-nocloud-amd64.qcow2`
+- [x] Cloud image uploaded to Proxmox ISO storage (`nas-data1-iso:iso/`)
 
 ### TrueNAS iSCSI Verification
 
-- [ ] Log into TrueNAS (nas01)
-- [ ] Verify iSCSI target exists: `iqn.2005-10.org.freenas.ctl:nas01:d03:01`
-- [ ] Check initiator access controls (may need updating for new VM)
-- [ ] Verify old d03 instance can be safely disconnected
-- [ ] Document any required changes
+- [x] Log into TrueNAS (nas01)
+- [x] Verify iSCSI target exists: `iqn.2005-10.org.freenas.ctl:nas01:d03:01`
+- [x] Check initiator access controls (may need updating for new VM)
+- [x] Verify old d03 instance can be safely disconnected
+- [x] Document any required changes
+
+**Documented Changes Required:**
+- After new d03 VM is set up, update Initiator Group 3 in TrueNAS with the new VM's IQN
+- Current Group 3 IQN: `iqn.2016-04.com.open-iscsi:5e1d682255e` (old d03)
+- New IQN will be generated when `open-iscsi` is installed on new d03
+- Update will be done during `iscsi.sh` setup script execution
 
 ### Old d03 Shutdown
 
-- [ ] Backup any critical data from old d03
-- [ ] Shut down old d03 VM: `qm shutdown 103`
-- [ ] Verify old d03 is fully stopped: `qm status 103`
-- [ ] Remove old d03 VM: `qm destroy 103` (⚠️ PERMANENT)
-- [ ] Verify old VM is removed: `qm list | grep d03`
+- [x] Backup any critical data from old d03
+- [x] Shut down old d03 VM: `qm shutdown 103`
+- [x] Verify old d03 is fully stopped: `qm status 103`
+- [x] Remove old d03 VM: `qm destroy 103` (⚠️ PERMANENT)
+- [x] Verify old VM is removed: `qm list | grep d03`
 
 ## Build Process
 
 ### Step 1: Create VM in Proxmox
 
-- [ ] SSH to Proxmox host (vmh01 or vmh02) as root
-- [ ] Run VM creation command from README (verify VMID=103)
-- [ ] Resize disk: `qm resize 103 scsi0 64G`
-- [ ] Start VM: `qm start 103`
-- [ ] Verify VM is running: `qm status 103`
+- [x] SSH to Proxmox host (vmh02) as root
+- [x] Run VM creation command from README (verify VMID=103)
+- [x] Import Debian cloud image: `qm disk import 103 ...`
+- [x] Configure disk: `qm set 103 --scsi0 ...`
+- [x] Resize disk: `qm resize 103 scsi0 64G`
+- [x] Configure VGA: `qm set 103 --vga std`
+- [x] Set boot order: `qm set 103 --boot order=scsi0` (prevents network boot loop)
+- [x] Verify boot order: `qm config 103 | grep '^boot:'` (should show `boot: order=scsi0`)
+- [x] Start VM: `qm start 103`
+- [x] Verify VM is running: `qm status 103`
+- [x] Verify VM boots from disk (not network) via console
 
 ### Step 2: Initial VM Configuration
 
