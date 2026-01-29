@@ -27,14 +27,16 @@ log_step() {
     echo -e "\n${BLUE}=== $1 ===${NC}"
 }
 
-# Configuration
+# Configuration - paths relative to this script so build works from repo root or d03/
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VMID=103
 VM_NAME="d03"
 PROXMOX_HOST="vmh02"
 # Try generic image first (more likely to include cloud-init), fall back to nocloud
 IMAGE_PATH="/mnt/nas/data1/iso/template/iso/debian-13-generic-amd64.qcow2"
 IMAGE_PATH_FALLBACK="/mnt/nas/data1/iso/template/iso/debian-13-nocloud-amd64.qcow2"
-CLOUD_INIT_FILE="d03/setup/cloud-init-userdata.yml"
+CLOUD_INIT_FILE="$SCRIPT_DIR/setup/cloud-init-userdata.yml"
+CLOUD_INIT_VENDOR_FILE="$SCRIPT_DIR/setup/cloud-init-vendor.yml"
 SNIPPETS_PATH="/var/lib/vz/snippets/d03-cloud-init.yml"
 
 log_step "Starting Full Build Test for d03 VM"
@@ -133,8 +135,8 @@ if command -v virt-ls >/dev/null 2>&1; then
     echo '   The vendor file will install it automatically if missing'
   fi
 else
-  echo '⚠️  virt-ls not available - cannot verify cloud-init in image'
-  echo '   Assuming image includes cloud-init (standard for Debian cloud images)'
+  echo 'Note: virt-ls not available - skipping cloud-init check in image'
+  echo '   Debian cloud images include cloud-init by default'
 fi
 " || {
     log_warn "Could not verify cloud-init in image (non-fatal)"
@@ -180,7 +182,7 @@ log_info "VGA configured for console access"
 # Step 9: Configure cloud-init using Proxmox built-in + vendor file
 log_step "Step 9: Configure cloud-init"
 log_info "Copying vendor file to Proxmox..."
-scp "d03/setup/cloud-init-vendor.yml" "root@$PROXMOX_HOST:/var/lib/vz/snippets/d03-cloud-init-vendor.yml" || {
+scp "$CLOUD_INIT_VENDOR_FILE" "root@$PROXMOX_HOST:/var/lib/vz/snippets/d03-cloud-init-vendor.yml" || {
     log_error "Failed to copy vendor file"
     exit 1
 }

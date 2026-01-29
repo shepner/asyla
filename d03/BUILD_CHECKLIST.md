@@ -39,7 +39,9 @@ This checklist guides you through the complete build process for the new d03 VM.
 ### Step 1: Create VM in Proxmox
 
 **Option A: Automated Build (Recommended)**
-- [ ] Run automated build script from workstation: `./d03/build.sh`
+- [ ] Run automated build script from workstation. Paths are script-relative, so either:
+  - From repo root: `./d03/build.sh`
+  - From d03: `./build.sh`
 - [ ] Script handles all steps automatically (VM creation, cloud-init setup, verification)
 - [ ] Wait for script to complete and verify SSH access
 
