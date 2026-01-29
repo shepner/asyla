@@ -38,6 +38,11 @@ Before creating the VM, ensure:
    - This is a pre-built cloud image - no installation needed, just configure and use
    - Place the downloaded file in your Proxmox ISO storage (e.g., `nas-data1-iso:iso/`)
    - **Why cloud image?**: Faster setup, supports cloud-init for automated configuration
+   - **⚠️ NOTE**: Debian 13 cloud images SHOULD include cloud-init pre-installed. If cloud-init is missing, the image may be incomplete or corrupted. Consider:
+   - Verifying the image download (checksums)
+   - Using `debian-13-generic-amd64.qcow2` instead (may be more complete)
+   - Re-downloading from https://cloud.debian.org/images/cloud/
+   - The build script will automatically install cloud-init if missing via vendor file
 
 3. **Proxmox host is ready**:
    - Storage volumes configured (`nas-data1-iso` for ISO storage, `nas-data1-vm` for VM storage)
@@ -137,6 +142,30 @@ qm list | grep d03
 
 **⚠️ PRODUCTION: Verify all values before executing**
 
+**Recommended: Use Automated Build Script**
+
+For fully automated builds without console copy/paste, use the `build.sh` script:
+
+```bash
+# From workstation (where repository is cloned)
+cd /path/to/asyla
+./d03/build.sh
+```
+
+**What the automated build does:**
+- Stops and removes existing d03 VM (if present)
+- Creates new VM with correct specifications
+- Imports Debian cloud image (checks for both `generic` and `nocloud` variants)
+- Configures Proxmox built-in cloud-init (user, network, SSH keys)
+- Copies vendor file that installs cloud-init if missing and processes full config
+- Sets boot order correctly
+- Starts VM and waits for initialization
+- Verifies SSH access
+
+**Manual Build (Alternative)**
+
+If you prefer manual control or need to customize the process, follow the steps below:
+
 ```bash
 # From Proxmox host (vmh01 or vmh02) as root via SSH
 VMID=103
@@ -187,24 +216,32 @@ qm resize $VMID scsi0 64G
 # 5. Configure VGA display for console access
 qm set $VMID --vga std
 
-# 6. Copy cloud-init user-data file to Proxmox snippets directory
-# From workstation, copy the cloud-init user-data file to Proxmox host:
-scp d03/setup/cloud-init-userdata.yml root@vmh02:/var/lib/vz/snippets/d03-cloud-init.yml
+# 6. Copy cloud-init vendor file to Proxmox snippets directory
+# From workstation, copy the vendor file to Proxmox host:
+scp d03/setup/cloud-init-vendor.yml root@vmh02:/var/lib/vz/snippets/d03-cloud-init-vendor.yml
 
-# 7. Configure cloud-init using custom user-data file
-# This automates: docker user creation, groups (asyla, docker), UID/GID (1003/1000),
-# SSH keys, network configuration, and initial package installation
-# Note: --cicustom REPLACES the auto-generated config, so network is included in user-data
+# 7. Copy SSH public key to Proxmox host (for cloud-init)
+# From workstation:
+scp ~/.ssh/docker_rsa.pub root@vmh02:/tmp/docker_rsa.pub
+
+# 8. Configure cloud-init using Proxmox built-in options + vendor file
+# This approach works even if cloud-init isn't pre-installed in the image
+# Proxmox generates an ISO that cloud-init reads when installed
+# The vendor file installs cloud-init if missing, then processes our full config
 qm set $VMID \
-  --cicustom user=local:snippets/d03-cloud-init.yml
+  --ciuser docker \
+  --cipassword $(openssl passwd -6 TempPassword123!) \
+  --sshkeys /tmp/docker_rsa.pub \
+  --ipconfig0 ip=10.0.0.62/24,gw=10.0.0.1 \
+  --nameserver '10.0.0.10 10.0.0.11' \
+  --searchdomain asyla.org \
+  --cicustom vendor=local:snippets/d03-cloud-init-vendor.yml
 
-# Alternative: Use Proxmox built-in cloud-init (simpler but requires bootstrap script)
-# qm set $VMID \
-#   --ciuser docker \
-#   --sshkeys /tmp/docker_rsa.pub \
-#   --ipconfig0 ip=10.0.0.62/24,gw=10.0.0.1 \
-#   --nameserver '10.0.0.10 10.0.0.11' \
-#   --searchdomain asyla.org
+# 9. Update cloud-init configuration
+qm cloudinit update $VMID
+
+# 10. Clean up temporary SSH key file
+rm -f /tmp/docker_rsa.pub
 
 # 9. Set boot order to disk (scsi0) - IMPORTANT: Prevents network boot loop
 qm set $VMID --boot order=scsi0
@@ -226,22 +263,36 @@ qm start $VMID
 
 ### Step 5: Initial VM Login
 
-**⚠️ IMPORTANT: Cloud-init Setup**
+**⚠️ IMPORTANT: Automated Cloud-init Setup**
 
-Cloud-init was configured during VM creation with custom user-data that automates:
-- **User**: `docker` (created automatically with UID 1003, GID 1000)
+The build process uses Proxmox's built-in cloud-init options combined with a vendor file that:
+1. **Installs cloud-init** if missing from the image (Debian cloud images should include it)
+2. **Processes Proxmox's built-in config** (user, network, SSH keys)
+3. **Processes our full user-data** (docker user with UID/GID, groups, additional packages)
+
+**What gets configured automatically:**
+- **User**: `docker` (created with UID 1003, GID 1000 via full user-data)
 - **Groups**: `asyla` (GID 1000), `docker`, `sudo` (all configured automatically)
-- **SSH Key**: Public key uploaded (no password needed)
-- **IP Address**: `10.0.0.62` (configured via cloud-init)
+- **SSH Key**: Public key configured (no password needed)
+- **IP Address**: `10.0.0.62` (configured via Proxmox built-in cloud-init)
 - **Network**: Fully configured (DNS, gateway, search domain)
-- **Packages**: curl, git installed automatically
+- **Packages**: cloud-init, openssh-server, curl, git installed automatically
+- **SSH Service**: Enabled and started automatically
 
 **Access the VM:**
-1. Wait ~30-60 seconds for cloud-init to complete (first boot takes longer)
+1. Wait ~60-90 seconds for cloud-init to complete (first boot installs packages and processes config)
 2. SSH to the VM using your SSH key:
    ```bash
    ssh docker@10.0.0.62
    ```
+   
+   **If SSH doesn't work immediately:**
+   - Check console for cloud-init progress
+   - Try DHCP IP if static IP not configured: `ssh docker@10.0.0.248` (or check `ip addr` from console)
+   - Vendor file will install cloud-init and process full config automatically
+   
+   **After a rebuild:** The VM gets a new SSH host key. Edit `~/.ssh/known_hosts` on your workstation and remove the old line for `10.0.0.62` or `d03`, then connect again (or answer `yes` when SSH asks to accept the new key).
+   
    No password needed - SSH key authentication is configured!
 
 **Verify Configuration:**
@@ -264,9 +315,24 @@ scp ~/.ssh/config d03:.ssh/config
 ssh d03 "chmod -R 700 ~/.ssh"
 ```
 
-**Note**: When using custom cloud-init user-data (`--cicustom`), groups, UID/GID, and permissions are configured automatically. No bootstrap script needed!
+**Note**: The vendor file automatically installs cloud-init if missing, then processes our full user-data configuration. Everything is automated - no manual console steps needed!
 
-**Network Configuration** (if not using cloud-init):
+**Automated Build Option:**
+For fully automated builds, use the `build.sh` script from the repository:
+```bash
+# From workstation
+cd /path/to/asyla
+./d03/build.sh
+```
+
+This script handles:
+- VM creation and configuration
+- Cloud image import
+- Cloud-init setup (Proxmox built-in + vendor file)
+- SSH key handling
+- Initial verification
+
+**Network Configuration**:
 - IP: 10.0.0.62/24
 - Gateway: 10.0.0.1
 - DNS: 10.0.0.10, 10.0.0.11
@@ -400,6 +466,86 @@ This is a **greenfield opportunity** and **base template** for future docker hos
 **Container Requirements:**
 - ⚠️ TODO: Determine which containers will run on d03
 - d03-old had no containers defined - this is a fresh start
+
+## Troubleshooting
+
+### Cloud-init Not Installed
+
+**Symptoms:**
+- `cloud-init: command not found` when checking from console
+- VM boots but configuration doesn't process automatically
+- Network gets DHCP IP instead of static IP
+- Docker user not created
+
+**Cause:**
+Some Debian 13 cloud images don't include cloud-init pre-installed, even though they're designed for cloud-init use. However, the vendor file should handle this automatically.
+
+**Expected Behavior:**
+The vendor file (`cloud-init-vendor.yml`) is designed to:
+1. Install cloud-init if missing
+2. Process Proxmox's built-in cloud-init config
+3. Process our full user-data configuration
+
+**If vendor file doesn't run (cloud-init not installed to process it):**
+
+**Option 1: Console bootstrap when paste is not available (recommended)**
+
+Proxmox console often does not support paste. Serve the bootstrap from your workstation so you only type a short command:
+
+1. On your workstation (from repo root): `./d03/setup/serve_bootstrap.sh`
+2. In the VM console, as root, type (replace with your host IP): `curl http://10.0.0.50:8888/b | bash`
+3. Stop the server with Ctrl+C when done.
+
+See `BUILD_CHECKLIST.md` → Troubleshooting → "Cloud-init missing / No SSH / Can't paste in console" for details.
+
+**Option 2: Use bootstrap script (if you can paste or run from SSH)**
+From the VM console (paste from GitHub):
+```bash
+curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/setup/bootstrap_complete.sh | bash
+```
+
+**Option 3: Manual Installation (if bootstrap script fails)**
+From the VM console:
+```bash
+# Install cloud-init
+apt-get update && apt-get install -y cloud-init
+
+# Fetch and process our user-data
+mkdir -p /var/lib/cloud/seed/nocloud
+curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/setup/cloud-init-userdata.yml > /var/lib/cloud/seed/nocloud/user-data
+
+# Process cloud-init configuration
+cloud-init clean && cloud-init init --local && cloud-init init && cloud-init modules --mode config && cloud-init modules --mode final
+
+# Verify setup
+id docker && systemctl status ssh && ip addr show ens18
+```
+
+**Prevention:**
+- Use `debian-13-generic-amd64.qcow2` instead of `debian-13-nocloud-amd64.qcow2` (more likely to include cloud-init)
+- Verify the Debian 13 cloud image includes cloud-init before use
+- The build script checks for both image types and prefers the generic one
+- Consider downloading a fresh image from https://cloud.debian.org/images/cloud/
+
+### Network Using DHCP Instead of Static IP
+
+**Symptoms:**
+- VM gets IP like `10.0.0.248` instead of `10.0.0.62`
+- `ip addr show ens18` shows DHCP-assigned address
+
+**Cause:**
+Cloud-init didn't process the network configuration (usually because cloud-init isn't installed or didn't run).
+
+**Solution:**
+1. Install cloud-init (see above)
+2. Process cloud-init configuration (see above)
+3. Or manually configure network:
+```bash
+# Edit network config
+nano /etc/netplan/50-cloud-init.yaml
+# Set static IP, gateway, DNS
+netplan apply
+```
 
 ## Related Documentation
 

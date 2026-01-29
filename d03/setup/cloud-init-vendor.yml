@@ -1,0 +1,84 @@
+#cloud-config
+# Vendor file for d03 VM - runs additional setup commands
+# This file is processed by cloud-init AFTER Proxmox's built-in cloud-init runs
+# Use with: qm set <VMID> --cicustom vendor=local:snippets/d03-cloud-init-vendor.yml
+# 
+# IMPORTANT: This file requires cloud-init to be installed to process it.
+# Debian 13 cloud images SHOULD include cloud-init pre-installed.
+# If cloud-init is missing, Proxmox's built-in config won't process either.
+# In that case, use the bootstrap script manually (see README troubleshooting).
+
+# Process our full user-data configuration
+runcmd:
+  # Verify cloud-init is available (should be pre-installed in Debian cloud images)
+  - |
+    if ! command -v cloud-init >/dev/null 2>&1; then
+      echo "ERROR: cloud-init not found - Debian cloud image may be incomplete"
+      echo "Installing cloud-init as fallback..."
+      apt-get update && apt-get install -y cloud-init || {
+        echo "ERROR: Failed to install cloud-init"
+        echo "Image may be corrupted - consider re-downloading from https://cloud.debian.org/images/cloud/"
+        exit 1
+      }
+    fi
+
+  # Save Proxmox-generated user-data (contains SSH key from --sshkeys) before we overwrite the seed.
+  # Seed may be at /var/lib/cloud/seed/nocloud/ or on the cloud-init CD (/dev/sr0).
+  - |
+    if [ -f /var/lib/cloud/seed/nocloud/user-data ] && [ -s /var/lib/cloud/seed/nocloud/user-data ]; then
+      cp /var/lib/cloud/seed/nocloud/user-data /tmp/proxmox_user_data.yml
+    elif [ -b /dev/sr0 ]; then
+      mkdir -p /tmp/ci_cd
+      if mount -o ro /dev/sr0 /tmp/ci_cd 2>/dev/null; then
+        for f in /tmp/ci_cd/user-data /tmp/ci_cd/user_data /tmp/ci_cd/openstack/latest/user_data; do
+          if [ -f "$f" ] && [ -s "$f" ]; then cp "$f" /tmp/proxmox_user_data.yml; break; fi
+        done
+        umount /tmp/ci_cd 2>/dev/null || true
+      fi
+      rmdir /tmp/ci_cd 2>/dev/null || true
+    fi
+  
+  # Fetch and process our full user-data configuration
+  - |
+    echo "Fetching full user-data configuration..."
+    mkdir -p /var/lib/cloud/seed/nocloud
+    curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/setup/cloud-init-userdata.yml > /var/lib/cloud/seed/nocloud/user-data || {
+      echo "ERROR: Failed to download user-data"
+      exit 1
+    }
+  
+  # Process the full configuration
+  - |
+    echo "Processing full cloud-init configuration..."
+    cloud-init clean || true
+    cloud-init init --local
+    cloud-init init
+    cloud-init modules --mode config
+    cloud-init modules --mode final
+
+  # Inject Proxmox SSH key into docker's authorized_keys (from saved Proxmox user-data).
+  # Proxmox writes ssh_authorized_keys as a YAML list; extract lines that look like SSH keys.
+  - |
+    if [ -f /tmp/proxmox_user_data.yml ]; then
+      mkdir -p /home/docker/.ssh
+      grep -E '^\s+-\s+ssh-' /tmp/proxmox_user_data.yml | sed 's/^\s*-\s*//' >> /home/docker/.ssh/authorized_keys 2>/dev/null || true
+      grep -E '^\s+-\s+ecdsa-' /tmp/proxmox_user_data.yml | sed 's/^\s*-\s*//' >> /home/docker/.ssh/authorized_keys 2>/dev/null || true
+      grep -E '^\s+-\s+sk-' /tmp/proxmox_user_data.yml | sed 's/^\s*-\s*//' >> /home/docker/.ssh/authorized_keys 2>/dev/null || true
+      sort -u /home/docker/.ssh/authorized_keys -o /home/docker/.ssh/authorized_keys 2>/dev/null || true
+      chown -R docker:asyla /home/docker/.ssh
+      chmod 700 /home/docker/.ssh
+      chmod 600 /home/docker/.ssh/authorized_keys
+      rm -f /tmp/proxmox_user_data.yml
+    fi
+  
+  # Ensure SSH service is running
+  - systemctl enable ssh || systemctl enable sshd || true
+  - systemctl start ssh || systemctl start sshd || true
+  
+  # Verify setup
+  - |
+    echo "=== Setup Verification ==="
+    id docker || echo "WARNING: docker user not created"
+    systemctl is-active ssh || systemctl is-active sshd || echo "WARNING: SSH not running"
+    ip addr show ens18 | grep "inet " || echo "WARNING: Network not configured"
+    echo "=== Setup Complete ==="

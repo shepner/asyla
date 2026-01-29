@@ -29,45 +29,52 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 REPO="shepner/asyla"
-WORKDIR=~/scripts
 HOSTNAME=$(hostname -s)
+TARGET_USER="docker"
+TARGET_HOME="/home/$TARGET_USER"
+TARGET_SCRIPTS="$TARGET_HOME/scripts"
+# Use a temp dir for clone so we never wipe the real scripts dir
+WORKDIR=$(mktemp -d)
 
 log_info "Updating scripts from repository..."
 
-# Remove existing work directory if it exists
-if [ -d "$WORKDIR" ]; then
-    log_info "Removing existing scripts directory..."
-    rm -rf "$WORKDIR"
-fi
-
 # Sparse git checkout - only get what we need
-# https://stackoverflow.com/questions/2466735/how-to-sparsely-checkout-only-one-single-file-from-a-git-repository
 log_info "Cloning repository (sparse checkout)..."
 git clone --depth 1 --no-checkout --filter=blob:none "https://github.com/$REPO.git" "$WORKDIR"
 
 cd "$WORKDIR"
 
-# Checkout only the directories we need
+# Checkout host-specific and docker trees
 log_info "Checking out host-specific scripts ($HOSTNAME)..."
 git checkout master -- "$HOSTNAME" || log_warn "No $HOSTNAME directory found in repository"
 
 log_info "Checking out docker scripts..."
 git checkout master -- docker || log_warn "No docker directory found in repository"
 
-# Set proper permissions on scripts
-log_info "Setting script permissions..."
-find "$WORKDIR" -name "*.sh" -exec chmod 744 {} \;
-
-# Move host-specific scripts to home directory
+# Install into docker user's home: ~/scripts/d03/ and ~/update*.sh
+log_info "Installing scripts to $TARGET_SCRIPTS and $TARGET_HOME..."
+mkdir -p "$TARGET_SCRIPTS"
 if [ -d "$WORKDIR/$HOSTNAME" ]; then
-    log_info "Moving host-specific scripts to home directory..."
-    mv "$WORKDIR/$HOSTNAME"/*.sh ~/ 2>/dev/null || log_warn "No scripts to move from $HOSTNAME directory"
+    cp -r "$WORKDIR/$HOSTNAME" "$TARGET_SCRIPTS/"
+    # Copy update scripts to home so ~/update.sh works
+    for f in update.sh update_scripts.sh update_all.sh; do
+        if [ -f "$TARGET_SCRIPTS/$HOSTNAME/$f" ]; then
+            cp "$TARGET_SCRIPTS/$HOSTNAME/$f" "$TARGET_HOME/"
+        fi
+    done
 fi
 
-# Clean up temporary git clone
+# Set ownership so docker user can run scripts
+if getent passwd "$TARGET_USER" &>/dev/null; then
+    chown -R "$TARGET_USER:" "$TARGET_SCRIPTS" "$TARGET_HOME"/update.sh "$TARGET_HOME"/update_scripts.sh "$TARGET_HOME"/update_all.sh 2>/dev/null || true
+fi
+find "$TARGET_SCRIPTS" -name "*.sh" -exec chmod 744 {} \;
+chmod 744 "$TARGET_HOME"/update.sh "$TARGET_HOME"/update_scripts.sh "$TARGET_HOME"/update_all.sh 2>/dev/null || true
+
+# Clean up temporary clone
 log_info "Cleaning up temporary files..."
-cd ~
+cd /
 rm -rf "$WORKDIR"
 
-log_info "Scripts updated successfully!"
+log_info "Scripts updated successfully! Setup scripts are in $TARGET_SCRIPTS/$HOSTNAME/setup/"
 

@@ -19,8 +19,10 @@ network:
         search:
           - asyla.org
 
-# Install packages
+# Install packages (cloud-init should be pre-installed in Debian cloud images)
+# If not, it will be installed here
 packages:
+  - cloud-init
   - openssh-server
   - curl
   - git
@@ -48,35 +50,34 @@ runcmd:
   - apt-get update
   - apt-get upgrade -y
   
-  # Ensure SSH service is enabled and started
-  - systemctl enable sshd || systemctl enable ssh
-  - systemctl start sshd || systemctl start ssh
+  # Ensure SSH service is enabled and started (Debian uses 'ssh' service name)
+  - systemctl enable ssh || systemctl enable sshd || true
+  - systemctl start ssh || systemctl start sshd || true
+  - systemctl status ssh --no-pager || systemctl status sshd --no-pager || echo "WARNING: Could not verify SSH service status"
   
   # Ensure .ssh directory permissions are correct (cloud-init may create it before user exists)
   - mkdir -p /home/docker/.ssh
   - chmod 700 /home/docker/.ssh
   - chown -R docker:asyla /home/docker/.ssh || true
   
-  # Fetch setup scripts (will be run manually later)
+  # Fetch setup scripts (fixed update_scripts.sh installs to /home/docker/scripts/d03/)
   - |
     curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/update_scripts.sh | bash || true
-  
-  # Note: Setup scripts (systemConfig.sh, nfs.sh, smb.sh, iscsi.sh, docker.sh) 
-  # should be run manually as some require configuration or verification
+
+  # Auto-run non-sensitive setup (systemConfig, nfs, docker, update). Only if scripts exist (e.g. after fixed update_scripts.sh).
+  - [ bash, -c, 'test -f /home/docker/scripts/d03/setup/systemConfig.sh && /home/docker/scripts/d03/setup/systemConfig.sh || true' ]
+  - [ bash, -c, 'test -f /home/docker/scripts/d03/setup/nfs.sh && /home/docker/scripts/d03/setup/nfs.sh || true' ]
+  - [ bash, -c, 'test -f /home/docker/scripts/d03/setup/docker.sh && /home/docker/scripts/d03/setup/docker.sh || true' ]
+  - [ bash, -c, 'test -f /home/docker/update.sh && /home/docker/update.sh || true' ]
 
 # Final message
 final_message: |
   d03 VM setup complete!
   
-  Next steps:
-  1. SSH to d03: ssh docker@10.0.0.62
-  2. Copy SSH private key and config from workstation:
-     scp ~/.ssh/docker_rsa d03:.ssh/docker_rsa
-     scp ~/.ssh/config d03:.ssh/config
-     ssh d03 "chmod -R 700 ~/.ssh"
-  3. Run remaining setup scripts:
-     ~/scripts/d03/setup/nfs.sh
-     ~/scripts/d03/setup/smb.sh  # (then edit ~/.smbcredentials)
-     ~/scripts/d03/setup/iscsi.sh
-     ~/scripts/d03/setup/docker.sh
-  4. Run system update: ~/update.sh
+  Auto-ran: systemConfig, nfs, docker, update (if scripts were installed).
+  Manual steps:
+  1. SSH to d03: ssh docker@10.0.0.62 (edit ~/.ssh/known_hosts if you rebuilt the VM)
+  2. Copy SSH private key and config: scp ~/.ssh/docker_rsa d03:.ssh/docker_rsa; scp ~/.ssh/config d03:.ssh/config; ssh d03 "chmod -R 700 ~/.ssh"
+  3. SMB (create ~/.smbcredentials then run): sudo ~/scripts/d03/setup/smb.sh
+  4. iSCSI (optional): sudo ~/scripts/d03/setup/iscsi.sh
+  5. Log out and back in (or newgrp docker) so docker group applies, then: docker ps

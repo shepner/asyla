@@ -38,35 +38,61 @@ This checklist guides you through the complete build process for the new d03 VM.
 
 ### Step 1: Create VM in Proxmox
 
-- [x] SSH to Proxmox host (vmh02) as root
-- [x] Run VM creation command from README (verify VMID=103)
-- [x] Import Debian cloud image: `qm disk import 103 ...`
-- [x] Configure disk: `qm set 103 --scsi0 ...`
-- [x] Resize disk: `qm resize 103 scsi0 64G`
-- [x] Configure VGA: `qm set 103 --vga std`
-- [ ] Copy cloud-init user-data to Proxmox: `scp d03/setup/cloud-init-userdata.yml root@vmh02:/var/lib/vz/snippets/d03-cloud-init.yml`
-- [ ] Configure cloud-init with custom user-data: `qm set 103 --cicustom user=local:snippets/d03-cloud-init.yml`
-- [x] Set boot order: `qm set 103 --boot order=scsi0` (prevents network boot loop)
-- [x] Verify configuration: `qm config 103 | grep -E '^boot:|^ciuser:|^ipconfig0:'`
-- [x] Start VM: `qm start 103`
-- [x] Verify VM is running: `qm status 103`
-- [x] Verify VM boots from disk (not network) via console
+**Option A: Automated Build (Recommended)**
+- [ ] Run automated build script from workstation: `./d03/build.sh`
+- [ ] Script handles all steps automatically (VM creation, cloud-init setup, verification)
+- [ ] Wait for script to complete and verify SSH access
+
+**Option B: Manual Build**
+- [ ] SSH to Proxmox host (vmh02) as root
+- [ ] Run VM creation command from README (verify VMID=103)
+- [ ] Import Debian cloud image: `qm disk import 103 ...`
+- [ ] Configure disk: `qm set 103 --scsi0 ...`
+- [ ] Resize disk: `qm resize 103 scsi0 64G`
+- [ ] Configure VGA: `qm set 103 --vga std`
+- [ ] Copy cloud-init vendor file to Proxmox: `scp d03/setup/cloud-init-vendor.yml root@vmh02:/var/lib/vz/snippets/d03-cloud-init-vendor.yml`
+- [ ] Copy SSH public key to Proxmox: `scp ~/.ssh/docker_rsa.pub root@vmh02:/tmp/docker_rsa.pub`
+- [ ] Configure Proxmox built-in cloud-init + vendor file:
+  ```bash
+  qm set 103 --ciuser docker \
+    --cipassword $(openssl passwd -6 TempPassword123!) \
+    --sshkeys /tmp/docker_rsa.pub \
+    --ipconfig0 ip=10.0.0.62/24,gw=10.0.0.1 \
+    --nameserver '10.0.0.10 10.0.0.11' \
+    --searchdomain asyla.org \
+    --cicustom vendor=local:snippets/d03-cloud-init-vendor.yml
+  qm cloudinit update 103
+  rm -f /tmp/docker_rsa.pub
+  ```
+- [ ] Set boot order: `qm set 103 --boot order=scsi0` (prevents network boot loop)
+- [ ] Verify configuration: `qm config 103 | grep -E '^boot:|^ciuser:|^ipconfig0:|^cicustom:'`
+- [ ] Start VM: `qm start 103`
+- [ ] Verify VM is running: `qm status 103`
 
 ### Step 2: Initial VM Login
 
-**✅ Fully automated by custom cloud-init user-data:**
-- Docker user created automatically (UID 1003, GID 1000)
+**✅ Fully automated by Proxmox built-in cloud-init + vendor file:**
+- Vendor file installs cloud-init if missing (Debian images should include it)
+- Docker user created automatically (UID 1003, GID 1000) via full user-data
 - Groups created automatically (asyla GID 1000, docker, sudo)
-- SSH public key configured automatically
-- Network configured automatically (IP, gateway, DNS, search domain)
-- Initial packages installed (curl, git)
+- SSH public key: Proxmox `--sshkeys` is preserved when the vendor re-runs cloud-init with userdata (vendor backs up/restores `authorized_keys` so your `docker_rsa.pub` is used)
+- Network configured automatically (IP, gateway, DNS, search domain) via Proxmox built-in
+- Initial packages installed (cloud-init, openssh-server, curl, git)
+- SSH service enabled and started automatically
 - Setup scripts fetched automatically
 
-**Manual verification steps:**
-- [ ] Wait ~30-60 seconds for cloud-init to complete (first boot)
+**Verification steps:**
+- [ ] Wait ~60-90 seconds for cloud-init to complete (first boot installs packages and processes config)
+- [ ] **Check cloud-init status** (from console if SSH not ready):
+  - `command -v cloud-init` (should show `/usr/bin/cloud-init` after vendor file runs)
+  - `cloud-init status` (should show "status: done" when complete)
+  - If cloud-init not found initially, vendor file will install it automatically
 - [ ] SSH to VM: `ssh docker@10.0.0.62` (no password - SSH key authentication)
+  - If SSH fails, try DHCP IP: `ssh docker@10.0.0.248` (or check `ip addr` from console)
+  - Vendor file ensures SSH service is running
+- [ ] **After a rebuild:** The VM gets a new host key. SSH will warn that the host key for `10.0.0.62` or `d03` has changed. Edit `~/.ssh/known_hosts` on your workstation and remove the old line for `10.0.0.62` or `d03`, then connect again (or answer `yes` when SSH asks to accept the new key).
 - [ ] Verify network configuration:
-  - IP: `ip addr show` (should show 10.0.0.62/24)
+  - IP: `ip addr show ens18` (should show 10.0.0.62/24)
   - Gateway: `ip route show` (should show default via 10.0.0.1)
   - DNS: `cat /etc/resolv.conf` (should show 10.0.0.10, 10.0.0.11)
   - Test connectivity: `ping -c 3 10.0.0.1`
@@ -75,7 +101,7 @@ This checklist guides you through the complete build process for the new d03 VM.
   - `groups docker` (should include: asyla docker sudo)
 - [ ] Verify setup scripts were fetched: `ls ~/scripts/d03/setup/`
 
-**Note**: Using `--cicustom` with `d03/setup/cloud-init-userdata.yml` automates everything. No bootstrap script needed!
+**Note**: The vendor file (`cloud-init-vendor.yml`) handles cloud-init installation if missing, then processes our full user-data configuration. Everything is automated - no console copy/paste needed!
 
 ### Step 3: Complete SSH Key Setup
 
@@ -97,15 +123,16 @@ This checklist guides you through the complete build process for the new d03 VM.
 - Scripts fetched automatically from repository
 
 **Must remain manual (requires verification/credentials):**
+- [ ] If scripts were not fetched by cloud-init, from workstation run: `./d03/deploy_scripts_to_d03.sh` (pushes setup and update scripts to d03)
 - [ ] SSH to d03: `ssh d03`
-- [ ] Verify scripts were fetched: `ls ~/scripts/d03/setup/` (should show all setup scripts)
-- [ ] Run systemConfig.sh: `~/scripts/d03/setup/systemConfig.sh`
-- [ ] Run nfs.sh: `~/scripts/d03/setup/nfs.sh`
-- [ ] Run smb.sh: `~/scripts/d03/setup/smb.sh`
+- [ ] Verify scripts are present: `ls ~/scripts/d03/setup/` (should show systemConfig.sh, nfs.sh, smb.sh, iscsi.sh, docker.sh)
+- [ ] Run systemConfig.sh: `sudo ~/scripts/d03/setup/systemConfig.sh`
+- [ ] Run nfs.sh: `sudo ~/scripts/d03/setup/nfs.sh`
+- [ ] Run smb.sh: `sudo ~/scripts/d03/setup/smb.sh`
 - [ ] **Edit SMB credentials**: `vi ~/.smbcredentials` (add username, password, domain)
-- [ ] Run iscsi.sh: `~/scripts/d03/setup/iscsi.sh` (verify TrueNAS when prompted)
-- [ ] Run docker.sh: `~/scripts/d03/setup/docker.sh`
-- [ ] Run system update: `~/update.sh`
+- [ ] Run iscsi.sh: `sudo ~/scripts/d03/setup/iscsi.sh` (verify TrueNAS when prompted)
+- [ ] Run docker.sh: `sudo ~/scripts/d03/setup/docker.sh`
+- [ ] Run system update: `sudo ~/update.sh`
 
 **Note**: Script fetching could be automated via custom cloud-init user-data, but execution must remain manual as some scripts require:
 - SMB credentials (security-sensitive)
@@ -170,6 +197,24 @@ This checklist guides you through the complete build process for the new d03 VM.
 - [ ] Any custom configurations documented
 
 ## Troubleshooting
+
+### Cloud-init missing / No SSH / Can't paste in console
+
+If the VM has no cloud-init (`command -v cloud-init` shows nothing), SSH is not running, and the console does not support paste:
+
+1. **On your workstation** (or Proxmox host, from a shell with the repo):
+   ```bash
+   ./d03/setup/serve_bootstrap.sh
+   ```
+   Note the `HOST_IP` it prints (e.g. `10.0.0.50`).
+
+2. **In the Proxmox VM console**, as root, type only (replace with your host IP):
+   ```text
+   curl http://10.0.0.50:8888/b | bash
+   ```
+   Short filename `b` keeps typing minimal. When the bootstrap finishes, SSH will be available at `docker@10.0.0.62` (or at the current DHCP IP if static is not yet applied).
+
+3. Stop the server on the workstation with Ctrl+C when done.
 
 ### Common Issues
 
