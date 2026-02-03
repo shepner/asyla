@@ -30,6 +30,13 @@ fi
 
 log_info "Starting system configuration..."
 
+# Set system timezone to Central
+log_info "Setting timezone to America/Chicago..."
+timedatectl set-timezone America/Chicago 2>/dev/null || {
+  echo "America/Chicago" > /etc/timezone
+  dpkg-reconfigure -f noninteractive tzdata 2>/dev/null || true
+}
+
 # Update package lists
 log_info "Updating package lists..."
 apt update

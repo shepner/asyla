@@ -9,6 +9,9 @@ hostname: d03
 fqdn: d03.asyla.org
 manage_etc_hosts: true
 
+# System timezone (Central)
+timezone: America/Chicago
+
 # Network configuration (Debian 13 uses ens18 for virtio adapters)
 network:
   version: 2
