@@ -297,8 +297,7 @@ elif ssh $VM_SSH_OPTS -o ConnectTimeout=5 root@10.0.0.248 "command -v cloud-init
     log_info "✅ cloud-init is installed (checked via DHCP IP)"
 else
     log_warn "cloud-init may not be installed."
-    log_info "From VM console (as root), run: curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/setup/bootstrap_complete.sh | bash"
-    log_info "Or on workstation: ./d03/setup/serve_bootstrap.sh then in console: curl http://<workstation-ip>:8888/b | bash"
+    log_info "From VM console (as root), run: curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/setup/bootstrap.sh | bash"
 fi
 
 # Step 15: Test SSH access

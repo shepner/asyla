@@ -94,7 +94,7 @@ See `README.md` for step-by-step manual instructions.
 1. VM boots
 2. Proxmox's ISO not processed (cloud-init not installed)
 3. Vendor file not processed (cloud-init not installed)
-4. Manual intervention: run `bootstrap_complete.sh` from console (curl from GitHub), or use `serve_bootstrap.sh` on workstation and in console: `curl http://<workstation-ip>:8888/b | bash`
+4. Manual intervention: from VM console (as root), run `curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/setup/bootstrap.sh | bash`
 
 ## Troubleshooting
 
@@ -130,7 +130,7 @@ See `README.md` for step-by-step manual instructions.
 - `build.sh`: Automated build script
 - `setup/cloud-init-vendor.yml`: Vendor file for additional setup
 - `setup/cloud-init-userdata.yml`: Full user-data configuration
-- `setup/bootstrap_complete.sh`: Fallback bootstrap script (if cloud-init missing)
+- `setup/bootstrap.sh`: Fallback bootstrap script (if cloud-init missing)
 
 ## References
 

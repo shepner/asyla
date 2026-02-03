@@ -429,13 +429,9 @@ The following scripts are available in the `setup/` directory:
 ### Monitoring
 [Monitoring setup will be documented]
 
-## Troubleshooting
-
-[Common issues and solutions will be documented as encountered]
-
 ## Network Configuration
 
-- **Interface**: eth0
+- **Interface**: ens18 (virtio; Debian 13)
 - **IP**: 10.0.0.62/24
 - **Gateway**: 10.0.0.1
 - **DNS**: 10.0.0.10, 10.0.0.11
@@ -488,17 +484,7 @@ The vendor file (`cloud-init-vendor.yml`) is designed to:
 
 **If vendor file doesn't run (cloud-init not installed to process it):**
 
-**Option 1: Console bootstrap when paste is not available**
-
-Proxmox console often does not support paste. Serve the bootstrap from your workstation so you only type a short command:
-
-1. On your workstation (from repo root): `./d03/setup/serve_bootstrap.sh`
-2. In the VM console, as root, type (replace with your host IP): `curl http://<workstation-ip>:8888/b | bash`
-3. Stop the server with Ctrl+C when done.
-
-**Option 2: Bootstrap script (if you can paste or run from SSH)**
-
-From the VM console: `curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/setup/bootstrap_complete.sh | bash`
+From the VM console (as root): `curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/setup/bootstrap.sh | bash`
 
 **If you can SSH but scripts/Docker were not installed:** Run once (as root or with sudo):  
 `curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/setup/deploy_software.sh | sudo bash`

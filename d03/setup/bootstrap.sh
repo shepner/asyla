@@ -1,7 +1,7 @@
 #!/bin/bash
 # Bootstrap script for d03 VM
-# This script completes the initial setup that cloud-init cannot handle
-# Run this automatically on first boot or manually after first login
+# Handles full setup including installing cloud-init if needed; run manually from console when cloud-init didn't run
+# Can be run manually or via Proxmox cloud-init runcmd
 
 set -euo pipefail
 
@@ -9,6 +9,7 @@ set -euo pipefail
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 log_info() {
@@ -23,67 +24,80 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1" >&2
 }
 
-# Check if running as root or with sudo
+log_step() {
+    echo -e "\n${BLUE}=== $1 ===${NC}"
+}
+
+# Check if running as root
 if [ "$EUID" -ne 0 ]; then
-    log_error "This script must be run as root or with sudo"
+    log_error "This script must be run as root"
     exit 1
 fi
 
-log_info "Starting d03 bootstrap script..."
+log_step "Starting Bootstrap for d03 VM"
 
-# Create asyla group with GID 1000 if it doesn't exist
-if ! getent group asyla > /dev/null 2>&1; then
-    log_info "Creating asyla group (GID 1000)..."
-    groupadd -g 1000 asyla
+# Step 1: Install cloud-init if not present
+log_step "Step 1: Install cloud-init"
+if ! command -v cloud-init >/dev/null 2>&1; then
+    log_info "cloud-init not found, installing..."
+    apt-get update
+    apt-get install -y cloud-init
+    log_info "cloud-init installed successfully"
 else
-    log_info "asyla group already exists"
+    log_info "cloud-init already installed: $(cloud-init --version)"
 fi
 
-# Modify docker user to have correct UID/GID and groups
-if id docker > /dev/null 2>&1; then
-    log_info "Configuring docker user..."
-    
-    # Get current UID/GID
-    CURRENT_UID=$(id -u docker)
-    CURRENT_GID=$(id -g docker)
-    
-    # Change primary group to asyla if needed
-    if [ "$CURRENT_GID" != "1000" ]; then
-        log_info "Changing docker user primary group to asyla..."
-        usermod -g asyla docker
-    fi
-    
-    # Change UID if needed
-    if [ "$CURRENT_UID" != "1003" ]; then
-        log_info "Changing docker user UID to 1003..."
-        usermod -u 1003 docker
-        # Fix home directory ownership
-        chown -R docker:asyla /home/docker
-    fi
-    
-    # Ensure docker user is in required groups
-    log_info "Adding docker user to required groups..."
-    usermod -aG docker,sudo docker
-    
-    # Ensure home directory ownership is correct
-    chown -R docker:asyla /home/docker
+# Step 2: Fetch our full cloud-init user-data
+log_step "Step 2: Fetch cloud-init user-data"
+mkdir -p /var/lib/cloud/seed/nocloud
+log_info "Downloading user-data from GitHub..."
+curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/setup/cloud-init-userdata.yml > /var/lib/cloud/seed/nocloud/user-data || {
+    log_error "Failed to download user-data"
+    exit 1
+}
+log_info "User-data downloaded successfully"
+
+# Step 3: Process cloud-init user-data
+log_step "Step 3: Process cloud-init user-data"
+log_info "Resetting cloud-init state..."
+cloud-init clean -s || true
+
+log_info "Running cloud-init..."
+cloud-init init --local
+cloud-init init
+cloud-init modules --mode config
+cloud-init modules --mode final
+
+# Step 4: Verify setup
+log_step "Step 4: Verify Setup"
+log_info "Checking docker user..."
+if id docker >/dev/null 2>&1; then
+    log_info "✅ Docker user exists: $(id docker)"
 else
-    log_error "docker user does not exist - cloud-init may have failed"
+    log_error "❌ Docker user not created"
     exit 1
 fi
 
-# Ensure .ssh directory exists with correct permissions
-log_info "Configuring SSH directory..."
-mkdir -p /home/docker/.ssh
-chmod 700 /home/docker/.ssh
-chown -R docker:asyla /home/docker/.ssh
+log_info "Checking SSH service..."
+if systemctl is-active --quiet ssh || systemctl is-active --quiet sshd; then
+    log_info "✅ SSH service is running"
+else
+    log_warn "⚠️  SSH service not running, starting..."
+    systemctl start ssh || systemctl start sshd || true
+fi
 
-# Note: SSH keys are already configured by cloud-init
-# Private key and config will be copied manually from workstation
+log_info "Checking network..."
+if ip addr show ens18 | grep -q "10.0.0.62"; then
+    log_info "✅ Network configured correctly (10.0.0.62)"
+else
+    CURRENT_IP=$(ip addr show ens18 | grep "inet " | awk '{print $2}' | cut -d/ -f1)
+    log_warn "⚠️  Network IP is $CURRENT_IP (expected 10.0.0.62)"
+    log_info "Network may need manual configuration or reboot"
+fi
 
-log_info "Bootstrap script completed successfully!"
+log_step "Bootstrap Complete!"
 log_info "Next steps:"
-log_info "  1. Copy SSH private key: scp ~/.ssh/docker_rsa d03:.ssh/docker_rsa"
-log_info "  2. Copy SSH config: scp ~/.ssh/config d03:.ssh/config"
-log_info "  3. Set permissions: ssh d03 'chmod -R 700 ~/.ssh'"
+log_info "  1. SSH to VM: ssh docker@10.0.0.62"
+log_info "  2. Copy SSH private key: scp ~/.ssh/docker_rsa d03:.ssh/docker_rsa"
+log_info "  3. Copy SSH config: scp ~/.ssh/config d03:.ssh/config"
 log_info "  4. Run setup scripts: ~/scripts/d03/setup/*.sh"

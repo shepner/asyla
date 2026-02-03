@@ -125,7 +125,6 @@ This checklist guides you through the complete build process for the new d03 VM.
 - Scripts fetched automatically from repository
 
 **Must remain manual (requires verification/credentials):**
-- [ ] If scripts were not fetched by cloud-init, from workstation run: `./d03/deploy_scripts_to_d03.sh` (pushes setup and update scripts to d03)
 - [ ] SSH to d03: `ssh d03`
 - [ ] Verify scripts are present: `ls ~/scripts/d03/setup/` (should show systemConfig.sh, nfs.sh, smb.sh, iscsi.sh, docker.sh)
 - [ ] Run systemConfig.sh: `sudo ~/scripts/d03/setup/systemConfig.sh`
@@ -200,23 +199,15 @@ This checklist guides you through the complete build process for the new d03 VM.
 
 ## Troubleshooting
 
-### Cloud-init missing / No SSH / Can't paste in console
+### Cloud-init missing / No SSH
 
-If the VM has no cloud-init (`command -v cloud-init` shows nothing), SSH is not running, and the console does not support paste:
+If the VM has no cloud-init (`command -v cloud-init` shows nothing) and SSH is not running:
 
-1. **On your workstation** (or Proxmox host, from a shell with the repo):
+1. **From the Proxmox VM console**, as root, run:
    ```bash
-   ./d03/setup/serve_bootstrap.sh
+   curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/setup/bootstrap.sh | bash
    ```
-   Note the `HOST_IP` it prints (e.g. `10.0.0.50`).
-
-2. **In the Proxmox VM console**, as root, type only (replace with your host IP):
-   ```text
-   curl http://10.0.0.50:8888/b | bash
-   ```
-   Short filename `b` keeps typing minimal. When the bootstrap finishes, SSH will be available at `docker@10.0.0.62` (or at the current DHCP IP if static is not yet applied).
-
-3. Stop the server on the workstation with Ctrl+C when done.
+2. When the bootstrap finishes, SSH will be available at `docker@10.0.0.62` (or at the current DHCP IP if static is not yet applied).
 
 ### Common Issues
 

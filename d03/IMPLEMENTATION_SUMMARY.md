@@ -18,6 +18,8 @@ All scripts, configurations, and documentation for the new d03 VM have been crea
 - ✅ `nfs.sh` - NFS client configuration
 - ✅ `smb.sh` - SMB/CIFS client configuration (with credentials placeholder)
 - ✅ `iscsi.sh` - iSCSI initiator configuration
+- ✅ `bootstrap.sh` - Full bootstrap from console when cloud-init didn't run (curl from GitHub)
+- ✅ `deploy_software.sh` - One-time install of scripts and Docker when cloud-init didn't deploy them
 
 ### Update Scripts
 - ✅ `update.sh` - OS maintenance (one-command system updates)
