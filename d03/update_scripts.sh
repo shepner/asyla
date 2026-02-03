@@ -64,7 +64,7 @@ if [ -d "$WORKDIR/$HOSTNAME" ]; then
 fi
 
 # Set ownership so docker user can run scripts
-if getent passwd "$TARGET_USER" &>/dev/null; then
+if getent passwd "$TARGET_USER" >/dev/null 2>&1; then
     chown -R "$TARGET_USER:" "$TARGET_SCRIPTS" "$TARGET_HOME"/update.sh "$TARGET_HOME"/update_scripts.sh "$TARGET_HOME"/update_all.sh 2>/dev/null || true
 fi
 find "$TARGET_SCRIPTS" -name "*.sh" -exec chmod 744 {} \;
