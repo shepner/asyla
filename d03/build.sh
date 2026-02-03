@@ -378,9 +378,14 @@ fi
 
 # Step 17: Optional SMB credentials (prompt and push to VM, then mount)
 log_step "Step 17: SMB credentials (optional)"
-  if ssh $VM_SSH_OPTS -o ConnectTimeout=5 "$VM_HOST" "test -d /home/docker" 2>/dev/null; then
+if ssh $VM_SSH_OPTS -o ConnectTimeout=5 "$VM_HOST" "test -d /home/docker" 2>/dev/null; then
   echo ""
-  read -r -p "Configure SMB mount now? [y/N]: " DO_SMB
+  if [ -t 0 ]; then
+    read -r -p "Configure SMB mount now? [y/N]: " DO_SMB
+  else
+    DO_SMB=""
+    log_info "No TTY - skipping SMB prompt. To set later: ssh d03, vi ~/.smbcredentials, sudo mount /mnt/nas/data1/media"
+  fi
   if [[ "${DO_SMB,,}" =~ ^y ]]; then
     read -r -p "SMB username: " SMB_USER
     read -r -p "SMB domain: " SMB_DOMAIN
