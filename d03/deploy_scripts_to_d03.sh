@@ -26,9 +26,7 @@ scp "$SCRIPT_DIR/setup/systemConfig.sh" "$SCRIPT_DIR/setup/nfs.sh" \
 scp "$SCRIPT_DIR/update.sh" "$SCRIPT_DIR/update_scripts.sh" "$SCRIPT_DIR/update_all.sh" "$HOST:~/"
 
 # Fix permissions on VM and link SMB credentials script into home
-ssh "$HOST" "chmod 744 ~/scripts/d03/setup/*.sh ~/update.sh ~/update_scripts.sh ~/update_all.sh && ln -sf ~/scripts/d03/setup/setup_smb_credentials.sh ~/setup_smb_credentials.sh && ln -sf ~/scripts/d03/setup/setup_iscsi_connect.sh ~/setup_iscsi_connect.sh && ln -sf ~/scripts/d03/setup/setup_manual.sh ~/setup_manual.sh"
+ssh "$HOST" "chmod 744 ~/scripts/d03/setup/*.sh ~/update.sh ~/update_scripts.sh ~/update_all.sh && ln -sf ~/scripts/d03/setup/setup_manual.sh ~/setup_manual.sh"
 
 echo "[INFO] Done. On d03 run: ~/scripts/d03/setup/systemConfig.sh then nfs.sh, smb.sh, iscsi.sh, docker.sh"
-echo "[INFO] SMB credentials: ~/setup_smb_credentials.sh"
-echo "[INFO] iSCSI connect (after-the-fact): sudo ~/setup_iscsi_connect.sh"
-echo "[INFO] Manual SMB + iSCSI in one: ~/setup_manual.sh"
+echo "[INFO] Manual SMB + iSCSI: ~/setup_manual.sh"

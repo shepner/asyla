@@ -5,8 +5,9 @@
 
 set -euo pipefail
 
-# When run as ~/setup_manual.sh (symlink), dirname is ~; scripts are ~/setup_smb_credentials.sh etc.
+# Resolve script dir: when run as ~/setup_manual.sh (symlink), scripts live in ~/scripts/d03/setup/
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+[ -f "$SCRIPT_DIR/setup_smb_credentials.sh" ] || SCRIPT_DIR="$HOME/scripts/d03/setup"
 
 echo "=============================================="
 echo "  Manual storage setup (SMB + iSCSI)"
@@ -15,7 +16,7 @@ echo ""
 
 # --- SMB credentials (interactive) ---
 read -r -p "Run SMB credentials setup? [Y/n]: " DO_SMB
-if [[ ! "${DO_SMB,,}" =~ ^n ]]; then
+if ! echo "${DO_SMB}" | grep -qi '^n'; then
   echo ""
   "$SCRIPT_DIR/setup_smb_credentials.sh"
   echo ""
@@ -26,7 +27,7 @@ fi
 
 # --- iSCSI connect (requires sudo) ---
 read -r -p "Run iSCSI connect (discovery, login, mount)? [Y/n]: " DO_ISCSI
-if [[ ! "${DO_ISCSI,,}" =~ ^n ]]; then
+if ! echo "${DO_ISCSI}" | grep -qi '^n'; then
   echo ""
   sudo "$SCRIPT_DIR/setup_iscsi_connect.sh"
   echo ""

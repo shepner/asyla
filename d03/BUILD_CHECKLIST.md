@@ -137,7 +137,7 @@ This checklist guides you through the complete build process for the new d03 VM.
 - [ ] Verify NFS mounts: `mount | grep nfs` (should show both data1/docker and data2/docker)
 
 **Manual only (credentials or interactive verification):**
-- [ ] **SMB + iSCSI (manual)**: iSCSI initiator (open-iscsi) is already installed by automation. On VM run `~/setup_manual.sh` (SMB credentials then iSCSI connect; prompts to skip either). Or separately: `~/setup_smb_credentials.sh`, `sudo ~/setup_iscsi_connect.sh`
+- [ ] **SMB + iSCSI (manual)**: iSCSI initiator (open-iscsi) is already installed by automation. On VM run `~/setup_manual.sh` (SMB credentials then iSCSI connect; prompts to skip either).
 - [ ] If automated steps failed, run once: `curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/setup/deploy_software.sh | sudo bash`
 
 ### Step 5: Verify Mounts
@@ -177,7 +177,7 @@ This checklist guides you through the complete build process for the new d03 VM.
 ### System Health
 
 - [ ] System updates working: `~/update.sh`
-- [ ] Script updates working: `~/update_scripts.sh`
+- [ ] Script updates working: `~/update_scripts.sh` (also installs history-search in `~/.bashrc` for docker user)
 - [ ] Comprehensive update working: `~/update_all.sh`
 - [ ] Docker containers starting correctly
 - [ ] All mounts accessible

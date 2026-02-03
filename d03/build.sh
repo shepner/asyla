@@ -384,7 +384,7 @@ if ssh $VM_SSH_OPTS -o ConnectTimeout=5 "$VM_HOST" "test -d /home/docker" 2>/dev
     read -r -p "Configure SMB mount now? [y/N]: " DO_SMB
   else
     DO_SMB=""
-    log_info "No TTY - skipping SMB prompt. To set later: ssh d03, run ~/setup_smb_credentials.sh"
+    log_info "No TTY - skipping SMB prompt. To set later: ssh d03, run ~/setup_manual.sh"
   fi
   if echo "${DO_SMB}" | grep -qi '^y'; then
     read -r -p "SMB username: " SMB_USER
@@ -398,17 +398,17 @@ if ssh $VM_SSH_OPTS -o ConnectTimeout=5 "$VM_HOST" "test -d /home/docker" 2>/dev
       if scp -o StrictHostKeyChecking=no "$SMB_TMP" "${VM_HOST}:/tmp/smbcreds" 2>/dev/null; then
         ssh $VM_SSH_OPTS "$VM_HOST" "sudo mv /tmp/smbcreds /home/docker/.smbcredentials && sudo chown docker:asyla /home/docker/.smbcredentials && sudo chmod 600 /home/docker/.smbcredentials && sudo mount /mnt/nas/data1/media 2>/dev/null && echo 'SMB credentials set and mount successful' || echo 'SMB credentials set; mount may need: sudo mount /mnt/nas/data1/media'" 2>/dev/null && log_info "✅ SMB credentials configured and mount attempted"
       else
-        log_warn "Could not copy credentials to VM (SSH/SCP failed). Set manually: ssh d03, run ~/setup_smb_credentials.sh"
+        log_warn "Could not copy credentials to VM (SSH/SCP failed). Set manually: ssh d03, run ~/setup_manual.sh"
       fi
       rm -f "$SMB_TMP"
     else
-      log_info "Skipped (empty username or password). Set later on d03: ~/setup_smb_credentials.sh"
+      log_info "Skipped (empty username or password). Set later on d03: ~/setup_manual.sh"
     fi
   else
-    log_info "Skipped. To set later: ssh d03, run ~/setup_smb_credentials.sh"
+    log_info "Skipped. To set later: ssh d03, run ~/setup_manual.sh"
   fi
 else
-  log_info "SSH not available; set SMB later: ssh d03, run ~/setup_smb_credentials.sh"
+  log_info "SSH not available; set SMB later: ssh d03, run ~/setup_manual.sh"
 fi
 
 echo ""
@@ -417,4 +417,4 @@ echo "  1. SSH to VM: ssh d03"
 echo "  2. Verify configuration: id docker && groups docker"
 echo "  3. Copy SSH private key: scp ~/.ssh/docker_rsa d03:.ssh/docker_rsa"
 echo "  4. Copy SSH config: scp ~/.ssh/config d03:.ssh/config"
-echo "  5. Manual SMB + iSCSI: ~/setup_manual.sh  (or separately: ~/setup_smb_credentials.sh, sudo ~/setup_iscsi_connect.sh)"
+echo "  5. Manual SMB + iSCSI: ~/setup_manual.sh"

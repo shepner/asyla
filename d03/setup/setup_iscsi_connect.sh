@@ -1,6 +1,6 @@
 #!/bin/bash
 # Connect to iSCSI target and mount /mnt/docker (after-the-fact).
-# Run once initiator is in TrueNAS Initiator Group: sudo ~/setup_iscsi_connect.sh
+# Run once initiator is in TrueNAS Initiator Group: ~/setup_manual.sh  (or sudo ~/scripts/d03/setup/setup_iscsi_connect.sh)
 # No prompts; assumes open-iscsi is installed.
 
 set -euo pipefail

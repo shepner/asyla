@@ -22,10 +22,9 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1" >&2
 }
 
-# Check if running as root or with sudo
+# Re-run as root if needed
 if [ "$EUID" -ne 0 ]; then
-    log_error "This script must be run as root or with sudo"
-    exit 1
+    exec sudo "$0" "$@"
 fi
 
 REPO="shepner/asyla"
@@ -71,19 +70,23 @@ fi
 find "$TARGET_SCRIPTS" -name "*.sh" -exec chmod 744 {} \;
 chmod 744 "$TARGET_HOME"/update.sh "$TARGET_HOME"/update_scripts.sh "$TARGET_HOME"/update_all.sh 2>/dev/null || true
 
-# Link SMB credentials script into docker user's home
-if [ -f "$TARGET_SCRIPTS/$HOSTNAME/setup/setup_smb_credentials.sh" ]; then
-    ln -sf "$TARGET_SCRIPTS/$HOSTNAME/setup/setup_smb_credentials.sh" "$TARGET_HOME/setup_smb_credentials.sh"
-    chown -h "$TARGET_USER:" "$TARGET_HOME/setup_smb_credentials.sh" 2>/dev/null || true
-fi
-# Link iSCSI connect script into docker user's home
-if [ -f "$TARGET_SCRIPTS/$HOSTNAME/setup/setup_iscsi_connect.sh" ]; then
-    ln -sf "$TARGET_SCRIPTS/$HOSTNAME/setup/setup_iscsi_connect.sh" "$TARGET_HOME/setup_iscsi_connect.sh"
-    chown -h "$TARGET_USER:" "$TARGET_HOME/setup_iscsi_connect.sh" 2>/dev/null || true
-fi
+# Link unified manual setup script into docker user's home
 if [ -f "$TARGET_SCRIPTS/$HOSTNAME/setup/setup_manual.sh" ]; then
     ln -sf "$TARGET_SCRIPTS/$HOSTNAME/setup/setup_manual.sh" "$TARGET_HOME/setup_manual.sh"
     chown -h "$TARGET_USER:" "$TARGET_HOME/setup_manual.sh" 2>/dev/null || true
+fi
+
+# Ensure docker user's .bashrc sources history-search and completion (doskey-like)
+if [ -f "$TARGET_SCRIPTS/$HOSTNAME/setup/docker_bashrc_additions.sh" ]; then
+    BASHRC="$TARGET_HOME/.bashrc"
+    touch "$BASHRC"
+    if ! grep -q 'docker_bashrc_additions.sh' "$BASHRC" 2>/dev/null; then
+        echo "" >> "$BASHRC"
+        echo "# History search (Up/Down by prefix) and completion - asyla d03" >> "$BASHRC"
+        echo '[ -f "$HOME/scripts/d03/setup/docker_bashrc_additions.sh" ] && . "$HOME/scripts/d03/setup/docker_bashrc_additions.sh"' >> "$BASHRC"
+        log_info "Added history-search and completion to $BASHRC"
+    fi
+    chown "$TARGET_USER:" "$BASHRC" 2>/dev/null || true
 fi
 
 # Clean up temporary clone

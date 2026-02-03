@@ -1,6 +1,6 @@
 #!/bin/bash
 # Create ~/.smbcredentials and optionally mount the SMB share.
-# Run on the VM as user docker: ~/setup_smb_credentials.sh  (or ~/scripts/d03/setup/setup_smb_credentials.sh)
+# Run on the VM as user docker: ~/setup_manual.sh  (or ~/scripts/d03/setup/setup_smb_credentials.sh)
 
 set -euo pipefail
 

@@ -22,10 +22,9 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1" >&2
 }
 
-# Check if running as root or with sudo
+# Re-run as root if needed
 if [ "$EUID" -ne 0 ]; then
-    log_error "This script must be run as root or with sudo"
-    exit 1
+    exec sudo "$0" "$@"
 fi
 
 log_info "Starting comprehensive system maintenance..."
