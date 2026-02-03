@@ -15,6 +15,7 @@ services:
     volumes:
       - ${DOCKER_DL}/TC_datalogger/TC_faction_crimes/config/credentials.json:/app/config/credentials.json:ro
       - ${DOCKER_DL}/TC_datalogger/TC_faction_crimes/config/TC_API_config.json:/app/config/TC_API_config.json:ro
+      - ${DOCKER_DL}/TC_datalogger/repo/TC_faction_crimes/config/oc_records_schema.json:/app/config/oc_records_schema.json:ro
       - ${DOCKER_DL}/TC_datalogger/TC_faction_crimes/logs:/app/logs
 
   tc-faction-members:
