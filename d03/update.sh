@@ -30,7 +30,7 @@ fi
 log_info "Starting system update..."
 
 # Clean up Docker (if Docker is installed)
-if command -v docker &> /dev/null; then
+if command -v docker >/dev/null 2>&1; then
     log_info "Cleaning up Docker images and system..."
     docker image prune --all -f || true
     docker system prune --all -f || true

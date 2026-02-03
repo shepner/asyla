@@ -27,20 +27,28 @@ if [ "$EUID" -ne 0 ]; then
     exec sudo "$0" "$@"
 fi
 
+# When running as root, run scripts from the invoker's home (e.g. /home/docker)
+if [ -n "${SUDO_USER:-}" ]; then
+    HOME_DIR=$(getent passwd "$SUDO_USER" | cut -d: -f6)
+else
+    HOME_DIR="$HOME"
+fi
+HOME_DIR="${HOME_DIR:-/home/docker}"
+
 log_info "Starting comprehensive system maintenance..."
 
 # Step 1: Update scripts from repository
 log_info "Step 1: Updating scripts from repository..."
-~/update_scripts.sh
+"$HOME_DIR/update_scripts.sh"
 
 # Step 2: Update OS
 log_info "Step 2: Updating operating system..."
-~/update.sh
+"$HOME_DIR/update.sh"
 
 # Step 3: Reload all Docker containers
 log_info "Step 3: Reloading all Docker containers..."
-if [ -f ~/scripts/docker/refresh_all.sh ]; then
-    ~/scripts/docker/refresh_all.sh
+if [ -f "$HOME_DIR/scripts/docker/refresh_all.sh" ]; then
+    "$HOME_DIR/scripts/docker/refresh_all.sh"
 else
     log_warn "refresh_all.sh not found, skipping Docker container reload"
     log_info "Docker containers can be managed manually with docker compose"
