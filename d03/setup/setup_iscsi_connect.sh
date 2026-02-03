@@ -13,13 +13,19 @@ fi
 IP_OF_TARGET="10.0.0.24"
 NAME_OF_TARGET="iqn.2005-10.org.freenas.ctl:nas01:d03:01"
 
+echo "This host's initiator (must be in TrueNAS Initiator Group for target nas01:d03:01):"
+grep -E "^InitiatorName=" /etc/iscsi/initiatorname.iscsi 2>/dev/null || true
+echo ""
+
 echo "Discovering iSCSI target..."
-iscsiadm -m discovery -t sendtargets -p "$IP_OF_TARGET" || true
+if ! iscsiadm -m discovery -t sendtargets -p "$IP_OF_TARGET" 2>/dev/null; then
+    echo "Discovery returned no targets. Add the initiator above to TrueNAS Initiator Group 3, then re-run this script."
+    exit 1
+fi
 
 echo "Logging in..."
 if ! iscsiadm --mode node --targetname "$NAME_OF_TARGET" --portal "$IP_OF_TARGET" --login 2>/dev/null; then
-    echo "Login failed. Add this initiator to TrueNAS Initiator Group and re-run:"
-    grep -E "^InitiatorName=" /etc/iscsi/initiatorname.iscsi 2>/dev/null || true
+    echo "Login failed. Add the initiator above to TrueNAS Initiator Group 3, then re-run: sudo $0"
     exit 1
 fi
 

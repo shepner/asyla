@@ -25,10 +25,17 @@ chmod 600 "$CREDFILE"
 echo "Created $CREDFILE (mode 600)."
 
 read -r -p "Mount SMB share now? [Y/n]: " DO_MOUNT
-if [[ ! "${DO_MOUNT,,}" =~ ^n ]]; then
+if echo "${DO_MOUNT}" | grep -qi '^n'; then
+  echo "Skipped mount. To mount later: sudo mount $MOUNT_POINT"
+else
   if sudo mount "$MOUNT_POINT" 2>/dev/null; then
-    echo "Mounted $MOUNT_POINT."
+    echo "Mount successful: $MOUNT_POINT"
+    mountpoint -q "$MOUNT_POINT" && df -h "$MOUNT_POINT" | tail -1
+  elif mountpoint -q "$MOUNT_POINT" 2>/dev/null; then
+    echo "Mount successful (already mounted): $MOUNT_POINT"
+    df -h "$MOUNT_POINT" | tail -1
   else
-    echo "Mount failed or already mounted. Try: sudo mount $MOUNT_POINT"
+    echo "Mount failed. Check credentials and try: sudo mount $MOUNT_POINT"
+    exit 1
   fi
 fi
