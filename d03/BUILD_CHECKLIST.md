@@ -74,14 +74,14 @@ This checklist guides you through the complete build process for the new d03 VM.
 ### Step 2: Initial VM Login
 
 **✅ Fully automated by Proxmox built-in cloud-init + vendor file:**
-- Vendor file installs cloud-init if missing (Debian images should include it)
-- Docker user created automatically (UID 1003, GID 1000) via full user-data
-- Groups created automatically (asyla GID 1000, docker, sudo)
-- SSH public key: Proxmox `--sshkeys` is preserved when the vendor re-runs cloud-init with userdata (vendor backs up/restores `authorized_keys` so your `docker_rsa.pub` is used)
-- Network configured automatically (IP, gateway, DNS, search domain) via Proxmox built-in
-- Initial packages installed (cloud-init, openssh-server, curl, git)
-- SSH service enabled and started automatically
-- Setup scripts fetched automatically
+- [x] Vendor file installs cloud-init if missing (Debian images should include it) - **automated**
+- [x] Docker user created automatically (UID 1003, GID 1000) via full user-data - **automated**
+- [x] Groups created automatically (asyla GID 1000, docker, sudo) - **automated**
+- [x] SSH public key: Proxmox `--sshkeys` is preserved when the vendor re-runs cloud-init with userdata (vendor backs up/restores `authorized_keys` so your `docker_rsa.pub` is used) - **automated**
+- [x] Network configured automatically (IP, gateway, DNS, search domain) via Proxmox built-in - **automated**
+- [x] Initial packages installed (cloud-init, openssh-server, curl, git) - **automated**
+- [x] SSH service enabled and started automatically - **automated**
+- [x] Setup scripts fetched automatically - **automated**
 
 **Verification steps:**
 - [ ] Wait ~60-90 seconds for cloud-init to complete (first boot installs packages and processes config)
@@ -108,7 +108,7 @@ This checklist guides you through the complete build process for the new d03 VM.
 ### Step 3: Complete SSH Key Setup
 
 **✅ Automated by cloud-init:**
-- SSH public key already configured (enables passwordless SSH to d03)
+- [x] SSH public key already configured (enables passwordless SSH to d03) - **automated**
 
 **Manual steps (required for SSH to other docker hosts):**
 - [ ] From workstation, copy SSH private key: `scp ~/.ssh/docker_rsa d03:.ssh/docker_rsa`
@@ -119,41 +119,42 @@ This checklist guides you through the complete build process for the new d03 VM.
 
 **Note**: Private key and config must be copied manually for security reasons (not stored in cloud-init).
 
-### Step 4: Run Setup Scripts
+### Step 4: Setup Scripts (Verify Automated + Run Manual)
 
-**✅ Automated by custom cloud-init user-data:**
-- Scripts fetched automatically from repository
+**✅ Automated by cloud-init (vendor + user-data):**
+- [x] Scripts fetched from repository (`update_scripts.sh`) - **automated**
+- [x] `systemConfig.sh` run automatically on first boot - **automated**
+- [x] `nfs.sh` run automatically on first boot - **automated**
+- [x] NFS mounts configured and mounted automatically (`/mnt/nas/data1/docker`, `/mnt/nas/data2/docker`) - **automated**
+- [x] `docker.sh` run automatically on first boot - **automated**
+- [x] `update.sh` (apt upgrade) runs in background; log: `/var/log/cloud-init-upgrade.log` - **automated**
 
-**Must remain manual (requires verification/credentials):**
+**Verify automated steps (after SSH works):**
 - [ ] SSH to d03: `ssh d03`
-- [ ] Verify scripts are present: `ls ~/scripts/d03/setup/` (should show systemConfig.sh, nfs.sh, smb.sh, iscsi.sh, docker.sh)
-- [ ] Run systemConfig.sh: `sudo ~/scripts/d03/setup/systemConfig.sh`
-- [ ] Run nfs.sh: `sudo ~/scripts/d03/setup/nfs.sh`
-- [ ] Run smb.sh: `sudo ~/scripts/d03/setup/smb.sh`
-- [ ] **Edit SMB credentials**: `vi ~/.smbcredentials` (add username, password, domain)
-- [ ] Run iscsi.sh: `sudo ~/scripts/d03/setup/iscsi.sh` (verify TrueNAS when prompted)
-- [ ] Run docker.sh: `sudo ~/scripts/d03/setup/docker.sh`
-- [ ] Run system update: `sudo ~/update.sh`
+- [ ] Verify scripts present: `ls ~/scripts/d03/setup/` (systemConfig.sh, nfs.sh, smb.sh, iscsi.sh, docker.sh, etc.)
+- [ ] Verify Docker: `docker ps` and `docker compose version`
+- [ ] Verify NFS mounts: `mount | grep nfs` (should show both data1/docker and data2/docker)
 
-**Note**: Script fetching could be automated via custom cloud-init user-data, but execution must remain manual as some scripts require:
-- SMB credentials (security-sensitive)
-- iSCSI target verification (safety check)
-- Manual review of configuration changes
+**Manual only (credentials or interactive verification):**
+- [ ] **Edit SMB credentials**: `vi ~/.smbcredentials` (add username, password, domain)
+- [ ] Run smb.sh: `sudo ~/scripts/d03/setup/smb.sh`
+- [ ] Run iscsi.sh: `sudo ~/scripts/d03/setup/iscsi.sh` (verify TrueNAS when prompted)
+- [ ] If automated steps failed, run once: `curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/setup/deploy_software.sh | sudo bash`
 
 ### Step 5: Verify Mounts
 
-- [ ] Verify NFS mounts: `mount | grep nfs`
-- [ ] Test NFS mount: `mount /mnt/nas/data1/docker` (if needed)
-- [ ] Verify SMB mount: `mount | grep cifs`
+- [x] Verify NFS mounts: `mount | grep nfs` - **automated and checked in Step 4**
+- [x] NFS mounts auto-mount on boot - **automated** (configured in `/etc/fstab` with `auto` option)
+- [ ] Verify SMB mount: `mount | grep cifs` (after running smb.sh)
 - [ ] Test SMB mount: `mount /mnt/nas/data1/media` (if needed)
-- [ ] Verify iSCSI connection: `iscsiadm -m session`
+- [ ] Verify iSCSI connection: `iscsiadm -m session` (after running iscsi.sh)
 - [ ] Verify iSCSI device: `lsblk` or `fdisk -l`
 - [ ] Test iSCSI mount: `mount /mnt/docker` (if needed)
 
 ### Step 6: Verify Docker
 
-- [ ] Verify Docker is running: `docker ps`
-- [ ] Verify Docker Compose: `docker compose version`
+- [x] Verify Docker is running: `docker ps` - **checked in Step 4**
+- [x] Verify Docker Compose: `docker compose version` - **checked in Step 4**
 - [ ] Test Docker: `docker run --rm hello-world`
 
 ### Step 7: Configure Docker Containers
@@ -193,8 +194,8 @@ This checklist guides you through the complete build process for the new d03 VM.
 ### Documentation
 
 - [ ] README.md reviewed and accurate
-- [ ] docker-compose.README.md reviewed
-- [ ] All scripts documented
+- [ ] BUILD_CHECKLIST.md (this file) reflects current process
+- [ ] docker-compose.README.md reviewed for container workflow
 - [ ] Any custom configurations documented
 
 ## Troubleshooting
@@ -208,6 +209,13 @@ If the VM has no cloud-init (`command -v cloud-init` shows nothing) and SSH is n
    curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/setup/bootstrap.sh | bash
    ```
 2. When the bootstrap finishes, SSH will be available at `docker@10.0.0.62` (or at the current DHCP IP if static is not yet applied).
+
+### SSH works but scripts/Docker not installed
+
+If you can SSH to d03 but scripts were not fetched or Docker was not installed (e.g. cloud-init runcmd failed):
+
+- On the VM (as root or with sudo):  
+  `curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/setup/deploy_software.sh | sudo bash`
 
 ### Common Issues
 

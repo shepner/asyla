@@ -50,19 +50,41 @@ chmod 755 /mnt/nas/data1/docker
 chmod 755 /mnt/nas/data2/docker
 
 # Check if fstab entries already exist
+MOUNT_DATA1=false
+MOUNT_DATA2=false
+
 if grep -q "nas:/mnt/data1/docker" /etc/fstab; then
     log_warn "NFS mount for data1/docker already exists in /etc/fstab, skipping..."
 else
     log_info "Adding NFS mount for data1/docker to /etc/fstab..."
-    echo "nas:/mnt/data1/docker /mnt/nas/data1/docker nfs rw,noauto,user 0 0" >> /etc/fstab
+    echo "nas:/mnt/data1/docker /mnt/nas/data1/docker nfs rw,_netdev,auto,user 0 0" >> /etc/fstab
+    MOUNT_DATA1=true
 fi
 
 if grep -q "nas:/mnt/data2/docker" /etc/fstab; then
     log_warn "NFS mount for data2/docker already exists in /etc/fstab, skipping..."
 else
     log_info "Adding NFS mount for data2/docker to /etc/fstab..."
-    echo "nas:/mnt/data2/docker /mnt/nas/data2/docker nfs rw,noauto,user 0 0" >> /etc/fstab
+    echo "nas:/mnt/data2/docker /mnt/nas/data2/docker nfs rw,_netdev,auto,user 0 0" >> /etc/fstab
+    MOUNT_DATA2=true
 fi
+
+# Mount NFS shares now (if network is available)
+log_info "Attempting to mount NFS shares..."
+for mount_point in "/mnt/nas/data1/docker" "/mnt/nas/data2/docker"; do
+    # Skip if already mounted
+    if mountpoint -q "$mount_point" 2>/dev/null; then
+        log_info "✅ $mount_point already mounted"
+        continue
+    fi
+    
+    # Try to mount
+    if mount "$mount_point" 2>/dev/null; then
+        log_info "✅ Successfully mounted $mount_point"
+    else
+        log_warn "⚠️  Could not mount $mount_point (network may not be ready; will mount on boot)"
+    fi
+done
 
 # Clean up package cache
 log_info "Cleaning up package cache..."
@@ -70,8 +92,6 @@ apt autoremove -y
 apt autoclean
 
 log_info "NFS client configuration completed successfully!"
-log_warn "NFS mounts are configured but not automatically mounted."
-log_info "To mount manually: mount /mnt/nas/data1/docker"
-log_info "To mount all: mount -a"
-log_info "Mounts will be available after reboot or manual mount"
+log_info "✅ NFS mounts configured to mount automatically on boot"
+log_info "Mounts: /mnt/nas/data1/docker and /mnt/nas/data2/docker"
 
