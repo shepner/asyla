@@ -1,0 +1,21 @@
+---
+description: Save, commit, and push changes when a task is complete
+globs: ["**/*"]
+alwaysApply: true
+---
+
+# Task Complete: Commit and Push
+
+When a task is **complete** (all requested work is done and the user is satisfied), the agent must:
+
+1. **Save** any unsaved file changes (user may need to save in the editor; remind if needed).
+2. **Stage and commit** with a clear, descriptive message:
+   - Run: `git add . && git status` to confirm what will be committed.
+   - Run: `git commit -m "<type>: <short description>"` using the project's commit conventions (e.g. feat, fix, docs, refactor, chore).
+   - Keep the first line of the message under 50 characters; add a body only if the change needs explanation.
+3. **Push** to the remote:
+   - Run: `git push` (or `git push origin <branch>` if a non-default branch is in use).
+
+Do **not** commit or push in the middle of a multi-step task; only when the **entire** task is finished. If the user says "done" or "that's it" or the conversation clearly indicates task completion, treat that as the trigger.
+
+If there are no changes to commit (`git status` shows nothing to commit), skip commit/push and say so. Do not force an empty commit.
