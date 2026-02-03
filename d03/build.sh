@@ -335,6 +335,14 @@ if $SSH_VERIFY "echo ok" 2>/dev/null; then
   else
     log_warn "Docker not found or not in PATH - run: newgrp docker, or log out and back in"
   fi
+  # Verify NFS mounts are in place (auto-mounted by nfs.sh)
+  NFS_COUNT=$($SSH_VERIFY "mount | grep -c nfs || true" 2>/dev/null) || NFS_COUNT=0
+  if [ "${NFS_COUNT:-0}" -ge 2 ]; then
+    log_info "✅ NFS mounts in place ($NFS_COUNT mounts)"
+    $SSH_VERIFY "mount | grep nfs" 2>/dev/null | sed 's/^/  /' || true
+  else
+    log_warn "NFS mounts not yet present (expected 2; got ${NFS_COUNT:-0}). They may mount after network is ready, or run: sudo mount -a"
+  fi
   # Full config dump if SSH works
   log_info "Configuration snapshot:"
   $SSH_VERIFY "id; groups; ls ~/scripts/d03/setup/ 2>/dev/null | head -15" 2>/dev/null || true
@@ -360,10 +368,42 @@ if ! ssh $VM_SSH_OPTS -o ConnectTimeout=5 "$VM_HOST" "echo ok" 2>/dev/null; then
     [ "$HOSTNAME" = "d03" ] && log_info "✅ Hostname is d03" || log_warn "Hostname is '$HOSTNAME' (expected d03)"
     [ "$HAS_SCRIPTS" = "y" ] && log_info "✅ Setup scripts at ~/scripts/d03/setup/" || log_warn "Setup scripts not found"
     [ -n "$DOCKER_VER" ] && log_info "✅ Docker: $DOCKER_VER" || log_warn "Docker not found"
+    NFS_COUNT=$($SSH_VERIFY "mount | grep -c nfs || true" 2>/dev/null) || NFS_COUNT=0
+    [ "${NFS_COUNT:-0}" -ge 2 ] && log_info "✅ NFS mounts: $NFS_COUNT" || log_warn "NFS mounts: ${NFS_COUNT:-0} (expected 2)"
     $SSH_VERIFY "ls ~/scripts/d03/setup/ 2>/dev/null | head -15" 2>/dev/null || true
   else
     log_warn "SSH still not ready. Try manually in a few min: ssh d03"
   fi
+fi
+
+# Step 17: Optional SMB credentials (prompt and push to VM, then mount)
+log_step "Step 17: SMB credentials (optional)"
+  if ssh $VM_SSH_OPTS -o ConnectTimeout=5 "$VM_HOST" "test -d /home/docker" 2>/dev/null; then
+  echo ""
+  read -r -p "Configure SMB mount now? [y/N]: " DO_SMB
+  if [[ "${DO_SMB,,}" =~ ^y ]]; then
+    read -r -p "SMB username: " SMB_USER
+    read -r -p "SMB domain: " SMB_DOMAIN
+    read -r -s -p "SMB password: " SMB_PASS
+    echo ""
+    if [ -n "$SMB_USER" ] && [ -n "$SMB_PASS" ]; then
+      SMB_TMP=$(mktemp)
+      trap 'rm -f "$SMB_TMP"' EXIT
+      printf 'username=%s\npassword=%s\ndomain=%s\n' "$SMB_USER" "$SMB_PASS" "${SMB_DOMAIN:-}" > "$SMB_TMP"
+      if scp -o StrictHostKeyChecking=no "$SMB_TMP" "${VM_HOST}:/tmp/smbcreds" 2>/dev/null; then
+        ssh $VM_SSH_OPTS "$VM_HOST" "sudo mv /tmp/smbcreds /home/docker/.smbcredentials && sudo chown docker:asyla /home/docker/.smbcredentials && sudo chmod 600 /home/docker/.smbcredentials && sudo mount /mnt/nas/data1/media 2>/dev/null && echo 'SMB credentials set and mount successful' || echo 'SMB credentials set; mount may need: sudo mount /mnt/nas/data1/media'" 2>/dev/null && log_info "✅ SMB credentials configured and mount attempted"
+      else
+        log_warn "Could not copy credentials to VM (SSH/SCP failed). Set manually: ssh d03, then vi ~/.smbcredentials and sudo mount /mnt/nas/data1/media"
+      fi
+      rm -f "$SMB_TMP"
+    else
+      log_info "Skipped (empty username or password). Set later: vi ~/.smbcredentials on d03, then sudo mount /mnt/nas/data1/media"
+    fi
+  else
+    log_info "Skipped. To set later: ssh d03, vi ~/.smbcredentials (username, password, domain), then sudo mount /mnt/nas/data1/media"
+  fi
+else
+  log_info "SSH not available; set SMB later: ssh d03, vi ~/.smbcredentials, sudo mount /mnt/nas/data1/media"
 fi
 
 echo ""
@@ -372,4 +412,4 @@ echo "  1. SSH to VM: ssh d03"
 echo "  2. Verify configuration: id docker && groups docker"
 echo "  3. Copy SSH private key: scp ~/.ssh/docker_rsa d03:.ssh/docker_rsa"
 echo "  4. Copy SSH config: scp ~/.ssh/config d03:.ssh/config"
-echo "  5. Run setup scripts: ~/scripts/d03/setup/*.sh"
+echo "  5. SMB (if not set above): vi ~/.smbcredentials then sudo mount /mnt/nas/data1/media"

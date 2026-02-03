@@ -126,6 +126,7 @@ This checklist guides you through the complete build process for the new d03 VM.
 - [x] `systemConfig.sh` run automatically on first boot - **automated**
 - [x] `nfs.sh` run automatically on first boot - **automated**
 - [x] NFS mounts configured and mounted automatically (`/mnt/nas/data1/docker`, `/mnt/nas/data2/docker`) - **automated**
+- [x] `smb.sh` run automatically on first boot (mount point + fstab; credentials set later) - **automated**
 - [x] `docker.sh` run automatically on first boot - **automated**
 - [x] `update.sh` (apt upgrade) runs in background; log: `/var/log/cloud-init-upgrade.log` - **automated**
 
@@ -136,8 +137,7 @@ This checklist guides you through the complete build process for the new d03 VM.
 - [ ] Verify NFS mounts: `mount | grep nfs` (should show both data1/docker and data2/docker)
 
 **Manual only (credentials or interactive verification):**
-- [ ] **Edit SMB credentials**: `vi ~/.smbcredentials` (add username, password, domain)
-- [ ] Run smb.sh: `sudo ~/scripts/d03/setup/smb.sh`
+- [ ] **SMB**: Build script prompts for credentials (optional); or set manually: `vi ~/.smbcredentials` then `sudo mount /mnt/nas/data1/media`
 - [ ] Run iscsi.sh: `sudo ~/scripts/d03/setup/iscsi.sh` (verify TrueNAS when prompted)
 - [ ] If automated steps failed, run once: `curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/setup/deploy_software.sh | sudo bash`
 

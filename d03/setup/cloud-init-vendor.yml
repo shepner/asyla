@@ -113,6 +113,9 @@ runcmd:
     echo "Running nfs.sh..."
     /home/docker/scripts/d03/setup/nfs.sh || true
     
+    echo "Running smb.sh..."
+    /home/docker/scripts/d03/setup/smb.sh || true
+    
     echo "Running docker.sh..."
     /home/docker/scripts/d03/setup/docker.sh || {
       echo "ERROR: docker.sh failed"
