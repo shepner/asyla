@@ -71,6 +71,12 @@ fi
 find "$TARGET_SCRIPTS" -name "*.sh" -exec chmod 744 {} \;
 chmod 744 "$TARGET_HOME"/update.sh "$TARGET_HOME"/update_scripts.sh "$TARGET_HOME"/update_all.sh 2>/dev/null || true
 
+# Link SMB credentials script into docker user's home
+if [ -f "$TARGET_SCRIPTS/$HOSTNAME/setup/setup_smb_credentials.sh" ]; then
+    ln -sf "$TARGET_SCRIPTS/$HOSTNAME/setup/setup_smb_credentials.sh" "$TARGET_HOME/setup_smb_credentials.sh"
+    chown -h "$TARGET_USER:" "$TARGET_HOME/setup_smb_credentials.sh" 2>/dev/null || true
+fi
+
 # Clean up temporary clone
 log_info "Cleaning up temporary files..."
 cd /

@@ -137,7 +137,7 @@ This checklist guides you through the complete build process for the new d03 VM.
 - [ ] Verify NFS mounts: `mount | grep nfs` (should show both data1/docker and data2/docker)
 
 **Manual only (credentials or interactive verification):**
-- [ ] **SMB**: Build script prompts for credentials (optional); or set manually: `vi ~/.smbcredentials` then `sudo mount /mnt/nas/data1/media`
+- [ ] **SMB**: Build script prompts for credentials (optional); or on VM: `~/setup_smb_credentials.sh`; or set manually: `vi ~/.smbcredentials` then `sudo mount /mnt/nas/data1/media`
 - [ ] Run iscsi.sh: `sudo ~/scripts/d03/setup/iscsi.sh` (verify TrueNAS when prompted)
 - [ ] If automated steps failed, run once: `curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/setup/deploy_software.sh | sudo bash`
 
