@@ -17,7 +17,8 @@ Torn City API data logger (→ BigQuery). First application on d03; managed enti
    ~/scripts/d03/apps/TC_datalogger/provision.sh
    ```
 3. Add per-service credentials (see upstream [TC_datalogger README](https://github.com/shepner/TC_datalogger)):
-   - `credentials.json` and `TC_API_config.json` in each service’s `config/` under `/mnt/docker/TC_datalogger/<service>/config/`.
+   - From **workstation** (with TC_datalogger project locally): run `./d03/apps/TC_datalogger/copy_config_to_d03.sh [d03]` to copy `credentials.json` and `TC_API_config.json` from each service’s `config/` to d03. Set `TC_DATALOGGER_SRC` if the project is not at `../TornCity/TC_datalogger` relative to the asyla repo.
+   - Or copy manually into `/mnt/docker/TC_datalogger/<service>/config/` on d03.
 4. Start:
    ```bash
    ~/scripts/d03/apps/TC_datalogger/tc_datalogger.sh up

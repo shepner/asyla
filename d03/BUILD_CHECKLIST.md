@@ -148,7 +148,7 @@ This checklist guides you through the complete build process for the new d03 VM.
 - [ ] Test SMB mount: `mount /mnt/nas/data1/media` (if needed)
 - [ ] Verify iSCSI connection: `iscsiadm -m session` (after running iscsi.sh)
 - [ ] Verify iSCSI device: `lsblk` or `fdisk -l`
-- [ ] Test iSCSI mount: `mount /mnt/docker` (if needed)
+- [ ] Test iSCSI mount: `mount /mnt/docker` (if needed). Both `iscsi.sh` and `setup_iscsi_connect.sh` set `/mnt/docker` ownership to `docker:asyla` after mount so the docker user can create app dirs there.
 
 ### Step 6: Verify Docker
 

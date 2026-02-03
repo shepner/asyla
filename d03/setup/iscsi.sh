@@ -186,6 +186,16 @@ else
     fi
 fi
 
+# Mount and set ownership so docker user owns the volume root
+log_info "Mounting /mnt/docker and setting ownership to docker:asyla..."
+if mount /mnt/docker 2>/dev/null; then
+    chown docker:asyla /mnt/docker
+    chmod 755 /mnt/docker
+    log_info "Mounted and set /mnt/docker to docker:asyla"
+else
+    log_info "Mount skipped or already mounted. After mounting, run: chown docker:asyla /mnt/docker"
+fi
+
 # Clean up package cache
 log_info "Cleaning up package cache..."
 apt autoremove -y
@@ -193,7 +203,7 @@ apt autoclean
 
 log_info "iSCSI initiator configuration completed successfully!"
 log_info "iSCSI device: $ISCSI_PARTITION"
-log_info "Mount point: /mnt/docker"
-log_info "To mount manually: mount /mnt/docker"
+log_info "Mount point: /mnt/docker (owned by docker:asyla when mounted)"
+log_info "To mount manually: mount /mnt/docker && chown docker:asyla /mnt/docker"
 log_info "Mount will be available after reboot or manual mount"
 

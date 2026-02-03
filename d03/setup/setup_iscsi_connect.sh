@@ -78,4 +78,9 @@ if ! grep -q "/mnt/docker" /etc/fstab; then
 fi
 
 mount /mnt/docker 2>/dev/null || true
+if mountpoint -q /mnt/docker; then
+    chown docker:asyla /mnt/docker
+    chmod 755 /mnt/docker
+    echo "Set /mnt/docker ownership to docker:asyla"
+fi
 echo "Done. /mnt/docker: $(df /mnt/docker 2>/dev/null | tail -1 || echo 'mount with: mount /mnt/docker')"
