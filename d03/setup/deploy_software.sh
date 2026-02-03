@@ -69,10 +69,13 @@ log_info "Step 3: Run nfs.sh..."
 log_info "Step 4: Run smb.sh..."
 "$TARGET_HOME/scripts/d03/setup/smb.sh" || { log_warn "smb.sh exited non-zero (continuing)"; }
 
-log_info "Step 5: Run docker.sh..."
+log_info "Step 5: Run iscsi_install.sh..."
+"$TARGET_HOME/scripts/d03/setup/iscsi_install.sh" || { log_warn "iscsi_install.sh exited non-zero (continuing)"; }
+
+log_info "Step 6: Run docker.sh..."
 "$TARGET_HOME/scripts/d03/setup/docker.sh" || { log_warn "docker.sh exited non-zero (continuing)"; }
 
-log_info "Step 6: Run update.sh (full apt upgrade, requires root)..."
+log_info "Step 7: Run update.sh (full apt upgrade, requires root)..."
 "$TARGET_HOME/update.sh" || { log_warn "update.sh exited non-zero (continuing)"; }
 
 log_info "Deploy complete. Docker user should run: newgrp docker (or log out and back in), then: docker ps"

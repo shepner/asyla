@@ -28,18 +28,22 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-log_warn "============================================================"
-log_warn "⚠️  PRODUCTION SAFETY: TrueNAS iSCSI Verification Required"
-log_warn "Before running this script, verify on TrueNAS (nas01):"
-log_warn "  1. iSCSI target exists: iqn.2005-10.org.freenas.ctl:nas01:d03:01"
-log_warn "  2. Initiator access controls are configured correctly"
-log_warn "  3. Old d03 instance is disconnected"
-log_warn "============================================================"
-
-read -p "Have you verified TrueNAS iSCSI configuration? (yes/no): " verify_response
-if [ "$verify_response" != "yes" ]; then
-    log_error "Please verify TrueNAS configuration before proceeding"
-    exit 1
+# Optional interactive verification when running with a TTY
+if [ -t 0 ]; then
+    log_warn "============================================================"
+    log_warn "⚠️  PRODUCTION SAFETY: TrueNAS iSCSI Verification Required"
+    log_warn "Before running this script, verify on TrueNAS (nas01):"
+    log_warn "  1. iSCSI target exists: iqn.2005-10.org.freenas.ctl:nas01:d03:01"
+    log_warn "  2. Initiator access controls are configured correctly"
+    log_warn "  3. Old d03 instance is disconnected"
+    log_warn "============================================================"
+    read -p "Have you verified TrueNAS iSCSI configuration? (yes/no): " verify_response
+    if [ "$verify_response" != "yes" ]; then
+        log_error "Please verify TrueNAS configuration before proceeding"
+        exit 1
+    fi
+else
+    log_info "Non-interactive run: skipping verification prompt."
 fi
 
 log_info "Starting iSCSI initiator configuration..."
@@ -60,9 +64,26 @@ systemctl start iscsid
 # Wait a moment for service to be ready
 sleep 2
 
-# iSCSI target configuration
+# Show initiator name so user can add it to TrueNAS before first login
 IP_OF_TARGET="10.0.0.24"
 NAME_OF_TARGET="iqn.2005-10.org.freenas.ctl:nas01:d03:01"
+INITIATOR_FILE="/etc/iscsi/initiatorname.iscsi"
+if [ -f "$INITIATOR_FILE" ]; then
+    log_info "This host's initiator (add to TrueNAS Initiator Group if not already):"
+    grep -E "^InitiatorName=" "$INITIATOR_FILE" || true
+    if [ -t 0 ]; then
+        log_warn "Add this initiator to the target's Initiator Group on TrueNAS, then press Enter..."
+        read -r
+    else
+        log_info "Non-interactive: proceeding with discovery and login."
+    fi
+fi
+
+log_info "Discovering iSCSI target..."
+if ! iscsiadm -m discovery -t sendtargets -p "$IP_OF_TARGET" 2>/dev/null; then
+    log_warn "Discovery returned no targets. Add initiator to TrueNAS and re-run this script."
+    exit 1
+fi
 
 log_info "Connecting to iSCSI target..."
 log_info "Target IP: $IP_OF_TARGET"
@@ -73,7 +94,7 @@ if iscsiadm --mode node --targetname "$NAME_OF_TARGET" --portal "$IP_OF_TARGET" 
     log_info "Successfully connected to iSCSI target"
 else
     log_error "Failed to connect to iSCSI target"
-    log_error "Please verify TrueNAS configuration and network connectivity"
+    log_error "Add this initiator to TrueNAS Initiator Group and re-run: sudo $0"
     exit 1
 fi
 

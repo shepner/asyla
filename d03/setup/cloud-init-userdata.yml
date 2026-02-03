@@ -72,6 +72,7 @@ runcmd:
   - [ bash, -c, 'test -f /home/docker/scripts/d03/setup/systemConfig.sh && /home/docker/scripts/d03/setup/systemConfig.sh || true' ]
   - [ bash, -c, 'test -f /home/docker/scripts/d03/setup/nfs.sh && /home/docker/scripts/d03/setup/nfs.sh || true' ]
   - [ bash, -c, 'test -f /home/docker/scripts/d03/setup/smb.sh && /home/docker/scripts/d03/setup/smb.sh || true' ]
+  - [ bash, -c, 'test -f /home/docker/scripts/d03/setup/iscsi_install.sh && /home/docker/scripts/d03/setup/iscsi_install.sh || true' ]
   - [ bash, -c, 'test -f /home/docker/scripts/d03/setup/docker.sh && /home/docker/scripts/d03/setup/docker.sh || true' ]
   - [ bash, -c, 'test -f /home/docker/update.sh && /home/docker/update.sh || true' ]
 
@@ -82,11 +83,10 @@ runcmd:
 final_message: |
   d03 VM setup complete!
   
-  Auto-ran: SSH started first, then systemConfig, nfs, smb (client), docker, update (if scripts were installed).
+  Auto-ran: SSH started first, then systemConfig, nfs, smb (client), iSCSI initiator install, docker, update (if scripts were installed).
   apt-get upgrade runs in background; log: /var/log/cloud-init-upgrade.log
   Manual steps:
   1. SSH to d03: ssh docker@10.0.0.62 (edit ~/.ssh/known_hosts if you rebuilt the VM)
   2. Copy SSH private key and config: scp ~/.ssh/docker_rsa d03:.ssh/docker_rsa; scp ~/.ssh/config d03:.ssh/config; ssh d03 "chmod -R 700 ~/.ssh"
-  3. SMB: set credentials (build script can prompt) then: sudo mount /mnt/nas/data1/media
-  4. iSCSI (optional): sudo ~/scripts/d03/setup/iscsi.sh
-  5. Log out and back in (or newgrp docker) so docker group applies, then: docker ps
+  3. SMB + iSCSI: ~/setup_manual.sh (after adding initiator to TrueNAS for iSCSI)
+  4. Log out and back in (or newgrp docker) so docker group applies, then: docker ps

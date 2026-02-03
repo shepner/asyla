@@ -132,13 +132,12 @@ This checklist guides you through the complete build process for the new d03 VM.
 
 **Verify automated steps (after SSH works):**
 - [ ] SSH to d03: `ssh d03`
-- [ ] Verify scripts present: `ls ~/scripts/d03/setup/` (systemConfig.sh, nfs.sh, smb.sh, iscsi.sh, docker.sh, etc.)
+- [ ] Verify scripts present: `ls ~/scripts/d03/setup/` (systemConfig.sh, nfs.sh, smb.sh, iscsi_install.sh, iscsi.sh, docker.sh, etc.)
 - [ ] Verify Docker: `docker ps` and `docker compose version`
 - [ ] Verify NFS mounts: `mount | grep nfs` (should show both data1/docker and data2/docker)
 
 **Manual only (credentials or interactive verification):**
-- [ ] **SMB**: Build script prompts for credentials (optional); or on VM: `~/setup_smb_credentials.sh`; or set manually: `vi ~/.smbcredentials` then `sudo mount /mnt/nas/data1/media`
-- [ ] Run iscsi.sh: `sudo ~/scripts/d03/setup/iscsi.sh` (verify TrueNAS when prompted)
+- [ ] **SMB + iSCSI (manual)**: iSCSI initiator (open-iscsi) is already installed by automation. On VM run `~/setup_manual.sh` (SMB credentials then iSCSI connect; prompts to skip either). Or separately: `~/setup_smb_credentials.sh`, `sudo ~/setup_iscsi_connect.sh`
 - [ ] If automated steps failed, run once: `curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/setup/deploy_software.sh | sudo bash`
 
 ### Step 5: Verify Mounts

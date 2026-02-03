@@ -76,6 +76,15 @@ if [ -f "$TARGET_SCRIPTS/$HOSTNAME/setup/setup_smb_credentials.sh" ]; then
     ln -sf "$TARGET_SCRIPTS/$HOSTNAME/setup/setup_smb_credentials.sh" "$TARGET_HOME/setup_smb_credentials.sh"
     chown -h "$TARGET_USER:" "$TARGET_HOME/setup_smb_credentials.sh" 2>/dev/null || true
 fi
+# Link iSCSI connect script into docker user's home
+if [ -f "$TARGET_SCRIPTS/$HOSTNAME/setup/setup_iscsi_connect.sh" ]; then
+    ln -sf "$TARGET_SCRIPTS/$HOSTNAME/setup/setup_iscsi_connect.sh" "$TARGET_HOME/setup_iscsi_connect.sh"
+    chown -h "$TARGET_USER:" "$TARGET_HOME/setup_iscsi_connect.sh" 2>/dev/null || true
+fi
+if [ -f "$TARGET_SCRIPTS/$HOSTNAME/setup/setup_manual.sh" ]; then
+    ln -sf "$TARGET_SCRIPTS/$HOSTNAME/setup/setup_manual.sh" "$TARGET_HOME/setup_manual.sh"
+    chown -h "$TARGET_USER:" "$TARGET_HOME/setup_manual.sh" 2>/dev/null || true
+fi
 
 # Clean up temporary clone
 log_info "Cleaning up temporary files..."

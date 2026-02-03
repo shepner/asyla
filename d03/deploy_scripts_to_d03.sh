@@ -16,15 +16,19 @@ ssh "$HOST" "mkdir -p ~/scripts/d03/setup"
 
 # Deploy setup scripts (the five run manually per BUILD_CHECKLIST)
 scp "$SCRIPT_DIR/setup/systemConfig.sh" "$SCRIPT_DIR/setup/nfs.sh" \
-    "$SCRIPT_DIR/setup/smb.sh" "$SCRIPT_DIR/setup/iscsi.sh" "$SCRIPT_DIR/setup/docker.sh" \
-    "$SCRIPT_DIR/setup/setup_smb_credentials.sh" \
+    "$SCRIPT_DIR/setup/smb.sh" "$SCRIPT_DIR/setup/iscsi_install.sh" "$SCRIPT_DIR/setup/iscsi.sh" \
+    "$SCRIPT_DIR/setup/docker.sh" \
+    "$SCRIPT_DIR/setup/setup_smb_credentials.sh" "$SCRIPT_DIR/setup/setup_iscsi_connect.sh" \
+    "$SCRIPT_DIR/setup/setup_manual.sh" \
     "$HOST:~/scripts/d03/setup/"
 
 # Deploy update scripts to home so ~/update.sh works
 scp "$SCRIPT_DIR/update.sh" "$SCRIPT_DIR/update_scripts.sh" "$SCRIPT_DIR/update_all.sh" "$HOST:~/"
 
 # Fix permissions on VM and link SMB credentials script into home
-ssh "$HOST" "chmod 744 ~/scripts/d03/setup/*.sh ~/update.sh ~/update_scripts.sh ~/update_all.sh && ln -sf ~/scripts/d03/setup/setup_smb_credentials.sh ~/setup_smb_credentials.sh"
+ssh "$HOST" "chmod 744 ~/scripts/d03/setup/*.sh ~/update.sh ~/update_scripts.sh ~/update_all.sh && ln -sf ~/scripts/d03/setup/setup_smb_credentials.sh ~/setup_smb_credentials.sh && ln -sf ~/scripts/d03/setup/setup_iscsi_connect.sh ~/setup_iscsi_connect.sh && ln -sf ~/scripts/d03/setup/setup_manual.sh ~/setup_manual.sh"
 
 echo "[INFO] Done. On d03 run: ~/scripts/d03/setup/systemConfig.sh then nfs.sh, smb.sh, iscsi.sh, docker.sh"
 echo "[INFO] SMB credentials: ~/setup_smb_credentials.sh"
+echo "[INFO] iSCSI connect (after-the-fact): sudo ~/setup_iscsi_connect.sh"
+echo "[INFO] Manual SMB + iSCSI in one: ~/setup_manual.sh"
