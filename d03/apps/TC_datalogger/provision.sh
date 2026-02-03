@@ -11,10 +11,11 @@ if [ -f "$HOME/scripts/docker/common.env" ]; then
   # shellcheck source=/dev/null
   . "$HOME/scripts/docker/common.env"
 fi
+DOCKER_DL="${DOCKER_DL:-/mnt/docker}"
 
 APP_NAME="TC_datalogger"
 APP_REPO="${TC_DATALOGGER_REPO:-https://github.com/shepner/TC_datalogger.git}"
-APP_ROOT="${DOCKER_DL:?}/$APP_NAME"
+APP_ROOT="$DOCKER_DL/$APP_NAME"
 REPO_DIR="$APP_ROOT/repo"
 SERVICES=(TC_faction_crimes TC_faction_members TC_items TC_user_events TC_faction_chains TC_dashboard)
 

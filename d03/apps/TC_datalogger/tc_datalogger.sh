@@ -13,11 +13,13 @@ if [ -f "$HOME/scripts/docker/common.env" ]; then
   # shellcheck source=/dev/null
   . "$HOME/scripts/docker/common.env"
 fi
+DOCKER_DL="${DOCKER_DL:-/mnt/docker}"
+DOCKER_D1="${DOCKER_D1:-/mnt/nas/data1/docker}"
 
 APP_NAME="TC_datalogger"
-APP_ROOT="${DOCKER_DL:?}/$APP_NAME"
+APP_ROOT="$DOCKER_DL/$APP_NAME"
 REPO_DIR="$APP_ROOT/repo"
-BACKUP_DIR="${DOCKER_D1:?}"  # tgz under NFS
+BACKUP_DIR="$DOCKER_D1"  # tgz under NFS
 
 export DOCKER_DL
 export DOCKER_D1
