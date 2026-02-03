@@ -158,12 +158,29 @@ This checklist guides you through the complete build process for the new d03 VM.
 
 ### Step 7: Configure Docker Containers
 
-- [ ] Determine which containers will run on d03
-- [ ] Add containers to `docker-compose.yml`
-- [ ] Configure networks (internet/internal/backend as appropriate)
-- [ ] Set resource limits
-- [ ] Add healthchecks
-- [ ] Test container startup: `docker compose up -d`
+**First application: TC_datalogger** (Torn City API data logger → BigQuery). Everything needed to build/run/maintain it on d03 lives in this repo; the app source is pulled from [shepner/TC_datalogger](https://github.com/shepner/TC_datalogger). Working files live under `/mnt/docker/TC_datalogger` (iSCSI); backups are tgz in `/mnt/nas/data1/docker`.
+
+- [ ] **On d03: ensure `/mnt/docker` is mounted** (iSCSI; run `~/setup_manual.sh` if not done).
+- [ ] **Provision TC_datalogger** (clone app repo and create dirs):
+  ```bash
+  ~/scripts/d03/apps/TC_datalogger/provision.sh
+  ```
+- [ ] **Add credentials and API config** in each service’s `config/` under `/mnt/docker/TC_datalogger/<service>/config/` (see [TC_datalogger README](https://github.com/shepner/TC_datalogger#configuration)):
+  - `credentials.json` (GCP service account)
+  - `TC_API_config.json` (API keys)
+  for: TC_faction_crimes, TC_faction_members, TC_items, TC_user_events, TC_faction_chains (TC_dashboard uses one service’s credentials).
+- [ ] **Start and verify**:
+  ```bash
+  ~/scripts/d03/apps/TC_datalogger/tc_datalogger.sh up
+  docker ps
+  ```
+  Logs: `tc_datalogger.sh logs` (or `logs --until=1h` per docker-logging rule).
+- [ ] **Backup / update / refresh / rebuild** (see `~/scripts/d03/apps/TC_datalogger/README.md`):
+  - `tc_datalogger.sh backup` — tgz to `/mnt/nas/data1/docker/`
+  - `tc_datalogger.sh update` — git pull, rebuild, up
+  - `tc_datalogger.sh refresh` — rebuild and up (no pull)
+  - `tc_datalogger.sh rebuild` — full rebuild and up
+- [ ] (Optional) Add other containers to d03’s `~/scripts/d03/docker-compose.yml` later; configure networks (internet/internal/backend), resource limits, and healthchecks as needed.
 
 ### Step 8: Final Cleanup
 

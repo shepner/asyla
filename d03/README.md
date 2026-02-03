@@ -12,6 +12,8 @@ This is for a Debian Linux VM on Proxmox which will run Docker containers.
 - **Purpose**: Docker host for containerized applications
 - **OS**: Debian 13 (Trixie) - Current stable release
 
+**First application:** [TC_datalogger](https://github.com/shepner/TC_datalogger) (Torn City API → BigQuery). Self-contained in this repo under `d03/apps/TC_datalogger/`: provision on d03 (`provision.sh`), add credentials under `/mnt/docker/TC_datalogger/<service>/config/`, then `tc_datalogger.sh up`. Backup/update/refresh/rebuild via `tc_datalogger.sh`. See [BUILD_CHECKLIST.md](BUILD_CHECKLIST.md) Step 7 and [docker-compose.README.md](docker-compose.README.md).
+
 ## VM Specifications
 
 - **VMID**: 103

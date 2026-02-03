@@ -1,0 +1,96 @@
+# TC_datalogger on d03 — working files under /mnt/docker/TC_datalogger
+# Source: clone from https://github.com/shepner/TC_datalogger to ${DOCKER_DL}/TC_datalogger/repo
+# Run with: source ~/scripts/docker/common.env; docker compose -f this-file --project-directory ${DOCKER_DL}/TC_datalogger up -d
+# Requires DOCKER_DL (e.g. /mnt/docker) and LOCAL_TZ in environment.
+
+services:
+  tc-faction-crimes:
+    build:
+      context: ${DOCKER_DL}/TC_datalogger/repo/TC_faction_crimes
+      dockerfile: Dockerfile
+    container_name: tc-faction-crimes-pipeline
+    restart: unless-stopped
+    environment:
+      - TZ=${LOCAL_TZ:-America/Chicago}
+    volumes:
+      - ${DOCKER_DL}/TC_datalogger/TC_faction_crimes/config/credentials.json:/app/config/credentials.json:ro
+      - ${DOCKER_DL}/TC_datalogger/TC_faction_crimes/config/TC_API_config.json:/app/config/TC_API_config.json:ro
+      - ${DOCKER_DL}/TC_datalogger/TC_faction_crimes/logs:/app/logs
+
+  tc-faction-members:
+    build:
+      context: ${DOCKER_DL}/TC_datalogger/repo/TC_faction_members
+      dockerfile: Dockerfile
+    container_name: tc-faction-members-pipeline
+    restart: unless-stopped
+    environment:
+      - TZ=${LOCAL_TZ:-America/Chicago}
+    volumes:
+      - ${DOCKER_DL}/TC_datalogger/TC_faction_members/config/credentials.json:/app/config/credentials.json:ro
+      - ${DOCKER_DL}/TC_datalogger/TC_faction_members/config/TC_API_config.json:/app/config/TC_API_config.json:ro
+      - ${DOCKER_DL}/TC_datalogger/TC_faction_members/logs:/app/logs
+
+  tc-items:
+    build:
+      context: ${DOCKER_DL}/TC_datalogger/repo/TC_items
+      dockerfile: Dockerfile
+    container_name: tc-items-pipeline
+    restart: unless-stopped
+    environment:
+      - TZ=${LOCAL_TZ:-America/Chicago}
+    volumes:
+      - ${DOCKER_DL}/TC_datalogger/TC_items/config/credentials.json:/app/config/credentials.json:ro
+      - ${DOCKER_DL}/TC_datalogger/TC_items/config/TC_API_config.json:/app/config/TC_API_config.json:ro
+      - ${DOCKER_DL}/TC_datalogger/TC_items/logs:/app/logs
+
+  tc-user-events:
+    build:
+      context: ${DOCKER_DL}/TC_datalogger/repo/TC_user_events
+      dockerfile: Dockerfile
+    container_name: tc-user-events-pipeline
+    restart: unless-stopped
+    environment:
+      - TZ=${LOCAL_TZ:-America/Chicago}
+    volumes:
+      - ${DOCKER_DL}/TC_datalogger/TC_user_events/config/credentials.json:/app/config/credentials.json:ro
+      - ${DOCKER_DL}/TC_datalogger/TC_user_events/config/TC_API_config.json:/app/config/TC_API_config.json:ro
+      - ${DOCKER_DL}/TC_datalogger/TC_user_events/logs:/app/logs
+
+  tc-faction-chains:
+    build:
+      context: ${DOCKER_DL}/TC_datalogger/repo/TC_faction_chains
+      dockerfile: Dockerfile
+    container_name: tc-faction-chains-pipeline
+    restart: unless-stopped
+    environment:
+      - TZ=${LOCAL_TZ:-America/Chicago}
+    volumes:
+      - ${DOCKER_DL}/TC_datalogger/TC_faction_chains/config/credentials.json:/app/config/credentials.json:ro
+      - ${DOCKER_DL}/TC_datalogger/TC_faction_chains/config/TC_API_config.json:/app/config/TC_API_config.json:ro
+      - ${DOCKER_DL}/TC_datalogger/TC_faction_chains/logs:/app/logs
+
+  tc-dashboard:
+    build:
+      context: ${DOCKER_DL}/TC_datalogger/repo/TC_dashboard
+      dockerfile: Dockerfile
+      args:
+        CACHE_BUST: ${CACHE_BUST:-1}
+    container_name: tc-dashboard
+    restart: unless-stopped
+    environment:
+      - TZ=${LOCAL_TZ:-America/Chicago}
+      - DASHBOARD_PORT=8080
+      - DASHBOARD_BASE_PATH=/app/data
+    ports:
+      - "8080:8080"
+    volumes:
+      - ${DOCKER_DL}/TC_datalogger/TC_faction_crimes/logs:/app/logs/faction_crimes:ro
+      - ${DOCKER_DL}/TC_datalogger/TC_faction_members/logs:/app/logs/faction_members:ro
+      - ${DOCKER_DL}/TC_datalogger/TC_items/logs:/app/logs/items:ro
+      - ${DOCKER_DL}/TC_datalogger/TC_user_events/logs:/app/logs/user_events:ro
+      - ${DOCKER_DL}/TC_datalogger/TC_faction_chains/logs:/app/logs/faction_chains:ro
+      - ${DOCKER_DL}/TC_datalogger/TC_dashboard/logs:/app/logs
+      - ${DOCKER_DL}/TC_datalogger/repo/TC_dashboard:/app/data:ro
+      - ${DOCKER_DL}/TC_datalogger/repo/sql_queries:/app/sql_queries:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${DOCKER_DL}/TC_datalogger/TC_faction_crimes/config/credentials.json:/app/config/credentials.json:ro

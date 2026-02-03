@@ -101,7 +101,25 @@ docker compose stop <service-name>
 docker compose logs -f <service-name>
 ```
 
-## Adding New Containers
+## First Application: TC_datalogger
+
+TC_datalogger (Torn City API → BigQuery) is the first application on d03. All build/run/maintain pieces live in this repo under `d03/apps/TC_datalogger/`; the app source is pulled from the [TC_datalogger repo](https://github.com/shepner/TC_datalogger) on the VM.
+
+- **Working files**: `/mnt/docker/TC_datalogger/` (iSCSI) — subdirs match the app name; `repo/` is the git clone; each service has `config/` and `logs/`.
+- **Backups**: tgz files in `/mnt/nas/data1/docker/` (e.g. `TC_datalogger-YYYYMMDD-HHMMSS.tgz`).
+- **On d03**: One-time `provision.sh` (clone repo + create dirs), add credentials in each service’s `config/`, then:
+  ```bash
+  ~/scripts/d03/apps/TC_datalogger/tc_datalogger.sh up
+  ```
+- **Backup / update / refresh / rebuild**:
+  - `tc_datalogger.sh backup` — tgz to NFS
+  - `tc_datalogger.sh update` — git pull, rebuild, up
+  - `tc_datalogger.sh refresh` — rebuild and up
+  - `tc_datalogger.sh rebuild` — full rebuild and up
+
+See `~/scripts/d03/apps/TC_datalogger/README.md` for full steps. The root `docker-compose.yml` in `~/scripts/d03/` is for future shared/infrastructure containers.
+
+## Adding New Containers (d03 docker-compose.yml)
 
 1. **Copy the template service** from `docker-compose.yml`
 2. **Choose appropriate network**:
