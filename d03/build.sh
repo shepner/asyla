@@ -49,14 +49,15 @@ if [ ! -f "$CLOUD_INIT_FILE" ]; then
 fi
 log_info "Cloud-init user-data file found: $CLOUD_INIT_FILE"
 
-# Step 2: Copy cloud-init user-data to Proxmox host
-log_step "Step 2: Copy cloud-init user-data to Proxmox"
+# Step 2: Copy cloud-init user-data and vendor files to Proxmox host
+log_step "Step 2: Copy cloud-init files to Proxmox"
 log_info "Copying $CLOUD_INIT_FILE to root@$PROXMOX_HOST:$SNIPPETS_PATH"
 scp "$CLOUD_INIT_FILE" "root@$PROXMOX_HOST:$SNIPPETS_PATH" || {
     log_error "Failed to copy cloud-init user-data file"
     exit 1
 }
 log_info "Cloud-init user-data file copied successfully"
+log_info "Note: VM fetches user-data from GitHub (vendor curl). Push cloud-init-userdata.yml to master before rebuild to use local changes."
 
 # Step 3: Stop and destroy existing VM (if it exists)
 log_step "Step 3: Clean up existing VM (if any)"
@@ -244,14 +245,14 @@ log_info "VM started successfully"
 
 # Step 13: Wait for VM to boot and cloud-init to finish
 log_step "Step 13: Wait for VM to boot"
-log_info "Waiting for SSH (docker@10.0.0.62) - cloud-init may take 90–180s..."
-for i in $(seq 1 24); do
+log_info "Waiting for SSH (docker@10.0.0.62) - checking once per minute, max 20 min..."
+for i in $(seq 1 20); do
   if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no docker@10.0.0.62 "echo ok" 2>/dev/null; then
-    log_info "SSH ready after ~$((i*10))s"
+    log_info "SSH ready after ~${i} min"
     break
   fi
-  [ "$i" -eq 24 ] && log_warn "SSH not ready after 240s - check console"
-  sleep 10
+  [ "$i" -eq 20 ] && log_warn "SSH not ready after 20 min - will retry verification at end"
+  sleep 60
 done
 
 # Step 14: Check if cloud-init is installed (via console if SSH not available)
@@ -264,17 +265,9 @@ if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no root@10.0.0.62 "command -
 elif ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no root@10.0.0.248 "command -v cloud-init >/dev/null 2>&1" 2>/dev/null; then
     log_info "✅ cloud-init is installed (checked via DHCP IP)"
 else
-    log_warn "⚠️  cloud-init may not be installed"
-    log_info "If cloud-init is missing, run from console:"
-    echo ""
-    echo "  apt-get update && apt-get install -y cloud-init"
-    echo "  mkdir -p /var/lib/cloud/seed/nocloud"
-    echo "  curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/setup/cloud-init-userdata.yml > /var/lib/cloud/seed/nocloud/user-data"
-    echo "  cloud-init clean && cloud-init init --local && cloud-init init && cloud-init modules --mode config && cloud-init modules --mode final"
-    echo ""
-    log_info "Or use the automated bootstrap script:"
-    echo "  curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/setup/bootstrap_complete.sh | bash"
-    echo ""
+    log_warn "cloud-init may not be installed."
+    log_info "From VM console (as root), run: curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/setup/bootstrap_complete.sh | bash"
+    log_info "Or on workstation: ./d03/setup/serve_bootstrap.sh then in console: curl http://<workstation-ip>:8888/b | bash"
 fi
 
 # Step 15: Test SSH access
@@ -290,31 +283,59 @@ else
     log_info "Check console or try: ssh docker@10.0.0.62 (or ssh root@10.0.0.248 if using DHCP)"
 fi
 
-# Step 15: Verify configuration on VM
-log_step "Step 15: Verify VM configuration"
-log_info "Checking docker user configuration..."
-ssh -o ConnectTimeout=10 docker@10.0.0.62 "
-echo '=== Docker User Info ==='
-id docker
-echo ''
-echo '=== Groups ==='
-groups docker
-echo ''
-echo '=== Network Configuration ==='
-ip addr show | grep 'inet ' | grep -v '127.0.0.1'
-ip route show | grep default
-cat /etc/resolv.conf
-echo ''
-echo '=== Setup Scripts ==='
-ls -la ~/scripts/d03/setup/ 2>/dev/null | head -10 || echo 'Scripts directory not found yet'
-" 2>/dev/null || {
-    log_warn "Could not verify configuration - VM may still be initializing"
-    log_info "Wait a bit longer and try: ssh docker@10.0.0.62"
-}
+# Step 16: Verify software deployment (hostname, scripts, Docker)
+log_step "Step 16: Verify software deployment"
+SSH_VERIFY="ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no docker@10.0.0.62"
+if $SSH_VERIFY "echo ok" 2>/dev/null; then
+  HOSTNAME=$($SSH_VERIFY "hostname -s" 2>/dev/null) || HOSTNAME=""
+  HAS_SCRIPTS=$($SSH_VERIFY "test -f ~/scripts/d03/setup/docker.sh && echo y" 2>/dev/null) || true
+  DOCKER_VER=$($SSH_VERIFY "docker --version 2>/dev/null" 2>/dev/null) || true
+  if [ "$HOSTNAME" = "d03" ]; then
+    log_info "✅ Hostname is d03 (update_scripts.sh can find d03/ in repo)"
+  else
+    log_warn "Hostname is '$HOSTNAME' (expected d03) - scripts may not have been installed"
+  fi
+  if [ "$HAS_SCRIPTS" = "y" ]; then
+    log_info "✅ Setup scripts installed at ~/scripts/d03/setup/"
+  else
+    log_warn "Setup scripts not found at ~/scripts/d03/setup/ - update_scripts.sh may have failed"
+  fi
+  if [ -n "$DOCKER_VER" ]; then
+    log_info "✅ Docker installed: $DOCKER_VER"
+  else
+    log_warn "Docker not found or not in PATH - run: newgrp docker, or log out and back in"
+  fi
+  # Full config dump if SSH works
+  log_info "Configuration snapshot:"
+  $SSH_VERIFY "id; groups; ls ~/scripts/d03/setup/ 2>/dev/null | head -15" 2>/dev/null || true
+else
+  log_warn "Could not verify - SSH not ready. Try: ssh docker@10.0.0.62"
+fi
 
 log_step "Build Complete!"
 log_info "VM Status:"
 ssh "root@$PROXMOX_HOST" "qm status $VMID"
+echo ""
+
+# If verification didn't run (SSH wasn't ready), wait 2 min and retry once
+if ! ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no docker@10.0.0.62 "echo ok" 2>/dev/null; then
+  log_info "SSH not ready at end of build. Waiting 2 min then retrying verification..."
+  sleep 120
+  log_step "Retry: Verify software deployment"
+  SSH_VERIFY="ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no docker@10.0.0.62"
+  if $SSH_VERIFY "echo ok" 2>/dev/null; then
+    HOSTNAME=$($SSH_VERIFY "hostname -s" 2>/dev/null) || HOSTNAME=""
+    HAS_SCRIPTS=$($SSH_VERIFY "test -f ~/scripts/d03/setup/docker.sh && echo y" 2>/dev/null) || true
+    DOCKER_VER=$($SSH_VERIFY "docker --version 2>/dev/null" 2>/dev/null) || true
+    [ "$HOSTNAME" = "d03" ] && log_info "✅ Hostname is d03" || log_warn "Hostname is '$HOSTNAME' (expected d03)"
+    [ "$HAS_SCRIPTS" = "y" ] && log_info "✅ Setup scripts at ~/scripts/d03/setup/" || log_warn "Setup scripts not found"
+    [ -n "$DOCKER_VER" ] && log_info "✅ Docker: $DOCKER_VER" || log_warn "Docker not found"
+    $SSH_VERIFY "ls ~/scripts/d03/setup/ 2>/dev/null | head -15" 2>/dev/null || true
+  else
+    log_warn "SSH still not ready. Try manually in a few min: ssh docker@10.0.0.62"
+  fi
+fi
+
 echo ""
 log_info "Next steps:"
 echo "  1. SSH to VM: ssh docker@10.0.0.62"

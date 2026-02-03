@@ -49,37 +49,40 @@ users:
     ssh_authorized_keys:
       - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCejokU+gb5+7sHSY9KkS/jJ1UzwiRwNFhnRQunoyeb+otkOXXqs1wMWg4qPamOOQTiieQNAvaomGcga5PWp35RUp9iQeq2EYzoOZTALruqZpMTuvuFs1dK58mrmsNVOg1s/1AF/S3WOURWPyou+k18LN+tRDu7JrGCs63JquCsNTBf04hiCtUptqP2LCUnJznNJ5B/KbGQbkqtUzuQFR+BImLN0t8U7A4CvmcHniuyYXzC0fmsqTFAw+NVx5WZRtKAVztFWnMLn7a/diiXXHfi84FhBukr4qbiB+LlWIGCUvZOPJrUdsS19L/iDsFS+F88mEnG+UXeopHAPtAUsntN docker@asyla.org
 
-# Run commands on first boot
+# Run commands on first boot.
+# Order matters: start SSH first so VM is reachable; install scripts and Docker before long apt upgrade.
 runcmd:
-  # Update system packages (packages are installed via 'packages' directive above)
-  - apt-get update
-  - apt-get upgrade -y
-  
-  # Ensure SSH service is enabled and started (Debian uses 'ssh' service name)
+  # Ensure SSH is up first (so build script and manual SSH work soon after boot)
   - systemctl enable ssh || systemctl enable sshd || true
   - systemctl start ssh || systemctl start sshd || true
-  - systemctl status ssh --no-pager || systemctl status sshd --no-pager || echo "WARNING: Could not verify SSH service status"
-  
-  # Ensure .ssh directory permissions are correct (cloud-init may create it before user exists)
+
+  # .ssh directory for docker user
   - mkdir -p /home/docker/.ssh
   - chmod 700 /home/docker/.ssh
   - chown -R docker:asyla /home/docker/.ssh || true
-  
-  # Fetch setup scripts (fixed update_scripts.sh installs to /home/docker/scripts/d03/)
+
+  # Quick package index update only (upgrade runs later so it does not block Docker install)
+  - apt-get update || true
+
+  # Fetch and install setup scripts (update_scripts.sh installs to /home/docker/scripts/d03/)
   - |
     curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/update_scripts.sh | bash || true
 
-  # Auto-run non-sensitive setup (systemConfig, nfs, docker, update). Only if scripts exist (e.g. after fixed update_scripts.sh).
+  # Deploy software: systemConfig, nfs, Docker, update (only if scripts exist)
   - [ bash, -c, 'test -f /home/docker/scripts/d03/setup/systemConfig.sh && /home/docker/scripts/d03/setup/systemConfig.sh || true' ]
   - [ bash, -c, 'test -f /home/docker/scripts/d03/setup/nfs.sh && /home/docker/scripts/d03/setup/nfs.sh || true' ]
   - [ bash, -c, 'test -f /home/docker/scripts/d03/setup/docker.sh && /home/docker/scripts/d03/setup/docker.sh || true' ]
   - [ bash, -c, 'test -f /home/docker/update.sh && /home/docker/update.sh || true' ]
 
+  # Full upgrade last (run in background so it does not block; logs to /var/log/cloud-init-upgrade.log)
+  - [ bash, -c, 'nohup apt-get upgrade -y >> /var/log/cloud-init-upgrade.log 2>&1 &' ]
+
 # Final message
 final_message: |
   d03 VM setup complete!
   
-  Auto-ran: systemConfig, nfs, docker, update (if scripts were installed).
+  Auto-ran: SSH started first, then systemConfig, nfs, docker, update (if scripts were installed).
+  apt-get upgrade runs in background; log: /var/log/cloud-init-upgrade.log
   Manual steps:
   1. SSH to d03: ssh docker@10.0.0.62 (edit ~/.ssh/known_hosts if you rebuilt the VM)
   2. Copy SSH private key and config: scp ~/.ssh/docker_rsa d03:.ssh/docker_rsa; scp ~/.ssh/config d03:.ssh/config; ssh d03 "chmod -R 700 ~/.ssh"

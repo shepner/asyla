@@ -488,38 +488,17 @@ The vendor file (`cloud-init-vendor.yml`) is designed to:
 
 **If vendor file doesn't run (cloud-init not installed to process it):**
 
-**Option 1: Console bootstrap when paste is not available (recommended)**
+**Option 1: Console bootstrap when paste is not available**
 
 Proxmox console often does not support paste. Serve the bootstrap from your workstation so you only type a short command:
 
 1. On your workstation (from repo root): `./d03/setup/serve_bootstrap.sh`
-2. In the VM console, as root, type (replace with your host IP): `curl http://10.0.0.50:8888/b | bash`
+2. In the VM console, as root, type (replace with your host IP): `curl http://<workstation-ip>:8888/b | bash`
 3. Stop the server with Ctrl+C when done.
 
-See `BUILD_CHECKLIST.md` → Troubleshooting → "Cloud-init missing / No SSH / Can't paste in console" for details.
+**Option 2: Bootstrap script (if you can paste or run from SSH)**
 
-**Option 2: Use bootstrap script (if you can paste or run from SSH)**
-From the VM console (paste from GitHub):
-```bash
-curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/setup/bootstrap_complete.sh | bash
-```
-
-**Option 3: Manual Installation (if bootstrap script fails)**
-From the VM console:
-```bash
-# Install cloud-init
-apt-get update && apt-get install -y cloud-init
-
-# Fetch and process our user-data
-mkdir -p /var/lib/cloud/seed/nocloud
-curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/setup/cloud-init-userdata.yml > /var/lib/cloud/seed/nocloud/user-data
-
-# Process cloud-init configuration
-cloud-init clean && cloud-init init --local && cloud-init init && cloud-init modules --mode config && cloud-init modules --mode final
-
-# Verify setup
-id docker && systemctl status ssh && ip addr show ens18
-```
+From the VM console: `curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/setup/bootstrap_complete.sh | bash`
 
 **Prevention:**
 - Use `debian-13-generic-amd64.qcow2` instead of `debian-13-nocloud-amd64.qcow2` (more likely to include cloud-init)
