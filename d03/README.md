@@ -500,6 +500,9 @@ Proxmox console often does not support paste. Serve the bootstrap from your work
 
 From the VM console: `curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/setup/bootstrap_complete.sh | bash`
 
+**If you can SSH but scripts/Docker were not installed:** Run once (as root or with sudo):  
+`curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/setup/deploy_software.sh | sudo bash`
+
 **Prevention:**
 - Use `debian-13-generic-amd64.qcow2` instead of `debian-13-nocloud-amd64.qcow2` (more likely to include cloud-init)
 - Verify the Debian 13 cloud image includes cloud-init before use

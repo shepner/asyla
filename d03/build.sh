@@ -1,7 +1,11 @@
 #!/bin/bash
 # Full build script for d03 VM
-# This script performs a complete build test from scratch
-
+#
+# Purpose: Destroy and recreate VM 103 on Proxmox, import Debian cloud image,
+#          configure cloud-init (vendor runs install), and verify SSH and software.
+# Usage:   ./d03/build.sh   (from repo root or d03/)
+# Requires: SSH access to root@vmh02, d03 in ~/.ssh/config (HostName 10.0.0.62, User docker),
+#           and ~/.ssh/docker_rsa.pub for cloud-init.
 set -euo pipefail
 
 # Colors for output
@@ -38,6 +42,8 @@ IMAGE_PATH_FALLBACK="/mnt/nas/data1/iso/template/iso/debian-13-nocloud-amd64.qco
 CLOUD_INIT_FILE="$SCRIPT_DIR/setup/cloud-init-userdata.yml"
 CLOUD_INIT_VENDOR_FILE="$SCRIPT_DIR/setup/cloud-init-vendor.yml"
 SNIPPETS_PATH="/var/lib/vz/snippets/d03-cloud-init.yml"
+VM_HOST="d03"
+VM_SSH_OPTS="-o StrictHostKeyChecking=no"
 
 log_step "Starting Full Build Test for d03 VM"
 
@@ -243,11 +249,11 @@ ssh "root@$PROXMOX_HOST" "qm start $VMID" || {
 }
 log_info "VM started successfully"
 
-# Step 13: Wait for VM to boot and cloud-init to finish
+# Step 13: Wait for VM to boot
 log_step "Step 13: Wait for VM to boot"
-log_info "Waiting for SSH (docker@10.0.0.62) - checking once per minute, max 20 min..."
+log_info "Waiting for SSH (d03) - checking once per minute, max 20 min..."
 for i in $(seq 1 20); do
-  if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no docker@10.0.0.62 "echo ok" 2>/dev/null; then
+  if ssh $VM_SSH_OPTS -o ConnectTimeout=5 "$VM_HOST" "echo ok" 2>/dev/null; then
     log_info "SSH ready after ~${i} min"
     break
   fi
@@ -255,14 +261,39 @@ for i in $(seq 1 20); do
   sleep 60
 done
 
+# Step 13b: Wait for cloud-init to finish (userdata runcmd can take 5–15 min after second boot)
+log_step "Step 13b: Wait for cloud-init to complete"
+log_info "Waiting for cloud-init (scripts/Docker install) - checking every 60s, max 18 min..."
+SOFTWARE_READY=""
+for i in $(seq 1 18); do
+  if ssh $VM_SSH_OPTS -o ConnectTimeout=10 "$VM_HOST" "test -f ~/scripts/d03/setup/docker.sh && command -v docker >/dev/null 2>&1" 2>/dev/null; then
+    log_info "Scripts and Docker ready after ~$((i + 2)) min total"
+    SOFTWARE_READY=1
+    break
+  fi
+  sleep 60
+done
+if [ -z "${SOFTWARE_READY:-}" ]; then
+  log_warn "Scripts/Docker not ready after 18 min - cloud-init may still be running or run deploy_software.sh"
+  # Capture cloud-init logs for debugging (best-effort)
+  if ssh $VM_SSH_OPTS -o ConnectTimeout=10 "$VM_HOST" "test -r /var/log/cloud-init-output.log" 2>/dev/null; then
+    log_info "Last 80 lines of cloud-init-output.log (for debugging):"
+    ssh $VM_SSH_OPTS -o ConnectTimeout=10 "$VM_HOST" "tail -80 /var/log/cloud-init-output.log" 2>/dev/null | sed 's/^/  | /' || true
+  fi
+  if ssh $VM_SSH_OPTS -o ConnectTimeout=10 "$VM_HOST" "test -r /var/log/cloud-init.log" 2>/dev/null; then
+    log_info "Last 40 lines of cloud-init.log:"
+    ssh $VM_SSH_OPTS -o ConnectTimeout=10 "$VM_HOST" "tail -40 /var/log/cloud-init.log" 2>/dev/null | sed 's/^/  | /' || true
+  fi
+fi
+
 # Step 14: Check if cloud-init is installed (via console if SSH not available)
 log_step "Step 14: Verify cloud-init installation"
 log_info "Checking if cloud-init is installed and working..."
 
 # Try to check via SSH if possible, otherwise provide console instructions
-if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no root@10.0.0.62 "command -v cloud-init >/dev/null 2>&1" 2>/dev/null; then
+if ssh $VM_SSH_OPTS -o ConnectTimeout=5 "root@${VM_HOST}" "command -v cloud-init >/dev/null 2>&1" 2>/dev/null; then
     log_info "✅ cloud-init is installed"
-elif ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no root@10.0.0.248 "command -v cloud-init >/dev/null 2>&1" 2>/dev/null; then
+elif ssh $VM_SSH_OPTS -o ConnectTimeout=5 root@10.0.0.248 "command -v cloud-init >/dev/null 2>&1" 2>/dev/null; then
     log_info "✅ cloud-init is installed (checked via DHCP IP)"
 else
     log_warn "cloud-init may not be installed."
@@ -272,20 +303,20 @@ fi
 
 # Step 15: Test SSH access
 log_step "Step 15: Test SSH access"
-log_info "Attempting SSH connection to docker@10.0.0.62..."
-if ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no docker@10.0.0.62 "echo 'SSH connection successful!'" 2>/dev/null; then
+log_info "Attempting SSH connection to d03..."
+if ssh $VM_SSH_OPTS -o ConnectTimeout=10 "$VM_HOST" "echo 'SSH connection successful!'" 2>/dev/null; then
     log_info "✅ SSH access working!"
-elif ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no docker@10.0.0.248 "echo 'SSH connection successful!'" 2>/dev/null; then
+elif ssh $VM_SSH_OPTS -o ConnectTimeout=10 docker@10.0.0.248 "echo 'SSH connection successful!'" 2>/dev/null; then
     log_info "✅ SSH access working (via DHCP IP 10.0.0.248)"
     log_warn "⚠️  VM is using DHCP IP instead of static 10.0.0.62"
 else
     log_warn "SSH not ready yet - cloud-init may still be processing"
-    log_info "Check console or try: ssh docker@10.0.0.62 (or ssh root@10.0.0.248 if using DHCP)"
+    log_info "Check console or try: ssh d03 (or ssh root@10.0.0.248 if using DHCP)"
 fi
 
 # Step 16: Verify software deployment (hostname, scripts, Docker)
 log_step "Step 16: Verify software deployment"
-SSH_VERIFY="ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no docker@10.0.0.62"
+SSH_VERIFY="ssh $VM_SSH_OPTS -o ConnectTimeout=10 ${VM_HOST}"
 if $SSH_VERIFY "echo ok" 2>/dev/null; then
   HOSTNAME=$($SSH_VERIFY "hostname -s" 2>/dev/null) || HOSTNAME=""
   HAS_SCRIPTS=$($SSH_VERIFY "test -f ~/scripts/d03/setup/docker.sh && echo y" 2>/dev/null) || true
@@ -309,7 +340,7 @@ if $SSH_VERIFY "echo ok" 2>/dev/null; then
   log_info "Configuration snapshot:"
   $SSH_VERIFY "id; groups; ls ~/scripts/d03/setup/ 2>/dev/null | head -15" 2>/dev/null || true
 else
-  log_warn "Could not verify - SSH not ready. Try: ssh docker@10.0.0.62"
+  log_warn "Could not verify - SSH not ready. Try: ssh d03"
 fi
 
 log_step "Build Complete!"
@@ -318,11 +349,11 @@ ssh "root@$PROXMOX_HOST" "qm status $VMID"
 echo ""
 
 # If verification didn't run (SSH wasn't ready), wait 2 min and retry once
-if ! ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no docker@10.0.0.62 "echo ok" 2>/dev/null; then
+if ! ssh $VM_SSH_OPTS -o ConnectTimeout=5 "$VM_HOST" "echo ok" 2>/dev/null; then
   log_info "SSH not ready at end of build. Waiting 2 min then retrying verification..."
   sleep 120
   log_step "Retry: Verify software deployment"
-  SSH_VERIFY="ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no docker@10.0.0.62"
+  SSH_VERIFY="ssh $VM_SSH_OPTS -o ConnectTimeout=10 ${VM_HOST}"
   if $SSH_VERIFY "echo ok" 2>/dev/null; then
     HOSTNAME=$($SSH_VERIFY "hostname -s" 2>/dev/null) || HOSTNAME=""
     HAS_SCRIPTS=$($SSH_VERIFY "test -f ~/scripts/d03/setup/docker.sh && echo y" 2>/dev/null) || true
@@ -332,13 +363,13 @@ if ! ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no docker@10.0.0.62 "echo 
     [ -n "$DOCKER_VER" ] && log_info "✅ Docker: $DOCKER_VER" || log_warn "Docker not found"
     $SSH_VERIFY "ls ~/scripts/d03/setup/ 2>/dev/null | head -15" 2>/dev/null || true
   else
-    log_warn "SSH still not ready. Try manually in a few min: ssh docker@10.0.0.62"
+    log_warn "SSH still not ready. Try manually in a few min: ssh d03"
   fi
 fi
 
 echo ""
 log_info "Next steps:"
-echo "  1. SSH to VM: ssh docker@10.0.0.62"
+echo "  1. SSH to VM: ssh d03"
 echo "  2. Verify configuration: id docker && groups docker"
 echo "  3. Copy SSH private key: scp ~/.ssh/docker_rsa d03:.ssh/docker_rsa"
 echo "  4. Copy SSH config: scp ~/.ssh/config d03:.ssh/config"

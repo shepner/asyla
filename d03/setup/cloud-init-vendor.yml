@@ -1,29 +1,21 @@
 #cloud-config
-# Vendor file for d03 VM - runs additional setup commands
-# This file is processed by cloud-init AFTER Proxmox's built-in cloud-init runs
+# Vendor file for d03 VM - runs on first boot.
+# Fetches our full user-data and directly executes the installation commands.
 # Use with: qm set <VMID> --cicustom vendor=local:snippets/d03-cloud-init-vendor.yml
-# 
-# IMPORTANT: This file requires cloud-init to be installed to process it.
-# Debian 13 cloud images SHOULD include cloud-init pre-installed.
-# If cloud-init is missing, Proxmox's built-in config won't process either.
-# In that case, use the bootstrap script manually (see README troubleshooting).
+#
+# Flow: first boot (Proxmox user+vendor) -> vendor runcmd runs ->
+#       fetch userdata -> execute installation commands directly.
+# Repo URL is fixed (GitHub raw); push cloud-init-userdata.yml to master before rebuild.
 
-# Process our full user-data configuration
 runcmd:
-  # Verify cloud-init is available (should be pre-installed in Debian cloud images)
+  # Verify cloud-init is available (Debian cloud images include it)
   - |
     if ! command -v cloud-init >/dev/null 2>&1; then
-      echo "ERROR: cloud-init not found - Debian cloud image may be incomplete"
-      echo "Installing cloud-init as fallback..."
-      apt-get update && apt-get install -y cloud-init || {
-        echo "ERROR: Failed to install cloud-init"
-        echo "Image may be corrupted - consider re-downloading from https://cloud.debian.org/images/cloud/"
-        exit 1
-      }
+      echo "ERROR: cloud-init not found - install it or use a generic cloud image"
+      apt-get update && apt-get install -y cloud-init || exit 1
     fi
 
-  # Save Proxmox-generated user-data (contains SSH key from --sshkeys) before we overwrite the seed.
-  # Seed may be at /var/lib/cloud/seed/nocloud/ or on the cloud-init CD (/dev/sr0).
+  # Save Proxmox user-data (has SSH key from --sshkeys) before we change anything
   - |
     if [ -f /var/lib/cloud/seed/nocloud/user-data ] && [ -s /var/lib/cloud/seed/nocloud/user-data ]; then
       cp /var/lib/cloud/seed/nocloud/user-data /tmp/proxmox_user_data.yml
@@ -37,48 +29,98 @@ runcmd:
       fi
       rmdir /tmp/ci_cd 2>/dev/null || true
     fi
-  
-  # Fetch and process our full user-data configuration
+
+  # Ensure SSH is running early (so build script can connect)
+  - systemctl enable ssh || systemctl enable sshd || true
+  - systemctl start ssh || systemctl start sshd || true
+
+  # Fetch our full user-data for reference (we'll execute its runcmd directly)
   - |
     echo "Fetching full user-data configuration..."
-    mkdir -p /var/lib/cloud/seed/nocloud
-    curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/setup/cloud-init-userdata.yml > /var/lib/cloud/seed/nocloud/user-data || {
-      echo "ERROR: Failed to download user-data"
+    curl -sL https://raw.githubusercontent.com/shepner/asyla/master/d03/setup/cloud-init-userdata.yml > /tmp/userdata.yml || {
+      echo "ERROR: Failed to download user-data (network?)"
       exit 1
     }
-  
-  # Process the full configuration
-  - |
-    echo "Processing full cloud-init configuration..."
-    cloud-init clean || true
-    cloud-init init --local
-    cloud-init init
-    cloud-init modules --mode config
-    cloud-init modules --mode final
 
-  # Inject Proxmox SSH key into docker's authorized_keys (from saved Proxmox user-data).
-  # Proxmox writes ssh_authorized_keys as a YAML list; extract lines that look like SSH keys.
+  # Ensure asyla group exists (from userdata groups section)
+  - |
+    if ! getent group asyla >/dev/null 2>&1; then
+      if getent group 1000 >/dev/null 2>&1; then
+        groupadd asyla
+      else
+        groupadd -g 1000 asyla
+      fi
+    fi
+
+  # Ensure docker user exists and is in correct groups (from userdata users section)
+  - |
+    if ! id docker >/dev/null 2>&1; then
+      useradd -m -u 1003 -g asyla -G asyla,docker,sudo -s /bin/bash docker || true
+    else
+      usermod -aG asyla docker 2>/dev/null || true
+      usermod -aG docker docker 2>/dev/null || true
+      usermod -aG sudo docker 2>/dev/null || true
+    fi
+
+  # Set up docker user's .ssh directory
+  - mkdir -p /home/docker/.ssh
+  - chmod 700 /home/docker/.ssh
+  - chown -R docker:asyla /home/docker/.ssh || chown -R docker:docker /home/docker/.ssh || true
+
+  # Add Proxmox SSH key to docker user
   - |
     if [ -f /tmp/proxmox_user_data.yml ]; then
-      mkdir -p /home/docker/.ssh
       grep -E '^\s+-\s+ssh-' /tmp/proxmox_user_data.yml | sed 's/^\s*-\s*//' >> /home/docker/.ssh/authorized_keys 2>/dev/null || true
       grep -E '^\s+-\s+ecdsa-' /tmp/proxmox_user_data.yml | sed 's/^\s*-\s*//' >> /home/docker/.ssh/authorized_keys 2>/dev/null || true
       grep -E '^\s+-\s+sk-' /tmp/proxmox_user_data.yml | sed 's/^\s*-\s*//' >> /home/docker/.ssh/authorized_keys 2>/dev/null || true
       sort -u /home/docker/.ssh/authorized_keys -o /home/docker/.ssh/authorized_keys 2>/dev/null || true
-      chown -R docker:asyla /home/docker/.ssh
-      chmod 700 /home/docker/.ssh
       chmod 600 /home/docker/.ssh/authorized_keys
+      chown -R docker:asyla /home/docker/.ssh 2>/dev/null || chown -R docker:docker /home/docker/.ssh 2>/dev/null || true
       rm -f /tmp/proxmox_user_data.yml
     fi
-  
-  # Ensure SSH service is running
-  - systemctl enable ssh || systemctl enable sshd || true
-  - systemctl start ssh || systemctl start sshd || true
-  
-  # Verify setup
+
+  # Execute installation commands from userdata runcmd section directly
+  # This is more reliable than trying to re-run cloud-init modules
   - |
-    echo "=== Setup Verification ==="
-    id docker || echo "WARNING: docker user not created"
-    systemctl is-active ssh || systemctl is-active sshd || echo "WARNING: SSH not running"
-    ip addr show ens18 | grep "inet " || echo "WARNING: Network not configured"
-    echo "=== Setup Complete ==="
+    echo "=== Starting software installation ==="
+    set -e
+    
+    # Install required packages first (git, curl needed for update_scripts.sh)
+    echo "Installing required packages (git, curl)..."
+    apt-get update -qq
+    apt-get install -y -qq git curl >/dev/null 2>&1 || {
+      echo "ERROR: Failed to install git/curl"
+      exit 1
+    }
+    
+    # Fetch and install setup scripts
+    echo "Installing scripts..."
+    curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/update_scripts.sh | bash || {
+      echo "ERROR: update_scripts.sh failed"
+      exit 1
+    }
+    
+    # Verify scripts were installed
+    if [ ! -f /home/docker/scripts/d03/setup/systemConfig.sh ]; then
+      echo "ERROR: Scripts not found after update_scripts.sh"
+      exit 1
+    fi
+    
+    # Run setup scripts (as root, since we're in vendor runcmd)
+    echo "Running systemConfig.sh..."
+    /home/docker/scripts/d03/setup/systemConfig.sh || true
+    
+    echo "Running nfs.sh..."
+    /home/docker/scripts/d03/setup/nfs.sh || true
+    
+    echo "Running docker.sh..."
+    /home/docker/scripts/d03/setup/docker.sh || {
+      echo "ERROR: docker.sh failed"
+      exit 1
+    }
+    
+    # Run update.sh (full apt upgrade) - run in background so it doesn't block
+    echo "Starting apt upgrade in background..."
+    nohup bash -c '/home/docker/update.sh >> /var/log/cloud-init-upgrade.log 2>&1' &
+    
+    echo "=== Software installation complete ==="
