@@ -386,7 +386,7 @@ if ssh $VM_SSH_OPTS -o ConnectTimeout=5 "$VM_HOST" "test -d /home/docker" 2>/dev
     DO_SMB=""
     log_info "No TTY - skipping SMB prompt. To set later: ssh d03, run ~/setup_smb_credentials.sh"
   fi
-  if [[ "${DO_SMB,,}" =~ ^y ]]; then
+  if echo "${DO_SMB}" | grep -qi '^y'; then
     read -r -p "SMB username: " SMB_USER
     read -r -p "SMB domain: " SMB_DOMAIN
     read -r -s -p "SMB password: " SMB_PASS
