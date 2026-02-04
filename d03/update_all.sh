@@ -45,14 +45,7 @@ log_info "Step 1: Updating scripts from repository..."
 log_info "Step 2: Updating operating system..."
 "$HOME_DIR/update.sh"
 
-# Step 3: Reload all Docker containers
-log_info "Step 3: Reloading all Docker containers..."
-if [ -f "$HOME_DIR/scripts/docker/refresh_all.sh" ]; then
-    "$HOME_DIR/scripts/docker/refresh_all.sh"
-else
-    log_warn "refresh_all.sh not found, skipping Docker container reload"
-    log_info "Docker containers can be managed manually with docker compose"
-fi
+# Step 3: Docker containers are managed per-host (compose apps, etc.), not via shared refresh_all
 
 log_info "Comprehensive maintenance completed successfully!"
 
