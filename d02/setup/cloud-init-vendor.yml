@@ -1,0 +1,146 @@
+#cloud-config
+# Vendor file for d02 VM - runs on first boot.
+# Fetches our full user-data and directly executes the installation commands.
+# Use with: qm set <VMID> --cicustom vendor=local:snippets/d02-cloud-init-vendor.yml
+#
+# Flow: first boot (Proxmox user+vendor) -> vendor runcmd runs ->
+#       fetch userdata -> execute installation commands directly.
+# Repo URL is fixed (GitHub raw); push cloud-init-userdata.yml to master before rebuild.
+
+runcmd:
+  # Verify cloud-init is available (Debian cloud images include it)
+  - |
+    if ! command -v cloud-init >/dev/null 2>&1; then
+      echo "ERROR: cloud-init not found - install it or use a generic cloud image"
+      apt-get update && apt-get install -y cloud-init || exit 1
+    fi
+
+  # Save Proxmox user-data (has SSH key from --sshkeys) before we change anything
+  - |
+    if [ -f /var/lib/cloud/seed/nocloud/user-data ] && [ -s /var/lib/cloud/seed/nocloud/user-data ]; then
+      cp /var/lib/cloud/seed/nocloud/user-data /tmp/proxmox_user_data.yml
+    elif [ -b /dev/sr0 ]; then
+      mkdir -p /tmp/ci_cd
+      if mount -o ro /dev/sr0 /tmp/ci_cd 2>/dev/null; then
+        for f in /tmp/ci_cd/user-data /tmp/ci_cd/user_data /tmp/ci_cd/openstack/latest/user_data; do
+          if [ -f "$f" ] && [ -s "$f" ]; then cp "$f" /tmp/proxmox_user_data.yml; break; fi
+        done
+        umount /tmp/ci_cd 2>/dev/null || true
+      fi
+      rmdir /tmp/ci_cd 2>/dev/null || true
+    fi
+
+  # Ensure SSH is running early (so build script can connect)
+  - systemctl enable ssh || systemctl enable sshd || true
+  - systemctl start ssh || systemctl start sshd || true
+
+  # Install and start QEMU guest agent early (Proxmox needs this before long setup)
+  - |
+    apt-get update -qq
+    apt-get install -y -qq qemu-guest-agent || true
+    systemctl enable qemu-guest-agent || true
+    systemctl start qemu-guest-agent || true
+
+  # Fetch our full user-data for reference (we'll execute its runcmd directly)
+  - |
+    echo "Fetching full user-data configuration..."
+    curl -sL https://raw.githubusercontent.com/shepner/asyla/master/d02/setup/cloud-init-userdata.yml > /tmp/userdata.yml || {
+      echo "ERROR: Failed to download user-data (network?)"
+      exit 1
+    }
+
+  # Ensure asyla group exists (from userdata groups section)
+  - |
+    if ! getent group asyla >/dev/null 2>&1; then
+      if getent group 1000 >/dev/null 2>&1; then
+        groupadd asyla
+      else
+        groupadd -g 1000 asyla
+      fi
+    fi
+
+  # Ensure docker user exists and is in correct groups (from userdata users section)
+  - |
+    if ! id docker >/dev/null 2>&1; then
+      useradd -m -u 1003 -g asyla -G asyla,docker,sudo -s /bin/bash docker || true
+    else
+      usermod -aG asyla docker 2>/dev/null || true
+      usermod -aG docker docker 2>/dev/null || true
+      usermod -aG sudo docker 2>/dev/null || true
+    fi
+
+  # Set up docker user's .ssh directory
+  - mkdir -p /home/docker/.ssh
+  - chmod 700 /home/docker/.ssh
+  - chown -R docker:asyla /home/docker/.ssh || chown -R docker:docker /home/docker/.ssh || true
+
+  # Add Proxmox SSH key to docker user
+  - |
+    if [ -f /tmp/proxmox_user_data.yml ]; then
+      grep -E '^\s+-\s+ssh-' /tmp/proxmox_user_data.yml | sed 's/^\s*-\s*//' >> /home/docker/.ssh/authorized_keys 2>/dev/null || true
+      grep -E '^\s+-\s+ecdsa-' /tmp/proxmox_user_data.yml | sed 's/^\s*-\s*//' >> /home/docker/.ssh/authorized_keys 2>/dev/null || true
+      grep -E '^\s+-\s+sk-' /tmp/proxmox_user_data.yml | sed 's/^\s*-\s*//' >> /home/docker/.ssh/authorized_keys 2>/dev/null || true
+      sort -u /home/docker/.ssh/authorized_keys -o /home/docker/.ssh/authorized_keys 2>/dev/null || true
+      chmod 600 /home/docker/.ssh/authorized_keys
+      chown -R docker:asyla /home/docker/.ssh 2>/dev/null || chown -R docker:docker /home/docker/.ssh 2>/dev/null || true
+      rm -f /tmp/proxmox_user_data.yml
+    fi
+
+  # Set hostname to d02 so update_scripts.sh checks out d02/ from repo (required for script install)
+  - hostnamectl set-hostname d02 || echo d02 > /etc/hostname
+  - |
+    if [ -f /etc/hosts ] && ! grep -q 'd02.asyla.org' /etc/hosts; then
+      sed -i 's/^127.0.1.1.*/127.0.1.1\td02.asyla.org d02/' /etc/hosts 2>/dev/null || true
+    fi
+
+  # Execute installation commands from userdata runcmd section directly
+  # This is more reliable than trying to re-run cloud-init modules
+  - |
+    echo "=== Starting software installation ==="
+    set -e
+    
+    # Install required packages first (git, curl needed for update_scripts.sh)
+    echo "Installing required packages (git, curl)..."
+    apt-get update -qq
+    apt-get install -y -qq git curl >/dev/null 2>&1 || {
+      echo "ERROR: Failed to install git/curl"
+      exit 1
+    }
+    
+    # Fetch and install setup scripts
+    echo "Installing scripts..."
+    curl -s https://raw.githubusercontent.com/shepner/asyla/master/d02/update_scripts.sh | bash || {
+      echo "ERROR: update_scripts.sh failed"
+      exit 1
+    }
+    
+    # Verify scripts were installed
+    if [ ! -f /home/docker/scripts/d02/setup/systemConfig.sh ]; then
+      echo "ERROR: Scripts not found after update_scripts.sh"
+      exit 1
+    fi
+    
+    # Run setup scripts (as root, since we're in vendor runcmd)
+    echo "Running systemConfig.sh..."
+    /home/docker/scripts/d02/setup/systemConfig.sh || true
+    
+    echo "Running nfs.sh..."
+    /home/docker/scripts/d02/setup/nfs.sh || true
+    
+    echo "Running smb.sh..."
+    /home/docker/scripts/d02/setup/smb.sh || true
+    
+    echo "Running iscsi_install.sh..."
+    /home/docker/scripts/d02/setup/iscsi_install.sh || true
+    
+    echo "Running docker.sh..."
+    /home/docker/scripts/d02/setup/docker.sh || {
+      echo "ERROR: docker.sh failed"
+      exit 1
+    }
+    
+    # Run update.sh (full apt upgrade) - run in background so it doesn't block
+    echo "Starting apt upgrade in background..."
+    nohup bash -c '/home/docker/update.sh >> /var/log/cloud-init-upgrade.log 2>&1' &
+    
+    echo "=== Software installation complete ==="

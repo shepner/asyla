@@ -1,0 +1,100 @@
+#cloud-config
+# Cloud-init user-data for d02 VM
+# This file automates initial system setup including user creation, groups, SSH keys, network, and initial scripts
+# Use with Proxmox: qm set <VMID> --cicustom user=local:snippets/d02-cloud-init.yml
+# Note: --cicustom REPLACES Proxmox's built-in config, so network must be included here
+
+# Hostname must be d02 so update_scripts.sh (hostname -s) finds the d02/ directory in the repo
+hostname: d02
+fqdn: d02.asyla.org
+manage_etc_hosts: true
+
+# System timezone (Central)
+timezone: America/Chicago
+
+# Network configuration (Debian 13 uses ens18 for virtio adapters)
+network:
+  version: 2
+  ethernets:
+    ens18:
+      addresses:
+        - 10.0.0.61/24
+      gateway4: 10.0.0.1
+      nameservers:
+        addresses:
+          - 10.0.0.10
+          - 10.0.0.11
+        search:
+          - asyla.org
+
+# Install packages (cloud-init should be pre-installed in Debian cloud images)
+# If not, it will be installed here. qemu-guest-agent for Proxmox integration.
+packages:
+  - cloud-init
+  - openssh-server
+  - curl
+  - git
+  - qemu-guest-agent
+
+# Create groups
+groups:
+  - asyla: 1000
+  - docker
+
+# Create/modify users
+users:
+  - name: docker
+    uid: 1003
+    primary_group: asyla
+    groups: [asyla, docker, sudo]
+    shell: /bin/bash
+    lock_passwd: false
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    ssh_authorized_keys:
+      - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCejokU+gb5+7sHSY9KkS/jJ1UzwiRwNFhnRQunoyeb+otkOXXqs1wMWg4qPamOOQTiieQNAvaomGcga5PWp35RUp9iQeq2EYzoOZTALruqZpMTuvuFs1dK58mrmsNVOg1s/1AF/S3WOURWPyou+k18LN+tRDu7JrGCs63JquCsNTBf04hiCtUptqP2LCUnJznNJ5B/KbGQbkqtUzuQFR+BImLN0t8U7A4CvmcHniuyYXzC0fmsqTFAw+NVx5WZRtKAVztFWnMLn7a/diiXXHfi84FhBukr4qbiB+LlWIGCUvZOPJrUdsS19L/iDsFS+F88mEnG+UXeopHAPtAUsntN docker@asyla.org
+
+# Run commands on first boot.
+# Order matters: start SSH first so VM is reachable; install scripts and Docker before long apt upgrade.
+runcmd:
+  # Ensure SSH is up first (so build script and manual SSH work soon after boot)
+  - systemctl enable ssh || systemctl enable sshd || true
+  - systemctl start ssh || systemctl start sshd || true
+
+  # Start QEMU guest agent early (packages already installed; Proxmox needs this)
+  - systemctl enable qemu-guest-agent || true
+  - systemctl start qemu-guest-agent || true
+
+  # .ssh directory for docker user
+  - mkdir -p /home/docker/.ssh
+  - chmod 700 /home/docker/.ssh
+  - chown -R docker:asyla /home/docker/.ssh || true
+
+  # Quick package index update only (upgrade runs later so it does not block Docker install)
+  - apt-get update || true
+
+  # Fetch and install setup scripts (update_scripts.sh installs to /home/docker/scripts/d02/)
+  - |
+    curl -s https://raw.githubusercontent.com/shepner/asyla/master/d02/update_scripts.sh | bash || true
+
+  # Deploy software: systemConfig, nfs, smb (client only; credentials set later), Docker, update
+  - [ bash, -c, 'test -f /home/docker/scripts/d02/setup/systemConfig.sh && /home/docker/scripts/d02/setup/systemConfig.sh || true' ]
+  - [ bash, -c, 'test -f /home/docker/scripts/d02/setup/nfs.sh && /home/docker/scripts/d02/setup/nfs.sh || true' ]
+  - [ bash, -c, 'test -f /home/docker/scripts/d02/setup/smb.sh && /home/docker/scripts/d02/setup/smb.sh || true' ]
+  - [ bash, -c, 'test -f /home/docker/scripts/d02/setup/iscsi_install.sh && /home/docker/scripts/d02/setup/iscsi_install.sh || true' ]
+  - [ bash, -c, 'test -f /home/docker/scripts/d02/setup/docker.sh && /home/docker/scripts/d02/setup/docker.sh || true' ]
+  - [ bash, -c, 'test -f /home/docker/update.sh && /home/docker/update.sh || true' ]
+
+  # Full upgrade last (run in background so it does not block; logs to /var/log/cloud-init-upgrade.log)
+  - [ bash, -c, 'nohup apt-get upgrade -y >> /var/log/cloud-init-upgrade.log 2>&1 &' ]
+
+# Final message
+final_message: |
+  d02 VM setup complete!
+  
+  Auto-ran: SSH started first, then systemConfig, nfs, smb (client), iSCSI initiator install, docker, update (if scripts were installed).
+  apt-get upgrade runs in background; log: /var/log/cloud-init-upgrade.log
+  Manual steps:
+  1. SSH to d02: ssh docker@10.0.0.61 (edit ~/.ssh/known_hosts if you rebuilt the VM)
+  2. Copy SSH private key and config: scp ~/.ssh/docker_rsa d02:.ssh/docker_rsa; scp ~/.ssh/config d02:.ssh/config; ssh d02 "chmod -R 700 ~/.ssh"
+  3. SMB + iSCSI: ~/setup_manual.sh (after adding initiator to TrueNAS for iSCSI)
+  4. Log out and back in (or newgrp docker) so docker group applies, then: docker ps
