@@ -1,7 +1,7 @@
 #!/bin/bash
-# Plex on d02: backup, up, down, pull, logs.
+# Plex on d02: backup, up, down, pull, update, logs.
 # Config lives under ${DOCKER_DL}/plex/plexmediaserver; backups go to ${DOCKER_D1} (tgz).
-# Usage: plex.sh backup|up|down|pull|logs
+# Usage: plex.sh backup|up|down|pull|update|logs
 # Run from anywhere; loads ~/scripts/docker/common.env for DOCKER_DL, DATA1, etc.
 
 set -euo pipefail
@@ -56,15 +56,21 @@ case "$cmd" in
     run_compose pull
     run_compose up -d
     ;;
+  update)
+    echo "[INFO] Pulling latest image and starting"
+    run_compose pull
+    run_compose up -d
+    ;;
   logs)
     run_compose logs -f "${@:2}"
     ;;
   *)
-    echo "Usage: $0 backup|up|down|pull|logs" >&2
+    echo "Usage: $0 backup|up|down|pull|update|logs" >&2
     echo "  backup - tgz of $APP_ROOT to $BACKUP_DIR" >&2
     echo "  up     - start (default)" >&2
     echo "  down   - stop and remove container" >&2
     echo "  pull   - pull latest image and up" >&2
+    echo "  update - pull latest image and start (same as pull)" >&2
     echo "  logs   - follow logs" >&2
     exit 1
     ;;

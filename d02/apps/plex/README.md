@@ -13,7 +13,8 @@ Optional `.env` in `/mnt/docker/plex/`: `PLEX_CLAIM`, `DOCKER_MODS`, `VERSION` (
 ```bash
 ~/scripts/d02/apps/plex/plex.sh up      # start (default)
 ~/scripts/d02/apps/plex/plex.sh down
-~/scripts/d02/apps/plex/plex.sh pull
+~/scripts/d02/apps/plex/plex.sh pull    # pull image and up
+~/scripts/d02/apps/plex/plex.sh update  # pull latest image and start
 ~/scripts/d02/apps/plex/plex.sh backup
 ~/scripts/d02/apps/plex/plex.sh logs
 ```

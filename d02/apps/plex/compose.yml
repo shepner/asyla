@@ -4,8 +4,6 @@
 # Optional .env in project dir: PLEX_CLAIM, DOCKER_MODS, VERSION (docker|latest|public|<version>)
 # Run: ~/scripts/d02/apps/plex/plex.sh up
 
-version: '3.8'
-
 services:
   plex:
     image: lscr.io/linuxserver/plex:latest
