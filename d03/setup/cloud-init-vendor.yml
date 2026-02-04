@@ -52,15 +52,21 @@ runcmd:
       fi
     fi
 
-  # Ensure docker user exists and is in correct groups (from userdata users section)
+  # Ensure docker group exists (needed for useradd -G docker before Docker is installed)
+  - getent group docker >/dev/null 2>&1 || groupadd docker || true
+
+  # Ensure docker user exists with UID 1003 (Proxmox --ciuser creates docker with UID 1000; fix in place to avoid orphaning)
   - |
+    DOCKER_UID=1003
     if ! id docker >/dev/null 2>&1; then
-      useradd -m -u 1003 -g asyla -G asyla,docker,sudo -s /bin/bash docker || true
-    else
-      usermod -aG asyla docker 2>/dev/null || true
-      usermod -aG docker docker 2>/dev/null || true
-      usermod -aG sudo docker 2>/dev/null || true
+      useradd -m -u "$DOCKER_UID" -g asyla -G asyla,docker,sudo -s /bin/bash docker || true
+    elif [ "$(id -u docker)" -ne "$DOCKER_UID" ]; then
+      usermod -u "$DOCKER_UID" -g asyla docker
+      chown -R docker:asyla /home/docker
     fi
+    usermod -aG asyla docker 2>/dev/null || true
+    usermod -aG docker docker 2>/dev/null || true
+    usermod -aG sudo docker 2>/dev/null || true
 
   # Set up docker user's .ssh directory
   - mkdir -p /home/docker/.ssh

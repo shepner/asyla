@@ -1,0 +1,29 @@
+# Plex Media Server on d02 — Compose-based
+# Docs: https://docs.linuxserver.io/images/docker-plex/
+# Config: ${DOCKER_DL}/plex/plexmediaserver  Media: ${DATA1}/media
+# Optional .env in project dir: PLEX_CLAIM, DOCKER_MODS, VERSION (docker|latest|public|<version>)
+# Run: ~/scripts/d02/apps/plex/plex.sh up
+
+version: '3.8'
+
+services:
+  plex:
+    image: lscr.io/linuxserver/plex:latest
+    container_name: plex
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - PUID=${DOCKER_UID:-1003}
+      - PGID=${DOCKER_GID:-1000}
+      - TZ=${LOCAL_TZ:-America/Chicago}
+      - VERSION=${VERSION:-latest}
+      - PLEX_CLAIM=${PLEX_CLAIM:-}
+      - DOCKER_MODS=${DOCKER_MODS:-linuxserver/mods:plex-absolute-hama}
+      - CMD_DOMAIN=plex.${MY_DOMAIN:-asyla.org}
+      - CMD_PROTOCOL_USESSL=true
+    volumes:
+      - ${DOCKER_DL:-/mnt/docker}/plex/plexmediaserver:/config
+      - ${DATA1:-/mnt/nas/data1}/media:/data
+    # Optional: Intel/AMD QuickSync — uncomment:
+    # devices:
+    #   - /dev/dri:/dev/dri

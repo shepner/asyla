@@ -335,6 +335,15 @@ if $SSH_VERIFY "echo ok" 2>/dev/null; then
   else
     log_warn "Docker not found or not in PATH - run: newgrp docker, or log out and back in"
   fi
+  # Verify docker user has UID 1003 (required for NFS/SMB consistency across hosts)
+  DOCKER_UID_ACTUAL=$($SSH_VERIFY "id -u docker 2>/dev/null" 2>/dev/null) || DOCKER_UID_ACTUAL=""
+  if [ "$DOCKER_UID_ACTUAL" = "1003" ]; then
+    log_info "✅ docker user UID is 1003"
+  elif [ -n "$DOCKER_UID_ACTUAL" ]; then
+    log_error "docker user has wrong UID: $DOCKER_UID_ACTUAL (expected 1003)"
+    log_info "Cloud-init UID fix log (if present):"
+    $SSH_VERIFY "cat /var/log/docker-uid-fix.log 2>/dev/null" 2>/dev/null | sed 's/^/  | /' || true
+  fi
   # Verify NFS mounts are in place (auto-mounted by nfs.sh)
   NFS_COUNT=$($SSH_VERIFY "mount | grep -c nfs || true" 2>/dev/null) || NFS_COUNT=0
   if [ "${NFS_COUNT:-0}" -ge 2 ]; then

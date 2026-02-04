@@ -62,6 +62,10 @@ if [ -d "$WORKDIR/$HOSTNAME" ]; then
         fi
     done
 fi
+# Install docker scripts (refresh_all.sh, plex.sh, etc.) so update_all can reload containers
+if [ -d "$WORKDIR/docker" ]; then
+    cp -r "$WORKDIR/docker" "$TARGET_SCRIPTS/"
+fi
 
 # Set ownership so docker user can run scripts
 if getent passwd "$TARGET_USER" >/dev/null 2>&1; then
