@@ -100,5 +100,37 @@ systemctl status qemu-guest-agent --no-pager -l || true
 log_info "Automatic updates status:"
 systemctl status unattended-upgrades --no-pager -l || true
 
+# Ensure docker user's .ssh directory exists and has correct permissions
+log_info "Ensuring docker user SSH directory is configured..."
+if [ -d /home/docker ]; then
+    mkdir -p /home/docker/.ssh
+    chmod 700 /home/docker/.ssh
+    chown -R docker:asyla /home/docker/.ssh 2>/dev/null || chown -R docker:docker /home/docker/.ssh 2>/dev/null || true
+    
+    # Ensure authorized_keys has correct permissions if it exists
+    if [ -f /home/docker/.ssh/authorized_keys ]; then
+        chmod 600 /home/docker/.ssh/authorized_keys
+        chown docker:asyla /home/docker/.ssh/authorized_keys 2>/dev/null || chown docker:docker /home/docker/.ssh/authorized_keys 2>/dev/null || true
+    fi
+    log_info "✅ Docker user SSH directory configured"
+else
+    log_warn "⚠️  Docker user home directory not found - SSH keys should be configured manually"
+fi
+
+# Add rsync to sudoers for docker user (needed for migration script)
+log_info "Configuring sudo access for rsync (needed for app migration)..."
+if ! grep -q "^docker.*rsync" /etc/sudoers.d/docker-rsync 2>/dev/null; then
+    mkdir -p /etc/sudoers.d
+    echo "docker ALL=NOPASSWD:/usr/bin/rsync" > /etc/sudoers.d/docker-rsync
+    chmod 440 /etc/sudoers.d/docker-rsync
+    log_info "✅ Sudo access for rsync configured"
+else
+    log_info "✅ Sudo access for rsync already configured"
+fi
+
 log_info "System configuration completed successfully!"
+log_info ""
+log_info "Note: To enable app migration script, ensure SSH keys are configured:"
+log_info "  Run: ~/scripts/d03/setup/setup_ssh_keys.sh"
+log_info "  Or manually copy SSH keys from workstation (see d03/README.md)"
 

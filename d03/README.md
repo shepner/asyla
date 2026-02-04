@@ -315,8 +315,42 @@ To enable SSH to other docker hosts (d01, d02) using the same identity:
 ```bash
 # From your workstation
 scp ~/.ssh/docker_rsa d03:.ssh/docker_rsa
+scp ~/.ssh/docker_rsa.pub d03:.ssh/docker_rsa.pub
 scp ~/.ssh/config d03:.ssh/config
-ssh d03 "chmod -R 700 ~/.ssh"
+ssh d03 "chmod 600 ~/.ssh/docker_rsa ~/.ssh/config && chmod 644 ~/.ssh/docker_rsa.pub && chmod 700 ~/.ssh"
+
+# Verify setup
+ssh d03 '~/scripts/d03/setup/setup_ssh_keys.sh'
+```
+
+**Important for App Migration:**
+For the `migrate-app.sh` script to work, SSH keys must be configured for docker-to-docker access on all hosts:
+
+1. **Copy SSH keys to d03** (from workstation):
+   ```bash
+   scp ~/.ssh/docker_rsa d03:.ssh/docker_rsa
+   scp ~/.ssh/docker_rsa.pub d03:.ssh/docker_rsa.pub
+   scp ~/.ssh/config d03:.ssh/config
+   ssh d03 "chmod 600 ~/.ssh/docker_rsa ~/.ssh/config && chmod 644 ~/.ssh/docker_rsa.pub && chmod 700 ~/.ssh"
+   ```
+
+2. **Add d03's public key to d01 and d02** (so d03 can SSH to them):
+   ```bash
+   # From workstation, copy d03's public key to d01 and d02
+   ssh d03 "cat ~/.ssh/docker_rsa.pub" | ssh d01 "cat >> /home/docker/.ssh/authorized_keys && chmod 600 /home/docker/.ssh/authorized_keys"
+   ssh d03 "cat ~/.ssh/docker_rsa.pub" | ssh d02 "cat >> /home/docker/.ssh/authorized_keys && chmod 600 /home/docker/.ssh/authorized_keys"
+   ```
+
+3. **Test connectivity**:
+   ```bash
+   ssh d03 'ssh docker@d01 echo "SSH to d01 works"'
+   ssh d03 'ssh docker@d02 echo "SSH to d02 works"'
+   ```
+
+**Alternative: Use setup script**
+After copying keys to d03, run the setup script:
+```bash
+ssh d03 '~/scripts/d03/setup/setup_ssh_keys.sh'
 ```
 
 **Note**: The vendor file automatically installs cloud-init if missing, then processes our full user-data configuration. Everything is automated - no manual console steps needed!

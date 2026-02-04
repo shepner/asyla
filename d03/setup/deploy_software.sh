@@ -79,3 +79,7 @@ log_info "Step 7: Run update.sh (full apt upgrade, requires root)..."
 "$TARGET_HOME/update.sh" || { log_warn "update.sh exited non-zero (continuing)"; }
 
 log_info "Deploy complete. Docker user should run: newgrp docker (or log out and back in), then: docker ps"
+log_info ""
+log_info "Next: Set up SSH keys for docker-to-docker access:"
+log_info "  Run: ~/scripts/d03/setup/setup_ssh_keys.sh"
+log_info "  Or copy SSH keys manually (see d03/README.md)"

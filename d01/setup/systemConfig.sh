@@ -27,3 +27,21 @@ echo 'SYSLOGD_OPTS="-t -L -R 10.0.0.73:514"' | doas tee /etc/conf.d/syslog
 doas rc-service syslog restart
 
 
+# Ensure docker user's .ssh directory exists and has correct permissions
+doas mkdir -p /home/docker/.ssh
+doas chmod 700 /home/docker/.ssh
+doas chown -R docker:asyla /home/docker/.ssh
+
+# Ensure authorized_keys has correct permissions if it exists
+if [ -f /home/docker/.ssh/authorized_keys ]; then
+    doas chmod 600 /home/docker/.ssh/authorized_keys
+    doas chown docker:asyla /home/docker/.ssh/authorized_keys
+fi
+
+# Add rsync to doas.conf for docker user (needed for migration script)
+# https://wiki.alpinelinux.org/wiki/Doas
+if ! grep -q "permit nopass docker as root cmd /usr/bin/rsync" /etc/doas.conf 2>/dev/null; then
+    echo "permit nopass docker as root cmd /usr/bin/rsync" | doas tee -a /etc/doas.conf
+fi
+
+
