@@ -193,6 +193,17 @@ apps:
 
 Defines the cloudflared service and which app networks it connects to.
 
+## Internal access (split DNS)
+
+If Pi-hole or another internal DNS resolves `tc-datalogger.asyla.org` to d03’s IP, use the **internal reverse proxy** so the same URL works on the LAN without going through Cloudflare:
+
+```bash
+cd ~/scripts/d03/internal-proxy
+docker compose up -d
+```
+
+See [../internal-proxy/README.md](../internal-proxy/README.md). TLS is self-signed (accept once in the browser).
+
 ## Troubleshooting
 
 ### cloudflared can't reach app

@@ -1,0 +1,27 @@
+# Internal reverse proxy for d03 (split-DNS / Pi-hole)
+# When tc-datalogger.asyla.org resolves to d03 (e.g. via Pi-hole), this serves
+# HTTPS and proxies to tc-dashboard so internal users use the same URL.
+# TLS is self-signed (accept once in browser).
+#
+# Start after TC_datalogger is running (tc_datalogger_net must exist).
+# Ports 80 and 443 must not be used by another service on d03.
+
+version: '3.8'
+
+services:
+  caddy-internal:
+    image: caddy:latest
+    container_name: caddy-internal-d03
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    networks:
+      - tc_datalogger_net
+
+networks:
+  tc_datalogger_net:
+    external: true
+    name: tc_datalogger_net
