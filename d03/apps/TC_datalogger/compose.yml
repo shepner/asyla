@@ -2,6 +2,15 @@
 # Source: clone from https://github.com/shepner/TC_datalogger to ${DOCKER_DL}/TC_datalogger/repo
 # Run with: source ~/scripts/docker/common.env; docker compose -f this-file --project-directory ${DOCKER_DL}/TC_datalogger up -d
 # Requires DOCKER_DL (e.g. /mnt/docker) and LOCAL_TZ in environment.
+#
+# Network isolation: All TC_datalogger services run on tc_datalogger_net (per-app network)
+
+version: '3.8'
+
+networks:
+  tc_datalogger_net:
+    name: tc_datalogger_net
+    driver: bridge
 
 services:
   tc-faction-crimes:
@@ -17,6 +26,8 @@ services:
       - ${DOCKER_DL}/TC_datalogger/TC_faction_crimes/config/TC_API_config.json:/app/config/TC_API_config.json:ro
       - ${DOCKER_DL}/TC_datalogger/repo/TC_faction_crimes/config/oc_records_schema.json:/app/config/oc_records_schema.json:ro
       - ${DOCKER_DL}/TC_datalogger/TC_faction_crimes/logs:/app/logs
+    networks:
+      - tc_datalogger_net
 
   tc-faction-members:
     build:
@@ -30,6 +41,8 @@ services:
       - ${DOCKER_DL}/TC_datalogger/TC_faction_members/config/credentials.json:/app/config/credentials.json:ro
       - ${DOCKER_DL}/TC_datalogger/TC_faction_members/config/TC_API_config.json:/app/config/TC_API_config.json:ro
       - ${DOCKER_DL}/TC_datalogger/TC_faction_members/logs:/app/logs
+    networks:
+      - tc_datalogger_net
 
   tc-items:
     build:
@@ -43,6 +56,8 @@ services:
       - ${DOCKER_DL}/TC_datalogger/TC_items/config/credentials.json:/app/config/credentials.json:ro
       - ${DOCKER_DL}/TC_datalogger/TC_items/config/TC_API_config.json:/app/config/TC_API_config.json:ro
       - ${DOCKER_DL}/TC_datalogger/TC_items/logs:/app/logs
+    networks:
+      - tc_datalogger_net
 
   tc-user-events:
     build:
@@ -56,6 +71,8 @@ services:
       - ${DOCKER_DL}/TC_datalogger/TC_user_events/config/credentials.json:/app/config/credentials.json:ro
       - ${DOCKER_DL}/TC_datalogger/TC_user_events/config/TC_API_config.json:/app/config/TC_API_config.json:ro
       - ${DOCKER_DL}/TC_datalogger/TC_user_events/logs:/app/logs
+    networks:
+      - tc_datalogger_net
 
   tc-faction-chains:
     build:
@@ -69,6 +86,8 @@ services:
       - ${DOCKER_DL}/TC_datalogger/TC_faction_chains/config/credentials.json:/app/config/credentials.json:ro
       - ${DOCKER_DL}/TC_datalogger/TC_faction_chains/config/TC_API_config.json:/app/config/TC_API_config.json:ro
       - ${DOCKER_DL}/TC_datalogger/TC_faction_chains/logs:/app/logs
+    networks:
+      - tc_datalogger_net
 
   tc-dashboard:
     build:
@@ -82,8 +101,9 @@ services:
       - TZ=${LOCAL_TZ:-America/Chicago}
       - DASHBOARD_PORT=8080
       - DASHBOARD_BASE_PATH=/app/data
-    ports:
-      - "8080:8080"
+    # Port mapping removed - access via cloudflared tunnel instead
+    # ports:
+    #   - "8080:8080"
     volumes:
       - ${DOCKER_DL}/TC_datalogger/TC_faction_crimes/logs:/app/logs/faction_crimes:ro
       - ${DOCKER_DL}/TC_datalogger/TC_faction_members/logs:/app/logs/faction_members:ro
@@ -95,3 +115,5 @@ services:
       - ${DOCKER_DL}/TC_datalogger/repo/sql_queries:/app/sql_queries:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ${DOCKER_DL}/TC_datalogger/TC_faction_crimes/config/credentials.json:/app/config/credentials.json:ro
+    networks:
+      - tc_datalogger_net

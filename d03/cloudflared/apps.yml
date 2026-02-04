@@ -1,0 +1,35 @@
+# Cloudflare Tunnel Applications Configuration
+# Single source of truth for all apps exposed via d03 tunnel
+#
+# This file is used by scripts and documentation to:
+# - Generate cloudflared network list
+# - Create Cloudflare Public Hostnames
+# - Create DNS CNAMEs
+# - Create Cloudflare Access applications
+#
+# Schema:
+#   domain: Base domain for all apps (e.g. asyla.org)
+#   apps:
+#     - app: Application name (used for Docker network name: {app}_net)
+#       hostname: Subdomain (full hostname = {hostname}.{domain})
+#       service: Docker service/container name
+#       port: Port the service listens on
+#       access: true/false - Enable Cloudflare Access (default: true)
+#
+# Example:
+#   domain: asyla.org
+#   apps:
+#     - app: tc_datalogger
+#       hostname: tc-datalogger
+#       service: tc-dashboard
+#       port: 8080
+#       access: true
+
+domain: asyla.org
+
+apps:
+  - app: tc_datalogger
+    hostname: tc-datalogger
+    service: tc-dashboard
+    port: 8080
+    access: true

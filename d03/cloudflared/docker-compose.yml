@@ -1,0 +1,38 @@
+# Cloudflare Tunnel (cloudflared) for d03
+# Provides internet access to d03 applications via Cloudflare Tunnel
+# 
+# This service connects to each app's Docker network to proxy traffic
+# No port forwarding needed - all traffic is outbound to Cloudflare
+#
+# Setup:
+# 1. Create tunnel in Cloudflare Zero Trust dashboard, get TUNNEL_TOKEN
+# 2. Set TUNNEL_TOKEN in ~/.env or pass via -e TUNNEL_TOKEN=...
+# 3. Add app networks to the networks list below as apps are added
+# 4. Configure Public Hostnames in Cloudflare dashboard (or via API)
+#
+# Environment variables:
+# - TUNNEL_TOKEN: Cloudflare tunnel token (from Zero Trust dashboard)
+#   DO NOT commit this token to git - use .env file or secrets
+
+version: '3.8'
+
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared-d03
+    restart: unless-stopped
+    command: tunnel run
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+    # Attach to each app network that has services exposed via tunnel
+    # Add networks here as apps are added (e.g. - tc_datalogger_net)
+    networks:
+      - tc_datalogger_net
+    # No ports published - tunnel is outbound-only
+    # Logs go to stdout/stderr (view with: docker logs cloudflared-d03)
+
+networks:
+  # External networks - these are created by each app's compose file
+  tc_datalogger_net:
+    external: true
+    name: tc_datalogger_net
