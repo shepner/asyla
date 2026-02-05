@@ -12,7 +12,8 @@ services:
     image: cloudflare/cloudflared:latest
     container_name: cloudflared-d01
     restart: unless-stopped
-    command: tunnel run
+    # Token mode (from setup-tunnel-api.py or dashboard): config is remote
+    command: ["tunnel", "run", "--token", "${TUNNEL_TOKEN}"]
     environment:
       - TUNNEL_TOKEN=${TUNNEL_TOKEN}
     # Attach to app networks so tunnel can reach services
