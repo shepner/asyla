@@ -23,23 +23,32 @@ run_compose() {
   docker compose -p calibre -f "$COMPOSE_FILE" --project-directory "$APP_ROOT" "$@"
 }
 
+# Remove any existing container named "calibre" (e.g. orphan from another project)
+# so our project can create one. Safe to run before up/pull.
+remove_stale_calibre_container() {
+  docker rm -f calibre 2>/dev/null || true
+}
+
 cmd="${1:-}"
 
 case "$cmd" in
   up)
     echo "[INFO] Creating app dir if needed"
     mkdir -p "${DOCKER_DL}/calibre/config"
+    remove_stale_calibre_container
     echo "[INFO] Starting Calibre"
     run_compose up -d
     ;;
   down)
     run_compose down
+    remove_stale_calibre_container
     ;;
   logs)
     run_compose logs -f "${@:2}"
     ;;
   pull)
     run_compose pull
+    remove_stale_calibre_container
     run_compose up -d
     ;;
   *)
