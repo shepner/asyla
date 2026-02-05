@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Full tunnel automation via Cloudflare API.
-Creates or reuses a tunnel, pushes ingress from apps.yml, and syncs DNS CNAMEs.
+Creates or reuses a tunnel, pushes ingress from apps.yml, syncs DNS CNAMEs,
+and creates/updates a Cloudflare Access application for hostnames with access: true.
 Run from a machine with API credentials; copy the printed TUNNEL_TOKEN to d01 .env.
 
 Ref: https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/get-started/create-remote-tunnel-api/
@@ -9,9 +10,11 @@ Ref: https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudf
 Usage:
   ./setup-tunnel-api.py   (reads .env and apps.yml in script dir)
   Or set: CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_ZONE_ID, CLOUDFLARE_API_TOKEN
-  Optional: TUNNEL_ID (reuse existing), TUNNEL_NAME (default: d01)
+  Optional: TUNNEL_ID (reuse existing), TUNNEL_NAME (default: d01),
+            CLOUDFLARE_ACCESS_APP_NAME (default: d01 media)
 
-Requires: requests (pip install requests) or use only stdlib (urllib).
+API token needs: Cloudflare Tunnel Edit, DNS Edit, Access: Apps and Policies Read/Write
+(Identity Providers Read for Access). Uses only stdlib (urllib).
 """
 import json
 import os
@@ -38,7 +41,7 @@ def load_dotenv(path: Path) -> None:
 
 
 def parse_apps_yml(path: Path) -> tuple[str, list[dict]]:
-    """Parse apps.yml; return (domain, list of {hostname, service, port})."""
+    """Parse apps.yml; return (domain, list of {hostname, service, port, access})."""
     text = path.read_text()
     domain = ""
     apps = []
@@ -49,14 +52,17 @@ def parse_apps_yml(path: Path) -> tuple[str, list[dict]]:
         hostname_m = re.search(r"hostname:\s*(\S+)", block)
         service_m = re.search(r"service:\s*(\S+)", block)
         port_m = re.search(r"port:\s*(\d+)", block)
+        access_m = re.search(r"access:\s*(true|false)", block, re.IGNORECASE)
         if hostname_m and service_m and port_m:
             hostname = hostname_m.group(1).strip()
             if "." not in hostname and domain:
                 hostname = f"{hostname}.{domain}"
+            access = access_m.group(1).lower() == "true" if access_m else True
             apps.append({
                 "hostname": hostname,
                 "service": service_m.group(1).strip(),
                 "port": int(port_m.group(1)),
+                "access": access,
             })
     return domain, apps
 
@@ -178,6 +184,68 @@ def main() -> None:
         print("DNS records synced.")
     else:
         print("CLOUDFLARE_ZONE_ID not set; skipping DNS. Create CNAMEs manually to <tunnel_id>.cfargotunnel.com")
+
+    # 4) Cloudflare Access: protect hostnames with access: true (auth at Cloudflare)
+    access_hostnames = [a["hostname"] for a in apps if a.get("access", True)]
+    if access_hostnames:
+        access_app_name = os.environ.get("CLOUDFLARE_ACCESS_APP_NAME", "d01 media").strip()
+        r = api_req("GET", f"/accounts/{account_id}/access/identity_providers", token)
+        if not r.get("success"):
+            print("Access: list IdPs failed (token needs Access: Apps and Policies Read):", r.get("errors"), file=sys.stderr)
+        else:
+            idps = r.get("result", [])
+            allowed_idps = [idp["id"] for idp in idps]
+            # Find or create Access application
+            r = api_req("GET", f"/accounts/{account_id}/access/apps", token)
+            if not r.get("success"):
+                print("Access: list apps failed:", r.get("errors"), file=sys.stderr)
+            else:
+                existing = next((app for app in r.get("result", []) if app.get("name") == access_app_name), None)
+                app_id = None
+                if existing:
+                    app_id = existing["id"]
+                    api_req("PUT", f"/accounts/{account_id}/access/apps/{app_id}", token, {
+                        "name": access_app_name,
+                        "type": "self_hosted",
+                        "domain": access_hostnames[0],
+                        "self_hosted_domains": access_hostnames,
+                        "session_duration": "24h",
+                        "allowed_idps": allowed_idps or existing.get("allowed_idps", []),
+                    })
+                    print(f"Access: updated application '{access_app_name}' ({len(access_hostnames)} hostnames).")
+                else:
+                    r2 = api_req("POST", f"/accounts/{account_id}/access/apps", token, {
+                        "name": access_app_name,
+                        "type": "self_hosted",
+                        "domain": access_hostnames[0],
+                        "self_hosted_domains": access_hostnames,
+                        "session_duration": "24h",
+                        "allowed_idps": allowed_idps if allowed_idps else None,
+                    })
+                    if not r2.get("success"):
+                        print("Access: create app failed (token needs Access: Apps and Policies Write):", r2.get("errors"), file=sys.stderr)
+                    else:
+                        app_id = r2["result"]["id"]
+                        print(f"Access: created application '{access_app_name}' ({len(access_hostnames)} hostnames).")
+                # Ensure allow policy exists
+                if app_id:
+                    r3 = api_req("GET", f"/accounts/{account_id}/access/apps/{app_id}/policies", token)
+                    if r3.get("success"):
+                        policies = r3.get("result", [])
+                        allow = next((p for p in policies if p.get("decision") == "allow"), None)
+                        if not allow:
+                            r4 = api_req("POST", f"/accounts/{account_id}/access/apps/{app_id}/policies", token, {
+                                "name": "Allow authenticated",
+                                "decision": "allow",
+                                "include": [{"everyone": {}}],
+                                "precedence": 1,
+                            })
+                            if r4.get("success"):
+                                print("Access: added policy 'Allow authenticated' (everyone who logs in).")
+                            else:
+                                print("Access: add policy failed:", r4.get("errors"), file=sys.stderr)
+                        else:
+                            print("Access: allow policy already present.")
 
     print()
     print("Add this to ~/scripts/d01/cloudflared/.env on d01 (or your tunnel host):")

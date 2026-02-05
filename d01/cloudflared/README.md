@@ -8,7 +8,7 @@ This directory contains the Cloudflare Tunnel configuration for d01.
 
 - **docker-compose.yml**: cloudflared service definition
 - **apps.yml**: Single source of truth for hostnames and services (used by both API and config-file flows)
-- **setup-tunnel-api.py**: Full automation via Cloudflare API (create tunnel, push ingress, sync DNS)
+- **setup-tunnel-api.py**: Full automation via Cloudflare API (tunnel, ingress, DNS, Access app for login)
 - **generate-config.sh**: Generates local config.yml from apps.yml (for config-file mode)
 - **.env.example**: Template for API credentials and tunnel token
 - **README.md**: This file
@@ -19,7 +19,8 @@ One script creates or updates the tunnel, pushes ingress from `apps.yml`, and cr
 
 1. **Create an API token** in Cloudflare with:
    - **Account** → Cloudflare Tunnel → Edit
-   - **Zone** → DNS → Edit  
+   - **Zone** → DNS → Edit
+   - **Account** → Access: Apps and Policies → Edit (so the script can create the Access app for login)
    ([Create token](https://dash.cloudflare.com/profile/api-tokens); see [Create a tunnel (API)](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/get-started/create-remote-tunnel-api/).)
 2. **From your laptop or CI** (where you have the token), in this repo:
    ```bash
@@ -32,6 +33,8 @@ One script creates or updates the tunnel, pushes ingress from `apps.yml`, and cr
 4. **On d01:** `./start.sh` (or `docker compose up -d`). The tunnel runs with remote config; no config.yml or credentials.json on the server.
 
 When you add or change apps in `apps.yml`, run `./setup-tunnel-api.py` again (same .env with API credentials); then restart cloudflared on d01 if you like (config is pulled from Cloudflare).
+
+The script also creates or updates a **Cloudflare Access** application for hostnames with `access: true` in `apps.yml`, so visitors must log in (e.g. One-time PIN or Google) before reaching the app.
 
 ## Quick Start (manual token)
 
@@ -68,7 +71,7 @@ Add `config.yml` and `credentials.json` to `.gitignore` (they contain secrets).
 
 ## Protecting apps with Cloudflare Access
 
-The tunnel exposes hostnames (e.g. sonarr.asyla.org, radarr.asyla.org); those apps have little or no built-in auth. Add **Cloudflare Access** so users must authenticate at Cloudflare before traffic reaches your services.
+The tunnel exposes hostnames (e.g. sonarr.asyla.org, radarr.asyla.org); those apps have little or no built-in auth. **If you use the API automation** (above), the script creates an Access application and an “Allow authenticated” policy for hostnames with `access: true` in `apps.yml`. Otherwise, you can add Access manually:
 
 1. In **Zero Trust** → **Access** → **Applications** → **Add an application**.
 2. Choose **Self-hosted**.
