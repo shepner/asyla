@@ -12,8 +12,10 @@ if [ -f "$HOME/scripts/docker/common.env" ]; then
   . "$HOME/scripts/docker/common.env"
 fi
 DOCKER_DL="${DOCKER_DL:-/mnt/docker}"
+DATA1="${DATA1:-/mnt/nas/data1}"
 
 export DOCKER_DL
+export DATA1
 export LOCAL_TZ
 
 # Standalone app: own project dir and project name (not part of media stack)

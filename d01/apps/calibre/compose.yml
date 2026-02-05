@@ -22,8 +22,10 @@ services:
       - PUID=${DOCKER_UID:-1003}
       - PGID=${DOCKER_GID:-1000}
       - TZ=${LOCAL_TZ:-America/Chicago}
+      - CALIBRE_OVERRIDE_DATABASE_PATH=/config/metadata.db
       # Optional: - PASSWORD=  for basic auth (Cloudflare Access is primary)
     volumes:
       - ./config:/config
+      - ${DATA1:-/mnt/nas/data1}/media:/media
     networks:
       - media_net
