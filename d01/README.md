@@ -22,7 +22,7 @@ Requires:
 1. SSH: `ssh d01`
 2. Copy SSH keys and config from workstation (see build.sh next steps).
 3. Run: `~/scripts/d01/setup/setup_ssh_keys.sh`
-4. **Media stack:** `source ~/scripts/docker/common.env && ~/scripts/d01/apps/media/media.sh up`
+4. **Media stack:** `~/scripts/d01/apps/media/media.sh up` (sources common.env automatically)
 5. **Cloudflared:** `cd ~/scripts/d01/cloudflared && cp .env.example .env` (set `TUNNEL_TOKEN` or `TUNNEL_ID`), then `./start.sh`
 6. **Internal proxy:** `cd ~/scripts/d01/internal-proxy && ./start.sh`
 7. SMB + iSCSI: `~/setup_manual.sh` (after adding initiator to TrueNAS for iSCSI target `nas01:d01:01`)

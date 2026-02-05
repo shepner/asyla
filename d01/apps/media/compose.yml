@@ -1,8 +1,9 @@
 # Media stack on d01: Sonarr, Radarr, Overseerr, Jackett, Transmission
 # Working dirs under /mnt/docker (sonarr, radarr, overseerr, jackett, transmission).
-# Run: source ~/scripts/docker/common.env; ~/scripts/d01/apps/media/media.sh up
+# Run: ~/scripts/d01/apps/media/media.sh up
 # Access via cloudflared tunnel or internal proxy (no published ports except Transmission peer port).
 # Requires: DOCKER_DL (/mnt/docker), DOCKER_UID, DOCKER_GID, LOCAL_TZ; /mnt/nas/data1/media for library.
+# Note: media.sh automatically sources ~/scripts/docker/common.env if it exists.
 
 networks:
   media_net:

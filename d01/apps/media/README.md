@@ -17,9 +17,10 @@ Combined Sonarr, Radarr, Overseerr, Jackett, and Transmission on d01. All share 
 ## Run
 
 ```bash
-source ~/scripts/docker/common.env
 ~/scripts/d01/apps/media/media.sh up
 ```
+
+The script automatically sources `~/scripts/docker/common.env` if it exists.
 
 ## Access
 
