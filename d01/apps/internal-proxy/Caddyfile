@@ -26,9 +26,10 @@ calibre.asyla.org {
     tls internal
     reverse_proxy calibre:8080
 }
+# Both hostnames serve Camera UI (8181); 8581 redirects to /camview so we use 8181 for homebridge too.
 homebridge.asyla.org {
     tls internal
-    reverse_proxy homebridge-proxy:8581
+    reverse_proxy cameraui-proxy:8181
 }
 cameraui.asyla.org {
     tls internal
