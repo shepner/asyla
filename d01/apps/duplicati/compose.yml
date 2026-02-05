@@ -1,0 +1,26 @@
+# Duplicati backup on d01 (LinuxServer.io image).
+# Access via internal proxy (and optionally cloudflared tunnel); no published ports.
+# Run: ~/scripts/d01/apps/duplicati/duplicati.sh up
+# Ref: https://docs.linuxserver.io/images/docker-duplicati
+
+networks:
+  duplicati_net:
+    external: true
+    name: duplicati_net
+
+services:
+  duplicati:
+    image: lscr.io/linuxserver/duplicati:latest
+    container_name: duplicati
+    restart: unless-stopped
+    environment:
+      - PUID=${DOCKER_UID:-1003}
+      - PGID=${DOCKER_GID:-1000}
+      - TZ=${LOCAL_TZ:-America/Chicago}
+      # Optional: SETTINGS_ENCRYPTION_KEY=, DUPLICATI__WEBSERVICE_PASSWORD=
+    volumes:
+      - ./config:/config
+      - ./backups:/backups
+      - ${DATA1:-/mnt/nas/data1}/media:/source/media
+    networks:
+      - duplicati_net

@@ -22,6 +22,7 @@ services:
       - media_net
       - calibre_net
       - homebridge_net
+      - duplicati_net
 
 networks:
   d01_internal:
@@ -36,3 +37,6 @@ networks:
   homebridge_net:
     external: true
     name: homebridge_net
+  duplicati_net:
+    external: true
+    name: duplicati_net

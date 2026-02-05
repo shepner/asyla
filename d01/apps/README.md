@@ -9,6 +9,7 @@ All d01 apps live here. Each has the same management pattern: a script (`media.s
 | **internal-proxy** | `~/scripts/d01/apps/internal-proxy/internal-proxy.sh` | Caddy for split-DNS (ports 80/443) |
 | **calibre** | `~/scripts/d01/apps/calibre/calibre.sh` | Calibre e-book manager (tunnel + Access) |
 | **homebridge** | `~/scripts/d01/apps/homebridge/homebridge.sh` | Homebridge (tunnel + Access; host net + proxy) |
+| **duplicati** | `~/scripts/d01/apps/duplicati/duplicati.sh` | Duplicati backup (internal proxy, optional tunnel) |
 
 Start after boot (order: media, then cloudflared, then internal-proxy, then calibre if desired):
 
@@ -18,4 +19,5 @@ Start after boot (order: media, then cloudflared, then internal-proxy, then cali
 ~/scripts/d01/apps/internal-proxy/internal-proxy.sh up
 ~/scripts/d01/apps/calibre/calibre.sh up
 ~/scripts/d01/apps/homebridge/homebridge.sh up
+~/scripts/d01/apps/duplicati/duplicati.sh up
 ```

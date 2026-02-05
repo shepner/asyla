@@ -53,3 +53,8 @@ apps:
     service: cameraui-proxy
     port: 8181
     access: true
+  - app: duplicati
+    hostname: duplicati
+    service: duplicati
+    port: 8200
+    access: true

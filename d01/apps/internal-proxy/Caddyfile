@@ -35,6 +35,10 @@ cameraui.asyla.org {
     tls internal
     reverse_proxy cameraui-proxy:8181
 }
+duplicati.asyla.org {
+    tls internal
+    reverse_proxy duplicati:8200
+}
 
 # Fallback for other hostnames / direct IP
 :80 {
