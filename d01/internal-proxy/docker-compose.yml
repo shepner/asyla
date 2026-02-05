@@ -17,8 +17,12 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
     networks:
       - d01_internal
+      - media_net
 
 networks:
   d01_internal:
     external: true
     name: d01_internal
+  media_net:
+    external: true
+    name: media_net

@@ -1,16 +1,29 @@
 # Internal reverse proxy for d01
-# Add hostname blocks as apps are deployed. When Pi-hole (or split DNS) points
-# a hostname to d01's IP, this serves that hostname and proxies to the app.
+# When Pi-hole (or split DNS) points hostnames to d01 (10.0.0.60), these blocks serve HTTPS and proxy to the media stack.
 # TLS: self-signed (Caddy "internal") - browsers will show a one-time warning.
-#
-# Example when you add an app:
-#   myapp.asyla.org {
-#       tls internal
-#       reverse_proxy myapp-service:8080
-#   }
-#
-# Placeholder so Caddy starts without errors (no hostnames yet)
-# Add hostname blocks above this when apps are deployed
+
+sonarr.asyla.org {
+    tls internal
+    reverse_proxy sonarr:8989
+}
+radarr.asyla.org {
+    tls internal
+    reverse_proxy radarr:7878
+}
+overseerr.asyla.org {
+    tls internal
+    reverse_proxy overseerr:5055
+}
+jackett.asyla.org {
+    tls internal
+    reverse_proxy jackett:9117
+}
+transmission.asyla.org {
+    tls internal
+    reverse_proxy transmission:9091
+}
+
+# Fallback for other hostnames / direct IP
 :80 {
     respond "d01 internal proxy ready" 200
 }

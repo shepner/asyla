@@ -15,12 +15,15 @@ services:
     command: tunnel run
     environment:
       - TUNNEL_TOKEN=${TUNNEL_TOKEN}
-    # Attach to d01_internal so apps on that network can be reached via tunnel
-    # Add app-specific networks here as apps are added (e.g. myapp_net)
+    # Attach to app networks so tunnel can reach services
     networks:
       - d01_internal
+      - media_net
 
 networks:
   d01_internal:
     external: true
     name: d01_internal
+  media_net:
+    external: true
+    name: media_net

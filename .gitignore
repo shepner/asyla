@@ -83,3 +83,5 @@ config/*.key
 config/*.json
 **/credentials.json
 **/secrets.json
+# Cloudflared generated config (contains tunnel ID)
+**/cloudflared/config.yml

@@ -32,6 +32,7 @@ Requires:
 - `setup/` – cloud-init userdata/vendor, bootstrap, deploy_software, systemConfig, nfs, smb, iscsi, docker, setup_manual, setup_ssh_keys, etc.
 - `cloudflared/` – Cloudflare Tunnel (docker-compose, apps.yml, .env.example).
 - `internal-proxy/` – Caddy reverse proxy for split-DNS (same hostnames, internal traffic).
+- `apps/media/` – Media stack: Sonarr, Radarr, Overseerr, Jackett, Transmission (compose + media.sh); access via cloudflared/internal proxy.
 - `docker-compose.yml` – Defines networks (d01_internet, d01_internal, d01_backend); add services as apps are deployed.
 - `update_scripts.sh`, `update.sh`, `update_all.sh` – Script update and OS maintenance.
 

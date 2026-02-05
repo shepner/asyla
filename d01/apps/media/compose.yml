@@ -1,0 +1,99 @@
+# Media stack on d01: Sonarr, Radarr, Overseerr, Jackett, Transmission
+# Working dirs under /mnt/docker (sonarr, radarr, overseerr, jackett, transmission).
+# Run: source ~/scripts/docker/common.env; ~/scripts/d01/apps/media/media.sh up
+# Access via cloudflared tunnel or internal proxy (no published ports except Transmission peer port).
+# Requires: DOCKER_DL (/mnt/docker), DOCKER_UID, DOCKER_GID, LOCAL_TZ; /mnt/nas/data1/media for library.
+
+networks:
+  media_net:
+    name: media_net
+    driver: bridge
+
+services:
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    restart: unless-stopped
+    depends_on:
+      - transmission
+      - jackett
+    environment:
+      - PUID=${DOCKER_UID:-1003}
+      - PGID=${DOCKER_GID:-1000}
+      - TZ=${LOCAL_TZ:-America/Chicago}
+    volumes:
+      - ${DOCKER_DL:-/mnt/docker}/sonarr/config:/config
+      - ${DATA1:-/mnt/nas/data1}/media:/tv
+      - ${DOCKER_DL:-/mnt/docker}/transmission/downloads/complete:/downloads
+    networks:
+      - media_net
+
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: radarr
+    restart: unless-stopped
+    depends_on:
+      - transmission
+      - jackett
+    environment:
+      - PUID=${DOCKER_UID:-1003}
+      - PGID=${DOCKER_GID:-1000}
+      - TZ=${LOCAL_TZ:-America/Chicago}
+    volumes:
+      - ${DOCKER_DL:-/mnt/docker}/radarr/config:/config
+      - ${DATA1:-/mnt/nas/data1}/media:/movies
+      - ${DOCKER_DL:-/mnt/docker}/transmission/downloads/complete:/downloads
+    networks:
+      - media_net
+
+  overseerr:
+    image: lscr.io/linuxserver/overseerr:latest
+    container_name: overseerr
+    restart: unless-stopped
+    depends_on:
+      - sonarr
+      - radarr
+    environment:
+      - PUID=${DOCKER_UID:-1003}
+      - PGID=${DOCKER_GID:-1000}
+      - TZ=${LOCAL_TZ:-America/Chicago}
+    volumes:
+      - ${DOCKER_DL:-/mnt/docker}/overseerr/config:/config
+    networks:
+      - media_net
+
+  jackett:
+    image: lscr.io/linuxserver/jackett:latest
+    container_name: jackett
+    restart: unless-stopped
+    depends_on:
+      - transmission
+    environment:
+      - PUID=${DOCKER_UID:-1003}
+      - PGID=${DOCKER_GID:-1000}
+      - TZ=${LOCAL_TZ:-America/Chicago}
+      - AUTO_UPDATE=true
+    volumes:
+      - ${DOCKER_DL:-/mnt/docker}/jackett/config:/config
+      - ${DOCKER_DL:-/mnt/docker}/jackett/downloads:/downloads
+    networks:
+      - media_net
+
+  transmission:
+    image: lscr.io/linuxserver/transmission:latest
+    container_name: transmission
+    restart: unless-stopped
+    environment:
+      - PUID=${DOCKER_UID:-1003}
+      - PGID=${DOCKER_GID:-1000}
+      - TZ=${LOCAL_TZ:-America/Chicago}
+    volumes:
+      - ${DOCKER_DL:-/mnt/docker}/transmission/config:/config
+      - ${DOCKER_DL:-/mnt/docker}/transmission/watch:/watch
+      - ${DOCKER_DL:-/mnt/docker}/transmission/downloads:/downloads
+    networks:
+      - media_net
+    # Peer port for incoming torrents (port-forward on router); WebUI via proxy
+    ports:
+      - "51413:51413"
+      - "51413:51413/udp"

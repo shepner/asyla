@@ -33,12 +33,26 @@ This directory contains the Cloudflare Tunnel configuration for d01.
    docker logs cloudflared-d01
    ```
 
+## Automated hostnames (config file) – no manual dashboard entries
+
+To define all hostnames from `apps.yml` so you don’t add each one by hand in the dashboard:
+
+1. **Create the tunnel once** in Zero Trust → Networks → Tunnels → Create tunnel → name it (e.g. `d01`). Choose **Cloudflared** as installer; copy the credentials JSON and save it in this directory as `credentials.json`. Note the tunnel UUID (in the JSON or in the dashboard URL).
+2. **Set TUNNEL_ID** in `.env`: `TUNNEL_ID=your-tunnel-uuid`
+3. **Generate config** from `apps.yml`: `./generate-config.sh` (writes `config.yml`).
+4. **Start with config override**:  
+   `docker compose -f docker-compose.yml -f docker-compose.config.yml up -d`
+5. When you add or change apps in `apps.yml`, run `./generate-config.sh` again and restart:  
+   `docker compose -f docker-compose.yml -f docker-compose.config.yml up -d`
+
+Add `config.yml` and `credentials.json` to `.gitignore` (they contain secrets).
+
 ## Adding Apps
 
 When you add an app that should be exposed via the tunnel:
 
-1. Ensure the app's compose file uses network `d01_internal` (or create an app-specific network and add it to cloudflared's `networks` in docker-compose.yml).
-2. Add the app to `apps.yml`.
-3. Add the app's network to `services.cloudflared.networks` in docker-compose.yml if not using d01_internal.
-4. Configure Public Hostname in Cloudflare Zero Trust dashboard (or via API).
-5. Restart cloudflared if you changed docker-compose.yml: `docker compose up -d`.
+1. Ensure the app’s compose uses a network that cloudflared is attached to (e.g. `media_net`), and add that network to cloudflared’s `networks` in docker-compose.yml if needed.
+2. Add the app to `apps.yml` (hostname, service name, port).
+3. **If using token mode:** add the Public Hostname in the Cloudflare Zero Trust dashboard.
+4. **If using config mode:** run `./generate-config.sh` and restart cloudflared with the config override.
+5. Restart cloudflared if you changed docker-compose or config.

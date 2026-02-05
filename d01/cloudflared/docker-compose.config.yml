@@ -1,0 +1,17 @@
+# Override for locally-managed tunnel: config file + credentials instead of TUNNEL_TOKEN.
+# Use when you want to automate hostnames from apps.yml (no manual dashboard entries).
+#
+# 1. Create a tunnel once: Zero Trust → Tunnels → Create tunnel → give it a name (e.g. d01).
+# 2. Install with "Cloudflared" method; copy the credentials JSON to this dir as credentials.json.
+# 3. Set TUNNEL_ID in .env (the tunnel UUID from the JSON filename or dashboard).
+# 4. Run: ./generate-config.sh   (generates config.yml from apps.yml)
+# 5. Run: docker compose -f docker-compose.yml -f docker-compose.config.yml up -d
+#
+# Add config.yml and credentials.json to .gitignore (they contain secrets).
+
+services:
+  cloudflared:
+    command: tunnel run --config /etc/cloudflared/config.yml
+    volumes:
+      - ./config.yml:/etc/cloudflared/config.yml:ro
+      - ./credentials.json:/etc/cloudflared/credentials.json:ro

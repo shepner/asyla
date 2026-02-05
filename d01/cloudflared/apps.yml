@@ -12,4 +12,29 @@
 
 domain: asyla.org
 
-apps: []
+apps:
+  - app: media
+    hostname: sonarr
+    service: sonarr
+    port: 8989
+    access: true
+  - app: media
+    hostname: radarr
+    service: radarr
+    port: 7878
+    access: true
+  - app: media
+    hostname: overseerr
+    service: overseerr
+    port: 5055
+    access: true
+  - app: media
+    hostname: jackett
+    service: jackett
+    port: 9117
+    access: true
+  - app: media
+    hostname: transmission
+    service: transmission
+    port: 9091
+    access: true
