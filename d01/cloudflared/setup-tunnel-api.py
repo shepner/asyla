@@ -207,7 +207,7 @@ def main() -> None:
         print("CLOUDFLARE_ZONE_ID not set; skipping DNS. Create CNAMEs manually to <tunnel_id>.cfargotunnel.com")
 
     # 4) Cloudflare Access: protect hostnames with access: true (auth at Cloudflare)
-    # Note: Identity Providers list needs "Access: Organizations, Identity Providers, and Groups".
+    # Note: Identity Providers list needs "Access: Organizations, Identity Providers, and Groups" (Read is enough).
     # We only need "Access: Apps and Policies" if we omit allowed_idps (Cloudflare uses account defaults).
     access_hostnames = [a["hostname"] for a in apps if a.get("access", True)]
     if access_hostnames:
