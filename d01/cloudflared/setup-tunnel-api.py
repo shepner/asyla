@@ -207,66 +207,76 @@ def main() -> None:
         print("CLOUDFLARE_ZONE_ID not set; skipping DNS. Create CNAMEs manually to <tunnel_id>.cfargotunnel.com")
 
     # 4) Cloudflare Access: protect hostnames with access: true (auth at Cloudflare)
+    # Note: Identity Providers list needs "Access: Organizations, Identity Providers, and Groups".
+    # We only need "Access: Apps and Policies" if we omit allowed_idps (Cloudflare uses account defaults).
     access_hostnames = [a["hostname"] for a in apps if a.get("access", True)]
     if access_hostnames:
         access_app_name = os.environ.get("CLOUDFLARE_ACCESS_APP_NAME", "d01 media").strip()
-        r = api_req("GET", f"/accounts/{account_id}/access/identity_providers", token, raise_on_error=False)
-        if not r.get("success"):
-            print("Access: skipped – token lacks Access permission (403). Add 'Access: Apps and Policies → Edit' to the API token, or set up Access in Zero Trust → Access → Applications.", file=sys.stderr)
-        else:
-            idps = r.get("result", [])
+        allowed_idps = None
+        r_idp = api_req("GET", f"/accounts/{account_id}/access/identity_providers", token, raise_on_error=False)
+        if r_idp.get("success"):
+            idps = r_idp.get("result", [])
             allowed_idps = [idp["id"] for idp in idps]
-            # Find or create Access application
-            r = api_req("GET", f"/accounts/{account_id}/access/apps", token)
-            if not r.get("success"):
-                print("Access: list apps failed:", r.get("errors"), file=sys.stderr)
-            else:
-                existing = next((app for app in r.get("result", []) if app.get("name") == access_app_name), None)
-                app_id = None
-                if existing:
-                    app_id = existing["id"]
-                    api_req("PUT", f"/accounts/{account_id}/access/apps/{app_id}", token, {
-                        "name": access_app_name,
-                        "type": "self_hosted",
-                        "domain": access_hostnames[0],
-                        "self_hosted_domains": access_hostnames,
-                        "session_duration": "24h",
-                        "allowed_idps": allowed_idps or existing.get("allowed_idps", []),
-                    })
-                    print(f"Access: updated application '{access_app_name}' ({len(access_hostnames)} hostnames).")
+        # Find or create Access application (omit allowed_idps if we couldn't list IdPs; account defaults apply)
+        r = api_req("GET", f"/accounts/{account_id}/access/apps", token, raise_on_error=False)
+        if not r.get("success"):
+            print("Access: skipped – token needs 'Access: Apps and Policies → Edit'.", r.get("errors"), file=sys.stderr)
+        else:
+            existing = next((app for app in r.get("result", []) if app.get("name") == access_app_name), None)
+            app_id = None
+            if existing:
+                app_id = existing["id"]
+                payload = {
+                    "name": access_app_name,
+                    "type": "self_hosted",
+                    "domain": access_hostnames[0],
+                    "self_hosted_domains": access_hostnames,
+                    "session_duration": "24h",
+                }
+                if allowed_idps is not None:
+                    payload["allowed_idps"] = allowed_idps
                 else:
-                    r2 = api_req("POST", f"/accounts/{account_id}/access/apps", token, {
-                        "name": access_app_name,
-                        "type": "self_hosted",
-                        "domain": access_hostnames[0],
-                        "self_hosted_domains": access_hostnames,
-                        "session_duration": "24h",
-                        "allowed_idps": allowed_idps if allowed_idps else None,
-                    })
-                    if not r2.get("success"):
-                        print("Access: create app failed (token needs Access: Apps and Policies Write):", r2.get("errors"), file=sys.stderr)
-                    else:
-                        app_id = r2["result"]["id"]
-                        print(f"Access: created application '{access_app_name}' ({len(access_hostnames)} hostnames).")
-                # Ensure allow policy exists
-                if app_id:
-                    r3 = api_req("GET", f"/accounts/{account_id}/access/apps/{app_id}/policies", token)
-                    if r3.get("success"):
-                        policies = r3.get("result", [])
-                        allow = next((p for p in policies if p.get("decision") == "allow"), None)
-                        if not allow:
-                            r4 = api_req("POST", f"/accounts/{account_id}/access/apps/{app_id}/policies", token, {
-                                "name": "Allow authenticated",
-                                "decision": "allow",
-                                "include": [{"everyone": {}}],
-                                "precedence": 1,
-                            })
-                            if r4.get("success"):
-                                print("Access: added policy 'Allow authenticated' (everyone who logs in).")
-                            else:
-                                print("Access: add policy failed:", r4.get("errors"), file=sys.stderr)
+                    payload["allowed_idps"] = existing.get("allowed_idps") or []
+                r2 = api_req("PUT", f"/accounts/{account_id}/access/apps/{app_id}", token, payload, raise_on_error=False)
+                if not r2.get("success"):
+                    print("Access: update app failed:", r2.get("errors"), file=sys.stderr)
+                else:
+                    print(f"Access: updated application '{access_app_name}' ({len(access_hostnames)} hostnames).")
+            else:
+                payload = {
+                    "name": access_app_name,
+                    "type": "self_hosted",
+                    "domain": access_hostnames[0],
+                    "self_hosted_domains": access_hostnames,
+                    "session_duration": "24h",
+                }
+                if allowed_idps:
+                    payload["allowed_idps"] = allowed_idps
+                r2 = api_req("POST", f"/accounts/{account_id}/access/apps", token, payload, raise_on_error=False)
+                if not r2.get("success"):
+                    print("Access: create app failed:", r2.get("errors"), file=sys.stderr)
+                else:
+                    app_id = r2["result"]["id"]
+                    print(f"Access: created application '{access_app_name}' ({len(access_hostnames)} hostnames).")
+            # Ensure allow policy exists
+            if app_id:
+                r3 = api_req("GET", f"/accounts/{account_id}/access/apps/{app_id}/policies", token, raise_on_error=False)
+                if r3.get("success"):
+                    policies = r3.get("result", [])
+                    allow = next((p for p in policies if p.get("decision") == "allow"), None)
+                    if not allow:
+                        r4 = api_req("POST", f"/accounts/{account_id}/access/apps/{app_id}/policies", token, {
+                            "name": "Allow authenticated",
+                            "decision": "allow",
+                            "include": [{"everyone": {}}],
+                            "precedence": 1,
+                        }, raise_on_error=False)
+                        if r4.get("success"):
+                            print("Access: added policy 'Allow authenticated' (everyone who logs in).")
                         else:
-                            print("Access: allow policy already present.")
+                            print("Access: add policy failed:", r4.get("errors"), file=sys.stderr)
+                    else:
+                        print("Access: allow policy already present.")
 
     print()
     print("Add this to ~/scripts/d01/cloudflared/.env on d01 (or your tunnel host):")
