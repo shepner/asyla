@@ -27,6 +27,7 @@ run_compose() {
 remove_stale_container() {
   docker rm -f homebridge 2>/dev/null || true
   docker rm -f homebridge-proxy 2>/dev/null || true
+  docker rm -f cameraui-proxy 2>/dev/null || true
 }
 
 cmd="${1:-}"

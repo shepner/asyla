@@ -30,6 +30,10 @@ homebridge.asyla.org {
     tls internal
     reverse_proxy homebridge-proxy:8581
 }
+cameraui.asyla.org {
+    tls internal
+    reverse_proxy cameraui-proxy:8181
+}
 
 # Fallback for other hostnames / direct IP
 :80 {

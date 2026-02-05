@@ -2,7 +2,7 @@
 
 Homebridge runs on d01 with **host network** (required for mDNS/HomeKit discovery). The web UI is exposed via a small proxy container so the cloudflared tunnel and internal proxy can reach it. Access is protected by **Cloudflare Access**.
 
-- **URL:** `https://homebridge.asyla.org` (after tunnel + DNS + Access are configured)
+- **URLs:** `https://homebridge.asyla.org` (Homebridge UI), `https://cameraui.asyla.org` (Camera UI) — after tunnel + DNS + Access are configured
 - **Image:** [homebridge/homebridge](https://github.com/homebridge/homebridge/wiki/Install-Homebridge-on-Docker) (official; migrated from oznu/homebridge)
 - **Storage:** `${DOCKER_DL}/homebridge` → `/homebridge` in container (config, plugins, etc.)
 
@@ -30,4 +30,4 @@ The original `docker/homebridge.sh` used:
 - **Network:** host (same; required for Avahi/mDNS and HomeKit)
 - **Env:** TZ, ENABLE_AVAHI=1 (same)
 
-Ports on the host: 8181 (Homebridge UI; proxy forwards to this), 51956 (Homebridge HAP service). The proxy listens on 8581 and forwards to host:8181 so the tunnel matches the working UI; HomeKit discovery remains on the host network.
+Ports on the host: 8581 (Homebridge UI → homebridge.asyla.org), 8181 (Camera UI → cameraui.asyla.org), 51956 (Homebridge HAP service). Two proxy containers expose the UIs to the tunnel; HomeKit discovery remains on the host network.
