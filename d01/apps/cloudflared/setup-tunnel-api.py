@@ -282,7 +282,7 @@ def main() -> None:
     print("Add this to ~/scripts/d01/apps/cloudflared/.env on d01 (or your tunnel host):")
     print(f"TUNNEL_TOKEN={tunnel_token}")
     print()
-    print("Then start the tunnel: ~/scripts/d01/apps/cloudflared/cloudflared.sh up  (or ./start.sh in that dir)")
+    print("Then start the tunnel: ~/scripts/d01/apps/cloudflared/cloudflared.sh up")
 
 
 if __name__ == "__main__":

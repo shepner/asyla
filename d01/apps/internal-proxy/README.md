@@ -16,7 +16,7 @@ When **split DNS** (e.g. Pi-hole) points app hostnames to d01's IP (10.0.0.60), 
 ~/scripts/d01/apps/internal-proxy/internal-proxy.sh up
 ```
 
-Or: `cd ~/scripts/d01/apps/internal-proxy && ./start.sh`. Same management as other apps: `internal-proxy.sh down|logs|pull`. Networks are created automatically.
+Or: `cd ~/scripts/d01/apps/internal-proxy && ./internal-proxy.sh up`. Same management as other apps: `internal-proxy.sh down|logs|pull`. Networks are created automatically.
 
 ## Add hostnames
 

@@ -31,7 +31,7 @@ One script creates or updates the tunnel, pushes ingress from `apps.yml`, and cr
    ./setup-tunnel-api.py
    ```
 3. **Copy the printed `TUNNEL_TOKEN=...`** into `~/scripts/d01/apps/cloudflared/.env` on d01 (create .env if needed).
-4. **On d01:** `~/scripts/d01/apps/cloudflared/cloudflared.sh up` (or `./start.sh`). The tunnel runs with remote config; no config.yml or credentials.json on the server.
+4. **On d01:** `~/scripts/d01/apps/cloudflared/cloudflared.sh up`. The tunnel runs with remote config; no config.yml or credentials.json on the server.
 
 When you add or change apps in `apps.yml`, run `./setup-tunnel-api.py` again (same .env with API credentials); then restart cloudflared on d01 if you like (config is pulled from Cloudflare).
 
@@ -50,7 +50,7 @@ The script also creates or updates a **Cloudflare Access** application for hostn
    ```bash
    ~/scripts/d01/apps/cloudflared/cloudflared.sh up
    ```
-   Or: `cd ~/scripts/d01/apps/cloudflared && ./start.sh`
+   Or: `cd ~/scripts/d01/apps/cloudflared && ./cloudflared.sh up`
 4. **Verify**:
    ```bash
    docker logs cloudflared-d01
@@ -64,9 +64,9 @@ To define all hostnames from `apps.yml` so you don’t add each one by hand in t
 2. **Set TUNNEL_ID** in `.env`: `TUNNEL_ID=your-tunnel-uuid`
 3. **Generate config** from `apps.yml`: `./generate-config.sh` (writes `config.yml`).
 4. **Start** (creates networks automatically, detects config mode):  
-   `./start.sh`
+   `./cloudflared.sh up`
 5. When you add or change apps in `apps.yml`, run `./generate-config.sh` again and restart:  
-   `./start.sh`
+   `./cloudflared.sh up`
 
 Add `config.yml` and `credentials.json` to `.gitignore` (they contain secrets).
 
