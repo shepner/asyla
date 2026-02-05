@@ -62,10 +62,7 @@ services:
       - ${DOCKER_DL:-/mnt/docker}/overseerr/config:/config
     networks:
       - media_net
-    # Allow Overseerr to resolve d02 hostname for Plex connection
-    extra_hosts:
-      - "d02:10.0.0.61"
-      - "plex.d02:10.0.0.61"
+    # Plex is on d02:32400; use http://d02:32400 in Overseerr settings (resolved via host DNS / asyla.org)
 
   jackett:
     image: lscr.io/linuxserver/jackett:latest
