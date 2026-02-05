@@ -1,6 +1,7 @@
 #!/bin/bash
 # Internal Caddy proxy for d01 (split-DNS).
-# Usage: internal-proxy.sh up|down|logs [service]|pull
+# Usage: internal-proxy.sh up|down|restart|logs [service]|pull
+# Use 'restart' after update_scripts.sh so Caddy reloads the Caddyfile.
 # Run from anywhere.
 
 set -euo pipefail
@@ -33,6 +34,12 @@ case "$cmd" in
   down)
     run_compose down
     ;;
+  restart)
+    run_compose down
+    ensure_networks
+    run_compose up -d
+    echo "[INFO] Restarted; Caddy loaded current Caddyfile"
+    ;;
   logs)
     run_compose logs -f "${@:2}"
     ;;
@@ -41,9 +48,10 @@ case "$cmd" in
     run_compose up -d
     ;;
   *)
-    echo "Usage: $0 up|down|logs [service]|pull" >&2
-    echo "  up   - ensure networks and start Caddy" >&2
-    echo "  down - stop and remove container" >&2
+    echo "Usage: $0 up|down|restart|logs [service]|pull" >&2
+    echo "  up      - ensure networks and start Caddy" >&2
+    echo "  down    - stop and remove container" >&2
+    echo "  restart - down then up; use after update_scripts to reload Caddyfile" >&2
     echo "  logs - follow logs" >&2
     echo "  pull - pull image and up" >&2
     exit 1
