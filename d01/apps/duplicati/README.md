@@ -2,9 +2,8 @@
 
 Duplicati backup runs on d01 and is reachable via the internal proxy (and optionally the cloudflared tunnel). Uses its own network `duplicati_net`.
 
-- **URL:** `http://<d01-ip>:8200` (direct, like original script) or `https://duplicati.asyla.org` (internal proxy).
+- **URL:** `https://duplicati.asyla.org` (internal proxy only; no host port published).
 - **Image:** [linuxserver/duplicati](https://docs.linuxserver.io/images/docker-duplicati)
-- **Port:** 8200 published on host
 
 ## Commands
 
@@ -28,7 +27,7 @@ Matches the original `docker/duplicati.sh`:
 
 1. Ensure **internal-proxy** is running (so `duplicati_net` exists, or run duplicati first to create it).
 2. Run `duplicati.sh up`.
-3. For split-DNS: point `duplicati.asyla.org` to d01 (e.g. Pi-hole). Then open `https://duplicati.asyla.org` and accept the self-signed cert once.
+3. For split-DNS: point `duplicati.asyla.org` to d01 (e.g. Pi-hole). Use **https://duplicati.asyla.org** (not http); accept the self-signed cert once. If the hostname doesn’t load, on d01 run: `docker exec caddy-internal-d01 cat /etc/caddy/Caddyfile | grep -A2 duplicati` (should show the duplicati block) and `docker network inspect duplicati_net --format '{{range .Containers}}{{.Name}} {{end}}'` (should include `caddy-internal-d01` and `duplicati`). If either is missing, run `update_scripts.sh` then `internal-proxy.sh restart`.
 4. Optional: run **setup-tunnel-api.py** in the cloudflared app dir to add tunnel + DNS + Cloudflare Access for `duplicati.asyla.org`.
 
 Set a strong web UI password in Duplicati settings (or use `DUPLICATI__WEBSERVICE_PASSWORD` in the compose).
