@@ -43,8 +43,6 @@ case "$cmd" in
     echo "[INFO] Done. Size: $(du -h "$archive" | cut -f1)"
     ;;
   up)
-    echo "[INFO] Ensuring media_net exists"
-    docker network create media_net 2>/dev/null || true
     echo "[INFO] Creating app dirs if needed"
     for dir in sonarr/config radarr/config overseerr/config jackett/config jackett/downloads transmission/config transmission/watch transmission/downloads; do
       mkdir -p "${DOCKER_DL}/${dir}"
