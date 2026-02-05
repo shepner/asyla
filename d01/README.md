@@ -36,7 +36,6 @@ Requires:
 - `apps/cloudflared/` – Cloudflare Tunnel (cloudflared.sh, compose, apps.yml, setup-tunnel-api.py).
 - `apps/internal-proxy/` – Caddy reverse proxy for split-DNS (internal-proxy.sh, Caddyfile).
 - `apps/media/` – Media stack: Sonarr, Radarr, Overseerr, Jackett, Transmission (media.sh); access via cloudflared/internal proxy.
-- `docker-compose.yml` – Defines networks (d01_internet, d01_internal, d01_backend); add services as apps are deployed.
 - `update_scripts.sh`, `update.sh`, `update_all.sh` – Script update and OS maintenance.
 
 ## iSCSI
