@@ -67,8 +67,10 @@ def parse_apps_yml(path: Path) -> tuple[str, list[dict]]:
     return domain, apps
 
 
-def api_req(method: str, path: str, token: str, json_body: dict | None = None) -> dict:
-    """Call Cloudflare API; path is relative (e.g. /accounts/xx/cfd_tunnel)."""
+def api_req(method: str, path: str, token: str, json_body: dict | None = None, raise_on_error: bool = True) -> dict:
+    """Call Cloudflare API; path is relative (e.g. /accounts/xx/cfd_tunnel).
+    If raise_on_error is True (default), HTTP errors raise SystemExit. If False, returns {success: False, errors: [...]}.
+    """
     try:
         import urllib.request
         import urllib.error
@@ -84,7 +86,15 @@ def api_req(method: str, path: str, token: str, json_body: dict | None = None) -
             return json.loads(r.read().decode())
     except urllib.error.HTTPError as e:
         body = e.read().decode() if e.fp else ""
-        raise SystemExit(f"API {method} {path}: {e.code} {body}")
+        if raise_on_error:
+            raise SystemExit(f"API {method} {path}: {e.code} {body}")
+        try:
+            out = json.loads(body)
+            if "success" in out:
+                return out
+        except json.JSONDecodeError:
+            pass
+        return {"success": False, "errors": [{"code": e.code, "message": body[:200]}]}
 
 
 def main() -> None:
@@ -200,9 +210,9 @@ def main() -> None:
     access_hostnames = [a["hostname"] for a in apps if a.get("access", True)]
     if access_hostnames:
         access_app_name = os.environ.get("CLOUDFLARE_ACCESS_APP_NAME", "d01 media").strip()
-        r = api_req("GET", f"/accounts/{account_id}/access/identity_providers", token)
+        r = api_req("GET", f"/accounts/{account_id}/access/identity_providers", token, raise_on_error=False)
         if not r.get("success"):
-            print("Access: list IdPs failed (token needs Access: Apps and Policies Read):", r.get("errors"), file=sys.stderr)
+            print("Access: skipped – token lacks Access permission (403). Add 'Access: Apps and Policies → Edit' to the API token, or set up Access in Zero Trust → Access → Applications.", file=sys.stderr)
         else:
             idps = r.get("result", [])
             allowed_idps = [idp["id"] for idp in idps]
