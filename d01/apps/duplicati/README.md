@@ -2,9 +2,9 @@
 
 Duplicati backup runs on d01 and is reachable via the internal proxy (and optionally the cloudflared tunnel). Uses its own network `duplicati_net`.
 
-- **URL:** `https://duplicati.asyla.org` (internal proxy; add CNAME in split-DNS). Optionally expose via tunnel + Cloudflare Access with `setup-tunnel-api.py`.
+- **URL:** `http://<d01-ip>:8200` (direct, like original script) or `https://duplicati.asyla.org` (internal proxy).
 - **Image:** [linuxserver/duplicati](https://docs.linuxserver.io/images/docker-duplicati)
-- **Port:** 8200 (no host publish; proxy only)
+- **Port:** 8200 published on host
 
 ## Commands
 
@@ -32,3 +32,5 @@ Matches the original `docker/duplicati.sh`:
 4. Optional: run **setup-tunnel-api.py** in the cloudflared app dir to add tunnel + DNS + Cloudflare Access for `duplicati.asyla.org`.
 
 Set a strong web UI password in Duplicati settings (or use `DUPLICATI__WEBSERVICE_PASSWORD` in the compose).
+
+**SETTINGS_ENCRYPTION_KEY:** The image warns if this is unset (encrypts the settings DB). The original script didn’t use it; the app runs fine without it. To silence the warning and encrypt settings, set the env var in the compose and recreate the container (see LinuxServer docs).
