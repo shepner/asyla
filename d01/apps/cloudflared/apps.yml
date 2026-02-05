@@ -45,8 +45,8 @@ apps:
     access: true
   - app: homebridge
     hostname: homebridge
-    service: cameraui-proxy
-    port: 8181
+    service: homebridge-proxy
+    port: 8581
     access: true
   - app: homebridge
     hostname: cameraui
