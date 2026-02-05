@@ -1,0 +1,28 @@
+# Cloudflare Tunnel (cloudflared) for d01
+# Provides internet access to d01 applications via Cloudflare Tunnel
+#
+# Setup:
+# 1. Create tunnel in Cloudflare Zero Trust dashboard, get TUNNEL_TOKEN
+# 2. Set TUNNEL_TOKEN in ~/scripts/d01/cloudflared/.env (copy from .env.example)
+# 3. Add app networks to the networks list below as apps are added
+# 4. Configure Public Hostnames in Cloudflare dashboard
+
+version: '3.8'
+
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared-d01
+    restart: unless-stopped
+    command: tunnel run
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+    # Attach to d01_internal so apps on that network can be reached via tunnel
+    # Add app-specific networks here as apps are added (e.g. myapp_net)
+    networks:
+      - d01_internal
+
+networks:
+  d01_internal:
+    external: true
+    name: d01_internal

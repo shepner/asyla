@@ -1,0 +1,77 @@
+#cloud-config
+# Cloud-init user-data for d01 VM
+# Use with Proxmox: qm set <VMID> --cicustom user=local:snippets/d01-cloud-init.yml
+# Hostname must be d01 so update_scripts.sh (hostname -s) finds the d01/ directory in the repo
+
+hostname: d01
+fqdn: d01.asyla.org
+manage_etc_hosts: true
+
+timezone: America/Chicago
+
+network:
+  version: 2
+  ethernets:
+    ens18:
+      addresses:
+        - 10.0.0.60/24
+      gateway4: 10.0.0.1
+      nameservers:
+        addresses:
+          - 10.0.0.10
+          - 10.0.0.11
+        search:
+          - asyla.org
+
+packages:
+  - cloud-init
+  - openssh-server
+  - curl
+  - git
+
+groups:
+  - asyla: 1000
+  - docker
+
+users:
+  - name: docker
+    uid: 1003
+    primary_group: asyla
+    groups: [asyla, docker, sudo]
+    shell: /bin/bash
+    lock_passwd: false
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    ssh_authorized_keys:
+      - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCejokU+gb5+7sHSY9KkS/jJ1UzwiRwNFhnRQunoyeb+otkOXXqs1wMWg4qPamOOQTiieQNAvaomGcga5PWp35RUp9iQeq2EYzoOZTALruqZpMTuvuFs1dK58mrmsNVOg1s/1AF/S3WOURWPyou+k18LN+tRDu7JrGCs63JquCsNTBf04hiCtUptqP2LCUnJznNJ5B/KbGQbkqtUzuQFR+BImLN0t8U7A4CvmcHniuyYXzC0fmsqTFAw+NVx5WZRtKAVztFWnMLn7a/diiXXHfi84FhBukr4qbiB+LlWIGCUvZOPJrUdsS19L/iDsFS+F88mEnG+UXeopHAPtAUsntN docker@asyla.org
+
+runcmd:
+  - systemctl enable ssh || systemctl enable sshd || true
+  - systemctl start ssh || systemctl start sshd || true
+
+  - mkdir -p /home/docker/.ssh
+  - chmod 700 /home/docker/.ssh
+  - chown -R docker:asyla /home/docker/.ssh || true
+
+  - apt-get update || true
+
+  - |
+    curl -s https://raw.githubusercontent.com/shepner/asyla/master/d01/update_scripts.sh | bash || true
+
+  - [ bash, -c, 'test -f /home/docker/scripts/d01/setup/systemConfig.sh && /home/docker/scripts/d01/setup/systemConfig.sh || true' ]
+  - [ bash, -c, 'test -f /home/docker/scripts/d01/setup/nfs.sh && /home/docker/scripts/d01/setup/nfs.sh || true' ]
+  - [ bash, -c, 'test -f /home/docker/scripts/d01/setup/smb.sh && /home/docker/scripts/d01/setup/smb.sh || true' ]
+  - [ bash, -c, 'test -f /home/docker/scripts/d01/setup/iscsi_install.sh && /home/docker/scripts/d01/setup/iscsi_install.sh || true' ]
+  - [ bash, -c, 'test -f /home/docker/scripts/d01/setup/docker.sh && /home/docker/scripts/d01/setup/docker.sh || true' ]
+  - [ bash, -c, 'test -f /home/docker/update.sh && /home/docker/update.sh || true' ]
+
+  - [ bash, -c, 'nohup apt-get upgrade -y >> /var/log/cloud-init-upgrade.log 2>&1 &' ]
+
+final_message: |
+  d01 VM setup complete!
+  Auto-ran: SSH, systemConfig, nfs, smb, iSCSI initiator install, docker, update.
+  apt-get upgrade runs in background; log: /var/log/cloud-init-upgrade.log
+  Manual steps:
+  1. SSH to d01: ssh docker@10.0.0.60
+  2. Copy SSH keys and config; run ~/scripts/d01/setup/setup_ssh_keys.sh
+  3. Configure cloudflared (.env with TUNNEL_TOKEN) and internal-proxy
+  4. SMB + iSCSI: ~/setup_manual.sh

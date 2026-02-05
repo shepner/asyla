@@ -1,0 +1,18 @@
+# Docker Compose configuration for d01
+# Template structure - containers will be added as apps are deployed.
+# Environment variables from ~/scripts/docker/common.env or .env
+
+version: '3.8'
+
+networks:
+  internet:
+    driver: bridge
+    name: d01_internet
+  internal:
+    driver: bridge
+    name: d01_internal
+  backend:
+    driver: bridge
+    name: d01_backend
+
+services: {}

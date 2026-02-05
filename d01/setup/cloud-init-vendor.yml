@@ -1,0 +1,107 @@
+#cloud-config
+# Vendor file for d01 VM - runs on first boot.
+# Use with: qm set <VMID> --cicustom vendor=local:snippets/d01-cloud-init-vendor.yml
+
+runcmd:
+  - |
+    if ! command -v cloud-init >/dev/null 2>&1; then
+      echo "ERROR: cloud-init not found - install it or use a generic cloud image"
+      apt-get update && apt-get install -y cloud-init || exit 1
+    fi
+
+  - |
+    if [ -f /var/lib/cloud/seed/nocloud/user-data ] && [ -s /var/lib/cloud/seed/nocloud/user-data ]; then
+      cp /var/lib/cloud/seed/nocloud/user-data /tmp/proxmox_user_data.yml
+    elif [ -b /dev/sr0 ]; then
+      mkdir -p /tmp/ci_cd
+      if mount -o ro /dev/sr0 /tmp/ci_cd 2>/dev/null; then
+        for f in /tmp/ci_cd/user-data /tmp/ci_cd/user_data /tmp/ci_cd/openstack/latest/user_data; do
+          if [ -f "$f" ] && [ -s "$f" ]; then cp "$f" /tmp/proxmox_user_data.yml; break; fi
+        done
+        umount /tmp/ci_cd 2>/dev/null || true
+      fi
+      rmdir /tmp/ci_cd 2>/dev/null || true
+    fi
+
+  - systemctl enable ssh || systemctl enable sshd || true
+  - systemctl start ssh || systemctl start sshd || true
+
+  - |
+    echo "Fetching full user-data configuration..."
+    curl -sL https://raw.githubusercontent.com/shepner/asyla/master/d01/setup/cloud-init-userdata.yml > /tmp/userdata.yml || {
+      echo "ERROR: Failed to download user-data (network?)"
+      exit 1
+    }
+
+  - |
+    if ! getent group asyla >/dev/null 2>&1; then
+      if getent group 1000 >/dev/null 2>&1; then
+        groupadd asyla
+      else
+        groupadd -g 1000 asyla
+      fi
+    fi
+
+  - getent group docker >/dev/null 2>&1 || groupadd docker || true
+
+  - |
+    DOCKER_UID=1003
+    if ! id docker >/dev/null 2>&1; then
+      useradd -m -u "$DOCKER_UID" -g asyla -G asyla,docker,sudo -s /bin/bash docker || true
+    elif [ "$(id -u docker)" -ne "$DOCKER_UID" ]; then
+      usermod -u "$DOCKER_UID" -g asyla docker
+      chown -R docker:asyla /home/docker
+    fi
+    usermod -aG asyla docker 2>/dev/null || true
+    usermod -aG docker docker 2>/dev/null || true
+    usermod -aG sudo docker 2>/dev/null || true
+
+  - mkdir -p /home/docker/.ssh
+  - chmod 700 /home/docker/.ssh
+  - chown -R docker:asyla /home/docker/.ssh || chown -R docker:docker /home/docker/.ssh || true
+
+  - |
+    if [ -f /tmp/proxmox_user_data.yml ]; then
+      grep -E '^\s+-\s+ssh-' /tmp/proxmox_user_data.yml | sed 's/^\s*-\s*//' >> /home/docker/.ssh/authorized_keys 2>/dev/null || true
+      grep -E '^\s+-\s+ecdsa-' /tmp/proxmox_user_data.yml | sed 's/^\s*-\s*//' >> /home/docker/.ssh/authorized_keys 2>/dev/null || true
+      grep -E '^\s+-\s+sk-' /tmp/proxmox_user_data.yml | sed 's/^\s*-\s*//' >> /home/docker/.ssh/authorized_keys 2>/dev/null || true
+      sort -u /home/docker/.ssh/authorized_keys -o /home/docker/.ssh/authorized_keys 2>/dev/null || true
+      chmod 600 /home/docker/.ssh/authorized_keys
+      chown -R docker:asyla /home/docker/.ssh 2>/dev/null || chown -R docker:docker /home/docker/.ssh 2>/dev/null || true
+      rm -f /tmp/proxmox_user_data.yml
+    fi
+
+  - |
+    echo "=== Starting software installation ==="
+    set -e
+    echo "Installing required packages (git, curl)..."
+    apt-get update -qq
+    apt-get install -y -qq git curl >/dev/null 2>&1 || {
+      echo "ERROR: Failed to install git/curl"
+      exit 1
+    }
+    echo "Installing scripts..."
+    curl -s https://raw.githubusercontent.com/shepner/asyla/master/d01/update_scripts.sh | bash || {
+      echo "ERROR: update_scripts.sh failed"
+      exit 1
+    }
+    if [ ! -f /home/docker/scripts/d01/setup/systemConfig.sh ]; then
+      echo "ERROR: Scripts not found after update_scripts.sh"
+      exit 1
+    fi
+    echo "Running systemConfig.sh..."
+    /home/docker/scripts/d01/setup/systemConfig.sh || true
+    echo "Running nfs.sh..."
+    /home/docker/scripts/d01/setup/nfs.sh || true
+    echo "Running smb.sh..."
+    /home/docker/scripts/d01/setup/smb.sh || true
+    echo "Running iscsi_install.sh..."
+    /home/docker/scripts/d01/setup/iscsi_install.sh || true
+    echo "Running docker.sh..."
+    /home/docker/scripts/d01/setup/docker.sh || {
+      echo "ERROR: docker.sh failed"
+      exit 1
+    }
+    echo "Starting apt upgrade in background..."
+    nohup bash -c '/home/docker/update.sh >> /var/log/cloud-init-upgrade.log 2>&1' &
+    echo "=== Software installation complete ==="

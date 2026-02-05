@@ -1,0 +1,26 @@
+# Internal reverse proxy for d01 (split-DNS / Pi-hole)
+# When app hostnames resolve to d01 (e.g. via Pi-hole), this serves HTTPS and proxies to apps.
+# TLS is self-signed (accept once in browser).
+#
+# Start after any app that needs internal proxy is running (app network must exist).
+# Ports 80 and 443 must not be used by another service on d01.
+
+version: '3.8'
+
+services:
+  caddy-internal:
+    image: caddy:latest
+    container_name: caddy-internal-d01
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    networks:
+      - d01_internal
+
+networks:
+  d01_internal:
+    external: true
+    name: d01_internal

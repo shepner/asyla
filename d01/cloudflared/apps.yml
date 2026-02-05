@@ -1,0 +1,15 @@
+# Cloudflare Tunnel Applications Configuration for d01
+# Single source of truth for all apps exposed via d01 tunnel
+#
+# Add entries as apps are deployed. Schema:
+#   domain: Base domain (e.g. asyla.org)
+#   apps:
+#     - app: Application name (Docker network: {app}_net)
+#       hostname: Subdomain (full hostname = {hostname}.{domain})
+#       service: Docker service/container name
+#       port: Port the service listens on
+#       access: true/false - Enable Cloudflare Access (default: true)
+
+domain: asyla.org
+
+apps: []
