@@ -23,19 +23,19 @@ Requires:
 2. Copy SSH keys and config from workstation (see build.sh next steps).
 3. Run: `~/scripts/d01/setup/setup_ssh_keys.sh`
 4. **Media stack:** `~/scripts/d01/apps/media/media.sh up` (sources common.env automatically)
-5. **Cloudflared:** `cd ~/scripts/d01/cloudflared && cp .env.example .env` (set `TUNNEL_TOKEN` or `TUNNEL_ID`), then `./start.sh`
-6. **Internal proxy:** `cd ~/scripts/d01/internal-proxy && ./start.sh`
+5. **Cloudflared:** `cd ~/scripts/d01/apps/cloudflared && cp .env.example .env` (set `TUNNEL_TOKEN` or `TUNNEL_ID`), then `~/scripts/d01/apps/cloudflared/cloudflared.sh up`
+6. **Internal proxy:** `~/scripts/d01/apps/internal-proxy/internal-proxy.sh up`
 7. SMB + iSCSI: `~/setup_manual.sh` (after adding initiator to TrueNAS for iSCSI target `nas01:d01:01`)
 
-**Note:** All start scripts (`media.sh up`, `cloudflared/start.sh`, `internal-proxy/start.sh`) create required networks automatically.
+**Note:** All app scripts (`media.sh up`, `cloudflared.sh up`, `internal-proxy.sh up`) create required networks automatically.
 
 ## Layout
 
 - `build.sh` – Destroy/create VM 101 on vmh01, import Debian cloud image, cloud-init, verify.
 - `setup/` – cloud-init userdata/vendor, bootstrap, deploy_software, systemConfig, nfs, smb, iscsi, docker, setup_manual, setup_ssh_keys, etc.
-- `cloudflared/` – Cloudflare Tunnel (docker-compose, apps.yml, .env.example).
-- `internal-proxy/` – Caddy reverse proxy for split-DNS (same hostnames, internal traffic).
-- `apps/media/` – Media stack: Sonarr, Radarr, Overseerr, Jackett, Transmission (compose + media.sh); access via cloudflared/internal proxy.
+- `apps/cloudflared/` – Cloudflare Tunnel (cloudflared.sh, compose, apps.yml, setup-tunnel-api.py).
+- `apps/internal-proxy/` – Caddy reverse proxy for split-DNS (internal-proxy.sh, Caddyfile).
+- `apps/media/` – Media stack: Sonarr, Radarr, Overseerr, Jackett, Transmission (media.sh); access via cloudflared/internal proxy.
 - `docker-compose.yml` – Defines networks (d01_internet, d01_internal, d01_backend); add services as apps are deployed.
 - `update_scripts.sh`, `update.sh`, `update_all.sh` – Script update and OS maintenance.
 

@@ -279,10 +279,10 @@ def main() -> None:
                         print("Access: allow policy already present.")
 
     print()
-    print("Add this to ~/scripts/d01/cloudflared/.env on d01 (or your tunnel host):")
+    print("Add this to ~/scripts/d01/apps/cloudflared/.env on d01 (or your tunnel host):")
     print(f"TUNNEL_TOKEN={tunnel_token}")
     print()
-    print("Then start the tunnel: ./start.sh  (or docker compose up -d)")
+    print("Then start the tunnel: ~/scripts/d01/apps/cloudflared/cloudflared.sh up  (or ./start.sh in that dir)")
 
 
 if __name__ == "__main__":

@@ -13,18 +13,17 @@ When **split DNS** (e.g. Pi-hole) points app hostnames to d01's IP (10.0.0.60), 
 ## Run
 
 ```bash
-cd ~/scripts/d01/internal-proxy
-./start.sh
+~/scripts/d01/apps/internal-proxy/internal-proxy.sh up
 ```
 
-The script creates networks automatically if needed. Or use `docker compose up -d` directly (networks must exist first).
+Or: `cd ~/scripts/d01/apps/internal-proxy && ./start.sh`. Same management as other apps: `internal-proxy.sh down|logs|pull`. Networks are created automatically.
 
 ## Add hostnames
 
 Edit `Caddyfile` and add blocks (hostname, `tls internal`, `reverse_proxy` to the app). Restart:
 
 ```bash
-docker compose restart
+~/scripts/d01/apps/internal-proxy/internal-proxy.sh up
 ```
 
 ## Deploy/update

@@ -3,7 +3,7 @@
 #
 # Setup:
 # 1. Create tunnel in Cloudflare Zero Trust dashboard, get TUNNEL_TOKEN
-# 2. Set TUNNEL_TOKEN in ~/scripts/d01/cloudflared/.env (copy from .env.example)
+# 2. Set TUNNEL_TOKEN in ~/scripts/d01/apps/cloudflared/.env (copy from .env.example)
 # 3. Add app networks to the networks list below as apps are added
 # 4. Configure Public Hostnames in Cloudflare dashboard
 

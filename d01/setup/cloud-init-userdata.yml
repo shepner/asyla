@@ -73,5 +73,5 @@ final_message: |
   Manual steps:
   1. SSH to d01: ssh docker@10.0.0.60
   2. Copy SSH keys and config; run ~/scripts/d01/setup/setup_ssh_keys.sh
-  3. Configure cloudflared (.env with TUNNEL_TOKEN) and internal-proxy
+  3. Configure cloudflared: ~/scripts/d01/apps/cloudflared/.env (TUNNEL_TOKEN) and start cloudflared.sh / internal-proxy.sh
   4. SMB + iSCSI: ~/setup_manual.sh
