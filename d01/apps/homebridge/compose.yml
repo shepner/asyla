@@ -18,7 +18,7 @@ services:
       - ENABLE_AVAHI=1
     volumes:
       - .:/homebridge
-    # No networks: host mode. UI on host:8581; proxy below exposes it to homebridge_net.
+    # No networks: host mode. UI on host:8181; proxy below exposes it to homebridge_net.
 
   # Proxy so cloudflared/internal-proxy (on homebridge_net) can reach host's Homebridge UI.
   homebridge-proxy:
@@ -27,6 +27,6 @@ services:
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    command: ["caddy", "reverse-proxy", "--from", ":8581", "--to", "http://host.docker.internal:8581"]
+    command: ["caddy", "reverse-proxy", "--from", ":8581", "--to", "http://host.docker.internal:8181"]
     networks:
       - homebridge_net

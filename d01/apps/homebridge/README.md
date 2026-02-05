@@ -30,4 +30,4 @@ The original `docker/homebridge.sh` used:
 - **Network:** host (same; required for Avahi/mDNS and HomeKit)
 - **Env:** TZ, ENABLE_AVAHI=1 (same)
 
-Ports on the host (unchanged): 8581 (Homebridge UI), 51956 (Homebridge HAP service). The proxy only exposes the UI (8581) to the tunnel; HomeKit discovery remains on the host network.
+Ports on the host: 8181 (Homebridge UI; proxy forwards to this), 51956 (Homebridge HAP service). The proxy listens on 8581 and forwards to host:8181 so the tunnel matches the working UI; HomeKit discovery remains on the host network.
