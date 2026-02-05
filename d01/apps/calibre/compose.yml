@@ -24,6 +24,6 @@ services:
       - TZ=${LOCAL_TZ:-America/Chicago}
       # Optional: - PASSWORD=  for basic auth (Cloudflare Access is primary)
     volumes:
-      - ${DOCKER_DL:-/mnt/docker}/calibre/config:/config
+      - ./config:/config
     networks:
       - media_net

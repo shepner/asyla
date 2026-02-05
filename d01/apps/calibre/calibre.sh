@@ -16,10 +16,11 @@ DOCKER_DL="${DOCKER_DL:-/mnt/docker}"
 export DOCKER_DL
 export LOCAL_TZ
 
-APP_ROOT="${DOCKER_DL}"
+# Standalone app: own project dir and project name (not part of media stack)
+APP_ROOT="${DOCKER_DL}/calibre"
 
 run_compose() {
-  docker compose -f "$COMPOSE_FILE" --project-directory "$APP_ROOT" "$@"
+  docker compose -p calibre -f "$COMPOSE_FILE" --project-directory "$APP_ROOT" "$@"
 }
 
 cmd="${1:-}"
