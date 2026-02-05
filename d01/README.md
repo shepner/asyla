@@ -22,9 +22,12 @@ Requires:
 1. SSH: `ssh d01`
 2. Copy SSH keys and config from workstation (see build.sh next steps).
 3. Run: `~/scripts/d01/setup/setup_ssh_keys.sh`
-4. **Cloudflared:** `cp ~/scripts/d01/cloudflared/.env.example ~/scripts/d01/cloudflared/.env`, set `TUNNEL_TOKEN`, then `cd ~/scripts/d01/cloudflared && docker compose up -d`
-5. **Internal proxy:** Ensure `d01_internal` network exists (`docker network create d01_internal`), then `cd ~/scripts/d01/internal-proxy && docker compose up -d`
-6. SMB + iSCSI: `~/setup_manual.sh` (after adding initiator to TrueNAS for iSCSI target `nas01:d01:01`)
+4. **Media stack:** `source ~/scripts/docker/common.env && ~/scripts/d01/apps/media/media.sh up`
+5. **Cloudflared:** `cd ~/scripts/d01/cloudflared && cp .env.example .env` (set `TUNNEL_TOKEN` or `TUNNEL_ID`), then `./start.sh`
+6. **Internal proxy:** `cd ~/scripts/d01/internal-proxy && ./start.sh`
+7. SMB + iSCSI: `~/setup_manual.sh` (after adding initiator to TrueNAS for iSCSI target `nas01:d01:01`)
+
+**Note:** All start scripts (`media.sh up`, `cloudflared/start.sh`, `internal-proxy/start.sh`) create required networks automatically.
 
 ## Layout
 

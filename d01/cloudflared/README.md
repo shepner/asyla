@@ -20,15 +20,12 @@ This directory contains the Cloudflare Tunnel configuration for d01.
    cp .env.example .env
    # Edit .env and add TUNNEL_TOKEN
    ```
-3. **Ensure d01_internal network exists** (created by d01 docker-compose or by first app):
+3. **Start cloudflared** (creates networks automatically):
    ```bash
-   docker network create d01_internal 2>/dev/null || true
+   ./start.sh
    ```
-4. **Start cloudflared**:
-   ```bash
-   docker compose up -d
-   ```
-5. **Verify**:
+   Or manually: `docker compose up -d` (networks must exist first)
+4. **Verify**:
    ```bash
    docker logs cloudflared-d01
    ```
@@ -40,10 +37,10 @@ To define all hostnames from `apps.yml` so you don’t add each one by hand in t
 1. **Create the tunnel once** in Zero Trust → Networks → Tunnels → Create tunnel → name it (e.g. `d01`). Choose **Cloudflared** as installer; copy the credentials JSON and save it in this directory as `credentials.json`. Note the tunnel UUID (in the JSON or in the dashboard URL).
 2. **Set TUNNEL_ID** in `.env`: `TUNNEL_ID=your-tunnel-uuid`
 3. **Generate config** from `apps.yml`: `./generate-config.sh` (writes `config.yml`).
-4. **Start with config override**:  
-   `docker compose -f docker-compose.yml -f docker-compose.config.yml up -d`
+4. **Start** (creates networks automatically, detects config mode):  
+   `./start.sh`
 5. When you add or change apps in `apps.yml`, run `./generate-config.sh` again and restart:  
-   `docker compose -f docker-compose.yml -f docker-compose.config.yml up -d`
+   `./start.sh`
 
 Add `config.yml` and `credentials.json` to `.gitignore` (they contain secrets).
 

@@ -7,7 +7,6 @@ When **split DNS** (e.g. Pi-hole) points app hostnames to d01's IP (10.0.0.60), 
 
 ## Prerequisites
 
-- `d01_internal` Docker network exists (create with `docker network create d01_internal` or start an app that uses it).
 - Pi-hole (or your DNS) has records for app hostnames → d01's IP (10.0.0.60).
 - Ports 80 and 443 on d01 are free.
 
@@ -15,8 +14,10 @@ When **split DNS** (e.g. Pi-hole) points app hostnames to d01's IP (10.0.0.60), 
 
 ```bash
 cd ~/scripts/d01/internal-proxy
-docker compose up -d
+./start.sh
 ```
+
+The script creates networks automatically if needed. Or use `docker compose up -d` directly (networks must exist first).
 
 ## Add hostnames
 
