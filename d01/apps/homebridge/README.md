@@ -1,0 +1,33 @@
+# Homebridge on d01
+
+Homebridge runs on d01 with **host network** (required for mDNS/HomeKit discovery). The web UI is exposed via a small proxy container so the cloudflared tunnel and internal proxy can reach it. Access is protected by **Cloudflare Access**.
+
+- **URL:** `https://homebridge.asyla.org` (after tunnel + DNS + Access are configured)
+- **Image:** [homebridge/homebridge](https://github.com/homebridge/homebridge/wiki/Install-Homebridge-on-Docker) (official; migrated from oznu/homebridge)
+- **Storage:** `${DOCKER_DL}/homebridge` → `/homebridge` in container (config, plugins, etc.)
+
+## Commands
+
+```bash
+~/scripts/d01/apps/homebridge/homebridge.sh up    # start
+~/scripts/d01/apps/homebridge/homebridge.sh down # stop
+~/scripts/d01/apps/homebridge/homebridge.sh logs  # follow logs
+~/scripts/d01/apps/homebridge/homebridge.sh pull  # pull image and up
+```
+
+## First-time setup
+
+1. Ensure **media** (or at least something that created `media_net`), **cloudflared**, and **internal-proxy** are running.
+2. Run `homebridge.sh up`.
+3. Run **setup-tunnel-api.py** in the cloudflared app dir so `homebridge.asyla.org` gets tunnel ingress, DNS, and Cloudflare Access.
+4. Restart cloudflared if it was already running when you added the app.
+
+## Migration from original
+
+The original `docker/homebridge.sh` used:
+- **Image:** oznu/homebridge:latest (replaced with homebridge/homebridge:latest)
+- **Volume:** `${DOCKER_DL}/homebridge` → `/homebridge` (same: whole app dir)
+- **Network:** host (same; required for Avahi/mDNS and HomeKit)
+- **Env:** TZ, ENABLE_AVAHI=1 (same)
+
+Ports on the host (unchanged): 8581 (Homebridge UI), 51956 (Homebridge HAP service). The proxy only exposes the UI (8581) to the tunnel; HomeKit discovery remains on the host network.

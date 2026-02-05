@@ -43,3 +43,8 @@ apps:
     service: calibre
     port: 8080
     access: true
+  - app: homebridge
+    hostname: homebridge
+    service: homebridge-proxy
+    port: 8581
+    access: true

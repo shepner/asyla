@@ -1,0 +1,32 @@
+# Homebridge on d01. Uses host network for mDNS/HomeKit; proxy container exposes UI to tunnel.
+# Run: ~/scripts/d01/apps/homebridge/homebridge.sh up
+# Ref: https://github.com/homebridge/homebridge/wiki/Install-Homebridge-on-Docker
+
+networks:
+  media_net:
+    external: true
+    name: media_net
+
+services:
+  homebridge:
+    image: homebridge/homebridge:latest
+    container_name: homebridge
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - TZ=${LOCAL_TZ:-America/Chicago}
+      - ENABLE_AVAHI=1
+    volumes:
+      - .:/homebridge
+    # No networks: host mode. UI on host:8581; proxy below exposes it to media_net.
+
+  # Proxy so cloudflared/internal-proxy (on media_net) can reach host's Homebridge UI.
+  homebridge-proxy:
+    image: caddy:alpine
+    container_name: homebridge-proxy
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: ["caddy", "reverse-proxy", "--from", ":8581", "--to", "http://host.docker.internal:8581"]
+    networks:
+      - media_net
