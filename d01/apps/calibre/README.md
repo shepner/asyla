@@ -4,7 +4,7 @@ Calibre e-book manager runs on d01 and is reachable via the cloudflared tunnel a
 
 - **URL:** `https://calibre.asyla.org` (after tunnel + DNS + Access are configured)
 - **Image:** [linuxserver/calibre](https://docs.linuxserver.io/images/docker-calibre)
-- **Network:** `media_net` (no host ports; proxy only)
+- **Network:** `calibre_net` (no host ports; proxy only)
 
 ## Commands
 

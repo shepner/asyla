@@ -37,6 +37,7 @@ case "$cmd" in
   up)
     echo "[INFO] Creating app dir if needed"
     mkdir -p "${DOCKER_DL}/calibre/config"
+    docker network create calibre_net 2>/dev/null || true
     remove_stale_calibre_container
     echo "[INFO] Starting Calibre"
     run_compose up -d

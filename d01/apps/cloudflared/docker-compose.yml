@@ -20,6 +20,8 @@ services:
     networks:
       - d01_internal
       - media_net
+      - calibre_net
+      - homebridge_net
 
 networks:
   d01_internal:
@@ -28,3 +30,9 @@ networks:
   media_net:
     external: true
     name: media_net
+  calibre_net:
+    external: true
+    name: calibre_net
+  homebridge_net:
+    external: true
+    name: homebridge_net

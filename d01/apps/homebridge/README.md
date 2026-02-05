@@ -17,7 +17,7 @@ Homebridge runs on d01 with **host network** (required for mDNS/HomeKit discover
 
 ## First-time setup
 
-1. Ensure **media** (or at least something that created `media_net`), **cloudflared**, and **internal-proxy** are running.
+1. Ensure **cloudflared** and **internal-proxy** are running (they attach to `homebridge_net`). Start homebridge so the proxy is on `homebridge_net`.
 2. Run `homebridge.sh up`.
 3. Run **setup-tunnel-api.py** in the cloudflared app dir so `homebridge.asyla.org` gets tunnel ingress, DNS, and Cloudflare Access.
 4. Restart cloudflared if it was already running when you added the app.

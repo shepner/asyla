@@ -13,6 +13,8 @@ COMPOSE_FILE="docker-compose.yml"
 ensure_networks() {
   docker network create d01_internal 2>/dev/null || true
   docker network create media_net 2>/dev/null || true
+  docker network create calibre_net 2>/dev/null || true
+  docker network create homebridge_net 2>/dev/null || true
 }
 
 run_compose() {

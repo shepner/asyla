@@ -6,9 +6,9 @@
 # Ref: https://docs.linuxserver.io/images/docker-calibre
 
 networks:
-  media_net:
+  calibre_net:
     external: true
-    name: media_net
+    name: calibre_net
 
 services:
   calibre:
@@ -28,4 +28,4 @@ services:
       - ./config:/config
       - ${DATA1:-/mnt/nas/data1}/media:/media
     networks:
-      - media_net
+      - calibre_net

@@ -3,9 +3,9 @@
 # Ref: https://github.com/homebridge/homebridge/wiki/Install-Homebridge-on-Docker
 
 networks:
-  media_net:
+  homebridge_net:
     external: true
-    name: media_net
+    name: homebridge_net
 
 services:
   homebridge:
@@ -18,9 +18,9 @@ services:
       - ENABLE_AVAHI=1
     volumes:
       - .:/homebridge
-    # No networks: host mode. UI on host:8581; proxy below exposes it to media_net.
+    # No networks: host mode. UI on host:8581; proxy below exposes it to homebridge_net.
 
-  # Proxy so cloudflared/internal-proxy (on media_net) can reach host's Homebridge UI.
+  # Proxy so cloudflared/internal-proxy (on homebridge_net) can reach host's Homebridge UI.
   homebridge-proxy:
     image: caddy:alpine
     container_name: homebridge-proxy
@@ -29,4 +29,4 @@ services:
       - "host.docker.internal:host-gateway"
     command: ["caddy", "reverse-proxy", "--from", ":8581", "--to", "http://host.docker.internal:8581"]
     networks:
-      - media_net
+      - homebridge_net

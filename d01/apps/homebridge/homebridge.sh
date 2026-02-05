@@ -35,6 +35,7 @@ case "$cmd" in
   up)
     echo "[INFO] Creating app dir if needed"
     mkdir -p "${APP_ROOT}"
+    docker network create homebridge_net 2>/dev/null || true
     remove_stale_container
     echo "[INFO] Starting Homebridge and proxy"
     run_compose up -d
