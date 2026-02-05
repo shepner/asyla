@@ -108,25 +108,36 @@ def main() -> None:
         sys.exit(1)
 
     # 1) Create tunnel or get token for existing
+    tunnel_token = None
     if not tunnel_id:
-        print("Creating tunnel...")
-        r = api_req("POST", f"/accounts/{account_id}/cfd_tunnel", token, {
-            "name": tunnel_name,
-            "config_src": "cloudflare",
-        })
-        if not r.get("success"):
-            raise SystemExit("Create tunnel failed: " + json.dumps(r.get("errors", r)))
-        result = r["result"]
-        tunnel_id = result["id"]
-        # Token may be at top level or in credentials_file (API doc shows result.token)
-        tunnel_token = result.get("token")
-        if not tunnel_token and isinstance(result.get("credentials_file"), dict):
-            tunnel_token = result["credentials_file"].get("TunnelSecret")
-        if not tunnel_token:
-            raise SystemExit("Create tunnel response had no token: " + json.dumps(result)[:200])
-        print(f"Created tunnel: {tunnel_id}")
+        # Prefer reusing existing tunnel with same name (avoids 409 "tunnel with this name exists")
+        r = api_req("GET", f"/accounts/{account_id}/cfd_tunnel", token)
+        if r.get("success"):
+            for t in r.get("result", []):
+                if t.get("name") == tunnel_name:
+                    tunnel_id = t["id"]
+                    print(f"Using existing tunnel '{tunnel_name}': {tunnel_id}")
+                    break
+        if not tunnel_id:
+            print("Creating tunnel...")
+            r = api_req("POST", f"/accounts/{account_id}/cfd_tunnel", token, {
+                "name": tunnel_name,
+                "config_src": "cloudflare",
+            })
+            if not r.get("success"):
+                raise SystemExit("Create tunnel failed: " + json.dumps(r.get("errors", r)))
+            result = r["result"]
+            tunnel_id = result["id"]
+            tunnel_token = result.get("token")
+            if not tunnel_token and isinstance(result.get("credentials_file"), dict):
+                tunnel_token = result["credentials_file"].get("TunnelSecret")
+            if not tunnel_token:
+                raise SystemExit("Create tunnel response had no token: " + json.dumps(result)[:200])
+            print(f"Created tunnel: {tunnel_id}")
     else:
-        print("Using existing tunnel:", tunnel_id)
+        print("Using existing tunnel (TUNNEL_ID):", tunnel_id)
+    # Get token if we have tunnel_id but no token yet (reused by name or TUNNEL_ID)
+    if tunnel_id and not tunnel_token:
         r = api_req("GET", f"/accounts/{account_id}/cfd_tunnel/{tunnel_id}/token", token)
         if not r.get("success"):
             raise SystemExit("Get tunnel token failed: " + json.dumps(r.get("errors", r)))
