@@ -15,6 +15,8 @@ Duplicati backup runs on d01 and is reachable via the internal proxy (and option
 ~/scripts/d01/apps/duplicati/duplicati.sh pull  # pull image and up
 ```
 
+**Startup:** Duplicati can take 1–2 minutes to open the web UI. Use `docker ps` and check the **STATUS** column: `(healthy)` means the UI is up; `(health: starting)` means it’s still starting; `(unhealthy)` or repeated restarts mean something is wrong. Use `docker logs duplicati` (or `duplicati.sh logs`) to see startup output and any errors.
+
 ## Volumes
 
 Matches the original `docker/duplicati.sh`:

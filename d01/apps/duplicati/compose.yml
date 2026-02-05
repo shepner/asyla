@@ -21,5 +21,11 @@ services:
     volumes:
       - ./config:/config
       - ${DATA1:-/mnt/nas/data1}/media:/source/nas01/data1/media
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f -s -o /dev/null http://localhost:8200 || wget -q --spider http://localhost:8200 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
     networks:
       - duplicati_net
