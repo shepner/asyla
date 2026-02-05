@@ -15,7 +15,7 @@ Duplicati backup runs on d01 and is reachable via the internal proxy (and option
 ~/scripts/d01/apps/duplicati/duplicati.sh pull  # pull image and up
 ```
 
-**Startup:** Duplicati can take 1–2 minutes to open the web UI. Use `docker ps` and check the **STATUS** column: `(healthy)` means the UI is up; `(health: starting)` means it’s still starting; `(unhealthy)` or repeated restarts mean something is wrong. Use `docker logs duplicati` (or `duplicati.sh logs`) to see startup output and any errors.
+**Startup:** Duplicati can take 1–2 minutes to open the web UI. Once you see **"Server has started and is listening on *, port 8200"** in the logs, the app is up—logs will stay quiet until backups run or something errors; that’s normal. Use `docker ps` and check **STATUS**: `(healthy)` = UI reachable; `(health: starting)` = still starting; `(unhealthy)` = port check failing. Try opening https://duplicati.asyla.org (or your proxy URL) to confirm the UI loads.
 
 ## Volumes
 
