@@ -2,8 +2,6 @@
 # Template structure - containers will be added as apps are deployed.
 # Environment variables from ~/scripts/docker/common.env or .env
 
-version: '3.8'
-
 networks:
   internet:
     driver: bridge

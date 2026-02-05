@@ -7,8 +7,6 @@
 # 3. Add app networks to the networks list below as apps are added
 # 4. Configure Public Hostnames in Cloudflare dashboard
 
-version: '3.8'
-
 services:
   cloudflared:
     image: cloudflare/cloudflared:latest

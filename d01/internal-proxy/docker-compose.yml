@@ -5,8 +5,6 @@
 # Start after any app that needs internal proxy is running (app network must exist).
 # Ports 80 and 443 must not be used by another service on d01.
 
-version: '3.8'
-
 services:
   caddy-internal:
     image: caddy:latest
