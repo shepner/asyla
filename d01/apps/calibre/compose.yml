@@ -1,0 +1,29 @@
+# Calibre e-book manager on d01 (LinuxServer.io image).
+# Access via cloudflared tunnel or internal proxy; no published ports.
+# Run: ~/scripts/d01/apps/calibre/calibre.sh up
+# Requires: DOCKER_DL (/mnt/docker), DOCKER_UID, DOCKER_GID, LOCAL_TZ.
+# Note: calibre.sh sources ~/scripts/docker/common.env if it exists.
+# Ref: https://docs.linuxserver.io/images/docker-calibre
+
+networks:
+  media_net:
+    external: true
+    name: media_net
+
+services:
+  calibre:
+    image: lscr.io/linuxserver/calibre:latest
+    container_name: calibre
+    restart: unless-stopped
+    security_opt:
+      - seccomp:unconfined
+    shm_size: "1gb"
+    environment:
+      - PUID=${DOCKER_UID:-1003}
+      - PGID=${DOCKER_GID:-1000}
+      - TZ=${LOCAL_TZ:-America/Chicago}
+      # Optional: - PASSWORD=  for basic auth (Cloudflare Access is primary)
+    volumes:
+      - ${DOCKER_DL:-/mnt/docker}/calibre/config:/config
+    networks:
+      - media_net

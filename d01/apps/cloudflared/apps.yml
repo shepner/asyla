@@ -38,3 +38,8 @@ apps:
     service: transmission
     port: 9091
     access: true
+  - app: calibre
+    hostname: calibre
+    service: calibre
+    port: 8080
+    access: true
