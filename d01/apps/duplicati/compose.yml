@@ -20,7 +20,6 @@ services:
       # Optional: SETTINGS_ENCRYPTION_KEY=, DUPLICATI__WEBSERVICE_PASSWORD=
     volumes:
       - ./config:/config
-      - ./backups:/backups
-      - ${DATA1:-/mnt/nas/data1}/media:/source/media
+      - ${DATA1:-/mnt/nas/data1}/media:/source/nas01/data1/media
     networks:
       - duplicati_net

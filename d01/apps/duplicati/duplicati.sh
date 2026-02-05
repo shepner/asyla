@@ -33,8 +33,8 @@ cmd="${1:-}"
 
 case "$cmd" in
   up)
-    echo "[INFO] Creating app dirs if needed"
-    mkdir -p "${APP_ROOT}/config" "${APP_ROOT}/backups"
+    echo "[INFO] Creating app dir if needed"
+    mkdir -p "${APP_ROOT}/config"
     docker network create duplicati_net 2>/dev/null || true
     remove_stale_container
     echo "[INFO] Starting Duplicati"

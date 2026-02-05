@@ -17,9 +17,10 @@ Duplicati backup runs on d01 and is reachable via the internal proxy (and option
 
 ## Volumes
 
-- `./config` → Duplicati config and database
-- `./backups` → Local backup destination (use `/backups` in Duplicati when configuring local backups)
-- `${DATA1}/media` → `/source/media` (example backup source; add more in compose if needed)
+Matches the original `docker/duplicati.sh`:
+
+- `./config` → `/config` — Duplicati config and database
+- `${DATA1}/media` → `/source/nas01/data1/media` — backup source (same path as original script)
 
 ## First-time setup
 
