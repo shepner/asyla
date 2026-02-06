@@ -25,9 +25,9 @@
 ### 1. Domain environment variable name
 
 - **Old:** `FTLCONF_dns_domain` (used in old script).
-- **Refactored:** `FTLCONF_dns_domain_name` (matches [Pi-hole FTL config](https://docs.pi-hole.net/ftldns/configfile/): `[dns.domain]` → `name` → env `FTLCONF_dns_domain_name`).
+- **Refactored:** `FTLCONF_dns_domain_name` only (matches [Pi-hole FTL config](https://docs.pi-hole.net/ftldns/configfile/): `[dns.domain]` → `name` → env `FTLCONF_dns_domain_name`).
 
-So the refactored config uses the documented FTL variable. If an older image only honored `FTLCONF_dns_domain`, we can add that as well for compatibility.
+Current FTL does not recognize `FTLCONF_dns_domain` and logs a warning suggesting `FTLCONF_dns_domain_name`, so the refactored config uses only the documented variable.
 
 ### 2. Domain value (hostname vs container name)
 

@@ -101,6 +101,10 @@ FTL may log this when the web UI hits the API before the database is ready, or i
 - Restart Pi-hole: `pihole.sh down && pihole.sh up`.
 - Check for stale lock files: `ls -la /mnt/docker/pihole-ns01/etc-pihole/*.db-*` and remove any if the container is stopped.
 
+### "SQLite3: recovered N frames from WAL file"
+
+This appears when the container was stopped (or crashed) before FTL could checkpoint the Write-Ahead Log. SQLite recovers the frames on next start—data is not lost, but the message is noisy. The compose file sets `stop_grace_period: 45s` so `docker stop` / `pihole.sh down` give FTL time to shut down cleanly. If you still see it after host reboots or hard stops, it's harmless.
+
 ## References
 
 - [Pi-hole Documentation](https://docs.pi-hole.net/)

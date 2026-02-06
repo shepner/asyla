@@ -18,7 +18,6 @@ services:
       - PIHOLE_UID=${DOCKER_UID:-1003}
       - PIHOLE_GID=${DOCKER_GID:-1000}
       - FTLCONF_dns_dnssec=true
-      - FTLCONF_dns_domain=ns02.asyla.org
       - FTLCONF_dns_domain_name=ns02.asyla.org
       - FTLCONF_misc_etc_dnsmasq_d=true
       - DNS1=1.1.1.1
@@ -32,6 +31,7 @@ services:
     cap_add:
       - NET_ADMIN
       - SYS_NICE
+    stop_grace_period: 45s
     # Ports are handled by host network mode
     # DNS: 53/tcp, 53/udp
     # DHCP: 67/udp
