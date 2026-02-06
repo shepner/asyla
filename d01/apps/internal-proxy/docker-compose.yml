@@ -10,7 +10,8 @@ services:
     image: caddybuilds/caddy-cloudflare:latest
     container_name: caddy-internal-d01
     restart: unless-stopped
-    env_file: .env
+    environment:
+      - CF_API_TOKEN=${CF_API_TOKEN}
     ports:
       - "80:80"
       - "443:443"
