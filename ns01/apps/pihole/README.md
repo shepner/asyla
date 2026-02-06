@@ -101,6 +101,16 @@ FTL may log this when the web UI hits the API before the database is ready, or i
 - Restart Pi-hole: `pihole.sh down && pihole.sh up`.
 - Check for stale lock files: `ls -la /mnt/docker/pihole-ns01/etc-pihole/*.db-*` and remove any if the container is stopped.
 
+### "SQL error step DELETE: database is locked"
+
+FTL logs this when SQLite cannot get a write lock (e.g. during `add_message` for dnsmasq/DHCP or upstream DNS messages). Common causes:
+
+- **High write load** — Many DHCP/dnsmasq events or upstream errors cause concurrent writes; the compose file sets `FTLCONF_database_busytimeout=30000` (30s) so FTL waits longer for locks instead of failing immediately.
+- **Database on network storage** — If `etc-pihole` is on iSCSI or NFS, lock latency can be higher. For persistent locks, consider moving the DB to local storage or increasing the timeout (e.g. `FTLCONF_database_busytimeout=60000` in your env or compose).
+- **Stale locks** — After a crash, remove any `*.db-wal`, `*.db-shm` or other `*.db-*` files in `etc-pihole` only when the container is stopped.
+
+If errors continue after a restart, try raising the busy timeout or ensure `/etc/pihole` is on fast local disk.
+
 ### "SQLite3: recovered N frames from WAL file"
 
 This appears when the container was stopped (or crashed) before FTL could checkpoint the Write-Ahead Log. SQLite recovers the frames on next start—data is not lost, but the message is noisy. The compose file sets `stop_grace_period: 45s` so `docker stop` / `pihole.sh down` give FTL time to shut down cleanly. If you still see it after host reboots or hard stops, it's harmless.
