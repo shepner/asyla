@@ -83,6 +83,16 @@ To use your existing Pi-hole data (gravity.db, etc.) on the new ns02 VM:
 
 ## Troubleshooting
 
+### "Address in use" / "failed to create listening socket for port 53"
+
+The host must not run another DNS service on port 53. The ns02 setup disables the systemd-resolved stub listener and any host dnsmasq. If you see this error on an existing ns02 that was built before that change, run once:
+
+```bash
+sudo ~/scripts/ns02/setup/systemConfig.sh
+```
+
+Then restart Pi-hole: `pihole.sh down && pihole.sh up`.
+
 ### "Database not available" (API)
 
 FTL may log this when the web UI hits the API before the database is ready, or if the DB is locked. If the log also shows "Imported ... rows from the on-disk database", the data is being read; the message is often transient. If it persists:

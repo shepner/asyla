@@ -106,6 +106,29 @@ else
     log_info "✅ Sudo access for rsync already configured"
 fi
 
+# Free port 53 for Pi-hole (host network): no host service must bind to 53
+log_info "Ensuring port 53 is free for Pi-hole container..."
+# 1. Disable systemd-resolved stub listener (it uses 127.0.0.53:53)
+if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+  mkdir -p /etc/systemd/resolved.conf.d
+  if [ ! -f /etc/systemd/resolved.conf.d/no-stub.conf ]; then
+    printf '%s\n' '[Resolve]' 'DNSStubListener=no' > /etc/systemd/resolved.conf.d/no-stub.conf
+    log_info "✅ Created /etc/systemd/resolved.conf.d/no-stub.conf"
+  fi
+  if [ -L /etc/resolv.conf ]; then
+    rm -f /etc/resolv.conf
+    ln -s /run/systemd/resolve/resolv.conf /etc/resolv.conf 2>/dev/null || true
+  fi
+  systemctl restart systemd-resolved 2>/dev/null || true
+fi
+# 2. Stop/disable host dnsmasq if present (would bind 0.0.0.0:53)
+if systemctl list-unit-files --type=service 2>/dev/null | grep -q '^dnsmasq\.service'; then
+  systemctl stop dnsmasq 2>/dev/null || true
+  systemctl disable dnsmasq 2>/dev/null || true
+  log_info "✅ Disabled host dnsmasq.service"
+fi
+log_info "✅ Port 53 ready for Pi-hole"
+
 log_info "System configuration completed successfully!"
 log_info ""
 log_info "Note: To enable app migration script, ensure SSH keys are configured:"
