@@ -290,6 +290,26 @@ else
   log_warn "Could not verify - SSH not ready. Try: ssh ns02"
 fi
 
+# Step 16: Copy SSH keys to VM (for docker-to-docker and workstation access)
+log_step "Step 16: Copy SSH keys to VM"
+SSH_PRIV_KEY="$HOME/.ssh/docker_rsa"
+if [ -f "$SSH_PRIV_KEY" ] && $SSH_VERIFY "mkdir -p ~/.ssh && echo ok" 2>/dev/null; then
+  if scp $VM_SSH_OPTS -o ConnectTimeout=10 "$SSH_PRIV_KEY" "${VM_HOST}:.ssh/docker_rsa" 2>/dev/null && \
+     scp $VM_SSH_OPTS -o ConnectTimeout=10 "$HOME/.ssh/docker_rsa.pub" "${VM_HOST}:.ssh/docker_rsa.pub" 2>/dev/null && \
+     ( [ -f "$HOME/.ssh/config" ] && scp $VM_SSH_OPTS -o ConnectTimeout=10 "$HOME/.ssh/config" "${VM_HOST}:.ssh/config" 2>/dev/null || true ); then
+    $SSH_VERIFY "chmod 600 ~/.ssh/docker_rsa 2>/dev/null; chmod 644 ~/.ssh/docker_rsa.pub 2>/dev/null; chmod 600 ~/.ssh/config 2>/dev/null; chmod 700 ~/.ssh" 2>/dev/null && \
+      log_info "✅ SSH keys and config copied to ns02"
+  else
+    log_warn "Could not copy SSH keys (scp failed). Copy manually - see next steps."
+  fi
+else
+  if [ ! -f "$SSH_PRIV_KEY" ]; then
+    log_warn "Private key not found at $SSH_PRIV_KEY - copy SSH keys manually."
+  else
+    log_warn "SSH not ready - copy SSH keys manually once VM is up."
+  fi
+fi
+
 log_step "Build Complete!"
 log_info "VM Status:"
 ssh "root@$PROXMOX_HOST" "qm status $VMID"
@@ -297,11 +317,17 @@ echo ""
 
 log_info "Next steps:"
 echo "  1. SSH to VM: ssh ns02"
-echo "  2. Copy SSH keys: scp ~/.ssh/docker_rsa ns02:.ssh/docker_rsa"
-echo "     scp ~/.ssh/docker_rsa.pub ns02:.ssh/docker_rsa.pub"
-echo "     scp ~/.ssh/config ns02:.ssh/config"
-echo "     ssh ns02 'chmod 600 ~/.ssh/docker_rsa ~/.ssh/config && chmod 700 ~/.ssh'"
-echo "  3. Run: ssh ns02 '~/scripts/ns02/setup/setup_ssh_keys.sh'"
-echo "  4. Start Pi-hole: ~/scripts/ns02/apps/pihole/pihole.sh up"
-echo "  5. iSCSI: ~/setup_manual.sh (after adding initiator to TrueNAS for iSCSI target nas01:ns02:01)"
+if [ -f "$SSH_PRIV_KEY" ] && $SSH_VERIFY "test -f ~/.ssh/docker_rsa" 2>/dev/null; then
+  echo "  2. (SSH keys already copied) Run: ssh ns02 '~/scripts/ns02/setup/setup_ssh_keys.sh'"
+  echo "  3. Start Pi-hole: ~/scripts/ns02/apps/pihole/pihole.sh up"
+  echo "  4. iSCSI: ~/setup_manual.sh (after adding initiator to TrueNAS for iSCSI target nas01:ns02:01)"
+else
+  echo "  2. Copy SSH keys: scp ~/.ssh/docker_rsa ns02:.ssh/docker_rsa"
+  echo "     scp ~/.ssh/docker_rsa.pub ns02:.ssh/docker_rsa.pub"
+  echo "     scp ~/.ssh/config ns02:.ssh/config"
+  echo "     ssh ns02 'chmod 600 ~/.ssh/docker_rsa ~/.ssh/config && chmod 700 ~/.ssh'"
+  echo "  3. Run: ssh ns02 '~/scripts/ns02/setup/setup_ssh_keys.sh'"
+  echo "  4. Start Pi-hole: ~/scripts/ns02/apps/pihole/pihole.sh up"
+  echo "  5. iSCSI: ~/setup_manual.sh (after adding initiator to TrueNAS for iSCSI target nas01:ns02:01)"
+fi
 echo ""
