@@ -1,149 +1,143 @@
-# d01
+# ns01
 
-This is for an Alpine Linux VM guest which will run docker 
+Docker host VM (Debian 13, cloud-init) on Proxmox vmh01 at **10.0.0.10**, VMID **300**.
 
-## create VM
+Built from the same pattern as d01/d02/d03: Debian cloud image, cloud-init, Docker, NFS/iSCSI clients, and Pi-hole DNS server.
 
-Create the Alpine Linux VM on Proxmox
-[10.12. Managing Virtual Machines with qm](https://pve.proxmox.com/pve-docs/pve-admin-guide.html#_managing_virtual_machines_with_span_class_monospaced_qm_span)
+## Build (from workstation)
 
-This will create a 1G disk of file and then logically resize it to to 256G but the file will remain at 1G until it fills.  This saves the need to shrink the file later on which dramatically speeds up the process
-
-The [qm.conf](https://pve.proxmox.com/wiki/Manual:_qm.conf) file is located in `/etc/pve/qemu-server/<VMID>.conf`
-
-``` shell
-VMID=304
-qm create $VMID \
-  --name ns01-pihole \
-  --sockets 2 \
-  --cores 2 \
-  --memory 2048 \
-  --ostype l26 \
-  --ide2 nas-data1-iso:iso/alpine-virt-3.18.2-x86_64.iso,media=cdrom \
-  --scsi0 nas-data1-vm:1,format=qcow2,discard=on,ssd=1 \
-  --scsihw virtio-scsi-pci \
-  --bootdisk scsi0 \
-  --net0 virtio,bridge=vmbr1,firewall=1,tag=100 \
-  --onboot 1 \
-  --numa 0 \
-  --agent 1,fstrim_cloned_disks=1
+```bash
+cd /path/to/asyla
+./ns01/build.sh
 ```
 
-Wait a min or 2
+Requires:
 
-``` shell
-qm resize $VMID scsi0 64G # [resize disks](https://pve.proxmox.com/wiki/Resize_disks)
+- SSH to `root@vmh01`
+- `ns01` in `~/.ssh/config` (HostName 10.0.0.10, User docker)
+- `~/.ssh/docker_rsa.pub` for cloud-init
+
+## After first boot
+
+1. SSH: `ssh ns01`
+2. Copy SSH keys and config from workstation (see build.sh next steps).
+3. Run: `~/scripts/ns01/setup/setup_ssh_keys.sh`
+4. **Pi-hole:** `~/scripts/ns01/apps/pihole/pihole.sh up`
+5. iSCSI: `~/setup_manual.sh` (after adding initiator to TrueNAS for iSCSI target `nas01:ns01:01`)
+
+**Note:** All app scripts (`pihole.sh up`) create required networks automatically.
+
+## Layout
+
+- `build.sh` – Destroy/create VM 300 on vmh01, import Debian cloud image, cloud-init, verify.
+- `setup/` – cloud-init userdata/vendor, bootstrap, deploy_software, systemConfig, nfs, iscsi, docker, setup_manual, setup_ssh_keys, etc.
+- `apps/pihole/` – Pi-hole DNS server (pihole.sh, compose.yml).
+- `update_scripts.sh`, `update.sh`, `update_all.sh` – Script update and OS maintenance.
+
+## iSCSI
+
+Target name for ns01 on TrueNAS: `iqn.2005-10.org.freenas.ctl:nas01:ns01:01`. Add this host's initiator to the target's Initiator Group before running `~/setup_manual.sh` (iSCSI step) or `~/scripts/ns01/setup/setup_iscsi_connect.sh`.
+
+## Network Configuration
+
+- IP: 10.0.0.10/24
+- Gateway: 10.0.0.1
+- DNS: 10.0.0.10, 10.0.0.11
+- Search Domain: asyla.org
+
+## Applications
+
+### Pi-hole
+
+DNS server providing ad-blocking and DNS resolution for the network.
+
+- **Access:** http://10.0.0.10/admin or http://pi.hole/admin
+- **DNS:** 10.0.0.10:53 (TCP/UDP)
+- **Start:** `~/scripts/ns01/apps/pihole/pihole.sh up`
+
+See [apps/pihole/README.md](apps/pihole/README.md) for details.
+
+## Maintenance
+
+### Updates
+
+```bash
+# Update the system
+./update.sh
+
+# Update scripts from repository
+./update_scripts.sh
+
+# Update everything
+./update_all.sh
 ```
 
-Wait a min or 2
+### Backup
 
-``` shell
-qm start $VMID
+Pi-hole configuration is stored in `/mnt/docker/pihole-ns01/`. Backup this directory to NFS:
+
+```bash
+tar -czf /mnt/nas/data1/docker/pihole-ns01-backup-$(date +%Y%m%d).tgz -C /mnt/docker pihole-ns01
 ```
 
-## Install Alpine
+## Security
 
-login from the console (root, no passwd) and do the following
+- SSH key-based authentication only
+- Regular security updates (unattended-upgrades configured)
+- Docker security best practices
+- **No sensitive information in repository**: All credentials use placeholders
+- Network segmentation for DNS services
 
-``` shell
-setup-alpine
+## Troubleshooting
 
+### Cloud-init Not Installed
 
-us
-us
-ns01.asyla.org
-eth0
-10.0.0.10
-255.255.255.0
-10.0.0.1
-n
-asyla.org
-1.1.1.1.1, 1.0.0.1
-<password>
-<password>
-America/Chicago
-none
-1
-no
-openssh
-prohibit-password
-none
-sda
-sys
-y
+**Symptoms:**
+- `cloud-init: command not found` when checking from console
+- VM boots but configuration doesn't process automatically
+- Network gets DHCP IP instead of static IP
+- Docker user not created
 
-reboot
+**Solution:**
+
+From the VM console (as root): `curl -s https://raw.githubusercontent.com/shepner/asyla/master/ns01/setup/bootstrap.sh | bash`
+
+**If you can SSH but scripts/Docker were not installed:** Run once (as root or with sudo):  
+`curl -s https://raw.githubusercontent.com/shepner/asyla/master/ns01/setup/deploy_software.sh | sudo bash`
+
+### Network Using DHCP Instead of Static IP
+
+**Symptoms:**
+- VM gets IP like `10.0.0.248` instead of `10.0.0.10`
+- `ip addr show ens18` shows DHCP-assigned address
+
+**Solution:**
+1. Install cloud-init (see above)
+2. Process cloud-init configuration (see above)
+3. Or manually configure network:
+```bash
+# Edit network config
+nano /etc/netplan/50-cloud-init.yaml
+# Set static IP, gateway, DNS
+netplan apply
 ```
 
-From the VM host, remove the ISO image as its not needed anymore:
+## Related Documentation
 
-``` shell
-qm set $VMID \
-  --ide2 none,media=cdrom
-```
+- [Proxmox VM Management](https://pve.proxmox.com/pve-docs/pve-admin-guide.html#_managing_virtual_machines_with_span_class_monospaced_qm_span)
+- [Debian Cloud Images](https://cloud.debian.org/images/cloud/) - Download qcow2 format for Proxmox
+- [Docker Installation](https://docs.docker.com/engine/install/debian/)
+- [Pi-hole Documentation](https://docs.pi-hole.net/)
 
+## Important Notes
 
-## Configure Alpine
+**⚠️ PRODUCTION ENVIRONMENT**
+- This is a production system - proceed with extreme caution
+- Verify all steps before executing
+- Backup critical data before making changes
+- Test in non-production if possible
 
-if needed:
-* Interface settings: `/etc/network/interfaces`
-* DNS settings: `/etc/resolv.conf`
-
-
-### config a user account
-
-``` shell
-addgroup -g 1000 asyla
-adduser -u 1003 -G asyla -g "docker" docker
-```
-
-### doas
-
-``` shell
-adduser docker wheel
-
-apk add doas
-echo "permit nopass :wheel" >> /etc/doas.d/doas.conf
-```
-
-### SSH
-
-from local workstation, copy over the ssh keys
-
-``` shell
-DHOST=ns01
-ssh-copy-id -i ~/.ssh/docker_rsa.pub $DHOST
-
-scp ~/.ssh/docker_rsa $DHOST:.ssh/docker_rsa
-scp ~/.ssh/docker_rsa.pub $DHOST:.ssh/docker_rsa.pub
-scp ~/.ssh/config $DHOST:.ssh/config
-ssh $DHOST "chmod -R 700 ~/.ssh"
-```
-
-### configure system
-
-run the setup scripts:
-
-``` shell
-doas apk add curl git
-ash <(curl -s https://raw.githubusercontent.com/shepner/asyla/master/`hostname -s`/update_scripts.sh)
-
-~/scripts/`hostname -s`/setup/systemConfig.sh
-```
-
-run this by hand the first time
-
-``` shell
-~/scripts/`hostname -s`/setup/iscsi.sh
-```
-
-
-``` shell
-~/scripts/`hostname -s`/setup/nfs.sh
-~/scripts/`hostname -s`/setup/docker.sh
-
-~/update.sh
-
-doas reboot
-```
-
+**⚠️ SECURITY**
+- No sensitive information (passwords, keys, secrets) is stored in this repository
+- All credentials use placeholders - must be set manually
+- Review all scripts before execution

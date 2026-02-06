@@ -1,0 +1,37 @@
+# Pi-hole DNS server on ns01
+# Access via http://10.0.0.10/admin or http://pi.hole/admin
+# Run: ~/scripts/ns01/apps/pihole/pihole.sh up
+# Requires: DOCKER_DL (/mnt/docker), DOCKER_UID, DOCKER_GID, LOCAL_TZ
+# Note: pihole.sh automatically sources ~/scripts/docker/common.env if it exists.
+
+services:
+  pihole:
+    image: pihole/pihole:latest
+    container_name: pihole-ns01
+    hostname: ns01.asyla.org
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - TZ=${LOCAL_TZ:-America/Chicago}
+      - FTLCONF_webserver_api_password=${PIHOLE_API_PASSWORD:-}
+      - FTLCONF_dns_listeningMode=all
+      - PIHOLE_UID=${DOCKER_UID:-1003}
+      - PIHOLE_GID=${DOCKER_GID:-1000}
+      - FTLCONF_dns_dnssec=true
+      - FTLCONF_dns_domain_name=ns01.asyla.org
+      - FTLCONF_misc_etc_dnsmasq_d=true
+      - DNS1=1.1.1.1
+      - DNS2=1.0.0.1
+      - DNS3=2606:4700:4700::1111
+      - DNS4=2606:4700:4700::1001
+    volumes:
+      - ${DOCKER_DL:-/mnt/docker}/pihole-ns01/etc-pihole:/etc/pihole
+      - ${DOCKER_DL:-/mnt/docker}/pihole-ns01/etc-dnsmasq.d:/etc/dnsmasq.d
+      - ${DOCKER_D2:-/mnt/nas/data2/docker}/pihole/hosts:/etc/hosts:ro
+    cap_add:
+      - NET_ADMIN
+      - SYS_NICE
+    # Ports are handled by host network mode
+    # DNS: 53/tcp, 53/udp
+    # DHCP: 67/udp
+    # Web: 80/tcp, 443/tcp
