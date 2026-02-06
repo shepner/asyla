@@ -1,9 +1,0 @@
-# Internal reverse proxy for tc-datalogger.asyla.org
-# Used when Pi-hole (or split DNS) points this hostname to d03 so internal
-# users hit the same URL without going through Cloudflare.
-# TLS: self-signed (Caddy "internal") - browsers will show a one-time warning.
-
-tc-datalogger.asyla.org {
-    tls internal
-    reverse_proxy tc-dashboard:8080
-}

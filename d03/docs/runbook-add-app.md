@@ -64,7 +64,7 @@ The script will:
 Check that cloudflared compose was updated:
 
 ```bash
-cat ~/scripts/d03/cloudflared/docker-compose.yml
+cat ~/scripts/d03/apps/cloudflared/docker-compose.yml
 ```
 
 Should include your app's network in:
@@ -136,8 +136,7 @@ docker network ls | grep {app}_net
 After adding network to cloudflared compose:
 
 ```bash
-cd ~/scripts/d03/cloudflared
-docker compose up -d
+~/scripts/d03/apps/cloudflared/cloudflared.sh restart
 ```
 
 Verify cloudflared is on the app network:
@@ -194,5 +193,5 @@ docker network inspect {app}_net | grep cloudflared
 ## Reference
 
 - Full documentation: [cloudflare-tunnel.md](cloudflare-tunnel.md)
-- Config file: `~/scripts/d03/cloudflared/apps.yml`
+- Config file: `~/scripts/d03/apps/cloudflared/apps.yml`
 - Add script: `~/scripts/d03/scripts/add-tunnel-app.sh`

@@ -32,10 +32,10 @@ Internet → Cloudflare → Tunnel → cloudflared (Docker) → App Network → 
 
 ### 2. Configure Tunnel Token on d03
 
-On d03, create `.env` file in `~/scripts/d03/cloudflared/`:
+On d03, create `.env` file in `~/scripts/d03/apps/cloudflared/`:
 
 ```bash
-cd ~/scripts/d03/cloudflared
+cd ~/scripts/d03/apps/cloudflared
 cp .env.example .env
 # Edit .env and add your TUNNEL_TOKEN
 ```
@@ -45,8 +45,7 @@ cp .env.example .env
 ### 3. Start cloudflared
 
 ```bash
-cd ~/scripts/d03/cloudflared
-docker compose up -d
+~/scripts/d03/apps/cloudflared/cloudflared.sh up
 ```
 
 Verify it's running:
@@ -120,7 +119,7 @@ The script will:
 Then:
 1. Ensure your app's compose file defines `{app}_net` network and attaches all services to it
 2. Follow the Cloudflare steps output by the script
-3. Restart cloudflared: `cd ~/scripts/d03/cloudflared && docker compose up -d`
+3. Restart cloudflared: `~/scripts/d03/apps/cloudflared/cloudflared.sh restart`
 
 ### Manual Method
 
@@ -138,7 +137,7 @@ Then:
          - {app}_net
    ```
 
-2. **Add to apps.yml**: Add entry to `~/scripts/d03/cloudflared/apps.yml`:
+2. **Add to apps.yml**: Add entry to `~/scripts/d03/apps/cloudflared/apps.yml`:
    ```yaml
    - app: {app_name}
      hostname: {hostname}
@@ -147,7 +146,7 @@ Then:
      access: true
    ```
 
-3. **Update cloudflared compose**: Add network to `~/scripts/d03/cloudflared/docker-compose.yml`:
+3. **Update cloudflared compose**: Add network to `~/scripts/d03/apps/cloudflared/docker-compose.yml`:
    - Add `- {app}_net` to `services.cloudflared.networks`
    - Add network definition:
      ```yaml
@@ -158,7 +157,7 @@ Then:
 
 4. **Cloudflare Dashboard**: Follow steps from "Configure First App" above
 
-5. **Restart cloudflared**: `cd ~/scripts/d03/cloudflared && docker compose up -d`
+5. **Restart cloudflared**: `~/scripts/d03/apps/cloudflared/cloudflared.sh restart`
 
 ## Per-Application Networks
 
@@ -175,7 +174,7 @@ Then:
 
 ### apps.yml
 
-Single source of truth for all exposed apps. Located at: `~/scripts/d03/cloudflared/apps.yml`
+Single source of truth for all exposed apps. Located at: `~/scripts/d03/apps/cloudflared/apps.yml`
 
 Schema:
 ```yaml
@@ -189,7 +188,7 @@ apps:
     access: true           # Enable Cloudflare Access (default: true)
 ```
 
-### cloudflared/docker-compose.yml
+### apps/cloudflared/docker-compose.yml
 
 Defines the cloudflared service and which app networks it connects to.
 
@@ -198,11 +197,11 @@ Defines the cloudflared service and which app networks it connects to.
 If Pi-hole or another internal DNS resolves `tc-datalogger.asyla.org` to d03’s IP, use the **internal reverse proxy** so the same URL works on the LAN without going through Cloudflare:
 
 ```bash
-cd ~/scripts/d03/internal-proxy
+cd ~/scripts/d03/apps/internal-proxy
 docker compose up -d
 ```
 
-See [../internal-proxy/README.md](../internal-proxy/README.md). TLS is self-signed (accept once in the browser).
+See [../apps/internal-proxy/README.md](../apps/internal-proxy/README.md). TLS uses Let's Encrypt (set CF_API_TOKEN in .env).
 
 ## Troubleshooting
 

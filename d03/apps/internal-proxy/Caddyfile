@@ -1,0 +1,24 @@
+# Internal reverse proxy for d03
+# When Pi-hole (or split DNS) points hostnames to d03 (10.0.0.62), these blocks serve HTTPS and proxy to the apps.
+# TLS: Let's Encrypt via Cloudflare DNS-01 (CF_API_TOKEN in .env). Browsers trust certs automatically.
+
+(internal_tls) {
+    tls {
+        dns cloudflare {env.CF_API_TOKEN}
+        resolvers 1.1.1.1
+    }
+}
+
+tc-datalogger.asyla.org {
+    import internal_tls
+    reverse_proxy tc-dashboard:8080
+}
+
+# Fallback for other hostnames / direct IP
+:80 {
+    respond "d03 internal proxy ready" 200
+}
+:443 {
+    tls internal
+    respond "d03 internal proxy ready" 200
+}

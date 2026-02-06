@@ -18,7 +18,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 D03_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-CLOUDFLARED_DIR="${D03_DIR}/cloudflared"
+CLOUDFLARED_DIR="${D03_DIR}/apps/cloudflared"
 APPS_YML="${CLOUDFLARED_DIR}/apps.yml"
 CLOUDFLARED_COMPOSE="${CLOUDFLARED_DIR}/docker-compose.yml"
 
@@ -150,5 +150,5 @@ echo "   - Name: ${HOSTNAME}"
 echo "   - Target: <tunnel-id>.cfargotunnel.com"
 echo
 info "After Cloudflare setup, restart cloudflared:"
-echo "  cd ${CLOUDFLARED_DIR} && docker compose up -d"
+echo "  ${CLOUDFLARED_DIR}/cloudflared.sh restart"
 echo
