@@ -1,42 +1,48 @@
 # Internal reverse proxy for d01
-# When Pi-hole (or split DNS) points hostnames to d01 (10.0.0.60), these blocks serve HTTPS and proxy to the media stack.
-# TLS: self-signed (Caddy "internal") - browsers will show a one-time warning.
+# When Pi-hole (or split DNS) points hostnames to d01 (10.0.0.60), these blocks serve HTTPS and proxy to the apps.
+# TLS: Let's Encrypt via Cloudflare DNS-01 (CF_API_TOKEN in .env). Browsers trust certs automatically.
+
+(internal_tls) {
+    tls {
+        dns cloudflare {env.CF_API_TOKEN}
+        resolvers 1.1.1.1
+    }
+}
 
 sonarr.asyla.org {
-    tls internal
+    import internal_tls
     reverse_proxy sonarr:8989
 }
 radarr.asyla.org {
-    tls internal
+    import internal_tls
     reverse_proxy radarr:7878
 }
 overseerr.asyla.org {
-    tls internal
+    import internal_tls
     reverse_proxy overseerr:5055
 }
 jackett.asyla.org {
-    tls internal
+    import internal_tls
     reverse_proxy jackett:9117
 }
 transmission.asyla.org {
-    tls internal
+    import internal_tls
     reverse_proxy transmission:9091
 }
 calibre.asyla.org {
-    tls internal
+    import internal_tls
     reverse_proxy calibre:8080
 }
-# homebridge=8581 cameraui=8181
 homebridge.asyla.org {
-    tls internal
+    import internal_tls
     reverse_proxy homebridge-proxy:8581
 }
 cameraui.asyla.org {
-    tls internal
+    import internal_tls
     reverse_proxy cameraui-proxy:8181
 }
 duplicati.asyla.org {
-    tls internal
+    import internal_tls
     reverse_proxy duplicati:8200
 }
 

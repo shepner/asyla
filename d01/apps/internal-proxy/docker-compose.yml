@@ -1,15 +1,16 @@
 # Internal reverse proxy for d01 (split-DNS / Pi-hole)
 # When app hostnames resolve to d01 (e.g. via Pi-hole), this serves HTTPS and proxies to apps.
-# TLS is self-signed (accept once in browser).
+# TLS: Let's Encrypt via Cloudflare DNS-01 (set CF_API_TOKEN in .env).
 #
 # Start after any app that needs internal proxy is running (app network must exist).
 # Ports 80 and 443 must not be used by another service on d01.
 
 services:
   caddy-internal:
-    image: caddy:latest
+    image: caddybuilds/caddy-cloudflare:latest
     container_name: caddy-internal-d01
     restart: unless-stopped
+    env_file: .env
     ports:
       - "80:80"
       - "443:443"
