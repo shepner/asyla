@@ -5,7 +5,7 @@ Pi-hole DNS server running on ns02 (10.0.0.11). Provides DNS resolution and ad-b
 ## Prerequisites
 
 - `~/scripts/docker/common.env` (DOCKER_DL, DOCKER_UID, DOCKER_GID, LOCAL_TZ)
-- `/mnt/docker` (iSCSI) mounted
+- `/mnt/docker` (iSCSI) mounted, or another path for DOCKER_DL (see Migration below)
 - `/mnt/nas/data2/docker/pihole/hosts` (NFS) available for custom hosts file
 - `/mnt/nas/data2/docker/pihole/03-lan-dns.conf` (optional) for custom dnsmasq config
 
@@ -68,6 +68,28 @@ Place custom dnsmasq configuration in `/mnt/nas/data2/docker/pihole/03-lan-dns.c
 ## Network Mode
 
 Pi-hole uses `host` network mode to bind directly to ports 53, 67, 80, and 443 on the host. This is required for DNS and DHCP functionality.
+
+## Migration from old ns02 (Alpine)
+
+To use your existing Pi-hole data (gravity.db, etc.) on the new ns02 VM:
+
+1. **Same volume path:** The new setup uses the same paths as the old script: `DOCKER_DL/pihole-ns02/etc-pihole` and `etc-dnsmasq.d`, and `DOCKER_D2/pihole/hosts`. So if you use iSCSI (`/mnt/docker`) and reconnect the same LUN, the data may already be there.
+2. **Restore from backup:** If the new VM has empty storage, copy the old `etc-pihole` and `etc-dnsmasq.d` from the old host (or from an NFS/backup) into `/mnt/docker/pihole-ns02/` (or wherever DOCKER_DL points).
+3. **Ownership:** The container runs as PIHOLE_UID:PIHOLE_GID (default 1003:1000). Ensure the host dirs are readable/writable by that user:
+   ```bash
+   sudo chown -R 1003:1000 /mnt/docker/pihole-ns02
+   ```
+   If your `common.env` uses DOCKER_GID=1001 (asyla), the container will use 1003:1001; then use `chown -R 1003:1001 ...` instead.
+
+## Troubleshooting
+
+### "Database not available" (API)
+
+FTL may log this when the web UI hits the API before the database is ready, or if the DB is locked. If the log also shows "Imported ... rows from the on-disk database", the data is being read; the message is often transient. If it persists:
+
+- Ensure ownership of `etc-pihole` (and files inside) matches PIHOLE_UID:PIHOLE_GID (e.g. `chown -R 1003:1000 /mnt/docker/pihole-ns02/etc-pihole`).
+- Restart Pi-hole: `pihole.sh down && pihole.sh up`.
+- Check for stale lock files: `ls -la /mnt/docker/pihole-ns02/etc-pihole/*.db-*` and remove any if the container is stopped.
 
 ## References
 

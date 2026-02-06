@@ -17,6 +17,8 @@ DOCKER_D2="${DOCKER_D2:-/mnt/nas/data2/docker}"
 export DOCKER_DL
 export DOCKER_D2
 export LOCAL_TZ
+export DOCKER_UID
+export DOCKER_GID
 
 # Standalone app: own project dir and project name
 APP_ROOT="${DOCKER_DL}/pihole-ns02"
@@ -36,10 +38,16 @@ case "$cmd" in
     echo "[INFO] Creating app dirs if needed"
     mkdir -p "${APP_ROOT}/etc-pihole"
     mkdir -p "${APP_ROOT}/etc-dnsmasq.d"
+    # Ownership so container (PIHOLE_UID:PIHOLE_GID) can read/write DB and config
+    PIHOLE_UID="${DOCKER_UID:-1003}"
+    PIHOLE_GID="${DOCKER_GID:-1000}"
+    if command -v sudo >/dev/null 2>&1; then
+      sudo chown -R "${PIHOLE_UID}:${PIHOLE_GID}" "${APP_ROOT}/etc-pihole" "${APP_ROOT}/etc-dnsmasq.d" 2>/dev/null || true
+    fi
     # Copy custom dnsmasq config if it exists
     if [ -f "${DOCKER_D2}/pihole/03-lan-dns.conf" ]; then
       echo "[INFO] Copying custom dnsmasq config"
-      sudo cp "${DOCKER_D2}/pihole/03-lan-dns.conf" "${APP_ROOT}/etc-dnsmasq.d/" || cp "${DOCKER_D2}/pihole/03-lan-dns.conf" "${APP_ROOT}/etc-dnsmasq.d/"
+      sudo cp "${DOCKER_D2}/pihole/03-lan-dns.conf" "${APP_ROOT}/etc-dnsmasq.d/" 2>/dev/null || cp "${DOCKER_D2}/pihole/03-lan-dns.conf" "${APP_ROOT}/etc-dnsmasq.d/"
     fi
     remove_stale_container
     echo "[INFO] Starting Pi-hole"
