@@ -23,8 +23,9 @@ services:
       - FTLCONF_database_busytimeout=30000
       - DNS1=1.1.1.1
       - DNS2=1.0.0.1
-      - DNS3=2606:4700:4700::1111
-      - DNS4=2606:4700:4700::1001
+      # - DNS3=2606:4700:4700::1111
+      # - DNS4=2606:4700:4700::1001
+      # Uncomment above if host has IPv6; otherwise FTL logs "Network unreachable"
     volumes:
       - ${DOCKER_DL:-/mnt/docker}/pihole-ns02/etc-pihole:/etc/pihole
       - ${DOCKER_DL:-/mnt/docker}/pihole-ns02/etc-dnsmasq.d:/etc/dnsmasq.d

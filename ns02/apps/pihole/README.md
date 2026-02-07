@@ -51,11 +51,11 @@ If not set, Pi-hole will generate a random password (check logs).
 
 ### Custom DNS
 
-Pi-hole uses upstream DNS servers:
+Pi-hole uses upstream DNS servers (IPv4 only by default):
 - 1.1.1.1 (Cloudflare)
 - 1.0.0.1 (Cloudflare)
-- 2606:4700:4700::1111 (Cloudflare IPv6)
-- 2606:4700:4700::1001 (Cloudflare IPv6)
+
+IPv6 upstreams (e.g. 2606:4700:4700::1111) are not set because they produce "Network unreachable" connection errors when the network has no IPv6. To use them, add `DNS3`/`DNS4` in the compose environment and ensure the host has IPv6 connectivity.
 
 ### Custom Hosts File
 
