@@ -20,7 +20,8 @@ services:
       - FTLCONF_dns_dnssec=true
       - FTLCONF_dns_domain_name=ns02.asyla.org
       - FTLCONF_misc_etc_dnsmasq_d=true
-      - FTLCONF_database_busytimeout=30000
+      - FTLCONF_database_busytimeout=60000
+      - FTLCONF_dns_upstreams=1.1.1.1;1.0.0.1
       - DNS1=1.1.1.1
       - DNS2=1.0.0.1
       # - DNS3=2606:4700:4700::1111

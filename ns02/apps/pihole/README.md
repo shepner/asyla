@@ -105,11 +105,11 @@ FTL may log this when the web UI hits the API before the database is ready, or i
 
 FTL logs this when SQLite cannot get a write lock (e.g. during `add_message` for dnsmasq/DHCP or upstream DNS messages). Common causes:
 
-- **High write load** — Many DHCP/dnsmasq events or upstream errors cause concurrent writes; the compose file sets `FTLCONF_database_busytimeout=30000` (30s) so FTL waits longer for locks instead of failing immediately.
+- **High write load** — Many DHCP/dnsmasq events or upstream errors cause concurrent writes; the compose file sets `FTLCONF_database_busytimeout=60000` (60s) so FTL waits longer for locks. `FTLCONF_dns_upstreams=1.1.1.1;1.0.0.1` forces IPv4-only upstreams and overrides any old config that still had IPv6 (which would cause connection errors and extra DB writes).
 - **Database on network storage** — If `etc-pihole` is on iSCSI or NFS, lock latency can be higher. For persistent locks, consider moving the DB to local storage or increasing the timeout (e.g. `FTLCONF_database_busytimeout=60000` in your env or compose).
 - **Stale locks** — After a crash, remove any `*.db-wal`, `*.db-shm` or other `*.db-*` files in `etc-pihole` only when the container is stopped.
 
-If errors continue after a restart, try raising the busy timeout or ensure `/etc/pihole` is on fast local disk.
+If the lock error still mentions an IPv6 address (e.g. `2606:4700:4700::1111`), the persisted config likely still had that upstream; the compose file now sets `FTLCONF_dns_upstreams=1.1.1.1;1.0.0.1` so only IPv4 is used after a restart. If errors continue, try raising the busy timeout further or ensure `/etc/pihole` is on fast local disk.
 
 ### "SQLite3: recovered N frames from WAL file"
 
