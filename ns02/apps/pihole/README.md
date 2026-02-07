@@ -65,6 +65,19 @@ Place custom hosts entries in `/mnt/nas/data2/docker/pihole/hosts` (mounted read
 
 Place custom dnsmasq configuration in `/mnt/nas/data2/docker/pihole/03-lan-dns.conf`. This file is automatically copied to the container's `/etc/dnsmasq.d/` directory on start.
 
+### "not giving name … to the DHCP lease because the name exists in /etc/hosts"
+
+That warning means the device is getting a **different** IP from DHCP (e.g. 10.0.0.243) than the IP you have for its hostname in `/etc/hosts` (e.g. 10.0.0.82). dnsmasq won't attach the hostname to the lease because it would conflict with the static hosts entry, so the device keeps its current lease and the message repeats.
+
+**Fix:** Add a **DHCP reservation** (static lease) so the device is always assigned the same IP as in `/etc/hosts`. In `03-lan-dns.conf` add:
+
+```conf
+# MAC, hostname, IP — use the IP that matches your hosts file
+dhcp-host=AA:BB:CC:DD:EE:FF,hdhr-1052f1a2,10.0.0.82
+```
+
+Replace `AA:BB:CC:DD:EE:FF` with the device's MAC (from Pi-hole Admin → Local DNS → DHCP leases, or the lease list for the current 10.0.0.243 lease). After copying the updated config and restarting Pi-hole, the device will get 10.0.0.82 on its next DHCP request/renew; then the hostname and IP match and the warnings stop. Repeat for any other hosts (e.g. hdhr-10516dac → 10.0.0.83).
+
 ## Network Mode
 
 Pi-hole uses `host` network mode to bind directly to ports 53, 67, 80, and 443 on the host. This is required for DNS and DHCP functionality.
