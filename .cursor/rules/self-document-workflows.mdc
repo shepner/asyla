@@ -1,0 +1,16 @@
+# Self-documenting workflows
+
+This project uses Cursor to continually document and improve its own workflows.
+All Cursor-for-Cursor artifacts live under `.cursor/` (rules, skills, notes, helpers).
+
+## When to document or improve
+
+- After a non-trivial or repeatable workflow, add/update a rule/skill/helper.
+- When you notice gaps or repeated friction, codify it.
+
+## What to create or update
+
+- Rules: `.cursor/rules/*.mdc`
+- Skills: `.cursor/skills/<name>/SKILL.md`
+- Notes: `.cursor/notes/`
+- Helpers: `.cursor/helpers/`
