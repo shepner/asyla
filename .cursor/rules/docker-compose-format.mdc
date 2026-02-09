@@ -1,0 +1,80 @@
+# Docker Compose File Format
+
+All docker compose files in this project should use the latest compose file format without the obsolete `version` attribute.
+
+## Format Requirements
+
+### Do NOT include `version:`
+
+The `version` attribute is **obsolete** in Docker Compose v2+ and will generate warnings. Modern compose files should start directly with `services:`, `networks:`, or `volumes:` sections.
+
+**❌ Wrong:**
+```yaml
+version: '3.8'
+
+services:
+  app:
+    image: nginx
+```
+
+**✅ Correct:**
+```yaml
+services:
+  app:
+    image: nginx
+```
+
+### File Naming
+
+- Use `compose.yml` (preferred) or `docker-compose.yml`
+- Both are supported by `docker compose` command
+
+### Compose File Structure
+
+Modern compose files should follow this structure:
+
+```yaml
+# Comments explaining the compose file purpose
+# Include any important notes about environment variables, networks, etc.
+
+services:
+  service-name:
+    image: image:tag
+    # or
+    build:
+      context: ./path
+      dockerfile: Dockerfile
+    # ... rest of service config
+
+networks:
+  network-name:
+    name: network-name
+    driver: bridge
+
+volumes:
+  volume-name:
+    # volume config
+```
+
+## Migration from Old Format
+
+If you encounter a compose file with `version:`, remove that line:
+
+1. Remove the `version: 'X.X'` line
+2. Ensure the file starts with `services:`, `networks:`, or `volumes:`
+3. Test with `docker compose config` to verify the file is valid
+
+## Verification
+
+To check if a compose file is using the correct format:
+
+```bash
+docker compose -f compose.yml config
+```
+
+This will validate the file and show any warnings (including obsolete `version` attribute).
+
+## References
+
+- [Docker Compose File Format](https://docs.docker.com/compose/compose-file/)
+- [Compose Specification](https://github.com/compose-spec/compose-spec/blob/master/spec.md)

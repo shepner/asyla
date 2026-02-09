@@ -2,6 +2,8 @@
 
 All docker container management scripts in this project follow a consistent command pattern for clarity and predictability.
 
+**Related:** See `.cursor/rules/docker-compose-format.mdc` for compose file format requirements.
+
 ## Standard Commands
 
 ### Core Commands (All Apps)

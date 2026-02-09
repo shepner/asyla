@@ -5,8 +5,6 @@
 #
 # Network isolation: All TC_datalogger services run on tc_datalogger_net (per-app network)
 
-version: '3.8'
-
 networks:
   tc_datalogger_net:
     name: tc_datalogger_net
