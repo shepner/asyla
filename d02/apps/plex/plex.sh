@@ -1,7 +1,7 @@
 #!/bin/bash
-# Plex on d02: backup, up, down, pull, update, logs.
+# Plex on d02: backup, up, down, refresh, update, logs.
 # Config lives under ${DOCKER_DL}/plex/plexmediaserver; backups go to ${DOCKER_D1} (tgz).
-# Usage: plex.sh backup|up|down|pull|update|logs
+# Usage: plex.sh backup|up|down|refresh|update|logs
 # Run from anywhere; loads ~/scripts/docker/common.env for DOCKER_DL, DATA1, etc.
 
 set -euo pipefail
@@ -47,17 +47,21 @@ case "$cmd" in
     echo "[INFO] Done. Size: $(du -h "$archive" | cut -f1)"
     ;;
   up)
+    # Start containers only (no pull)
     run_compose up -d
     ;;
   down)
     run_compose down
     ;;
-  pull)
+  refresh)
+    # Pull latest images + start
+    echo "[INFO] Pulling latest images and starting"
     run_compose pull
     run_compose up -d
     ;;
   update)
-    echo "[INFO] Pulling latest image and starting"
+    # Pull latest images + start (same as refresh)
+    echo "[INFO] Pulling latest images and starting"
     run_compose pull
     run_compose up -d
     ;;
@@ -65,13 +69,22 @@ case "$cmd" in
     run_compose logs -f "${@:2}"
     ;;
   *)
-    echo "Usage: $0 backup|up|down|pull|update|logs" >&2
-    echo "  backup - tgz of $APP_ROOT to $BACKUP_DIR" >&2
-    echo "  up     - start (default)" >&2
-    echo "  down   - stop and remove container" >&2
-    echo "  pull   - pull latest image and up" >&2
-    echo "  update - pull latest image and start (same as pull)" >&2
-    echo "  logs   - follow logs" >&2
+    echo "Usage: $0 backup|up|down|refresh|update|logs [service...]" >&2
+    echo "" >&2
+    echo "Commands:" >&2
+    echo "  backup   - Create tgz backup of $APP_ROOT to $BACKUP_DIR" >&2
+    echo "" >&2
+    echo "  update   - Pull latest images + start" >&2
+    echo "  refresh  - Pull latest images + start (same as update)" >&2
+    echo "  up       - Start containers only (no pull; fails if images missing)" >&2
+    echo "" >&2
+    echo "  down     - Stop and remove containers" >&2
+    echo "  logs     - Follow logs (optionally for one service)" >&2
+    echo "" >&2
+    echo "When to use:" >&2
+    echo "  update   - After image updates or when you need latest images" >&2
+    echo "  refresh  - Same as update" >&2
+    echo "  up       - Just start already-pulled containers" >&2
     exit 1
     ;;
 esac

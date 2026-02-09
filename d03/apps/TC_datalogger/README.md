@@ -28,15 +28,15 @@ Torn City API data logger (→ BigQuery). First application on d03; managed enti
 
 All commands source `~/scripts/docker/common.env` (DOCKER_DL, DOCKER_D1).
 
-| Command | Action |
-|--------|--------|
-| `tc_datalogger.sh backup` | Create tgz of working dirs (excl. repo) in `/mnt/nas/data1/docker/` |
-| `tc_datalogger.sh update` | `git pull` in repo, rebuild images, `up -d` |
-| `tc_datalogger.sh refresh` | Rebuild and `up -d` (no pull) |
-| `tc_datalogger.sh rebuild` | `build --no-cache` and `up -d` |
-| `tc_datalogger.sh up` | Build if needed and start |
-| `tc_datalogger.sh down` | Stop and remove containers |
-| `tc_datalogger.sh logs [service]` | Follow logs (use `--until=1h` in script if desired) |
+| Command | Action | When to use |
+|--------|--------|-------------|
+| `tc_datalogger.sh backup` | Create tgz of working dirs (excl. repo) in `/mnt/nas/data1/docker/` | Regular backups |
+| `tc_datalogger.sh update` | Pull latest code (`git pull`) + update base images (`--pull`) + rebuild + start | After code changes in repo |
+| `tc_datalogger.sh refresh` | Rebuild with cache + start (no git pull, no base image updates) | After local config changes |
+| `tc_datalogger.sh rebuild` | Full rebuild without cache + start (no git pull) | When build cache is corrupted or you need a clean build |
+| `tc_datalogger.sh up` | Start containers only (no build; fails if images missing) | Just start already-built containers |
+| `tc_datalogger.sh down` | Stop and remove containers | Stop the app |
+| `tc_datalogger.sh logs [service]` | Follow logs (use `--until=1h` in script if desired) | Debugging |
 
 Run from the app script path, e.g.:
 

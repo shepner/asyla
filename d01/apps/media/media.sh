@@ -1,7 +1,7 @@
 #!/bin/bash
 # Media stack on d01: Sonarr, Radarr, Overseerr, Jackett, Transmission.
 # Working dirs under /mnt/docker (sonarr, radarr, overseerr, jackett, transmission).
-# Usage: media.sh backup|up|down|logs [service...]
+# Usage: media.sh backup|up|down|logs [service...]|refresh|update
 # Run from anywhere; loads ~/scripts/docker/common.env for DOCKER_DL, DOCKER_UID, etc.
 
 set -euo pipefail
@@ -56,17 +56,43 @@ case "$cmd" in
   logs)
     run_compose logs -f "${@:2}"
     ;;
-  pull)
+  refresh)
+    # Pull latest images + start
+    echo "[INFO] Pulling latest images and starting"
+    echo "[INFO] Creating app dirs if needed"
+    for dir in sonarr/config radarr/config overseerr/config jackett/config jackett/downloads transmission/config transmission/watch transmission/downloads; do
+      mkdir -p "${DOCKER_DL}/${dir}"
+    done
+    run_compose pull
+    run_compose up -d
+    ;;
+  update)
+    # Pull latest images + start (same as refresh)
+    echo "[INFO] Pulling latest images and starting"
+    echo "[INFO] Creating app dirs if needed"
+    for dir in sonarr/config radarr/config overseerr/config jackett/config jackett/downloads transmission/config transmission/watch transmission/downloads; do
+      mkdir -p "${DOCKER_DL}/${dir}"
+    done
     run_compose pull
     run_compose up -d
     ;;
   *)
-    echo "Usage: $0 backup|up|down|logs [service...]|pull" >&2
-    echo "  backup - tgz of sonarr,radarr,overseerr,jackett,transmission to $BACKUP_DIR" >&2
-    echo "  up     - create dirs and start all services" >&2
-    echo "  down   - stop and remove containers" >&2
-    echo "  logs   - follow logs (optionally for one service)" >&2
-    echo "  pull   - pull images and up" >&2
+    echo "Usage: $0 backup|up|down|logs [service...]|refresh|update" >&2
+    echo "" >&2
+    echo "Commands:" >&2
+    echo "  backup   - Create tgz backup of sonarr,radarr,overseerr,jackett,transmission to $BACKUP_DIR" >&2
+    echo "" >&2
+    echo "  update   - Pull latest images + start" >&2
+    echo "  refresh  - Pull latest images + start (same as update)" >&2
+    echo "  up       - Start containers only (no pull; fails if images missing)" >&2
+    echo "" >&2
+    echo "  down     - Stop and remove containers" >&2
+    echo "  logs     - Follow logs (optionally for one service)" >&2
+    echo "" >&2
+    echo "When to use:" >&2
+    echo "  update   - After image updates or when you need latest images" >&2
+    echo "  refresh  - Same as update" >&2
+    echo "  up       - Just start already-pulled containers" >&2
     exit 1
     ;;
 esac

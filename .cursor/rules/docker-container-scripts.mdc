@@ -1,0 +1,66 @@
+# Docker Container Script Pattern
+
+All docker container management scripts in this project follow a consistent command pattern for clarity and predictability.
+
+## Standard Commands
+
+### Core Commands (All Apps)
+
+- **`up`** - Start containers only (no build/pull). Fails if images are missing.
+- **`down`** - Stop and remove containers.
+- **`logs [service...]`** - Follow logs (optionally for specific services).
+
+### Image-Based Apps (Pre-built Images)
+
+For apps that use pre-built Docker images (e.g., plex, pihole, cloudflared):
+
+- **`refresh`** - Pull latest images + start (replaces old `pull` command).
+- **`update`** - Same as `refresh` (for consistency with build-based apps).
+- **`backup`** - Create tgz backup of config/data directories (if applicable).
+
+### Build-Based Apps (Build from Source)
+
+For apps that build from source code (e.g., TC_datalogger):
+
+- **`refresh`** - Rebuild with cache + start (no git pull, no base image updates).
+- **`update`** - Pull latest code (`git pull`) + update base images (`--pull`) + rebuild + start.
+- **`rebuild`** - Full rebuild without cache + start (no git pull).
+- **`backup`** - Create tgz backup of config/data directories (exclude repo if applicable).
+
+## When to Use Each Command
+
+### Image-Based Apps:
+- **`up`** - Just start already-pulled containers.
+- **`refresh`** / **`update`** - After image updates or when you need to pull latest images.
+
+### Build-Based Apps:
+- **`up`** - Just start already-built containers.
+- **`refresh`** - After local config changes (quick rebuild with cache).
+- **`update`** - After code changes in repo (pulls code + base images).
+- **`rebuild`** - When build cache is corrupted or you need a clean build.
+
+## Implementation Notes
+
+1. **`up` must NOT build or pull** - it should only start containers. This makes the distinction clear between `up` and `refresh`.
+2. **`refresh` replaces `pull`** - For image-based apps, `refresh` does what `pull` used to do (pull + start).
+3. **Help text should be clear** - Include "When to use" guidance in the usage output.
+4. **Consistent naming** - Use `refresh` and `update` consistently across all scripts.
+
+## Example Help Output
+
+```
+Commands:
+  backup   - Create tgz backup of $APP_ROOT (excl. repo) to $BACKUP_DIR
+
+  update   - Pull latest images + start
+  refresh  - Pull latest images + start (same as update)
+  up       - Start containers only (no pull; fails if images missing)
+
+  down     - Stop and remove containers
+  logs     - Follow logs (optionally for one service)
+
+When to use:
+  update   - After image updates or when you need latest images
+  refresh  - Same as update
+  up       - Just start already-pulled containers
+```

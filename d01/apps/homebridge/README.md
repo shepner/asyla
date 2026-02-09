@@ -9,10 +9,11 @@ Homebridge runs on d01 with **host network** (required for mDNS/HomeKit discover
 ## Commands
 
 ```bash
-~/scripts/d01/apps/homebridge/homebridge.sh up    # start
-~/scripts/d01/apps/homebridge/homebridge.sh down # stop
-~/scripts/d01/apps/homebridge/homebridge.sh logs  # follow logs
-~/scripts/d01/apps/homebridge/homebridge.sh pull  # pull image and up
+~/scripts/d01/apps/homebridge/homebridge.sh up      # start
+~/scripts/d01/apps/homebridge/homebridge.sh down    # stop
+~/scripts/d01/apps/homebridge/homebridge.sh logs     # follow logs
+~/scripts/d01/apps/homebridge/homebridge.sh refresh # pull latest images and start
+~/scripts/d01/apps/homebridge/homebridge.sh update  # pull latest images and start (same as refresh)
 ```
 
 ## First-time setup

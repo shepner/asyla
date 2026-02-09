@@ -9,10 +9,11 @@ Calibre e-book manager runs on d01 and is reachable via the cloudflared tunnel a
 ## Commands
 
 ```bash
-~/scripts/d01/apps/calibre/calibre.sh up    # start
-~/scripts/d01/apps/calibre/calibre.sh down  # stop
-~/scripts/d01/apps/calibre/calibre.sh logs  # follow logs
-~/scripts/d01/apps/calibre/calibre.sh pull  # pull image and up
+~/scripts/d01/apps/calibre/calibre.sh up      # start
+~/scripts/d01/apps/calibre/calibre.sh down    # stop
+~/scripts/d01/apps/calibre/calibre.sh logs    # follow logs
+~/scripts/d01/apps/calibre/calibre.sh refresh # pull latest images and start
+~/scripts/d01/apps/calibre/calibre.sh update  # pull latest images and start (same as refresh)
 ```
 
 ## First-time setup

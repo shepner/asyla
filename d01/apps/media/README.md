@@ -33,7 +33,8 @@ The script automatically sources `~/scripts/docker/common.env` if it exists.
 - `media.sh down` — stop stack
 - `media.sh backup` — tgz of app dirs to NFS backup
 - `media.sh logs [service]` — follow logs
-- `media.sh pull` — pull images and up
+- `media.sh refresh` — pull latest images and start
+- `media.sh update` — pull latest images and start (same as refresh)
 
 ## References
 

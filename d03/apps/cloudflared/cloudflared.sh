@@ -1,6 +1,6 @@
 #!/bin/bash
 # Cloudflare Tunnel (cloudflared) for d03.
-# Usage: cloudflared.sh up|down|restart|logs [service]|pull
+# Usage: cloudflared.sh up|down|restart|logs [service]|refresh|update
 # Run from anywhere. .env (TUNNEL_TOKEN) in this directory.
 
 set -euo pipefail
@@ -39,17 +39,38 @@ case "$cmd" in
   logs)
     run_compose logs -f "${@:2}"
     ;;
-  pull)
+  refresh)
+    # Pull latest images + start
+    echo "[INFO] Pulling latest images and starting"
+    ensure_networks
+    echo "[INFO] Using token mode (.env TUNNEL_TOKEN)"
+    run_compose pull
+    run_compose up -d
+    ;;
+  update)
+    # Pull latest images + start (same as refresh)
+    echo "[INFO] Pulling latest images and starting"
+    ensure_networks
+    echo "[INFO] Using token mode (.env TUNNEL_TOKEN)"
     run_compose pull
     run_compose up -d
     ;;
   *)
-    echo "Usage: $0 up|down|restart|logs [service]|pull" >&2
-    echo "  up      - ensure networks and start cloudflared" >&2
-    echo "  down    - stop and remove container" >&2
-    echo "  restart - down then up" >&2
-    echo "  logs - follow logs" >&2
-    echo "  pull - pull image and up" >&2
+    echo "Usage: $0 up|down|restart|logs [service]|refresh|update" >&2
+    echo "" >&2
+    echo "Commands:" >&2
+    echo "  update   - Pull latest images + start" >&2
+    echo "  refresh  - Pull latest images + start (same as update)" >&2
+    echo "  up       - Start containers only (no pull; fails if images missing)" >&2
+    echo "  restart  - Down then up (useful for reloading config)" >&2
+    echo "" >&2
+    echo "  down     - Stop and remove containers" >&2
+    echo "  logs     - Follow logs (optionally for one service)" >&2
+    echo "" >&2
+    echo "When to use:" >&2
+    echo "  update   - After image updates or when you need latest images" >&2
+    echo "  refresh  - Same as update" >&2
+    echo "  up       - Just start already-pulled containers" >&2
     exit 1
     ;;
 esac

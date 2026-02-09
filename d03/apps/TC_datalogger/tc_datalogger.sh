@@ -60,8 +60,8 @@ case "$cmd" in
     run_compose up -d
     ;;
   up)
-    # Start (build if needed)
-    run_compose up -d --build
+    # Start containers (no build)
+    run_compose up -d
     ;;
   down)
     run_compose down
@@ -71,13 +71,23 @@ case "$cmd" in
     ;;
   *)
     echo "Usage: $0 backup|update|refresh|rebuild|up|down|logs [service...]" >&2
-    echo "  backup   - tgz of $APP_ROOT (excl. repo) to $BACKUP_DIR" >&2
-    echo "  update   - git pull in repo, build, up" >&2
-    echo "  refresh  - build and up (no pull)" >&2
-    echo "  rebuild  - build --no-cache and up" >&2
-    echo "  up       - build if needed and start" >&2
-    echo "  down     - stop and remove containers" >&2
-    echo "  logs     - follow logs (optionally for one service)" >&2
+    echo "" >&2
+    echo "Commands:" >&2
+    echo "  backup   - Create tgz backup of $APP_ROOT (excl. repo) to $BACKUP_DIR" >&2
+    echo "" >&2
+    echo "  update   - Pull latest code (git pull) + update base images (--pull) + rebuild + start" >&2
+    echo "  refresh  - Rebuild with cache + start (no git pull, no base image updates)" >&2
+    echo "  rebuild  - Full rebuild without cache + start (no git pull)" >&2
+    echo "  up       - Start containers only (no build; fails if images missing)" >&2
+    echo "" >&2
+    echo "  down     - Stop and remove containers" >&2
+    echo "  logs     - Follow logs (optionally for one service)" >&2
+    echo "" >&2
+    echo "When to use:" >&2
+    echo "  update   - After code changes in repo (pulls code + base images)" >&2
+    echo "  refresh  - After local config changes (quick rebuild with cache)" >&2
+    echo "  rebuild  - When build cache is corrupted or you need a clean build" >&2
+    echo "  up       - Just start already-built containers" >&2
     exit 1
     ;;
 esac

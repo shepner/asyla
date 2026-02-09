@@ -34,7 +34,8 @@ The script automatically sources `~/scripts/docker/common.env` if it exists.
 - `pihole.sh up` — create dirs and start Pi-hole
 - `pihole.sh down` — stop container
 - `pihole.sh logs` — follow logs
-- `pihole.sh pull` — pull image and up
+- `pihole.sh refresh` — pull latest images and start
+- `pihole.sh update` — pull latest images and start (same as refresh)
 
 ## Configuration
 
