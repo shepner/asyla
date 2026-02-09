@@ -1,12 +1,95 @@
 # Docker Compose File Format
 
-All docker compose files in this project should use the latest compose file format without the obsolete `version` attribute.
+All docker compose files in this project should use the latest compose file format and avoid all deprecated or obsolete attributes.
 
-## Format Requirements
+## Deprecated/Obsolete Attributes to Avoid
 
-### Do NOT include `version:`
+### ❌ `version:` (Obsolete)
 
 The `version` attribute is **obsolete** in Docker Compose v2+ and will generate warnings. Modern compose files should start directly with `services:`, `networks:`, or `volumes:` sections.
+
+**❌ Wrong:**
+```yaml
+version: '3.8'
+
+services:
+  app:
+    image: nginx
+```
+
+**✅ Correct:**
+```yaml
+services:
+  app:
+    image: nginx
+```
+
+### ❌ `links:` (Deprecated)
+
+The `links` attribute is deprecated. Use `networks` instead to connect services.
+
+**❌ Wrong:**
+```yaml
+services:
+  app:
+    links:
+      - db
+```
+
+**✅ Correct:**
+```yaml
+services:
+  app:
+    networks:
+      - app_net
+  db:
+    networks:
+      - app_net
+
+networks:
+  app_net:
+```
+
+### ❌ `extends:` (Deprecated/Removed)
+
+The `extends` attribute was deprecated in Compose v3 and removed in Compose v2. Use YAML anchors or duplicate the configuration.
+
+**❌ Wrong:**
+```yaml
+services:
+  app:
+    extends:
+      file: common.yml
+      service: base
+```
+
+**✅ Correct:** Use YAML anchors or duplicate configuration.
+
+### ❌ `external_links:` (Deprecated)
+
+The `external_links` attribute is deprecated. Use `networks` with `external: true` instead.
+
+**❌ Wrong:**
+```yaml
+services:
+  app:
+    external_links:
+      - container_name
+```
+
+**✅ Correct:**
+```yaml
+services:
+  app:
+    networks:
+      - external_net
+
+networks:
+  external_net:
+    external: true
+```
+
+## Format Requirements
 
 **❌ Wrong:**
 ```yaml
@@ -56,25 +139,71 @@ volumes:
     # volume config
 ```
 
+## Best Practices
+
+### Restart Policies
+
+Use `restart: unless-stopped` (preferred) instead of `restart: always`:
+- `unless-stopped` - Restart unless explicitly stopped (survives reboots)
+- `always` - Always restart (also survives reboots, but less clear intent)
+
+**✅ Preferred:**
+```yaml
+services:
+  app:
+    restart: unless-stopped
+```
+
+### Depends On
+
+Use the modern `depends_on` syntax with conditions when you need health checks:
+
+**✅ Modern (with condition):**
+```yaml
+services:
+  app:
+    depends_on:
+      db:
+        condition: service_healthy
+  db:
+    healthcheck:
+      test: ["CMD", "pg_isready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+```
+
+**✅ Simple (still valid):**
+```yaml
+services:
+  app:
+    depends_on:
+      - db
+```
+
 ## Migration from Old Format
 
-If you encounter a compose file with `version:`, remove that line:
+If you encounter a compose file with deprecated attributes:
 
-1. Remove the `version: 'X.X'` line
-2. Ensure the file starts with `services:`, `networks:`, or `volumes:`
-3. Test with `docker compose config` to verify the file is valid
+1. Remove `version: 'X.X'` line
+2. Replace `links:` with `networks:`
+3. Remove `extends:` and use YAML anchors or duplicate config
+4. Replace `external_links:` with `networks:` with `external: true`
+5. Ensure the file starts with `services:`, `networks:`, or `volumes:`
+6. Test with `docker compose config` to verify the file is valid
 
 ## Verification
 
-To check if a compose file is using the correct format:
+To check if a compose file is using the correct format and has no deprecated attributes:
 
 ```bash
 docker compose -f compose.yml config
 ```
 
-This will validate the file and show any warnings (including obsolete `version` attribute).
+This will validate the file and show any warnings (including obsolete `version` attribute and other deprecated features).
 
 ## References
 
 - [Docker Compose File Format](https://docs.docker.com/compose/compose-file/)
 - [Compose Specification](https://github.com/compose-spec/compose-spec/blob/master/spec.md)
+- [Migrate from Docker Compose v1 to v2](https://docs.docker.com/compose/migrate/)
