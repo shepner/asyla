@@ -99,12 +99,6 @@ You should:
 
 ## Adding a New Application
 
-### Internal-only apps (do not expose via tunnel)
-
-Some apps must **never** get a Cloudflare Tunnel public hostname — they are internal only and, if exposed at all, only via the internal proxy (split DNS) or stdio from internal clients. Do not add these to **Public Hostnames** in Zero Trust:
-
-- **truenas-mcp** — TrueNAS MCP server; internal use only (stdio or future internal-proxy).
-
 ### Automated Method (Recommended)
 
 Use the `add-tunnel-app.sh` script:
