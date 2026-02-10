@@ -1,0 +1,26 @@
+# TrueNAS MCP Server on d03 — [TrueNasCoreMCP](https://github.com/vespo92/TrueNasCoreMCP)
+# Internal only: do not add to Cloudflare Tunnel. Access via internal proxy (if HTTP) or stdio from internal clients.
+# Env: TRUENAS_URL, TRUENAS_API_KEY (required); TRUENAS_VERIFY_SSL, TRUENAS_LOG_LEVEL (optional).
+# For Cursor/Claude MCP over stdio, use: docker compose run --rm truenas-mcp (not up -d).
+# Network: isolated app network (no external).
+
+services:
+  truenas-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: truenas-mcp-server:latest
+    container_name: truenas-mcp-d03
+    restart: "no"
+    environment:
+      - TRUENAS_URL=${TRUENAS_URL}
+      - TRUENAS_API_KEY=${TRUENAS_API_KEY}
+      - TRUENAS_VERIFY_SSL=${TRUENAS_VERIFY_SSL:-true}
+      - TRUENAS_LOG_LEVEL=${TRUENAS_LOG_LEVEL:-INFO}
+    networks:
+      - truenas_mcp_net
+
+networks:
+  truenas_mcp_net:
+    name: truenas_mcp_net
+    driver: bridge
