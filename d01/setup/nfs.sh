@@ -32,13 +32,14 @@ chown docker:asyla /mnt/nas/data2/docker
 chmod 755 /mnt/nas/data1/docker
 chmod 755 /mnt/nas/data2/docker
 
-if ! grep -q "nas:/mnt/data1/docker" /etc/fstab; then
+# Use IP (10.0.0.24) not hostname 'nas' so NFS mounts work before DNS is available.
+if ! grep -q "10.0.0.24:/mnt/data1/docker" /etc/fstab; then
     log_info "Adding NFS mount for data1/docker to /etc/fstab..."
-    echo "nas:/mnt/data1/docker /mnt/nas/data1/docker nfs rw,_netdev,auto,user 0 0" >> /etc/fstab
+    echo "10.0.0.24:/mnt/data1/docker /mnt/nas/data1/docker nfs rw,_netdev,auto,user 0 0" >> /etc/fstab
 fi
-if ! grep -q "nas:/mnt/data2/docker" /etc/fstab; then
+if ! grep -q "10.0.0.24:/mnt/data2/docker" /etc/fstab; then
     log_info "Adding NFS mount for data2/docker to /etc/fstab..."
-    echo "nas:/mnt/data2/docker /mnt/nas/data2/docker nfs rw,_netdev,auto,user 0 0" >> /etc/fstab
+    echo "10.0.0.24:/mnt/data2/docker /mnt/nas/data2/docker nfs rw,_netdev,auto,user 0 0" >> /etc/fstab
 fi
 
 log_info "Attempting to mount NFS shares..."

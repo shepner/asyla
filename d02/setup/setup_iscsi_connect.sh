@@ -29,8 +29,9 @@ if ! iscsiadm --mode node --targetname "$NAME_OF_TARGET" --portal "$IP_OF_TARGET
     exit 1
 fi
 
-echo "Setting automatic on boot..."
+echo "Setting automatic on boot (both node and conn so open-iscsi.service --loginall=automatic finds it)..."
 iscsiadm -m node -T "$NAME_OF_TARGET" -p "$IP_OF_TARGET" --op update -n node.conn[0].startup -v automatic
+iscsiadm -m node -T "$NAME_OF_TARGET" -p "$IP_OF_TARGET" --op update -n node.startup -v automatic
 
 echo "Waiting for device..."
 sleep 3
@@ -68,6 +69,7 @@ mkdir -p /mnt/docker
 chown docker:asyla /mnt/docker
 chmod 755 /mnt/docker
 
+# Use noauto; mount at boot is done by mount-docker-iscsi.service (waits for device then mounts).
 if ! grep -q "/mnt/docker" /etc/fstab; then
     UUID=$(blkid -s UUID -o value "$ISCSI_PARTITION")
     if [ -n "$UUID" ]; then
@@ -76,6 +78,21 @@ if ! grep -q "/mnt/docker" /etc/fstab; then
         echo "$ISCSI_PARTITION /mnt/docker ext4 _netdev,rw,noauto 0 0" >> /etc/fstab
     fi
 fi
+
+# Fix Debian Trixie: open-iscsi.service checks /etc/iscsi/nodes but nodes live in
+# /var/lib/iscsi/nodes, so it never runs and automatic login at boot never happens (bug #1090725).
+SCRIPT_DIR_SETUP="${SCRIPT_DIR_SETUP:-$(dirname "$(realpath "$0")")}"
+install -d /etc/systemd/system/open-iscsi.service.d
+install -m 644 "$SCRIPT_DIR_SETUP/systemd/open-iscsi.service.d/override.conf" /etc/systemd/system/open-iscsi.service.d/override.conf
+systemctl enable open-iscsi.service
+
+# Install oneshot that waits for iSCSI device then mounts (after open-iscsi has logged in).
+install -m 755 "$SCRIPT_DIR_SETUP/mount-docker-iscsi.sh" /usr/local/bin/mount-docker-iscsi.sh
+install -d /etc/systemd/system/iscsid.service.d
+install -m 644 "$SCRIPT_DIR_SETUP/systemd/iscsid.service.d/network-online.conf" /etc/systemd/system/iscsid.service.d/network-online.conf
+install -m 644 "$SCRIPT_DIR_SETUP/mount-docker-iscsi.service" /etc/systemd/system/mount-docker-iscsi.service
+systemctl daemon-reload
+systemctl enable mount-docker-iscsi.service
 
 mount /mnt/docker 2>/dev/null || true
 if mountpoint -q /mnt/docker; then

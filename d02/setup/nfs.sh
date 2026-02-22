@@ -53,19 +53,20 @@ chmod 755 /mnt/nas/data2/docker
 MOUNT_DATA1=false
 MOUNT_DATA2=false
 
-if grep -q "nas:/mnt/data1/docker" /etc/fstab; then
+# Use IP (10.0.0.24) not hostname 'nas' so NFS mounts work before DNS is available.
+if grep -q "10.0.0.24:/mnt/data1/docker" /etc/fstab; then
     log_warn "NFS mount for data1/docker already exists in /etc/fstab, skipping..."
 else
     log_info "Adding NFS mount for data1/docker to /etc/fstab..."
-    echo "nas:/mnt/data1/docker /mnt/nas/data1/docker nfs rw,_netdev,auto,user 0 0" >> /etc/fstab
+    echo "10.0.0.24:/mnt/data1/docker /mnt/nas/data1/docker nfs rw,_netdev,auto,user 0 0" >> /etc/fstab
     MOUNT_DATA1=true
 fi
 
-if grep -q "nas:/mnt/data2/docker" /etc/fstab; then
+if grep -q "10.0.0.24:/mnt/data2/docker" /etc/fstab; then
     log_warn "NFS mount for data2/docker already exists in /etc/fstab, skipping..."
 else
     log_info "Adding NFS mount for data2/docker to /etc/fstab..."
-    echo "nas:/mnt/data2/docker /mnt/nas/data2/docker nfs rw,_netdev,auto,user 0 0" >> /etc/fstab
+    echo "10.0.0.24:/mnt/data2/docker /mnt/nas/data2/docker nfs rw,_netdev,auto,user 0 0" >> /etc/fstab
     MOUNT_DATA2=true
 fi
 

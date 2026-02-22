@@ -1,0 +1,15 @@
+[Unit]
+Description=Mount iSCSI /mnt/docker after device appears
+After=network-online.target iscsid.service open-iscsi.service
+Wants=network-online.target iscsid.service open-iscsi.service
+Before=remote-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/mount-docker-iscsi.sh
+ExecStop=/usr/bin/umount /mnt/docker
+TimeoutStartSec=150
+
+[Install]
+WantedBy=multi-user.target

@@ -527,6 +527,15 @@ From the VM console (as root): `curl -s https://raw.githubusercontent.com/shepne
 **If you can SSH but scripts/Docker were not installed:** Run once (as root or with sudo):  
 `curl -s https://raw.githubusercontent.com/shepner/asyla/master/d03/setup/deploy_software.sh | sudo bash`
 
+### iSCSI mount missing or "can't find UUID" (including after boot)
+
+**Cause:** On Debian Trixie, **open-iscsi.service** never runs at boot because it checks `/etc/iscsi/nodes` while open-iscsi 2.1.9+ stores nodes in `/var/lib/iscsi/nodes`. The saved node may also have `node.startup = manual` (Debian bug #1090725).
+
+**Fix:** Run once `sudo ~/scripts/d03/setup/setup_iscsi_connect.sh` (after adding initiator to TrueNAS). That installs the override, sets the node to automatic, and enables services. Reboot to verify. If the node already exists with `manual`, set it:  
+`sudo iscsiadm -m node -T iqn.2005-10.org.freenas.ctl:nas01:d03:01 -p 10.0.0.24 --op update -n node.startup -v automatic`  
+`sudo iscsiadm -m node -T iqn.2005-10.org.freenas.ctl:nas01:d03:01 -p 10.0.0.24 --op update -n node.conn[0].startup -v automatic`  
+Then reboot. **Immediate mount:** `~/setup_manual.sh` (iSCSI step).
+
 **Prevention:**
 - Use `debian-13-generic-amd64.qcow2` instead of `debian-13-nocloud-amd64.qcow2` (more likely to include cloud-init)
 - Verify the Debian 13 cloud image includes cloud-init before use

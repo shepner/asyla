@@ -40,4 +40,17 @@ Requires:
 
 ## iSCSI
 
-Target name for d01 on TrueNAS: `iqn.2005-10.org.freenas.ctl:nas01:d01:01`. Add this host's initiator to the target's Initiator Group before running `~/setup_manual.sh` (iSCSI step) or `~/scripts/d01/setup/setup_iscsi_connect.sh`.
+Target name for d01 on TrueNAS: `iqn.2005-10.org.freenas.ctl:nas01:d01:01`. Add this host's initiator to the target's Initiator Group before running `~/setup_manual.sh` (iSCSI step) or `~/scripts/d01/setup/setup_iscsi_connect.sh`. The same NAS (10.0.0.24) serves both NFS and iSCSI; mount issues at boot are due to initiator ordering, not NAS availability.
+
+The setup script configures `/mnt/docker` to **automount at boot**. It (1) installs a systemd override so **open-iscsi.service** runs at boot (Debian Trixie bug #1090725: the unit checks `/etc/iscsi/nodes` but nodes live in `/var/lib/iscsi/nodes`), (2) sets the node to `node.startup` and `node.conn[0].startup = automatic` so `--loginall=automatic` logs in, (3) installs **mount-docker-iscsi.service** to wait for the block device then mount. Run the connect script once (after adding the initiator to TrueNAS); then reboots will auto-login and mount.
+
+## Troubleshooting
+
+### iSCSI mount missing or "can't find UUID" (including after boot)
+
+**Cause:** On Debian Trixie, **open-iscsi.service** never runs at boot because it checks `/etc/iscsi/nodes` while open-iscsi 2.1.9+ stores nodes in `/var/lib/iscsi/nodes`. The saved node may also have `node.startup = manual` (Debian bug #1090725).
+
+**Fix:** Run once `sudo ~/scripts/d01/setup/setup_iscsi_connect.sh` (after adding initiator to TrueNAS). That installs the override, sets the node to automatic, and enables services. Reboot to verify. If the node already exists with `manual`, set it:  
+`sudo iscsiadm -m node -T iqn.2005-10.org.freenas.ctl:nas01:d01:01 -p 10.0.0.24 --op update -n node.startup -v automatic`  
+`sudo iscsiadm -m node -T iqn.2005-10.org.freenas.ctl:nas01:d01:01 -p 10.0.0.24 --op update -n node.conn[0].startup -v automatic`  
+Then reboot. **Immediate mount:** `~/setup_manual.sh` (iSCSI step).

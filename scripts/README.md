@@ -1,4 +1,18 @@
-# Migration Scripts
+# Scripts
+
+## apply_iscsi_fix_d01_d02_d03.sh
+
+Applies the iSCSI boot fix (open-iscsi override, mount-docker-iscsi.service, node startup=automatic, NFS IP) to d01, d02, and d03. Run from your **workstation** (where you have SSH to those hosts).
+
+```bash
+# Apply config only (then reboot each host yourself)
+./scripts/apply_iscsi_fix_d01_d02_d03.sh
+
+# Apply and reboot each host
+./scripts/apply_iscsi_fix_d01_d02_d03.sh --reboot
+```
+
+Requires: `ssh`/`scp` to d01, d02, d03 (e.g. Host d01 in `~/.ssh/config`, or it will try `docker@10.0.0.60` etc.). After running, each host will auto-login iSCSI and mount `/mnt/docker` at boot.
 
 ## migrate-app.sh
 

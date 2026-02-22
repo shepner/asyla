@@ -36,7 +36,9 @@ Requires:
 
 ## iSCSI
 
-Target name for ns02 on TrueNAS: `iqn.2005-10.org.freenas.ctl:nas01:ns02:01`. Add this host's initiator to the target's Initiator Group before running `~/setup_manual.sh` (iSCSI step) or `~/scripts/ns02/setup/setup_iscsi_connect.sh`.
+Target name for ns02 on TrueNAS: `iqn.2005-10.org.freenas.ctl:nas01:ns02:01`. Add this host's initiator to the target's Initiator Group before running `~/setup_manual.sh` (iSCSI step) or `~/scripts/ns02/setup/setup_iscsi_connect.sh`. The same NAS (10.0.0.24) serves both NFS and iSCSI; mount issues at boot are due to initiator ordering, not NAS availability.
+
+The setup script configures `/mnt/docker` to **automount at boot**. It (1) installs a systemd override so **open-iscsi.service** runs at boot (Debian Trixie bug #1090725: the unit checks `/etc/iscsi/nodes` but nodes live in `/var/lib/iscsi/nodes`), (2) sets the node to `node.startup` and `node.conn[0].startup = automatic` so `--loginall=automatic` logs in, (3) installs **mount-docker-iscsi.service** to wait for the block device then mount. Run the connect script once (after adding the initiator to TrueNAS); then reboots will auto-login and mount.
 
 ## Network Configuration
 
@@ -104,6 +106,20 @@ From the VM console (as root): `curl -s https://raw.githubusercontent.com/shepne
 
 **If you can SSH but scripts/Docker were not installed:** Run once (as root or with sudo):  
 `curl -s https://raw.githubusercontent.com/shepner/asyla/master/ns02/setup/deploy_software.sh | sudo bash`
+
+### iSCSI mount missing or "can't find UUID" (including after boot)
+
+**Cause:** On Debian Trixie, **open-iscsi.service** (which logs in to targets with `node.startup = automatic`) never runs at boot because it checks `ConditionDirectoryNotEmpty=/etc/iscsi/nodes`, while open-iscsi 2.1.9+ stores nodes in `/var/lib/iscsi/nodes`. So no iSCSI session is established and the block device never appears. The saved node may also have `node.startup = manual`, so even if the service runs it finds no nodes to log in (Debian bug #1090725).
+
+**Fix (already applied if you ran the current setup):** The connect script installs the open-iscsi.service override, sets the node to automatic (both `node.startup` and `node.conn[0].startup`), and enables open-iscsi and mount-docker-iscsi. At boot: open-iscsi runs and logs in, the block device appears, then mount-docker-iscsi.service mounts `/mnt/docker`.
+
+**If you still see the error:** Run once:  
+`sudo ~/scripts/ns02/setup/setup_iscsi_connect.sh`  
+(Add this host's initiator to the TrueNAS target first.) That does discovery, login, sets the node to automatic, installs override and services, and mounts for the current boot. Reboot to verify automatic login and mount. If the node was already created with `manual`, set it and reboot:  
+`sudo iscsiadm -m node -T iqn.2005-10.org.freenas.ctl:nas01:ns02:01 -p 10.0.0.24 --op update -n node.startup -v automatic`  
+`sudo iscsiadm -m node -T iqn.2005-10.org.freenas.ctl:nas01:ns02:01 -p 10.0.0.24 --op update -n node.conn[0].startup -v automatic`
+
+**Immediate mount (current boot):** Run `~/setup_manual.sh` (iSCSI step) to log in and mount once.
 
 ### Network Using DHCP Instead of Static IP
 
