@@ -14,6 +14,11 @@ tc-datalogger.asyla.org {
     reverse_proxy tc-dashboard:8080
 }
 
+gitea.asyla.org gitea {
+    import internal_tls
+    reverse_proxy gitea:3000
+}
+
 # Fallback for other hostnames / direct IP
 :80 {
     respond "d03 internal proxy ready" 200

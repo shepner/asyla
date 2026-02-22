@@ -19,8 +19,12 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
     networks:
       - tc_datalogger_net
+      - gitea_net
 
 networks:
   tc_datalogger_net:
     external: true
     name: tc_datalogger_net
+  gitea_net:
+    external: true
+    name: gitea_net

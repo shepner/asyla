@@ -13,6 +13,7 @@ COMPOSE_FILE="docker-compose.yml"
 
 ensure_networks() {
   docker network create tc_datalogger_net 2>/dev/null || true
+  docker network create gitea_net 2>/dev/null || true
 }
 
 run_compose() {
