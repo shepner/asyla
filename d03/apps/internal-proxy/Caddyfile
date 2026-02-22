@@ -14,8 +14,10 @@ tc-datalogger.asyla.org {
     reverse_proxy tc-dashboard:8080
 }
 
+# Gitea: use tls internal (self-signed) so the host matches even when LE fails (e.g. no internet).
+# Switch to "import internal_tls" when Let's Encrypt DNS-01 is available for this host.
 gitea.asyla.org gitea {
-    import internal_tls
+    tls internal
     reverse_proxy gitea:3000
 }
 
