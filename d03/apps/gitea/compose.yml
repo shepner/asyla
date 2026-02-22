@@ -1,5 +1,6 @@
 # Gitea on d03 — data under /mnt/docker/Gitea
-# Access via internal-proxy (hostname gitea or gitea.asyla.org). No ports published; no internet.
+# Follows https://docs.gitea.com/installation/install-with-docker
+# Access via internal-proxy (hostname gitea or gitea.asyla.org). No ports published (proxy only).
 # Run with: ~/scripts/d03/apps/gitea/gitea.sh up
 # Requires DOCKER_DL (e.g. /mnt/docker) and LOCAL_TZ in environment.
 
@@ -10,16 +11,17 @@ networks:
 
 services:
   gitea:
-    image: gitea/gitea:latest
+    image: docker.gitea.com/gitea:1
     container_name: gitea
     restart: unless-stopped
     environment:
-      - TZ=${LOCAL_TZ:-America/Chicago}
       - USER_UID=1000
       - USER_GID=1000
       - GITEA__server__ROOT_URL=https://gitea.asyla.org/
       - GITEA__server__HTTP_PORT=3000
     volumes:
       - ${DOCKER_DL}/Gitea/data:/data
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
     networks:
       - gitea_net
