@@ -1,6 +1,6 @@
 #!/bin/bash
 # Internal Caddy proxy for d03 (split-DNS).
-# Usage: internal-proxy.sh up|down|restart|logs [service]|refresh|update
+# Usage: internal-proxy.sh backup|up|down|restart|logs [service]|refresh|update
 # Use 'restart' after update_scripts.sh so Caddy reloads the Caddyfile.
 # Run from anywhere.
 
@@ -8,6 +8,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+
+[ -f "$HOME/scripts/docker/common.env" ] && . "$HOME/scripts/docker/common.env"
+DOCKER_D1="${DOCKER_D1:-/mnt/nas/data1/docker}"
 
 COMPOSE_FILE="docker-compose.yml"
 
@@ -23,6 +26,14 @@ run_compose() {
 cmd="${1:-}"
 
 case "$cmd" in
+  backup)
+    stamp=$(date +%Y%m%d-%H%M%S)
+    archive="${DOCKER_D1}/internal-proxy-d03-backup-${stamp}.tgz"
+    echo "[INFO] Backing up internal-proxy config to $archive"
+    mkdir -p "$(dirname "$archive")"
+    tar -czf "$archive" -C "$SCRIPT_DIR" . 2>/dev/null || true
+    echo "[INFO] Done. Size: $(du -h "$archive" 2>/dev/null | cut -f1)"
+    ;;
   up)
     echo "[INFO] Ensuring networks exist..."
     ensure_networks
@@ -56,9 +67,10 @@ case "$cmd" in
     run_compose up -d
     ;;
   *)
-    echo "Usage: $0 up|down|restart|logs [service]|refresh|update" >&2
+    echo "Usage: $0 backup|up|down|restart|logs [service]|refresh|update" >&2
     echo "" >&2
     echo "Commands:" >&2
+    echo "  backup   - Create tgz of Caddyfile/config to NFS (DOCKER_D1)" >&2
     echo "  update   - Pull latest images + start" >&2
     echo "  refresh  - Pull latest images + start (same as update)" >&2
     echo "  up       - Start containers only (no pull; fails if images missing)" >&2

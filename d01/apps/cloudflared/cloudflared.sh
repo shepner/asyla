@@ -1,12 +1,15 @@
 #!/bin/bash
 # Cloudflare Tunnel (cloudflared) for d01.
-# Usage: cloudflared.sh up|down|logs [service]|refresh|update
+# Usage: cloudflared.sh backup|up|down|logs [service]|refresh|update
 # Run from anywhere. .env (TUNNEL_TOKEN) must be in this directory.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+
+[ -f "$HOME/scripts/docker/common.env" ] && . "$HOME/scripts/docker/common.env"
+DOCKER_D1="${DOCKER_D1:-/mnt/nas/data1/docker}"
 
 COMPOSE_FILE="docker-compose.yml"
 COMPOSE_EXTRA=""
@@ -29,6 +32,14 @@ run_compose() {
 cmd="${1:-}"
 
 case "$cmd" in
+  backup)
+    stamp=$(date +%Y%m%d-%H%M%S)
+    archive="${DOCKER_D1}/cloudflared-d01-backup-${stamp}.tgz"
+    echo "[INFO] Backing up cloudflared config (.env, config files) to $archive"
+    mkdir -p "$(dirname "$archive")"
+    tar -czf "$archive" -C "$SCRIPT_DIR" . 2>/dev/null || true
+    echo "[INFO] Done. Size: $(du -h "$archive" 2>/dev/null | cut -f1)"
+    ;;
   up)
     echo "[INFO] Ensuring networks exist..."
     ensure_networks
@@ -70,9 +81,10 @@ case "$cmd" in
     run_compose up -d
     ;;
   *)
-    echo "Usage: $0 up|down|logs [service]|refresh|update" >&2
+    echo "Usage: $0 backup|up|down|logs [service]|refresh|update" >&2
     echo "" >&2
     echo "Commands:" >&2
+    echo "  backup   - Create tgz of .env/config to NFS (DOCKER_D1)" >&2
     echo "  update   - Pull latest images + start" >&2
     echo "  refresh  - Pull latest images + start (same as update)" >&2
     echo "  up       - Start containers only (no pull; fails if images missing)" >&2
