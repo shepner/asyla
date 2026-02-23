@@ -1,5 +1,5 @@
 #!/bin/bash
-# Calibre on d01. Usage: calibre.sh up|down|logs|refresh|update
+# Calibre on d01. Usage: calibre.sh backup|up|down|logs|refresh|update
 # Run from anywhere; loads ~/scripts/docker/common.env for DOCKER_DL, etc.
 
 set -euo pipefail
@@ -13,9 +13,11 @@ if [ -f "$HOME/scripts/docker/common.env" ]; then
 fi
 DOCKER_DL="${DOCKER_DL:-/mnt/docker}"
 DATA1="${DATA1:-/mnt/nas/data1}"
+DOCKER_D1="${DOCKER_D1:-${DATA1}/docker}"
 
 export DOCKER_DL
 export DATA1
+export DOCKER_D1
 export LOCAL_TZ
 
 # Standalone app: own project dir and project name (not part of media stack)
@@ -34,6 +36,14 @@ remove_stale_calibre_container() {
 cmd="${1:-}"
 
 case "$cmd" in
+  backup)
+    stamp=$(date +%Y%m%d-%H%M%S)
+    archive="${DOCKER_D1}/calibre-backup-${stamp}.tgz"
+    echo "[INFO] Backing up Calibre data to $archive"
+    mkdir -p "$(dirname "$archive")"
+    tar -czf "$archive" -C "${DOCKER_DL}" calibre 2>/dev/null || true
+    echo "[INFO] Done. Size: $(du -h "$archive" 2>/dev/null | cut -f1)"
+    ;;
   up)
     echo "[INFO] Creating app dir if needed"
     mkdir -p "${DOCKER_DL}/calibre/config"
@@ -64,9 +74,10 @@ case "$cmd" in
     run_compose up -d
     ;;
   *)
-    echo "Usage: $0 up|down|logs|refresh|update" >&2
+    echo "Usage: $0 backup|up|down|logs|refresh|update" >&2
     echo "" >&2
     echo "Commands:" >&2
+    echo "  backup   - Create tgz of calibre data to NFS (DOCKER_D1)" >&2
     echo "  update   - Pull latest images + start" >&2
     echo "  refresh  - Pull latest images + start (same as update)" >&2
     echo "  up       - Start containers only (no pull; fails if images missing)" >&2
