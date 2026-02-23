@@ -461,6 +461,17 @@ The following scripts are available in the `setup/` directory:
 ./update_scripts.sh
 ```
 
+### Comprehensive update (update_all)
+`./update_all.sh` (as root or with sudo) runs in order: (1) update_scripts, (2) OS update, (3) backup and upgrade each app under `~/scripts/<host>/apps/`. Step 3 runs **one screen session per app** (parallel and disconnect-safe). If your SSH session drops, reattach with `screen -r update_<host>_<app>` to watch that app; the main script polls until all apps finish. Results are written to `~/logs/update_all/run_<timestamp>/` (per-app `.exit` codes, `summary.txt`, wrapper scripts).
+
+### Auditing update_all runs
+From your **local workstation** (in the asyla repo), run the helper to check the latest run on each host via SSH:
+```bash
+.cursor/helpers/audit_update_all.sh              # default hosts: d01 d02 d03 ns01 ns02
+.cursor/helpers/audit_update_all.sh d01 d03     # specific hosts
+```
+Exit 0 = every host has a run with no failures; exit 1 = one or more hosts have failures or no run. The helper fetches `~/logs/update_all/latest` → `summary.txt` from each host.
+
 ### Backup
 [Backup procedures will be documented]
 
