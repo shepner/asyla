@@ -1,6 +1,6 @@
 #!/bin/bash
 # Comprehensive maintenance for this host: update scripts, OS, then backup and upgrade
-# each Docker app found under ~/scripts/<host>/apps/ (host = directory containing this script).
+# each Docker app found under ~/scripts/<host>/apps/ (host = hostname -s, e.g. d03).
 # Detects apps automatically so no ongoing maintenance when new apps are added.
 
 set -euo pipefail
@@ -26,9 +26,8 @@ else
 fi
 HOME_DIR="${HOME_DIR:-/home/docker}"
 
-# Host name from our script path (e.g. .../d03/update_all.sh -> d03)
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-HOST="$(basename "$SCRIPT_DIR")"
+# Host from hostname so apps path is correct even when script is run via symlink (e.g. ~/update_all.sh)
+HOST="$(hostname -s)"
 APPS_DIR="$HOME_DIR/scripts/$HOST/apps"
 
 log_info "Starting comprehensive system maintenance (host: $HOST)..."
