@@ -1,13 +1,13 @@
 #!/bin/bash
-# Plex on d02: backup, up, down, refresh, update, logs.
+# Plex on d02. Usage: plex.sh [switch ...] e.g. backup|up|down|refresh|update|restart|logs
+# Switches can be combined (e.g. down backup up). Run from anywhere; loads ~/scripts/docker/common.env.
 # Config lives under ${DOCKER_DL}/plex/plexmediaserver; backups go to ${DOCKER_D1} (tgz).
-# Usage: plex.sh backup|up|down|refresh|update|logs
-# Run from anywhere; loads ~/scripts/docker/common.env for DOCKER_DL, DATA1, etc.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="$SCRIPT_DIR/compose.yml"
+SCREEN_APP="plex"
 
 if [ -f "$HOME/scripts/docker/common.env" ]; then
   # shellcheck source=/dev/null
@@ -29,62 +29,88 @@ export DOCKER_UID
 export DOCKER_GID
 export MY_DOMAIN
 
-cmd="${1:-up}"
-
-# Ensure app root exists (config dir created by Plex on first run)
 mkdir -p "$APP_ROOT"
 
 run_compose() {
   docker compose -f "$COMPOSE_FILE" --project-directory "$APP_ROOT" "$@"
 }
 
-case "$cmd" in
-  backup)
-    stamp=$(date +%Y%m%d-%H%M%S)
-    archive="$BACKUP_DIR/${APP_NAME}-${stamp}.tgz"
-    echo "[INFO] Backing up $APP_ROOT to $archive"
-    tar -czf "$archive" -C "${DOCKER_DL}" "$APP_NAME"
-    echo "[INFO] Done. Size: $(du -h "$archive" | cut -f1)"
-    ;;
-  up)
-    # Start containers only (no pull)
-    run_compose up -d
-    ;;
-  down)
-    run_compose down
-    ;;
-  refresh)
-    # Pull latest images + start
-    echo "[INFO] Pulling latest images and starting"
-    run_compose pull
-    run_compose up -d
-    ;;
-  update)
-    # Pull latest images + start (same as refresh)
-    echo "[INFO] Pulling latest images and starting"
-    run_compose pull
-    run_compose up -d
-    ;;
-  logs)
-    run_compose logs -f "${@:2}"
-    ;;
-  *)
-    echo "Usage: $0 backup|up|down|refresh|update|logs [service...]" >&2
-    echo "" >&2
-    echo "Commands:" >&2
-    echo "  backup   - Create tgz backup of $APP_ROOT to $BACKUP_DIR" >&2
-    echo "" >&2
-    echo "  update   - Pull latest images + start" >&2
-    echo "  refresh  - Pull latest images + start (same as update)" >&2
-    echo "  up       - Start containers only (no pull; fails if images missing)" >&2
-    echo "" >&2
-    echo "  down     - Stop and remove containers" >&2
-    echo "  logs     - Follow logs (optionally for one service)" >&2
-    echo "" >&2
-    echo "When to use:" >&2
-    echo "  update   - After image updates or when you need latest images" >&2
-    echo "  refresh  - Same as update" >&2
-    echo "  up       - Just start already-pulled containers" >&2
+do_backup() {
+  stamp=$(date +%Y%m%d-%H%M%S)
+  archive="$BACKUP_DIR/${APP_NAME}-${stamp}.tgz"
+  echo "[INFO] Backing up $APP_ROOT to $archive"
+  tar -czf "$archive" -C "${DOCKER_DL}" "$APP_NAME"
+  echo "[INFO] Done. Size: $(du -h "$archive" | cut -f1)"
+}
+
+do_update() {
+  echo "[INFO] Pulling latest images (not starting app; use up or restart to start)"
+  run_compose pull
+}
+
+run_cmd() {
+  local cmd="$1"
+  case "$cmd" in
+    backup)
+      screen -S "backup-${SCREEN_APP}-$(date +%Y%m%d-%H%M%S)" -dm "$0" _backup
+      echo "[INFO] Backup running in screen; attach with: screen -r"
+      ;;
+    _backup)
+      do_backup
+      ;;
+    up)
+      run_compose up -d
+      ;;
+    down)
+      run_compose down
+      ;;
+    refresh)
+      echo "[INFO] Pulling latest images and starting"
+      run_compose pull
+      run_compose up -d
+      ;;
+    update)
+      screen -S "update-${SCREEN_APP}-$(date +%Y%m%d-%H%M%S)" -dm "$0" _update
+      echo "[INFO] Update running in screen; use 'up' or 'restart' to start when done. Attach: screen -r"
+      ;;
+    _update)
+      do_update
+      ;;
+    restart)
+      run_compose down
+      run_compose up -d
+      ;;
+    logs)
+      run_compose logs -f
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+if [ $# -eq 0 ]; then
+  echo "Usage: $0 [switch ...]" >&2
+  echo "  Switches can be combined, e.g. down backup up" >&2
+  echo "" >&2
+  echo "  backup   - Create tgz backup of $APP_ROOT to $BACKUP_DIR (runs in screen)" >&2
+  echo "  update   - Pull latest images in screen; use up/restart to start" >&2
+  echo "  refresh  - Pull latest images + start (inline)" >&2
+  echo "  up       - Start containers only" >&2
+  echo "  down     - Stop and remove containers" >&2
+  echo "  restart  - Down then up" >&2
+  echo "  logs     - Follow logs (optionally for one service)" >&2
+  exit 1
+fi
+
+if [ "$1" = "logs" ]; then
+  run_compose logs -f "${@:2}"
+  exit 0
+fi
+
+for cmd in "$@"; do
+  if ! run_cmd "$cmd"; then
+    echo "Usage: $0 backup|up|down|refresh|update|restart|logs [ ... ]" >&2
     exit 1
-    ;;
-esac
+  fi
+done
