@@ -47,10 +47,10 @@ log_info "Starting comprehensive system maintenance (host: $HOST)..."
 log_info "Step 1: Updating scripts from repository..."
 "$HOME_DIR/update_scripts.sh"
 
-# Step 1.5 (d02): Ensure SMB mount configured and mounted (Plex needs /mnt/nas/data1/media)
-if [ "$HOST" = "d02" ]; then
+# Step 1.5 (d01/d02/d03): Ensure SMB mount configured and mounted
+if [ "$HOST" = "d01" ] || [ "$HOST" = "d02" ] || [ "$HOST" = "d03" ]; then
     SMB_MOUNT="/mnt/nas/data1/media"
-    SETUP_SMB="$HOME_DIR/scripts/d02/setup/smb.sh"
+    SETUP_SMB="$HOME_DIR/scripts/$HOST/setup/smb.sh"
     if ! grep -q "/mnt/nas/data1/media.*cifs" /etc/fstab 2>/dev/null; then
         log_info "Step 1.5: Configuring SMB client..."
         [ -f "$SETUP_SMB" ] && "$SETUP_SMB" || log_warn "smb.sh not found: $SETUP_SMB"
