@@ -47,6 +47,23 @@ log_info "Starting comprehensive system maintenance (host: $HOST)..."
 log_info "Step 1: Updating scripts from repository..."
 "$HOME_DIR/update_scripts.sh"
 
+# Step 1.5 (d02): Ensure SMB mount configured and mounted (Plex needs /mnt/nas/data1/media)
+if [ "$HOST" = "d02" ]; then
+    SMB_MOUNT="/mnt/nas/data1/media"
+    SETUP_SMB="$HOME_DIR/scripts/d02/setup/smb.sh"
+    if ! grep -q "/mnt/nas/data1/media.*cifs" /etc/fstab 2>/dev/null; then
+        log_info "Step 1.5: Configuring SMB client..."
+        [ -f "$SETUP_SMB" ] && "$SETUP_SMB" || log_warn "smb.sh not found: $SETUP_SMB"
+    fi
+    if ! mountpoint -q "$SMB_MOUNT" 2>/dev/null; then
+        if grep -q "/mnt/nas/data1/media.*cifs" /etc/fstab 2>/dev/null; then
+            log_info "Step 1.5: Mounting SMB share $SMB_MOUNT..."
+            mount "$SMB_MOUNT" 2>/dev/null || true
+            mountpoint -q "$SMB_MOUNT" 2>/dev/null && log_info "  SMB mount OK." || log_warn "  SMB mount failed (will retry at boot)."
+        fi
+    fi
+fi
+
 # Step 2: Update OS
 log_info "Step 2: Updating operating system..."
 "$HOME_DIR/update.sh"

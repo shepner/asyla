@@ -1,7 +1,7 @@
 #!/bin/bash
 # One-time software deploy for d02 VM
 #
-# Purpose: Install scripts (update_scripts.sh), then run systemConfig, nfs, docker, update.
+# Purpose: Install scripts (update_scripts.sh), then run systemConfig, nfs, smb, iscsi_install, docker, update.
 #          Use when cloud-init did not complete software install (e.g. first boot failed).
 # Usage:   curl -s https://raw.githubusercontent.com/shepner/asyla/master/d02/setup/deploy_software.sh | sudo bash
 #          Or from workstation: ssh d02 'sudo bash -s' < d02/setup/deploy_software.sh

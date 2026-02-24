@@ -533,6 +533,10 @@ From the VM console (as root): `curl -s https://raw.githubusercontent.com/shepne
 **If you can SSH but scripts/Docker were not installed:** Run once (as root or with sudo):  
 `curl -s https://raw.githubusercontent.com/shepner/asyla/master/d02/setup/deploy_software.sh | sudo bash`
 
+### SMB mount missing or not working (/mnt/nas/data1/media)
+
+**Fix:** SMB is configured to mount at boot using the NAS IP (not hostname) and SMB3. If you had an older entry (`//nas/media`, `noauto`), run once on d02: `~/update_scripts.sh` then `sudo ~/scripts/d02/setup/smb.sh` — that replaces the fstab line. Then `sudo mount /mnt/nas/data1/media` (or reboot). After that it mounts automatically at boot.
+
 ### iSCSI mount missing or "can't find UUID" (including after boot)
 
 **Cause:** On Debian Trixie, **open-iscsi.service** never runs at boot because it checks `/etc/iscsi/nodes` while open-iscsi 2.1.9+ stores nodes in `/var/lib/iscsi/nodes`. The saved node may also have `node.startup = manual` (Debian bug #1090725).

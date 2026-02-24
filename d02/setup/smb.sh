@@ -78,13 +78,15 @@ mkdir -p /mnt/nas/data1/media
 chown docker:asyla /mnt/nas/data1/media
 chmod 755 /mnt/nas/data1/media
 
-# Check if fstab entry already exists
-if grep -q "//nas/media" /etc/fstab; then
-    log_warn "SMB mount for //nas/media already exists in /etc/fstab, skipping..."
-else
-    log_info "Adding SMB mount to /etc/fstab..."
-    echo "//nas/media /mnt/nas/data1/media cifs rw,uid=1003,gid=1000,credentials=$CREDENTIALS_FILE,noauto,user 0 0" >> /etc/fstab
+# Use IP (10.0.0.24) like NFS so mount works before DNS; _netdev + no noauto = mount at boot
+NAS_IP="10.0.0.24"
+SMB_FSTAB_LINE="//${NAS_IP}/media /mnt/nas/data1/media cifs rw,uid=1003,gid=1000,credentials=$CREDENTIALS_FILE,_netdev,vers=3.0 0 0"
+if grep -q "/mnt/nas/data1/media.*cifs" /etc/fstab; then
+    # Replace existing (possibly old //nas, noauto) entry with correct one
+    sed -i "\|/mnt/nas/data1/media.*cifs|d" /etc/fstab
 fi
+log_info "Adding SMB mount to /etc/fstab (mount at boot, use NAS IP)..."
+echo "$SMB_FSTAB_LINE" >> /etc/fstab
 
 # Clean up package cache
 log_info "Cleaning up package cache..."
@@ -98,6 +100,5 @@ log_warn "Run: vi $CREDENTIALS_FILE"
 log_warn "Add your actual username, password, and domain"
 log_warn "============================================================"
 log_info "Credentials file location: $CREDENTIALS_FILE"
-log_info "Mount point: /mnt/nas/data1/media"
-log_info "To mount manually: mount /mnt/nas/data1/media"
+log_info "Mount point: /mnt/nas/data1/media (mounts at boot)"
 
