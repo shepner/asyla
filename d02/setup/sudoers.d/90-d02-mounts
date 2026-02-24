@@ -1,0 +1,4 @@
+# Let docker reload fstab and mount/umount SMB without password (no login shell password on d02)
+docker ALL=(ALL) NOPASSWD: /usr/bin/systemctl daemon-reload
+docker ALL=(ALL) NOPASSWD: /usr/bin/mount /mnt/nas/data1/media
+docker ALL=(ALL) NOPASSWD: /usr/bin/umount /mnt/nas/data1/media

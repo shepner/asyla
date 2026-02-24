@@ -535,7 +535,7 @@ From the VM console (as root): `curl -s https://raw.githubusercontent.com/shepne
 
 ### SMB mount missing or not working (/mnt/nas/data1/media)
 
-**Fix:** SMB is configured to mount at boot using the NAS IP (not hostname) and SMB3. If you had an older entry (`//nas/media`, `noauto`), run once on d02: `~/update_scripts.sh` then `sudo ~/scripts/d02/setup/smb.sh` — that replaces the fstab line. Then `sudo mount /mnt/nas/data1/media` (or reboot). After that it mounts automatically at boot.
+**Fix:** SMB is configured to mount at boot using the NAS IP (not hostname) and SMB3. If you had an older entry (`//nas/media`, `noauto`), run once on d02 as **root** (e.g. from Proxmox console or `ssh root@d02`): `~/scripts/d02/setup/smb.sh` — that replaces the fstab line and installs a sudoers fragment so the docker user can run `sudo systemctl daemon-reload` and `sudo mount /mnt/nas/data1/media` without a password. Then as docker: `sudo systemctl daemon-reload` and `sudo mount /mnt/nas/data1/media` (or reboot). After that it mounts automatically at boot.
 
 ### iSCSI mount missing or "can't find UUID" (including after boot)
 

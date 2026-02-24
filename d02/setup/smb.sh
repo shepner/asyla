@@ -28,6 +28,8 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 log_info "Starting SMB/CIFS client configuration..."
 
 # Update package lists
@@ -87,6 +89,12 @@ if grep -q "/mnt/nas/data1/media.*cifs" /etc/fstab; then
 fi
 log_info "Adding SMB mount to /etc/fstab (mount at boot, use NAS IP)..."
 echo "$SMB_FSTAB_LINE" >> /etc/fstab
+
+# Allow docker to run daemon-reload and mount/umount without password (account has no password)
+if [ -f "$SCRIPT_DIR/sudoers.d/90-d02-mounts" ]; then
+    install -o root -g root -m 440 "$SCRIPT_DIR/sudoers.d/90-d02-mounts" /etc/sudoers.d/90-d02-mounts
+    log_info "Installed sudoers fragment so docker can run: sudo systemctl daemon-reload, sudo mount /mnt/nas/data1/media"
+fi
 
 # Clean up package cache
 log_info "Cleaning up package cache..."
