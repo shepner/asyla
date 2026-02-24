@@ -96,6 +96,17 @@ if [ -f "$SCRIPT_DIR/sudoers.d/90-d02-mounts" ]; then
     log_info "Installed sudoers fragment so docker can run: sudo systemctl daemon-reload, sudo mount /mnt/nas/data1/media"
 fi
 
+# Reload systemd so it uses the new fstab; clear busy mount point if needed; then mount
+log_info "Reloading systemd and mounting SMB share..."
+systemctl daemon-reload
+systemctl stop mnt-nas-data1-media.mount 2>/dev/null || true
+umount -l /mnt/nas/data1/media 2>/dev/null || true
+if mount /mnt/nas/data1/media 2>/dev/null; then
+    log_info "SMB share mounted at /mnt/nas/data1/media"
+else
+    mount /mnt/nas/data1/media || log_warn "Mount failed (check credentials and NAS); will mount at boot."
+fi
+
 # Clean up package cache
 log_info "Cleaning up package cache..."
 apt autoremove -y
