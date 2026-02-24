@@ -2,6 +2,7 @@
 # TC_datalogger on d03. Usage: tc_datalogger.sh [switch ...] e.g. backup|update|refresh|rebuild|up|down|restart|logs
 # Switches can be combined (e.g. down backup up). Run from anywhere; loads ~/scripts/docker/common.env.
 # Working files under /mnt/docker/TC_datalogger; backups to /mnt/nas/data1/docker (tgz).
+# Builds use --parallel so all six microservices build concurrently (much faster than serial).
 
 set -euo pipefail
 
@@ -40,7 +41,7 @@ do_backup() {
 do_update() {
   echo "[INFO] Pulling latest from app repo and rebuilding (not starting app; use up or restart to start)"
   git -C "$REPO_DIR" pull
-  run_compose build --pull
+  run_compose build --pull --parallel
 }
 
 run_cmd() {
@@ -61,12 +62,13 @@ run_cmd() {
       do_update
       ;;
     refresh)
-      echo "[INFO] Rebuilding and starting"
-      run_compose up -d --build
+      echo "[INFO] Rebuilding (parallel) and starting"
+      run_compose build --parallel
+      run_compose up -d
       ;;
     rebuild)
-      echo "[INFO] Full rebuild (no cache) and start"
-      run_compose build --no-cache
+      echo "[INFO] Full rebuild (no cache, parallel) and start"
+      run_compose build --no-cache --parallel
       run_compose up -d
       ;;
     up)

@@ -24,6 +24,10 @@ Torn City API data logger (→ BigQuery). First application on d03; managed enti
    ~/scripts/d03/apps/TC_datalogger/tc_datalogger.sh up
    ```
 
+## Builds (parallel)
+
+`update`, `refresh`, and `rebuild` use `docker compose build --parallel` so all six microservices build at once. This reduces total build time from about an hour (serial) to roughly the duration of the slowest single service (often ~10–20 minutes), depending on CPU/memory.
+
 ## Commands (on d03)
 
 All commands source `~/scripts/docker/common.env` (DOCKER_DL, DOCKER_D1).
