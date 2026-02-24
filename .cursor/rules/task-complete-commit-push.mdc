@@ -19,3 +19,7 @@ When a task is **complete** (all requested work is done and the user is satisfie
 Do **not** commit or push in the middle of a multi-step task; only when the **entire** task is finished. If the user says "done" or "that's it" or the conversation clearly indicates task completion, treat that as the trigger.
 
 If there are no changes to commit (`git status` shows nothing to commit), skip commit/push and say so. Do not force an empty commit.
+
+## Common mistake to avoid
+
+**Do not** finish your reply with a summary and then stop. If the task is complete and there are file changes, **run** the commit-and-push steps in the same turn before saying you're done. The user should not have to ask you to "sync to the repo" or "push" after you've declared the task complete.

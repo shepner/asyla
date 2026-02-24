@@ -10,3 +10,4 @@ This is the **asyla** project. Cursor is expected to **document and improve its 
 ## Current artifacts
 
 - Rule: `.cursor/rules/self-document-workflows.mdc`
+- Rule: `.cursor/rules/task-complete-commit-push.mdc` — when a task is complete, run commit-and-push in the same turn; do not leave it for the user to ask.
