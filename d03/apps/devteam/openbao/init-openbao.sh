@@ -12,10 +12,12 @@ BAO="docker exec -e BAO_ADDR=http://127.0.0.1:8200 $CONTAINER bao"
 
 echo "=== OpenBao Init ==="
 
-# Check if already initialized
-if $BAO status 2>/dev/null | grep -q "Initialized.*true"; then
+# bao status returns 0=unsealed, 1=error, 2=sealed — capture output regardless of exit code
+STATUS_OUTPUT=$($BAO status 2>&1 || true)
+
+if echo "$STATUS_OUTPUT" | grep -q "Initialized.*true"; then
   echo "[INFO] OpenBao is already initialized."
-  if $BAO status 2>/dev/null | grep -q "Sealed.*true"; then
+  if echo "$STATUS_OUTPUT" | grep -q "Sealed.*true"; then
     echo "[WARN] OpenBao is sealed. Unsealing..."
     for i in 1 2 3; do
       read -rsp "Enter unseal key $i: " KEY && echo
