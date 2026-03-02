@@ -20,39 +20,31 @@ OpenBao must start before Plane (secrets bootstrap dependency).
 ~/scripts/d03/apps/devteam/uptime-kuma/uptime-kuma.sh up
 ```
 
-## First-time setup
+## First-time setup (automated)
 
-### 1. OpenBao
-
-```bash
-~/scripts/d03/apps/devteam/openbao/openbao.sh up
-docker exec -it openbao bao operator init
-# Save root token + unseal keys to Bitwarden
-docker exec -it openbao bao operator unseal  # repeat 3x with different keys
-docker exec -it openbao bao login             # use root token
-docker exec -it openbao bao secrets enable -path=secret kv-v2
-```
-
-### 2. Plane
-
-Copy `.env.example` to `.env` and set secure passwords before first start:
+Run the deployment orchestrator. It handles everything and prompts when needed:
 
 ```bash
-cd ~/scripts/d03/apps/devteam/plane
-cp .env.example .env
-# Edit .env: set POSTGRES_PASSWORD, RABBITMQ_PASSWORD, AWS keys, SECRET_KEY, LIVE_SERVER_SECRET_KEY
-~/scripts/d03/apps/devteam/plane/plane.sh up
+~/scripts/d03/apps/devteam/deploy-devteam.sh
 ```
 
-Access `https://plane.asyla.org` to complete initial setup (create admin account).
+This single script:
+1. Starts OpenBao, initializes + unseals it, prompts you to save keys to Bitwarden
+2. Stores your Cursor API key in OpenBao
+3. Generates Plane `.env` with secure random passwords, starts Plane, runs setup
+4. Starts Uptime Kuma, creates health monitors
+5. Restarts internal-proxy and cloudflared
+6. Prompts for Pi-hole DNS records
+7. Verifies access
 
-### 3. Uptime Kuma
+### Individual setup scripts (for partial runs)
 
-```bash
-~/scripts/d03/apps/devteam/uptime-kuma/uptime-kuma.sh up
-```
+If you need to re-run a specific step:
 
-Access `https://status.asyla.org` to create admin account and configure monitors.
+- `openbao/init-openbao.sh` — initialize and unseal (idempotent)
+- `plane/generate-env.sh` — generate .env from template (skips if .env exists)
+- `plane/setup-plane.sh` — create workspace, project, users (idempotent)
+- `uptime-kuma/setup-monitors.sh` — create health monitors (idempotent)
 
 ## Data locations
 
