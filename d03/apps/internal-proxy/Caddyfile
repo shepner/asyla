@@ -19,6 +19,21 @@ gitea.asyla.org gitea {
     reverse_proxy gitea:3000
 }
 
+plane.asyla.org {
+    import internal_tls
+    reverse_proxy plane-proxy:80
+}
+
+vault.asyla.org {
+    import internal_tls
+    reverse_proxy openbao:8200
+}
+
+status.asyla.org {
+    import internal_tls
+    reverse_proxy uptime-kuma:3001
+}
+
 # Fallback for other hostnames / direct IP
 :80 {
     respond "d03 internal proxy ready" 200

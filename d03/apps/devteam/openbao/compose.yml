@@ -1,0 +1,27 @@
+# OpenBao on d03 — secrets management for devteam infrastructure
+# Data under /mnt/docker/Devteam/OpenBao
+# Access via internal-proxy only (vault.asyla.org). No external tunnel.
+# Run with: ~/scripts/d03/apps/devteam/openbao/openbao.sh up
+# After first start: bao operator init, bao operator unseal
+
+networks:
+  openbao_net:
+    name: openbao_net
+    driver: bridge
+
+services:
+  openbao:
+    image: openbao/openbao:latest
+    container_name: openbao
+    restart: unless-stopped
+    cap_add:
+      - IPC_LOCK
+    environment:
+      - BAO_ADDR=http://127.0.0.1:8200
+    volumes:
+      - ${DOCKER_DL}/Devteam/OpenBao/file:/openbao/file
+      - ${DOCKER_DL}/Devteam/OpenBao/logs:/openbao/logs
+      - ./config/openbao.hcl:/openbao/config/openbao.hcl:ro
+    command: server -config=/openbao/config/openbao.hcl
+    networks:
+      - openbao_net

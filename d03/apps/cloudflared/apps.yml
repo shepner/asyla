@@ -33,3 +33,15 @@ apps:
     service: tc-dashboard
     port: 8080
     access: true
+
+  - app: plane
+    hostname: plane
+    service: plane-proxy
+    port: 80
+    access: true
+
+  - app: uptime-kuma
+    hostname: status
+    service: uptime-kuma
+    port: 3001
+    access: true

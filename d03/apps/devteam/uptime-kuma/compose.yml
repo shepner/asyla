@@ -1,0 +1,21 @@
+# Uptime Kuma on d03 — process and service monitoring for devteam
+# Data under /mnt/docker/Devteam/UptimeKuma
+# Access via internal-proxy (status.asyla.org).
+# Run with: ~/scripts/d03/apps/devteam/uptime-kuma/uptime-kuma.sh up
+
+networks:
+  uptimekuma_net:
+    name: uptimekuma_net
+    driver: bridge
+
+services:
+  uptime-kuma:
+    image: louislam/uptime-kuma:1
+    container_name: uptime-kuma
+    restart: unless-stopped
+    volumes:
+      - ${DOCKER_DL}/Devteam/UptimeKuma/data:/app/data
+    environment:
+      - TZ=${LOCAL_TZ:-America/Chicago}
+    networks:
+      - uptimekuma_net

@@ -20,6 +20,9 @@ services:
     networks:
       - tc_datalogger_net
       - gitea_net
+      - plane_net
+      - openbao_net
+      - uptimekuma_net
 
 networks:
   tc_datalogger_net:
@@ -28,3 +31,12 @@ networks:
   gitea_net:
     external: true
     name: gitea_net
+  plane_net:
+    external: true
+    name: plane_net
+  openbao_net:
+    external: true
+    name: openbao_net
+  uptimekuma_net:
+    external: true
+    name: uptimekuma_net
