@@ -61,47 +61,26 @@ read -rsp "Enter OpenBao root token: " BAO_TOKEN && echo
 docker exec -e BAO_ADDR="$OPENBAO_ADDR" -e BAO_TOKEN="$BAO_TOKEN" \
   openbao bao kv put secret/devteam/plane/ea api_key="$EA_API_KEY"
 
-# Check/create workspace
-echo "[INFO] Checking workspace '$WORKSPACE_SLUG'..."
-WS_CHECK=$(plane_curl -H "X-API-Key: $EA_API_KEY" \
-  "${PLANE_API_BASE}/api/v1/workspaces/${WORKSPACE_SLUG}/" || true)
+# Check workspace / project only when not in --store-keys mode.
+if [ "${1:-}" != "--store-keys" ]; then
+  echo "[INFO] Checking workspace '$WORKSPACE_SLUG'..."
+  WS_CHECK=$(plane_curl -H "X-API-Key: $EA_API_KEY" \
+    "${PLANE_API_BASE}/api/v1/workspaces/${WORKSPACE_SLUG}/" || true)
 
-if echo "$WS_CHECK" | grep -q '"slug"'; then
-  echo "[INFO] Workspace '$WORKSPACE_SLUG' already exists."
-else
-  echo "[INFO] Creating workspace '$WORKSPACE_SLUG'..."
-  WS_RESULT=$(plane_curl -X POST \
-    -H "X-API-Key: $EA_API_KEY" \
-    -H "Content-Type: application/json" \
-    -d "{\"name\": \"DevTeam\", \"slug\": \"$WORKSPACE_SLUG\"}" \
-    "${PLANE_API_BASE}/api/v1/workspaces/")
-  echo "$WS_RESULT" | head -c 200
-  echo ""
-  if ! echo "$WS_RESULT" | grep -q '"slug"'; then
-    echo "[ERROR] Failed to create workspace. Response: $WS_RESULT"
-    exit 1
+  if echo "$WS_CHECK" | grep -q '"slug"'; then
+    echo "[INFO] Workspace '$WORKSPACE_SLUG' already exists."
+  else
+    echo "[WARN] Workspace '$WORKSPACE_SLUG' not found via API (Plane CE may manage this via UI only)."
   fi
-fi
 
-# Check/create project
-echo "[INFO] Checking project '$PROJECT_ID'..."
-PROJ_CHECK=$(plane_curl -H "X-API-Key: $EA_API_KEY" \
-  "${PLANE_API_BASE}/api/v1/workspaces/${WORKSPACE_SLUG}/projects/" || true)
+  echo "[INFO] Checking project '$PROJECT_ID'..."
+  PROJ_CHECK=$(plane_curl -H "X-API-Key: $EA_API_KEY" \
+    "${PLANE_API_BASE}/api/v1/workspaces/${WORKSPACE_SLUG}/projects/" || true)
 
-if echo "$PROJ_CHECK" | grep -q "\"identifier\":\"$PROJECT_ID\""; then
-  echo "[INFO] Project '$PROJECT_ID' already exists."
-else
-  echo "[INFO] Creating project '$PROJECT_NAME' ($PROJECT_ID)..."
-  PROJ_RESULT=$(plane_curl -X POST \
-    -H "X-API-Key: $EA_API_KEY" \
-    -H "Content-Type: application/json" \
-    -d "{\"name\": \"$PROJECT_NAME\", \"identifier\": \"$PROJECT_ID\", \"network\": 2}" \
-    "${PLANE_API_BASE}/api/v1/workspaces/${WORKSPACE_SLUG}/projects/")
-  echo "$PROJ_RESULT" | head -c 200
-  echo ""
-  if ! echo "$PROJ_RESULT" | grep -q '"identifier"'; then
-    echo "[ERROR] Failed to create project. Response: $PROJ_RESULT"
-    exit 1
+  if echo "$PROJ_CHECK" | grep -q "\"identifier\":\"$PROJECT_ID\""; then
+    echo "[INFO] Project '$PROJECT_ID' already exists."
+  else
+    echo "[WARN] Project '$PROJECT_ID' not found via API. Ensure the UI project matches this ID."
   fi
 fi
 
