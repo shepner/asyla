@@ -129,6 +129,9 @@ done
 echo ""
 echo "[INFO] Plane API is healthy."
 
+echo "[INFO] Restarting internal-proxy so plane.asyla.org is routable..."
+~/scripts/d03/apps/internal-proxy/internal-proxy.sh restart
+
 echo "[INFO] Running Plane setup..."
 "$SCRIPT_DIR/plane/setup-plane.sh"
 
