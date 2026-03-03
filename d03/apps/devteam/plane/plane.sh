@@ -2,7 +2,7 @@
 # Plane on d03. Usage: plane.sh [switch ...] e.g. backup|update|refresh|up|down|restart|logs
 # Switches can be combined (e.g. down backup up). Run from anywhere; loads ~/scripts/docker/common.env.
 # Data under /mnt/docker/Devteam/Plane; backups go to /mnt/nas/data1/docker (tgz).
-# Pulls use --parallel (d03 has 12 threads, slow per-thread; parallelism is key).
+# Modern Docker Compose pulls in parallel by default (--parallel is deprecated).
 
 set -euo pipefail
 
@@ -38,8 +38,8 @@ do_backup() {
 }
 
 do_update() {
-  echo "[INFO] Pulling latest images in parallel (not starting app; use up or restart to start)"
-  run_compose pull --parallel
+  echo "[INFO] Pulling latest images (not starting app; use up or restart to start)"
+  run_compose pull
 }
 
 run_cmd() {
@@ -60,13 +60,13 @@ run_cmd() {
       do_update
       ;;
     refresh)
-      echo "[INFO] Pulling latest images (parallel) and starting"
-      run_compose pull --parallel
+      echo "[INFO] Pulling latest images and starting"
+      run_compose pull
       run_compose up -d
       ;;
     pull)
-      echo "[INFO] Pulling images in parallel"
-      run_compose pull --parallel
+      echo "[INFO] Pulling images"
+      run_compose pull
       ;;
     up)
       mkdir -p "$APP_ROOT"/{pgdata,redis,rabbitmq,uploads,logs/{api,worker,beat,migrator}}

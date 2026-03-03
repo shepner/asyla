@@ -7,9 +7,15 @@
 
 set -euo pipefail
 
-PLANE_URL="${PLANE_URL:-http://plane-proxy:80}"
-PLANE_INTERNAL_URL="${PLANE_INTERNAL_URL:-http://localhost:80}"
+# Plane API must be reached via Docker network (plane-proxy is not published to host).
+# We use a helper container on plane_net to make API calls.
+PLANE_API_BASE="http://plane-proxy:80"
 OPENBAO_ADDR="${OPENBAO_ADDR:-http://127.0.0.1:8200}"
+
+# Wrapper: run curl inside a container on plane_net so we can reach plane-proxy directly.
+plane_curl() {
+  docker run --rm --network plane_net curlimages/curl -s "$@"
+}
 WORKSPACE_SLUG="devteam"
 PROJECT_NAME="DevTeam"
 PROJECT_ID="DT"
@@ -38,12 +44,12 @@ echo ""
 
 # Verify API access
 echo "[INFO] Verifying API access..."
-HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+VERIFY_RESPONSE=$(plane_curl -o /dev/null -w "%{http_code}" \
   -H "X-API-Key: $EA_API_KEY" \
-  "${PLANE_INTERNAL_URL}/api/v1/users/me/")
+  "${PLANE_API_BASE}/api/v1/users/me/")
 
-if [ "$HTTP_CODE" != "200" ]; then
-  echo "[ERROR] API returned HTTP $HTTP_CODE. Check your API key and that Plane is running."
+if [ "$VERIFY_RESPONSE" != "200" ]; then
+  echo "[ERROR] API returned HTTP $VERIFY_RESPONSE. Check your API key and that Plane is running."
   exit 1
 fi
 echo "[INFO] API access verified."
@@ -56,36 +62,46 @@ docker exec -e BAO_ADDR="$OPENBAO_ADDR" -e BAO_TOKEN="$BAO_TOKEN" \
 
 # Check/create workspace
 echo "[INFO] Checking workspace '$WORKSPACE_SLUG'..."
-WS_CHECK=$(curl -s -H "X-API-Key: $EA_API_KEY" \
-  "${PLANE_INTERNAL_URL}/api/v1/workspaces/${WORKSPACE_SLUG}/" || true)
+WS_CHECK=$(plane_curl -H "X-API-Key: $EA_API_KEY" \
+  "${PLANE_API_BASE}/api/v1/workspaces/${WORKSPACE_SLUG}/" || true)
 
 if echo "$WS_CHECK" | grep -q '"slug"'; then
   echo "[INFO] Workspace '$WORKSPACE_SLUG' already exists."
 else
   echo "[INFO] Creating workspace '$WORKSPACE_SLUG'..."
-  curl -s -X POST \
+  WS_RESULT=$(plane_curl -X POST \
     -H "X-API-Key: $EA_API_KEY" \
     -H "Content-Type: application/json" \
     -d "{\"name\": \"DevTeam\", \"slug\": \"$WORKSPACE_SLUG\"}" \
-    "${PLANE_INTERNAL_URL}/api/v1/workspaces/" | head -c 200
+    "${PLANE_API_BASE}/api/v1/workspaces/")
+  echo "$WS_RESULT" | head -c 200
   echo ""
+  if ! echo "$WS_RESULT" | grep -q '"slug"'; then
+    echo "[ERROR] Failed to create workspace. Response: $WS_RESULT"
+    exit 1
+  fi
 fi
 
 # Check/create project
 echo "[INFO] Checking project '$PROJECT_ID'..."
-PROJ_CHECK=$(curl -s -H "X-API-Key: $EA_API_KEY" \
-  "${PLANE_INTERNAL_URL}/api/v1/workspaces/${WORKSPACE_SLUG}/projects/" || true)
+PROJ_CHECK=$(plane_curl -H "X-API-Key: $EA_API_KEY" \
+  "${PLANE_API_BASE}/api/v1/workspaces/${WORKSPACE_SLUG}/projects/" || true)
 
 if echo "$PROJ_CHECK" | grep -q "\"identifier\":\"$PROJECT_ID\""; then
   echo "[INFO] Project '$PROJECT_ID' already exists."
 else
   echo "[INFO] Creating project '$PROJECT_NAME' ($PROJECT_ID)..."
-  curl -s -X POST \
+  PROJ_RESULT=$(plane_curl -X POST \
     -H "X-API-Key: $EA_API_KEY" \
     -H "Content-Type: application/json" \
     -d "{\"name\": \"$PROJECT_NAME\", \"identifier\": \"$PROJECT_ID\", \"network\": 2}" \
-    "${PLANE_INTERNAL_URL}/api/v1/workspaces/${WORKSPACE_SLUG}/projects/" | head -c 200
+    "${PLANE_API_BASE}/api/v1/workspaces/${WORKSPACE_SLUG}/projects/")
+  echo "$PROJ_RESULT" | head -c 200
   echo ""
+  if ! echo "$PROJ_RESULT" | grep -q '"identifier"'; then
+    echo "[ERROR] Failed to create project. Response: $PROJ_RESULT"
+    exit 1
+  fi
 fi
 
 # Invite agent users

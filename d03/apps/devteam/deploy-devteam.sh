@@ -116,7 +116,7 @@ fi
 echo "[INFO] Waiting for Plane API to become healthy..."
 ATTEMPTS=0
 MAX_ATTEMPTS=60
-until curl -sf http://localhost:80/api/health > /dev/null 2>&1; do
+until docker run --rm --network plane_net curlimages/curl -sf http://plane-proxy:80/api/health > /dev/null 2>&1; do
   ATTEMPTS=$((ATTEMPTS + 1))
   if [ "$ATTEMPTS" -ge "$MAX_ATTEMPTS" ]; then
     echo "[ERROR] Plane API did not become healthy after ${MAX_ATTEMPTS} attempts."
@@ -128,6 +128,9 @@ until curl -sf http://localhost:80/api/health > /dev/null 2>&1; do
 done
 echo ""
 echo "[INFO] Plane API is healthy."
+
+# Pre-create external networks that internal-proxy depends on (Uptime Kuma isn't started yet)
+docker network create uptimekuma_net 2>/dev/null || true
 
 echo "[INFO] Restarting internal-proxy so plane.asyla.org is routable..."
 ~/scripts/d03/apps/internal-proxy/internal-proxy.sh restart

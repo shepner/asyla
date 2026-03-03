@@ -213,7 +213,7 @@ services:
       - plane_net
 
   plane-minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2024-11-07T00-52-20Z
     container_name: plane-minio
     command: server /export --console-address ":9090"
     restart: unless-stopped
