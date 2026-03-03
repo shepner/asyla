@@ -30,6 +30,29 @@ if [[ "$CONFIRM" != [yY] ]]; then
   exit 0
 fi
 
+# ─── Step 0: Pull all images in parallel ─────────────────────────────────────
+
+echo ""
+echo "=== [0/7] Pulling all images in parallel ==="
+echo "[INFO] d03 has 12 threads (slow per-thread) — parallel pulls are much faster."
+
+# Pull all three services' images concurrently in background
+"$SCRIPT_DIR/plane/plane.sh" pull &
+PID_PLANE_PULL=$!
+
+docker pull openbao/openbao:latest &
+PID_OPENBAO_PULL=$!
+
+docker pull louislam/uptime-kuma:1 &
+PID_KUMA_PULL=$!
+
+echo "[INFO] Waiting for all image pulls to complete..."
+wait $PID_PLANE_PULL && echo "[INFO] Plane images pulled." || echo "[WARN] Plane pull had issues."
+wait $PID_OPENBAO_PULL && echo "[INFO] OpenBao image pulled." || echo "[WARN] OpenBao pull had issues."
+wait $PID_KUMA_PULL && echo "[INFO] Uptime Kuma image pulled." || echo "[WARN] Uptime Kuma pull had issues."
+
+echo "[INFO] All images pulled."
+
 # ─── Step 1: OpenBao ─────────────────────────────────────────────────────────
 
 echo ""

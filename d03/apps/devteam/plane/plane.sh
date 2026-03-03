@@ -2,6 +2,7 @@
 # Plane on d03. Usage: plane.sh [switch ...] e.g. backup|update|refresh|up|down|restart|logs
 # Switches can be combined (e.g. down backup up). Run from anywhere; loads ~/scripts/docker/common.env.
 # Data under /mnt/docker/Devteam/Plane; backups go to /mnt/nas/data1/docker (tgz).
+# Pulls use --parallel (d03 has 12 threads, slow per-thread; parallelism is key).
 
 set -euo pipefail
 
@@ -37,8 +38,8 @@ do_backup() {
 }
 
 do_update() {
-  echo "[INFO] Pulling latest images (not starting app; use up or restart to start)"
-  run_compose pull
+  echo "[INFO] Pulling latest images in parallel (not starting app; use up or restart to start)"
+  run_compose pull --parallel
 }
 
 run_cmd() {
@@ -59,9 +60,13 @@ run_cmd() {
       do_update
       ;;
     refresh)
-      echo "[INFO] Pulling latest images and starting"
-      run_compose pull
+      echo "[INFO] Pulling latest images (parallel) and starting"
+      run_compose pull --parallel
       run_compose up -d
+      ;;
+    pull)
+      echo "[INFO] Pulling images in parallel"
+      run_compose pull --parallel
       ;;
     up)
       mkdir -p "$APP_ROOT"/{pgdata,redis,rabbitmq,uploads,logs/{api,worker,beat,migrator}}
@@ -91,6 +96,7 @@ if [ $# -eq 0 ]; then
   echo "  backup   - Create tgz backup of $APP_ROOT to $BACKUP_DIR (runs in screen)" >&2
   echo "  update   - Pull latest images in screen; use up/restart to start" >&2
   echo "  refresh  - Pull latest images + start (inline)" >&2
+  echo "  pull     - Pull images in parallel" >&2
   echo "  up       - Start containers only" >&2
   echo "  down     - Stop and remove containers" >&2
   echo "  restart  - Down then up" >&2
@@ -105,7 +111,7 @@ fi
 
 for cmd in "$@"; do
   if ! run_cmd "$cmd"; then
-    echo "Usage: $0 backup|update|refresh|up|down|restart|logs [ ... ]" >&2
+    echo "Usage: $0 backup|update|refresh|pull|up|down|restart|logs [ ... ]" >&2
     exit 1
   fi
 done
