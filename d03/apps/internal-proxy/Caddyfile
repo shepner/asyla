@@ -29,6 +29,11 @@ vault.asyla.org {
     reverse_proxy openbao:8200
 }
 
+vikunja.asyla.org {
+    import internal_tls
+    reverse_proxy vikunja:3456
+}
+
 status.asyla.org {
     import internal_tls
     reverse_proxy uptime-kuma:3001

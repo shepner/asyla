@@ -18,9 +18,11 @@ echo "  DevTeam Infrastructure Deployment (d03)"
 echo "============================================"
 echo ""
 echo "This script will deploy:"
-echo "  1. OpenBao    (secrets management)   — vault.asyla.org (internal only)"
-echo "  2. Plane      (project management)   — plane.asyla.org (Cloudflare Access)"
+echo "  1. OpenBao     (secrets management)  — vault.asyla.org (internal only)"
+echo "  2. Vikunja     (task management)     — vikunja.asyla.org (Cloudflare Access)"
 echo "  3. Uptime Kuma (monitoring)          — status.asyla.org (Cloudflare Access)"
+echo ""
+echo "NOTE: Plane is already deployed and left running (will be removed once Vikunja is verified)."
 echo ""
 echo "It will also restart internal-proxy and cloudflared."
 echo ""
@@ -33,12 +35,12 @@ fi
 # ─── Step 0: Pull all images in parallel ─────────────────────────────────────
 
 echo ""
-echo "=== [0/7] Pulling all images in parallel ==="
+echo "=== [0/8] Pulling all images in parallel ==="
 echo "[INFO] d03 has 12 threads (slow per-thread) — parallel pulls are much faster."
 
-# Pull all three services' images concurrently in background
-"$SCRIPT_DIR/plane/plane.sh" pull &
-PID_PLANE_PULL=$!
+# Pull all services' images concurrently in background
+"$SCRIPT_DIR/vikunja/vikunja.sh" pull &
+PID_VIKUNJA_PULL=$!
 
 docker pull openbao/openbao:latest &
 PID_OPENBAO_PULL=$!
@@ -47,7 +49,7 @@ docker pull louislam/uptime-kuma:1 &
 PID_KUMA_PULL=$!
 
 echo "[INFO] Waiting for all image pulls to complete..."
-wait $PID_PLANE_PULL && echo "[INFO] Plane images pulled." || echo "[WARN] Plane pull had issues."
+wait $PID_VIKUNJA_PULL && echo "[INFO] Vikunja images pulled." || echo "[WARN] Vikunja pull had issues."
 wait $PID_OPENBAO_PULL && echo "[INFO] OpenBao image pulled." || echo "[WARN] OpenBao pull had issues."
 wait $PID_KUMA_PULL && echo "[INFO] Uptime Kuma image pulled." || echo "[WARN] Uptime Kuma pull had issues."
 
@@ -56,7 +58,7 @@ echo "[INFO] All images pulled."
 # ─── Step 1: OpenBao ─────────────────────────────────────────────────────────
 
 echo ""
-echo "=== [1/7] OpenBao ==="
+echo "=== [1/8] OpenBao ==="
 
 if docker ps --format '{{.Names}}' | grep -q '^openbao$'; then
   echo "[INFO] OpenBao container is already running."
@@ -72,7 +74,7 @@ echo "[INFO] Initializing OpenBao (if needed)..."
 # ─── Step 2: Store Cursor API key ────────────────────────────────────────────
 
 echo ""
-echo "=== [2/7] Store Cursor API Key in OpenBao ==="
+echo "=== [2/8] Store Cursor API Key in OpenBao ==="
 
 read -rsp "Enter OpenBao root token: " BAO_TOKEN && echo
 
@@ -98,50 +100,66 @@ fi
 
 export BAO_TOKEN
 
-# ─── Step 3: Plane ───────────────────────────────────────────────────────────
+# ─── Step 3: Vikunja ─────────────────────────────────────────────────────────
 
 echo ""
-echo "=== [3/7] Plane ==="
+echo "=== [3/8] Vikunja ==="
 
-echo "[INFO] Generating Plane .env (if needed)..."
-"$SCRIPT_DIR/plane/generate-env.sh"
+echo "[INFO] Generating Vikunja .env (if needed)..."
+"$SCRIPT_DIR/vikunja/generate-env.sh"
 
-if docker ps --format '{{.Names}}' | grep -q '^plane-api$'; then
-  echo "[INFO] Plane containers are already running."
-else
-  echo "[INFO] Starting Plane (this may take a few minutes on first run for image pulls)..."
-  "$SCRIPT_DIR/plane/plane.sh" up
+# Temporarily enable registration so setup-vikunja.sh can create the admin user.
+VIKUNJA_ENV="$SCRIPT_DIR/vikunja/.env"
+if grep -q 'ENABLE_REGISTRATION=false' "$VIKUNJA_ENV" 2>/dev/null; then
+  sed -i 's/ENABLE_REGISTRATION=false/ENABLE_REGISTRATION=true/' "$VIKUNJA_ENV"
+  REGISTRATION_ENABLED_BY_SCRIPT=true
+  echo "[INFO] Temporarily enabled user registration."
 fi
 
-echo "[INFO] Waiting for Plane API to become healthy..."
+if docker ps --format '{{.Names}}' | grep -q '^vikunja$'; then
+  echo "[INFO] Vikunja is already running."
+else
+  echo "[INFO] Starting Vikunja..."
+  "$SCRIPT_DIR/vikunja/vikunja.sh" up
+fi
+
+echo "[INFO] Waiting for Vikunja to become healthy..."
 ATTEMPTS=0
 MAX_ATTEMPTS=60
-until docker run --rm --network plane_net curlimages/curl -sf http://plane-proxy:80/api/health > /dev/null 2>&1; do
+until docker run --rm --network vikunja_net curlimages/curl -sf http://vikunja:3456/api/v1/info > /dev/null 2>&1; do
   ATTEMPTS=$((ATTEMPTS + 1))
   if [ "$ATTEMPTS" -ge "$MAX_ATTEMPTS" ]; then
-    echo "[ERROR] Plane API did not become healthy after ${MAX_ATTEMPTS} attempts."
-    echo "        Check logs: $SCRIPT_DIR/plane/plane.sh logs api"
+    echo "[ERROR] Vikunja did not respond after ${MAX_ATTEMPTS} attempts."
+    echo "        Check logs: $SCRIPT_DIR/vikunja/vikunja.sh logs"
     exit 1
   fi
   printf "."
-  sleep 5
+  sleep 3
 done
 echo ""
-echo "[INFO] Plane API is healthy."
+echo "[INFO] Vikunja is healthy."
 
-# Pre-create external networks that internal-proxy depends on (Uptime Kuma isn't started yet)
+# Pre-create external networks that internal-proxy depends on
 docker network create uptimekuma_net 2>/dev/null || true
 
-echo "[INFO] Restarting internal-proxy so plane.asyla.org is routable..."
+echo "[INFO] Restarting internal-proxy so vikunja.asyla.org is routable..."
 ~/scripts/d03/apps/internal-proxy/internal-proxy.sh restart
 
-echo "[INFO] Running Plane setup..."
-"$SCRIPT_DIR/plane/setup-plane.sh"
+echo "[INFO] Running Vikunja setup (creates admin user, project, labels, API token)..."
+"$SCRIPT_DIR/vikunja/setup-vikunja.sh"
+
+# Disable registration after setup
+if [ "${REGISTRATION_ENABLED_BY_SCRIPT:-false}" = "true" ]; then
+  sed -i 's/ENABLE_REGISTRATION=true/ENABLE_REGISTRATION=false/' "$VIKUNJA_ENV"
+  echo "[INFO] Registration disabled. Restarting Vikunja..."
+  "$SCRIPT_DIR/vikunja/vikunja.sh" restart
+  echo "[INFO] Vikunja restarted with registration disabled."
+fi
 
 # ─── Step 4: Uptime Kuma ─────────────────────────────────────────────────────
 
 echo ""
-echo "=== [4/7] Uptime Kuma ==="
+echo "=== [4/8] Uptime Kuma ==="
 
 if docker ps --format '{{.Names}}' | grep -q '^uptime-kuma$'; then
   echo "[INFO] Uptime Kuma container is already running."
@@ -157,7 +175,7 @@ echo "[INFO] Running Uptime Kuma monitor setup..."
 # ─── Step 5: Restart shared infra ────────────────────────────────────────────
 
 echo ""
-echo "=== [5/7] Restarting shared infrastructure ==="
+echo "=== [5/8] Restarting shared infrastructure ==="
 
 echo "[INFO] Restarting internal-proxy (Caddy)..."
 ~/scripts/d03/apps/internal-proxy/internal-proxy.sh restart
@@ -168,23 +186,36 @@ echo "[INFO] Restarting cloudflared..."
 # ─── Step 6: DNS ─────────────────────────────────────────────────────────────
 
 echo ""
-echo "=== [6/7] Pi-hole DNS Records ==="
+echo "=== [6/8] Pi-hole DNS Records ==="
 echo ""
-echo "Add these A records in Pi-hole (Local DNS -> DNS Records):"
-echo "  plane.asyla.org   -> 10.0.0.62"
-echo "  vault.asyla.org   -> 10.0.0.62"
-echo "  status.asyla.org  -> 10.0.0.62"
+echo "Add (or verify) these A records in Pi-hole (Local DNS -> DNS Records):"
+echo "  vault.asyla.org    -> 10.0.0.62"
+echo "  vikunja.asyla.org  -> 10.0.0.62"
+echo "  status.asyla.org   -> 10.0.0.62"
+echo ""
+echo "(plane.asyla.org should already exist from the earlier deployment.)"
 echo ""
 read -rp "Press Enter when DNS records are added..."
 
-# ─── Step 7: Verify ──────────────────────────────────────────────────────────
+# ─── Step 7: Cloudflare Access ───────────────────────────────────────────────
 
 echo ""
-echo "=== [7/7] Verification ==="
+echo "=== [7/8] Cloudflare Access ==="
+echo ""
+echo "Ensure vikunja.asyla.org is added to the Cloudflare Access application:"
+echo "  Cloudflare Zero Trust -> Access -> Applications"
+echo "  Add vikunja.asyla.org (or extend the existing devteam app to cover it)."
+echo ""
+read -rp "Press Enter when Cloudflare Access is configured (or skip if already done)..."
+
+# ─── Step 8: Verify ──────────────────────────────────────────────────────────
+
+echo ""
+echo "=== [8/8] Verification ==="
 echo ""
 echo "Test access (LAN):"
 
-for host in vault.asyla.org plane.asyla.org status.asyla.org; do
+for host in vault.asyla.org vikunja.asyla.org status.asyla.org; do
   HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" "https://${host}/" 2>/dev/null || echo "000")
   if [ "$HTTP_CODE" = "000" ]; then
     echo "  [WARN] https://$host — connection failed (DNS not propagated yet?)"
@@ -194,10 +225,14 @@ for host in vault.asyla.org plane.asyla.org status.asyla.org; do
 done
 
 echo ""
-echo "Test access (remote — requires Cloudflare Access):"
-echo "  https://plane.asyla.org"
+echo "Test dispatcher (dry-run):"
+echo "  cd ~/scripts/knowledge-hub"
+echo "  python3 .cursor/helpers/dispatch_agent.py --ticket 1 --project . --dry-run"
+echo ""
+echo "Test remote access (requires Cloudflare Access):"
+echo "  https://vikunja.asyla.org"
 echo "  https://status.asyla.org"
-echo "  (vault.asyla.org is internal only — no external access)"
+echo "  (vault.asyla.org is internal only)"
 
 echo ""
 echo "============================================"

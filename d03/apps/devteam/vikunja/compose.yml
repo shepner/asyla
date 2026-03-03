@@ -1,0 +1,49 @@
+# Vikunja task management on d03 — lightweight replacement for Plane
+# Go backend + Vue frontend, single binary image.
+# Access via internal-proxy (vikunja.asyla.org). Port 3456 not published externally.
+# Run with: ~/scripts/d03/apps/devteam/vikunja/vikunja.sh up
+
+networks:
+  vikunja_net:
+    name: vikunja_net
+    driver: bridge
+
+services:
+  vikunja:
+    image: vikunja/vikunja
+    container_name: vikunja
+    restart: unless-stopped
+    environment:
+      VIKUNJA_SERVICE_PUBLICURL: ${VIKUNJA_PUBLIC_URL:-https://vikunja.asyla.org}
+      VIKUNJA_DATABASE_HOST: vikunja-db
+      VIKUNJA_DATABASE_TYPE: postgres
+      VIKUNJA_DATABASE_USER: ${POSTGRES_USER:-vikunja}
+      VIKUNJA_DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
+      VIKUNJA_DATABASE_DATABASE: ${POSTGRES_DB:-vikunja}
+      VIKUNJA_SERVICE_JWTSECRET: ${JWT_SECRET}
+      # Set to true only during initial setup; disable after admin user is created.
+      VIKUNJA_SERVICE_ENABLEREGISTRATION: ${ENABLE_REGISTRATION:-false}
+    volumes:
+      - ${DOCKER_DL:-/mnt/docker}/Devteam/Vikunja/files:/app/vikunja/files
+    depends_on:
+      vikunja-db:
+        condition: service_healthy
+    networks:
+      - vikunja_net
+
+  vikunja-db:
+    image: postgres:16-alpine
+    container_name: vikunja-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-vikunja}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-vikunja}
+    volumes:
+      - ${DOCKER_DL:-/mnt/docker}/Devteam/Vikunja/pgdata:/var/lib/postgresql/data
+    networks:
+      - vikunja_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h localhost -U ${POSTGRES_USER:-vikunja}"]
+      interval: 2s
+      start_period: 30s
