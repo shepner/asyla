@@ -16,9 +16,10 @@ OPENBAO_ADDR="${OPENBAO_ADDR:-http://127.0.0.1:8200}"
 plane_curl() {
   docker run --rm --network plane_net curlimages/curl -s "$@"
 }
-WORKSPACE_SLUG="devteam"
-PROJECT_NAME="DevTeam"
-PROJECT_ID="DT"
+# Match the existing Plane workspace + project you created in the UI.
+WORKSPACE_SLUG="asyla"
+PROJECT_NAME="asyla"
+PROJECT_ID="ASYLA"
 
 AGENT_ROLES=(
   "product-manager"
