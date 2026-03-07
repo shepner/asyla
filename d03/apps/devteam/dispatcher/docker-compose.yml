@@ -1,0 +1,28 @@
+# Dispatcher (knowledge-hub dispatch agent) on d03.
+# Image is built from knowledge-hub checkout; on d03 that is ~/scripts/knowledge-hub.
+# Build context from this dir: ../../../../../knowledge-hub (so dispatcher lives under ~/scripts/d03/apps/devteam/).
+# Usage: ./dispatcher.sh up | down | one-cycle | logs
+
+services:
+  dispatcher:
+    build:
+      context: ../../../../../knowledge-hub
+      dockerfile: Dockerfile
+    image: dispatcher:latest
+    container_name: dispatcher
+    restart: unless-stopped
+    env_file:
+      - .config/env
+    environment:
+      - DISPATCH_POLL_INTERVAL=${DISPATCH_POLL_INTERVAL:-300}
+    volumes:
+      - dispatcher_runs:/app/_runs
+    # Optional: bind-mount host knowledge-hub _runs for persistence (set HUB_RUNS_DIR in .config/env)
+    # - ${HUB_RUNS_DIR:-/dev/null}/_runs:/app/_runs  # uncomment and set HUB_RUNS_DIR to override
+    command: >
+      python3 .cursor/helpers/dispatch_agent.py
+      --poll --poll-interval $$DISPATCH_POLL_INTERVAL
+      --project /app
+
+volumes:
+  dispatcher_runs:

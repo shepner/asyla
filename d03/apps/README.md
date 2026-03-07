@@ -11,6 +11,7 @@ All d03 apps use the same management pattern: a script with **up**, **down**, **
 | **devteam/openbao** | `~/scripts/d03/apps/devteam/openbao/openbao.sh` | Secrets management; internal only (vault.asyla.org via proxy) |
 | **devteam/plane** | `~/scripts/d03/apps/devteam/plane/plane.sh` | Project management; external (plane.asyla.org via tunnel + access) |
 | **devteam/uptime-kuma** | `~/scripts/d03/apps/devteam/uptime-kuma/uptime-kuma.sh` | Monitoring; external (status.asyla.org via tunnel + access) |
+| **devteam/dispatcher** | `~/scripts/d03/apps/devteam/dispatcher/dispatcher.sh` | Cursor dispatcher (poll loop); build from knowledge-hub; needs `.config/env` with OpenBao token |
 
 Start order (proxy needs all app networks, devteam has internal dependencies):
 
