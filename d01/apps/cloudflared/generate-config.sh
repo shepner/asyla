@@ -4,12 +4,18 @@ Generate cloudflared config.yml from apps.yml for a locally-managed tunnel.
 All hostnames are defined in the config file; no need to add each in the dashboard.
 
 Usage:
-  ./generate-config.sh   (reads apps.yml and .env in current dir, writes config.yml)
-  Or: TUNNEL_ID=your-uuid ./generate-config.sh
+  ./generate-config.sh   (reads apps.yml from script dir; reads/writes secrets in DATA_DIR)
+  Or: DATA_DIR=/mnt/docker/cloudflared TUNNEL_ID=your-uuid ./generate-config.sh
 
-Requires: TUNNEL_ID in environment or in .env (same dir as this script).
-Output: config.yml (credentials-file path is for inside container: /etc/cloudflared/credentials.json)
+DATA_DIR precedence:
+  1. DATA_DIR environment variable
+  2. $DOCKER_DL/cloudflared  (DOCKER_DL from env)
+  3. /mnt/docker/cloudflared (default)
+
+Reads: DATA_DIR/.env (for TUNNEL_ID), DATA_DIR/credentials.json (if TUNNEL_ID not set, extracts from JSON)
+Writes: DATA_DIR/config.yml
 """
+import json
 import os
 import re
 import sys
@@ -17,12 +23,17 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 APPS_YAML = SCRIPT_DIR / "apps.yml"
-ENV_FILE = SCRIPT_DIR / ".env"
-OUTPUT_CONFIG = SCRIPT_DIR / "config.yml"
+
+# Resolve DATA_DIR: env var > $DOCKER_DL/cloudflared > default
+_docker_dl = os.environ.get("DOCKER_DL", "/mnt/docker")
+DATA_DIR = Path(os.environ.get("DATA_DIR", f"{_docker_dl}/cloudflared"))
+ENV_FILE = DATA_DIR / ".env"
+OUTPUT_CONFIG = DATA_DIR / "config.yml"
+CREDENTIALS_FILE = DATA_DIR / "credentials.json"
 
 
 def load_dotenv(path: Path) -> None:
-    """Load KEY=VALUE from .env into os.environ."""
+    """Load KEY=VALUE from .env into os.environ (existing env vars take precedence)."""
     if not path.exists():
         return
     with open(path) as f:
@@ -41,7 +52,6 @@ def parse_apps_yml(path: Path) -> tuple[str, list[dict]]:
     m = re.search(r"^domain:\s*(\S+)", text, re.MULTILINE)
     if m:
         domain = m.group(1).strip()
-    # Each app has hostname, service, port (and optional access); match flexibly
     for block in re.split(r"\n\s*-\s+app:", text):
         hostname_m = re.search(r"hostname:\s*(\S+)", block)
         service_m = re.search(r"service:\s*(\S+)", block)
@@ -59,11 +69,29 @@ def parse_apps_yml(path: Path) -> tuple[str, list[dict]]:
 
 
 def main() -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
     load_dotenv(ENV_FILE)
+
     tunnel_id = os.environ.get("TUNNEL_ID", "").strip()
+
+    # Try to extract TUNNEL_ID from credentials.json if not already set
+    if not tunnel_id and CREDENTIALS_FILE.exists():
+        try:
+            creds = json.loads(CREDENTIALS_FILE.read_text())
+            tunnel_id = creds.get("TunnelID", "").strip()
+            if tunnel_id:
+                print(f"[INFO] Using TUNNEL_ID from {CREDENTIALS_FILE}: {tunnel_id}")
+        except Exception:
+            pass
+
     if not tunnel_id:
-        print("TUNNEL_ID not set. Set it in .env or environment.", file=sys.stderr)
+        print(
+            f"TUNNEL_ID not set. Set it in {ENV_FILE} or environment,\n"
+            f"or place credentials.json in {DATA_DIR}.",
+            file=sys.stderr,
+        )
         sys.exit(1)
+
     if not APPS_YAML.exists():
         print(f"apps.yml not found: {APPS_YAML}", file=sys.stderr)
         sys.exit(1)

@@ -1,7 +1,8 @@
 # Internal reverse proxy for d01 (split-DNS / Pi-hole)
 # When app hostnames resolve to d01 (e.g. via Pi-hole), this serves HTTPS and proxies to apps.
-# TLS: Let's Encrypt via Cloudflare DNS-01 (set CF_API_TOKEN in .env).
+# TLS: Let's Encrypt via Cloudflare DNS-01 (set CF_API_TOKEN in /mnt/docker/internal-proxy/.env).
 #
+# Secrets and Caddy TLS data live in DATA_DIR (/mnt/docker/internal-proxy), not alongside scripts.
 # Start after any app that needs internal proxy is running (app network must exist).
 # Ports 80 and 443 must not be used by another service on d01.
 
@@ -17,6 +18,8 @@ services:
       - "443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${DOCKER_DL:-/mnt/docker}/internal-proxy/caddy-data:/data
+      - ${DOCKER_DL:-/mnt/docker}/internal-proxy/caddy-config:/config
     networks:
       - d01_internal
       - media_net

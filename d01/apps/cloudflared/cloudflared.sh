@@ -1,7 +1,14 @@
 #!/bin/bash
 # Cloudflare Tunnel (cloudflared) for d01.
 # Usage: cloudflared.sh [switch ...] e.g. backup|up|down|restart|logs|refresh|update
-# Switches can be combined (e.g. down backup up). Run from anywhere. .env (TUNNEL_TOKEN) must be in this directory.
+# Switches can be combined (e.g. down backup up). Run from anywhere.
+#
+# Secrets/local state live in DATA_DIR (/mnt/docker/cloudflared), NOT in ~/scripts/.
+# This means update_scripts.sh never clobbers credentials.json, config.yml, or .env.
+# Files that must be in DATA_DIR:
+#   .env              - TUNNEL_TOKEN (token mode) or TUNNEL_ID + API creds (config/API mode)
+#   credentials.json  - tunnel credentials (config-file mode only)
+#   config.yml        - generated ingress config (config-file mode only; run generate-config.sh)
 
 set -euo pipefail
 
@@ -10,11 +17,19 @@ cd "$SCRIPT_DIR"
 SCREEN_APP="cloudflared-d01"
 
 [ -f "$HOME/scripts/docker/common.env" ] && . "$HOME/scripts/docker/common.env"
+DOCKER_DL="${DOCKER_DL:-/mnt/docker}"
 DOCKER_D1="${DOCKER_D1:-/mnt/nas/data1/docker}"
+export DOCKER_DL
+
+DATA_DIR="${DOCKER_DL}/cloudflared"
+export DATA_DIR
+
+# Load local secrets (TUNNEL_TOKEN, TUNNEL_ID, etc.) from DATA_DIR
+[ -f "$DATA_DIR/.env" ] && . "$DATA_DIR/.env"
 
 COMPOSE_FILE="docker-compose.yml"
 COMPOSE_EXTRA=""
-if [ -f "config.yml" ] && [ -f "credentials.json" ]; then
+if [ -f "$DATA_DIR/config.yml" ] && [ -f "$DATA_DIR/credentials.json" ]; then
   COMPOSE_EXTRA="-f docker-compose.config.yml"
 fi
 
@@ -27,15 +42,18 @@ ensure_networks() {
 }
 
 run_compose() {
-  docker compose -f "$COMPOSE_FILE" $COMPOSE_EXTRA "$@"
+  local env_args=""
+  [ -f "$DATA_DIR/.env" ] && env_args="--env-file $DATA_DIR/.env"
+  # shellcheck disable=SC2086
+  docker compose -f "$COMPOSE_FILE" $COMPOSE_EXTRA $env_args "$@"
 }
 
 do_backup() {
   stamp=$(date +%Y%m%d-%H%M%S)
   archive="${DOCKER_D1}/cloudflared-d01-backup-${stamp}.tgz"
-  echo "[INFO] Backing up cloudflared config (.env, config files) to $archive"
+  echo "[INFO] Backing up cloudflared config (DATA_DIR + script dir) to $archive"
   mkdir -p "$(dirname "$archive")"
-  tar -czf "$archive" -C "$SCRIPT_DIR" . 2>/dev/null || true
+  tar -czf "$archive" -C "$DATA_DIR" . 2>/dev/null || true
   echo "[INFO] Done. Size: $(du -h "$archive" 2>/dev/null | cut -f1)"
 }
 
@@ -55,12 +73,13 @@ run_cmd() {
       do_backup
       ;;
     up)
-      echo "[INFO] Ensuring networks exist..."
+      echo "[INFO] Ensuring networks and data dir exist..."
+      mkdir -p "$DATA_DIR"
       ensure_networks
       if [ -n "$COMPOSE_EXTRA" ]; then
-        echo "[INFO] Using config file mode (config.yml + credentials.json)"
+        echo "[INFO] Using config file mode ($DATA_DIR/config.yml + credentials.json)"
       else
-        echo "[INFO] Using token mode (.env TUNNEL_TOKEN)"
+        echo "[INFO] Using token mode (TUNNEL_TOKEN from $DATA_DIR/.env)"
       fi
       run_compose up -d
       ;;
@@ -69,16 +88,18 @@ run_cmd() {
       ;;
     restart)
       run_compose down
+      mkdir -p "$DATA_DIR"
       ensure_networks
       run_compose up -d
       ;;
     refresh)
       echo "[INFO] Pulling latest images and starting"
+      mkdir -p "$DATA_DIR"
       ensure_networks
       if [ -n "$COMPOSE_EXTRA" ]; then
-        echo "[INFO] Using config file mode (config.yml + credentials.json)"
+        echo "[INFO] Using config file mode ($DATA_DIR/config.yml + credentials.json)"
       else
-        echo "[INFO] Using token mode (.env TUNNEL_TOKEN)"
+        echo "[INFO] Using token mode (TUNNEL_TOKEN from $DATA_DIR/.env)"
       fi
       run_compose pull
       run_compose up -d
@@ -103,13 +124,15 @@ if [ $# -eq 0 ]; then
   echo "Usage: $0 [switch ...]" >&2
   echo "  Switches can be combined, e.g. down backup up" >&2
   echo "" >&2
-  echo "  backup   - Create tgz of .env/config to NFS (runs in screen)" >&2
+  echo "  backup   - Create tgz of DATA_DIR to NFS (runs in screen)" >&2
   echo "  update   - Pull latest images in screen; use up/restart to start" >&2
   echo "  refresh  - Pull latest images + start (inline)" >&2
   echo "  up       - Start containers only" >&2
   echo "  down     - Stop and remove containers" >&2
   echo "  restart  - Down then up" >&2
   echo "  logs     - Follow logs (optionally for one service)" >&2
+  echo "" >&2
+  echo "  DATA_DIR: $DATA_DIR  (secrets: .env, credentials.json, config.yml)" >&2
   exit 1
 fi
 
