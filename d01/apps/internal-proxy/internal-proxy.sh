@@ -57,7 +57,10 @@ ensure_networks() {
 }
 
 run_compose() {
-  docker compose -f "$COMPOSE_FILE" "$@"
+  local env_args=""
+  [ -f "$DATA_DIR/.env" ] && env_args="--env-file $DATA_DIR/.env"
+  # shellcheck disable=SC2086
+  docker compose -f "$COMPOSE_FILE" $env_args "$@"
 }
 
 do_backup() {
@@ -76,13 +79,11 @@ do_update() {
 
 prepare() {
   migrate_secrets
-  if [ ! -f "$DATA_DIR/certs/fullchain.pem" ] || [ ! -f "$DATA_DIR/certs/key.pem" ]; then
-    echo "[INFO] TLS certs missing; generating private CA and server cert..."
-    "$SCRIPT_DIR/gen-certs.sh"
-    echo "[INFO] Certs generated. Trust $DATA_DIR/certs/ca.crt on each workstation once."
-    echo "[INFO]   macOS: sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain $DATA_DIR/certs/ca.crt"
-  fi
   ensure_networks
+  if [ ! -f "$DATA_DIR/.env" ]; then
+    echo "[WARN] $DATA_DIR/.env not found — CF_API_TOKEN will be unset and TLS cert renewal will fail"
+    echo "[WARN] Run deploy.sh from your workstation to copy the .env into place"
+  fi
 }
 
 run_cmd() {
@@ -142,7 +143,7 @@ if [ $# -eq 0 ]; then
   echo "  down     - Stop and remove containers" >&2
   echo "  logs     - Follow logs (optionally for one service)" >&2
   echo "" >&2
-  echo "  DATA_DIR: $DATA_DIR  (TLS: certs/, caddy-data/, caddy-config/)" >&2
+  echo "  DATA_DIR: $DATA_DIR  (secrets: .env with CF_API_TOKEN; TLS data: caddy-data/)" >&2
   exit 1
 fi
 
