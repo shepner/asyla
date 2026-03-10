@@ -25,7 +25,7 @@ services:
     volumes:
       - ${DOCKER_DL:-/mnt/docker}/sonarr/config:/config
       - ${DATA1:-/mnt/nas/data1}/media:/tv
-      - ${DOCKER_DL:-/mnt/docker}/transmission/downloads/complete:/downloads
+      - ${DOCKER_DL:-/mnt/docker}/transmission/downloads:/downloads
     networks:
       - media_net
 
@@ -43,7 +43,7 @@ services:
     volumes:
       - ${DOCKER_DL:-/mnt/docker}/radarr/config:/config
       - ${DATA1:-/mnt/nas/data1}/media:/movies
-      - ${DOCKER_DL:-/mnt/docker}/transmission/downloads/complete:/downloads
+      - ${DOCKER_DL:-/mnt/docker}/transmission/downloads:/downloads
     networks:
       - media_net
 
@@ -89,6 +89,9 @@ services:
       - PUID=${DOCKER_UID:-1003}
       - PGID=${DOCKER_GID:-1000}
       - TZ=${LOCAL_TZ:-America/Chicago}
+      - TRANSMISSION_DOWNLOAD_DIR=/downloads/complete
+      - TRANSMISSION_INCOMPLETE_DIR=/downloads/incomplete
+      - TRANSMISSION_INCOMPLETE_DIR_ENABLED=true
     volumes:
       - ${DOCKER_DL:-/mnt/docker}/transmission/config:/config
       - ${DOCKER_DL:-/mnt/docker}/transmission/watch:/watch

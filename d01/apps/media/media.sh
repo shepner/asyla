@@ -63,7 +63,7 @@ run_cmd() {
       ;;
     up)
       echo "[INFO] Creating app dirs if needed"
-      for dir in sonarr/config radarr/config overseerr/config jackett/config jackett/downloads transmission/config transmission/watch transmission/downloads; do
+      for dir in sonarr/config radarr/config overseerr/config jackett/config jackett/downloads transmission/config transmission/watch transmission/downloads transmission/downloads/complete transmission/downloads/incomplete; do
         mkdir -p "${DOCKER_DL}/${dir}"
       done
       echo "[INFO] Starting media stack"
@@ -77,12 +77,12 @@ run_cmd() {
       ;;
     refresh)
       echo "[INFO] Pulling latest images and starting"
-      for dir in sonarr/config radarr/config overseerr/config jackett/config jackett/downloads transmission/config transmission/watch transmission/downloads; do
+      for dir in sonarr/config radarr/config overseerr/config jackett/config jackett/downloads transmission/config transmission/watch transmission/downloads transmission/downloads/complete transmission/downloads/incomplete; do
         mkdir -p "${DOCKER_DL}/${dir}"
       done
       run_compose pull
       run_compose up -d
-      ;;
+    ;;
     update)
       screen -S "update-${SCREEN_APP}-$(date +%Y%m%d-%H%M%S)" -dm "$0" _update
       echo "[INFO] Update running in screen; use 'up' or 'restart' to start when done. Attach: screen -r"
@@ -92,11 +92,11 @@ run_cmd() {
       ;;
     restart)
       run_compose down
-      for dir in sonarr/config radarr/config overseerr/config jackett/config jackett/downloads transmission/config transmission/watch transmission/downloads; do
+      for dir in sonarr/config radarr/config overseerr/config jackett/config jackett/downloads transmission/config transmission/watch transmission/downloads transmission/downloads/complete transmission/downloads/incomplete; do
         mkdir -p "${DOCKER_DL}/${dir}"
       done
       run_compose up -d
-      ;;
+    ;;
     *)
       return 1
       ;;
