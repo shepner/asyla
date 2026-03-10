@@ -24,8 +24,8 @@ services:
       - TZ=${LOCAL_TZ:-America/Chicago}
     volumes:
       - ${DOCKER_DL:-/mnt/docker}/sonarr/config:/config
-      - ${DATA1:-/mnt/nas/data1}/media:/tv
-      - ${DOCKER_DL:-/mnt/docker}/transmission/downloads:/downloads
+      - ${DATA1:-/mnt/nas/data1}/media/Videos:/tv
+      - ${DOCKER_DL:-/mnt/docker}/transmission/downloads/complete:/downloads
     networks:
       - media_net
 
@@ -42,8 +42,8 @@ services:
       - TZ=${LOCAL_TZ:-America/Chicago}
     volumes:
       - ${DOCKER_DL:-/mnt/docker}/radarr/config:/config
-      - ${DATA1:-/mnt/nas/data1}/media:/movies
-      - ${DOCKER_DL:-/mnt/docker}/transmission/downloads:/downloads
+      - ${DATA1:-/mnt/nas/data1}/media/Videos:/movies
+      - ${DOCKER_DL:-/mnt/docker}/transmission/downloads/complete:/downloads
     networks:
       - media_net
 
