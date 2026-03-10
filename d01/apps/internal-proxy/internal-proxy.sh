@@ -5,9 +5,8 @@
 # Run from anywhere.
 #
 # Secrets/local state live in DATA_DIR (/mnt/docker/internal-proxy), NOT in ~/scripts/.
-# This means update_scripts.sh never clobbers .env or Caddy's TLS cert data.
-# Files that must be in DATA_DIR:
-#   .env   - CF_API_TOKEN (Cloudflare API token for DNS-01 TLS)
+# On up/restart, the script auto-migrates any .env found in the script dir to DATA_DIR
+# and ensures Caddy's TLS data directories exist before the container starts.
 
 set -euo pipefail
 
@@ -24,6 +23,30 @@ DATA_DIR="${DOCKER_DL}/internal-proxy"
 export DATA_DIR
 
 COMPOSE_FILE="docker-compose.yml"
+
+# ---------------------------------------------------------------------------
+# Migrate any secrets still in the script dir to DATA_DIR
+# ---------------------------------------------------------------------------
+migrate_secrets() {
+  mkdir -p "$DATA_DIR/caddy-data" "$DATA_DIR/caddy-config"
+  if [ -f "$SCRIPT_DIR/.env" ] && [ ! -f "$DATA_DIR/.env" ]; then
+    echo "[INFO] Migrating .env -> $DATA_DIR/"
+    mv "$SCRIPT_DIR/.env" "$DATA_DIR/.env"
+  elif [ -f "$SCRIPT_DIR/.env" ] && [ -f "$DATA_DIR/.env" ]; then
+    echo "[WARN] .env exists in both script dir and DATA_DIR; keeping DATA_DIR copy, removing script dir copy"
+    rm "$SCRIPT_DIR/.env"
+  fi
+  # Migrate legacy certs dir if it exists
+  if [ -d "$SCRIPT_DIR/certs" ] && [ "$(ls -A "$SCRIPT_DIR/certs" 2>/dev/null)" ]; then
+    if [ ! -d "$DATA_DIR/certs" ] || [ -z "$(ls -A "$DATA_DIR/certs" 2>/dev/null)" ]; then
+      echo "[INFO] Migrating certs/ -> $DATA_DIR/certs/"
+      mkdir -p "$DATA_DIR/certs"
+      cp -r "$SCRIPT_DIR/certs/." "$DATA_DIR/certs/"
+    else
+      echo "[WARN] certs exist in both locations; keeping DATA_DIR copy"
+    fi
+  fi
+}
 
 ensure_networks() {
   docker network create d01_internal 2>/dev/null || true
@@ -43,7 +66,7 @@ run_compose() {
 do_backup() {
   stamp=$(date +%Y%m%d-%H%M%S)
   archive="${DOCKER_D1}/internal-proxy-d01-backup-${stamp}.tgz"
-  echo "[INFO] Backing up internal-proxy config (DATA_DIR) to $archive"
+  echo "[INFO] Backing up $DATA_DIR to $archive"
   mkdir -p "$(dirname "$archive")"
   tar -czf "$archive" -C "$DATA_DIR" . 2>/dev/null || true
   echo "[INFO] Done. Size: $(du -h "$archive" 2>/dev/null | cut -f1)"
@@ -52,6 +75,15 @@ do_backup() {
 do_update() {
   echo "[INFO] Pulling latest images (not starting app; use up or restart to start)"
   run_compose pull
+}
+
+prepare() {
+  migrate_secrets
+  ensure_networks
+  if [ ! -f "$DATA_DIR/.env" ]; then
+    echo "[WARN] $DATA_DIR/.env not found; CF_API_TOKEN will be unset and TLS will fail"
+    echo "[WARN] Create $DATA_DIR/.env with: CF_API_TOKEN=your-token"
+  fi
 }
 
 run_cmd() {
@@ -65,9 +97,7 @@ run_cmd() {
       do_backup
       ;;
     up)
-      echo "[INFO] Ensuring networks and data dir exist..."
-      mkdir -p "$DATA_DIR/caddy-data" "$DATA_DIR/caddy-config"
-      ensure_networks
+      prepare
       echo "[INFO] Starting internal proxy"
       run_compose up -d
       ;;
@@ -76,15 +106,12 @@ run_cmd() {
       ;;
     restart)
       run_compose down
-      mkdir -p "$DATA_DIR/caddy-data" "$DATA_DIR/caddy-config"
-      ensure_networks
+      prepare
       run_compose up -d
       echo "[INFO] Restarted; Caddy loaded current Caddyfile"
       ;;
     refresh)
-      echo "[INFO] Pulling latest images and starting"
-      mkdir -p "$DATA_DIR/caddy-data" "$DATA_DIR/caddy-config"
-      ensure_networks
+      prepare
       run_compose pull
       run_compose up -d
       ;;

@@ -4,11 +4,8 @@
 # Switches can be combined (e.g. down backup up). Run from anywhere.
 #
 # Secrets/local state live in DATA_DIR (/mnt/docker/cloudflared), NOT in ~/scripts/.
-# This means update_scripts.sh never clobbers credentials.json, config.yml, or .env.
-# Files that must be in DATA_DIR:
-#   .env              - TUNNEL_TOKEN (token mode) or TUNNEL_ID + API creds (config/API mode)
-#   credentials.json  - tunnel credentials (config-file mode only)
-#   config.yml        - generated ingress config (config-file mode only; run generate-config.sh)
+# On up/restart, the script auto-migrates any secrets found in the script dir to DATA_DIR,
+# and auto-generates config.yml if credentials.json is present but config.yml is not.
 
 set -euo pipefail
 
@@ -24,14 +21,43 @@ export DOCKER_DL
 DATA_DIR="${DOCKER_DL}/cloudflared"
 export DATA_DIR
 
-# Load local secrets (TUNNEL_TOKEN, TUNNEL_ID, etc.) from DATA_DIR
-[ -f "$DATA_DIR/.env" ] && . "$DATA_DIR/.env"
-
 COMPOSE_FILE="docker-compose.yml"
-COMPOSE_EXTRA=""
-if [ -f "$DATA_DIR/config.yml" ] && [ -f "$DATA_DIR/credentials.json" ]; then
-  COMPOSE_EXTRA="-f docker-compose.config.yml"
-fi
+
+# ---------------------------------------------------------------------------
+# Migrate any secrets that are still in the script dir to DATA_DIR
+# ---------------------------------------------------------------------------
+migrate_secrets() {
+  mkdir -p "$DATA_DIR"
+  local migrated=0
+  for f in .env credentials.json config.yml; do
+    if [ -f "$SCRIPT_DIR/$f" ] && [ ! -f "$DATA_DIR/$f" ]; then
+      echo "[INFO] Migrating $f -> $DATA_DIR/"
+      mv "$SCRIPT_DIR/$f" "$DATA_DIR/$f"
+      migrated=1
+    elif [ -f "$SCRIPT_DIR/$f" ] && [ -f "$DATA_DIR/$f" ]; then
+      echo "[WARN] $f exists in both script dir and DATA_DIR; keeping DATA_DIR copy, removing script dir copy"
+      rm "$SCRIPT_DIR/$f"
+    fi
+  done
+  [ "$migrated" -eq 0 ] || echo "[INFO] Migration complete."
+}
+
+# ---------------------------------------------------------------------------
+# Auto-generate config.yml from apps.yml if in config-file mode but config is missing
+# ---------------------------------------------------------------------------
+ensure_config() {
+  if [ -f "$DATA_DIR/credentials.json" ] && [ ! -f "$DATA_DIR/config.yml" ]; then
+    echo "[INFO] credentials.json found but config.yml missing; generating from apps.yml..."
+    "$SCRIPT_DIR/generate-config.sh"
+  fi
+}
+
+# Determine compose mode after DATA_DIR is populated
+compose_mode() {
+  if [ -f "$DATA_DIR/config.yml" ] && [ -f "$DATA_DIR/credentials.json" ]; then
+    echo "-f docker-compose.config.yml"
+  fi
+}
 
 ensure_networks() {
   docker network create d01_internal 2>/dev/null || true
@@ -42,16 +68,18 @@ ensure_networks() {
 }
 
 run_compose() {
+  local extra
+  extra="$(compose_mode)"
   local env_args=""
   [ -f "$DATA_DIR/.env" ] && env_args="--env-file $DATA_DIR/.env"
   # shellcheck disable=SC2086
-  docker compose -f "$COMPOSE_FILE" $COMPOSE_EXTRA $env_args "$@"
+  docker compose -f "$COMPOSE_FILE" $extra $env_args "$@"
 }
 
 do_backup() {
   stamp=$(date +%Y%m%d-%H%M%S)
   archive="${DOCKER_D1}/cloudflared-d01-backup-${stamp}.tgz"
-  echo "[INFO] Backing up cloudflared config (DATA_DIR + script dir) to $archive"
+  echo "[INFO] Backing up $DATA_DIR to $archive"
   mkdir -p "$(dirname "$archive")"
   tar -czf "$archive" -C "$DATA_DIR" . 2>/dev/null || true
   echo "[INFO] Done. Size: $(du -h "$archive" 2>/dev/null | cut -f1)"
@@ -60,6 +88,21 @@ do_backup() {
 do_update() {
   echo "[INFO] Pulling latest images (not starting app; use up or restart to start)"
   run_compose pull
+}
+
+prepare() {
+  migrate_secrets
+  # Load .env so TUNNEL_ID is available to generate-config.sh
+  [ -f "$DATA_DIR/.env" ] && . "$DATA_DIR/.env" || true
+  ensure_config
+  ensure_networks
+  local mode
+  if [ -f "$DATA_DIR/config.yml" ] && [ -f "$DATA_DIR/credentials.json" ]; then
+    mode="config-file ($DATA_DIR/config.yml)"
+  else
+    mode="token (TUNNEL_TOKEN from $DATA_DIR/.env)"
+  fi
+  echo "[INFO] Mode: $mode"
 }
 
 run_cmd() {
@@ -73,14 +116,7 @@ run_cmd() {
       do_backup
       ;;
     up)
-      echo "[INFO] Ensuring networks and data dir exist..."
-      mkdir -p "$DATA_DIR"
-      ensure_networks
-      if [ -n "$COMPOSE_EXTRA" ]; then
-        echo "[INFO] Using config file mode ($DATA_DIR/config.yml + credentials.json)"
-      else
-        echo "[INFO] Using token mode (TUNNEL_TOKEN from $DATA_DIR/.env)"
-      fi
+      prepare
       run_compose up -d
       ;;
     down)
@@ -88,19 +124,11 @@ run_cmd() {
       ;;
     restart)
       run_compose down
-      mkdir -p "$DATA_DIR"
-      ensure_networks
+      prepare
       run_compose up -d
       ;;
     refresh)
-      echo "[INFO] Pulling latest images and starting"
-      mkdir -p "$DATA_DIR"
-      ensure_networks
-      if [ -n "$COMPOSE_EXTRA" ]; then
-        echo "[INFO] Using config file mode ($DATA_DIR/config.yml + credentials.json)"
-      else
-        echo "[INFO] Using token mode (TUNNEL_TOKEN from $DATA_DIR/.env)"
-      fi
+      prepare
       run_compose pull
       run_compose up -d
       ;;
