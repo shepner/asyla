@@ -1,0 +1,32 @@
+# Mozilla cq — team API + review UI ([mozilla-ai/cq](https://github.com/mozilla-ai/cq)).
+# Build context is the cloned repo under ./upstream (see README.md).
+# Data: ${DOCKER_DL}/cq/data (team.db). Access via internal-proxy: https://cq.asyla.org
+#
+# Run: ~/scripts/d03/apps/cq/cq.sh up
+
+networks:
+  cq_net:
+    name: cq_net
+    driver: bridge
+
+services:
+  cq-team-api:
+    build: ./upstream/team-api
+    container_name: cq-team-api
+    restart: unless-stopped
+    environment:
+      CQ_DB_PATH: /data/team.db
+      CQ_JWT_SECRET: ${CQ_JWT_SECRET:?Set CQ_JWT_SECRET in .env}
+    volumes:
+      - ${DOCKER_DL:-/mnt/docker}/cq/data:/data
+    networks:
+      - cq_net
+
+  cq-team-ui:
+    build: ./upstream/team-ui
+    container_name: cq-team-ui
+    restart: unless-stopped
+    depends_on:
+      - cq-team-api
+    networks:
+      - cq_net

@@ -39,6 +39,12 @@ status.asyla.org {
     reverse_proxy uptime-kuma:3001
 }
 
+# Mozilla cq — team UI (nginx proxies /api/ to cq-team-api:8742)
+cq.asyla.org {
+    import internal_tls
+    reverse_proxy cq-team-ui:3000
+}
+
 # Fallback for other hostnames / direct IP
 :80 {
     respond "d03 internal proxy ready" 200

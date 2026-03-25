@@ -24,6 +24,7 @@ services:
       - openbao_net
       - uptimekuma_net
       - vikunja_net
+      - cq_net
 
 networks:
   tc_datalogger_net:
@@ -44,3 +45,6 @@ networks:
   vikunja_net:
     external: true
     name: vikunja_net
+  cq_net:
+    external: true
+    name: cq_net
