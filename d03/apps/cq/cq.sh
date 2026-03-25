@@ -11,6 +11,9 @@ COMPOSE_FILE="$SCRIPT_DIR/compose.yml"
 SCREEN_APP="cq"
 CQ_UPSTREAM_URL="${CQ_UPSTREAM_URL:-https://github.com/mozilla-ai/cq.git}"
 CQ_UPSTREAM_REF="${CQ_UPSTREAM_REF:-0.4.0}"
+# team-api image runs as user `app` (uid/gid 100/101 in upstream Dockerfile); bind mount must match.
+CQ_TEAM_API_UID="${CQ_TEAM_API_UID:-100}"
+CQ_TEAM_API_GID="${CQ_TEAM_API_GID:-101}"
 
 if [ -f "$HOME/scripts/docker/common.env" ]; then
   # shellcheck source=/dev/null
@@ -85,6 +88,22 @@ ensure_cq_env() {
   echo "[INFO] Wrote CQ_JWT_SECRET in $envf (API JWT signing key; keep the file private). You do not paste this into clients." >&2
 }
 
+# Bind-mounted SQLite dir must be writable by cq-team-api (non-root). Host dirs are often root:root
+# after first compose; fix via a one-shot root container (same pattern as many stack scripts).
+ensure_cq_data_dir() {
+  local base="${DOCKER_DL}/cq"
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "[WARN] docker not in PATH; cannot prepare $base/data. If the API restarts, chown that dir to ${CQ_TEAM_API_UID}:${CQ_TEAM_API_GID}." >&2
+    return 0
+  fi
+  echo "[INFO] Ensuring ${base}/data exists and is owned by ${CQ_TEAM_API_UID}:${CQ_TEAM_API_GID} (cq-team-api user) ..."
+  if ! docker run --rm -v "${DOCKER_DL}:/dock" alpine:3.20 \
+    sh -c "mkdir -p /dock/cq/data && chown -R ${CQ_TEAM_API_UID}:${CQ_TEAM_API_GID} /dock/cq/data"; then
+    echo "[WARN] Could not fix data dir permissions. If cq-team-api keeps restarting, run as root:" >&2
+    echo "  chown -R ${CQ_TEAM_API_UID}:${CQ_TEAM_API_GID} \"${base}/data\"" >&2
+  fi
+}
+
 ensure_upstream
 ensure_cq_env
 
@@ -115,9 +134,11 @@ run_cmd() {
       ;;
     refresh)
       do_pull_build
+      ensure_cq_data_dir
       run_compose up -d
       ;;
     up)
+      ensure_cq_data_dir
       run_compose up -d
       ;;
     down)
@@ -125,6 +146,7 @@ run_cmd() {
       ;;
     restart)
       run_compose down
+      ensure_cq_data_dir
       run_compose up -d
       ;;
     logs)

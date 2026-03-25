@@ -48,6 +48,10 @@ So: **team mode = shared commons for your estate**; **per-repo separation = tag 
 
 - SQLite: `${DOCKER_DL}/cq/data/team.db` (and WAL files). Include in your existing Docker volume backup practice.
 
+## Troubleshooting
+
+**`cq-team-api` restarts in a loop** — almost always **permissions on the bind-mounted data dir**. The API container runs as a non-root user (uid **100**, gid **101** in the upstream image). If `${DOCKER_DL}/cq/data` is `root:root` and not writable, SQLite never creates `team.db`. On `up`, `refresh`, and `restart`, `cq.sh` creates that path and `chown`s it via a one-off Alpine container. Check `docker logs cq-team-api`. If needed manually: `sudo chown -R 100:101 "${DOCKER_DL:-/mnt/docker}/cq/data"`. Custom image user: set `CQ_TEAM_API_UID` / `CQ_TEAM_API_GID` before `cq.sh`.
+
 ## Scripts on d03
 
 Synced from this repo to `~/scripts/d03/apps/cq/` via your usual `update_scripts.sh` flow.

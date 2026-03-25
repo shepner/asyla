@@ -1,6 +1,7 @@
 # Mozilla cq — team API + review UI ([mozilla-ai/cq](https://github.com/mozilla-ai/cq)).
 # Build context is the cloned repo under ./upstream (see README.md).
-# Data: ${DOCKER_DL}/cq/data (team.db). Access via internal-proxy: https://cq.asyla.org
+# Data: ${DOCKER_DL}/cq/data (team.db). cq-team-api runs as uid 100 — cq.sh chowns this path before up.
+# Access via internal-proxy: https://cq.asyla.org
 #
 # Run: ~/scripts/d03/apps/cq/cq.sh up
 
