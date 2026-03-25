@@ -4,36 +4,23 @@ Deploys the [mozilla-ai/cq](https://github.com/mozilla-ai/cq) **team tier**: Fas
 
 ## One-time setup (on d03)
 
-1. **Clone upstream** (not tracked in git):
+1. **Upstream + secrets**: First run of `cq.sh` clones [mozilla-ai/cq](https://github.com/mozilla-ai/cq) into `./upstream` (pinned tag `0.4.0` by default) and creates `.env` with **`CQ_JWT_SECRET`** if needed. That variable is only for the **team API server**: it signs JWTs for logged-in review UI sessions. It is **not** your UI login password, not for MCP clients, and you do not copy it to laptops. To pin a different release: `CQ_UPSTREAM_REF=main ./cq.sh refresh` (export or prefix once).
 
-   ```bash
-   git clone --depth 1 --branch 0.4.0 https://github.com/mozilla-ai/cq.git upstream
-   ```
+2. **DNS**: Add `cq.asyla.org` → d03 (Pi-hole / split-DNS), same pattern as `vikunja.asyla.org`.
 
-   Omit `--branch` to track `main` if you prefer; pinning a tag keeps builds reproducible.
-
-2. **Secrets**:
-
-   ```bash
-   cp .env.example .env
-   # Set CQ_JWT_SECRET — e.g. openssl rand -hex 32
-   ```
-
-3. **DNS**: Add `cq.asyla.org` → d03 (Pi-hole / split-DNS), same pattern as `vikunja.asyla.org`.
-
-4. **Proxy**: This repo’s `internal-proxy` Caddyfile includes `cq.asyla.org`. After first `cq.sh up`, restart the internal-proxy stack so Caddy joins `cq_net`:
+3. **Proxy**: This repo’s `internal-proxy` Caddyfile includes `cq.asyla.org`. After first `cq.sh up`, restart the internal-proxy stack so Caddy joins `cq_net`:
 
    ```bash
    ~/scripts/d03/apps/internal-proxy/internal-proxy.sh restart
    ```
 
-5. **Start cq**:
+4. **Start cq**:
 
    ```bash
    ~/scripts/d03/apps/cq/cq.sh refresh
    ```
 
-6. **Review UI login**: Create a user in the team DB (after the API has created `team.db` once):
+5. **Review UI login**: Create a user in the team DB (after the API has created `team.db` once):
 
    ```bash
    python3 upstream/scripts/seed-users.py \
