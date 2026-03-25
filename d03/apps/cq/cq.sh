@@ -18,7 +18,7 @@ DOCKER_DL="${DOCKER_DL:-/mnt/docker}"
 
 if [ ! -d "$SCRIPT_DIR/upstream/team-api" ] || [ ! -d "$SCRIPT_DIR/upstream/team-ui" ]; then
   echo "[ERROR] Missing cq upstream sources. Clone mozilla-ai/cq:" >&2
-  echo "  git clone --depth 1 --branch v0.4.0 https://github.com/mozilla-ai/cq.git \"$SCRIPT_DIR/upstream\"" >&2
+  echo "  git clone --depth 1 --branch 0.4.0 https://github.com/mozilla-ai/cq.git \"$SCRIPT_DIR/upstream\"" >&2
   echo "  (or omit --branch to track main; pin a release for reproducible builds)" >&2
   exit 1
 fi

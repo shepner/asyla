@@ -7,7 +7,7 @@ Deploys the [mozilla-ai/cq](https://github.com/mozilla-ai/cq) **team tier**: Fas
 1. **Clone upstream** (not tracked in git):
 
    ```bash
-   git clone --depth 1 --branch v0.4.0 https://github.com/mozilla-ai/cq.git upstream
+   git clone --depth 1 --branch 0.4.0 https://github.com/mozilla-ai/cq.git upstream
    ```
 
    Omit `--branch` to track `main` if you prefer; pinning a tag keeps builds reproducible.
