@@ -50,7 +50,7 @@ So: **team mode = shared commons for your estate**; **per-repo separation = tag 
 
 ## Troubleshooting
 
-**`cq-team-api` restarts in a loop** — almost always **permissions on the bind-mounted data dir**. By default `cq.sh` runs the API container **as your uid/gid** (`compose` `user:` + exported `CQ_TEAM_API_UID` / `CQ_TEAM_API_GID`) so `${DOCKER_DL}/cq/data` can stay owned by the deploy user without matching the upstream image’s baked-in `app` (100:101). On `up` / `refresh` / `restart`, `cq.sh` still `mkdir -p`s and `chown`s that dir to those ids when needed (may use **sudo** once if root created the tree). To force upstream ids: set `CQ_TEAM_API_UID=100` and `CQ_TEAM_API_GID=101` in `.env` or the environment. Check `docker logs cq-team-api`.
+**`cq-team-api` restarts in a loop** — almost always **permissions on the bind-mounted data dir**. The stack defaults to **uid/gid 1000:1000** (`CQ_TEAM_API_UID` / `CQ_TEAM_API_GID` in `.env` and compose `user:`). On `up` / `refresh` / `restart`, `cq.sh` `mkdir -p`s and `chown`s `${DOCKER_DL}/cq/data` to match (may use **sudo** once if root created the tree). Override in `.env` if your host uses different ids. Check `docker logs cq-team-api`.
 
 ## Scripts on d03
 

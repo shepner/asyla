@@ -85,7 +85,9 @@ ensure_cq_env() {
   echo "[INFO] Wrote CQ_JWT_SECRET in $envf (API JWT signing key; keep the file private). You do not paste this into clients." >&2
 }
 
-# Compose `user:` for team-api: env (or common.env) > .env > current uid/gid (bind mount friendly).
+# Compose `user:` for team-api: env (or common.env) > .env > 1000:1000 (typical first non-root user).
+CQ_TEAM_API_DEFAULT_UID="${CQ_TEAM_API_DEFAULT_UID:-1000}"
+CQ_TEAM_API_DEFAULT_GID="${CQ_TEAM_API_DEFAULT_GID:-1000}"
 resolve_cq_team_ids() {
   local envf="$SCRIPT_DIR/.env" line val
   if [ -z "${CQ_TEAM_API_UID+x}" ] && [ -f "$envf" ]; then
@@ -108,8 +110,8 @@ resolve_cq_team_ids() {
       [ -n "$val" ] && CQ_TEAM_API_GID="$val"
     fi
   fi
-  CQ_TEAM_API_UID="${CQ_TEAM_API_UID:-$(id -u)}"
-  CQ_TEAM_API_GID="${CQ_TEAM_API_GID:-$(id -g)}"
+  CQ_TEAM_API_UID="${CQ_TEAM_API_UID:-$CQ_TEAM_API_DEFAULT_UID}"
+  CQ_TEAM_API_GID="${CQ_TEAM_API_GID:-$CQ_TEAM_API_DEFAULT_GID}"
   export CQ_TEAM_API_UID CQ_TEAM_API_GID
 }
 

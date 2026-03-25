@@ -1,6 +1,6 @@
 # Mozilla cq — team API + review UI ([mozilla-ai/cq](https://github.com/mozilla-ai/cq)).
 # Build context is the cloned repo under ./upstream (see README.md).
-# Data: ${DOCKER_DL}/cq/data (team.db). user: defaults 100:101 (upstream image); cq.sh exports your uid/gid.
+# Data: ${DOCKER_DL}/cq/data (team.db). user: defaults 1000:1000; override via CQ_TEAM_API_UID/GID.
 # Access via internal-proxy: https://cq.asyla.org
 #
 # Run: ~/scripts/d03/apps/cq/cq.sh up
@@ -15,7 +15,7 @@ services:
     build: ./upstream/team-api
     container_name: cq-team-api
     restart: unless-stopped
-    user: "${CQ_TEAM_API_UID:-100}:${CQ_TEAM_API_GID:-101}"
+    user: "${CQ_TEAM_API_UID:-1000}:${CQ_TEAM_API_GID:-1000}"
     environment:
       CQ_DB_PATH: /data/team.db
       CQ_JWT_SECRET: ${CQ_JWT_SECRET:?Set CQ_JWT_SECRET in .env}
