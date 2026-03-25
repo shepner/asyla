@@ -88,20 +88,37 @@ ensure_cq_env() {
   echo "[INFO] Wrote CQ_JWT_SECRET in $envf (API JWT signing key; keep the file private). You do not paste this into clients." >&2
 }
 
-# Bind-mounted SQLite dir must be writable by cq-team-api (non-root). Host dirs are often root:root
-# after first compose; fix via a one-shot root container (same pattern as many stack scripts).
+_cq_data_owner() {
+  stat -c '%u:%g' "$1" 2>/dev/null || stat -f '%u:%g' "$1" 2>/dev/null || true
+}
+
+# Bind-mounted SQLite dir must be writable by cq-team-api (non-root, uid 100/101 in upstream image).
+# Only root can chown to another uid — try as current user, then sudo. Skip chown if already correct.
 ensure_cq_data_dir() {
-  local base="${DOCKER_DL}/cq"
-  if ! command -v docker >/dev/null 2>&1; then
-    echo "[WARN] docker not in PATH; cannot prepare $base/data. If the API restarts, chown that dir to ${CQ_TEAM_API_UID}:${CQ_TEAM_API_GID}." >&2
+  local d="${DOCKER_DL}/cq/data"
+  local u="${CQ_TEAM_API_UID}"
+  local g="${CQ_TEAM_API_GID}"
+  if mkdir -p "$d" 2>/dev/null; then
+    :
+  elif command -v sudo >/dev/null 2>&1; then
+    echo "[INFO] Creating $d with sudo ..."
+    sudo mkdir -p "$d"
+  else
+    echo "[ERROR] Cannot create $d. Fix permissions on ${DOCKER_DL}/cq or run with sudo." >&2
+    exit 1
+  fi
+  if [ "$(_cq_data_owner "$d")" = "${u}:${g}" ]; then
     return 0
   fi
-  echo "[INFO] Ensuring ${base}/data exists and is owned by ${CQ_TEAM_API_UID}:${CQ_TEAM_API_GID} (cq-team-api user) ..."
-  if ! docker run --rm -v "${DOCKER_DL}:/dock" alpine:3.20 \
-    sh -c "mkdir -p /dock/cq/data && chown -R ${CQ_TEAM_API_UID}:${CQ_TEAM_API_GID} /dock/cq/data"; then
-    echo "[WARN] Could not fix data dir permissions. If cq-team-api keeps restarting, run as root:" >&2
-    echo "  chown -R ${CQ_TEAM_API_UID}:${CQ_TEAM_API_GID} \"${base}/data\"" >&2
+  if chown -R "$u:$g" "$d" 2>/dev/null; then
+    return 0
   fi
+  if ! command -v sudo >/dev/null 2>&1; then
+    echo "[ERROR] Cannot chown $d to $u:$g (need root). Run: chown -R $u:$g \"$d\"" >&2
+    exit 1
+  fi
+  echo "[INFO] chown $d to $u:$g for cq-team-api (sudo) ..."
+  sudo chown -R "$u:$g" "$d"
 }
 
 ensure_upstream

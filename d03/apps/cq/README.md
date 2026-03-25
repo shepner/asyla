@@ -50,7 +50,7 @@ So: **team mode = shared commons for your estate**; **per-repo separation = tag 
 
 ## Troubleshooting
 
-**`cq-team-api` restarts in a loop** — almost always **permissions on the bind-mounted data dir**. The API container runs as a non-root user (uid **100**, gid **101** in the upstream image). If `${DOCKER_DL}/cq/data` is `root:root` and not writable, SQLite never creates `team.db`. On `up`, `refresh`, and `restart`, `cq.sh` creates that path and `chown`s it via a one-off Alpine container. Check `docker logs cq-team-api`. If needed manually: `sudo chown -R 100:101 "${DOCKER_DL:-/mnt/docker}/cq/data"`. Custom image user: set `CQ_TEAM_API_UID` / `CQ_TEAM_API_GID` before `cq.sh`.
+**`cq-team-api` restarts in a loop** — almost always **permissions on the bind-mounted data dir**. The API container runs as a non-root user (uid **100**, gid **101** in the upstream image). On `up`, `refresh`, and `restart`, `cq.sh` runs `mkdir -p` and `chown -R 100:101` on `${DOCKER_DL}/cq/data`; if the tree was created by root, that step uses **sudo** (you may be prompted once). Check `docker logs cq-team-api`. Manual fix: `sudo chown -R 100:101 "${DOCKER_DL:-/mnt/docker}/cq/data"`. Custom image user: set `CQ_TEAM_API_UID` / `CQ_TEAM_API_GID` before `cq.sh`.
 
 ## Scripts on d03
 
