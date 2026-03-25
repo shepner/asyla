@@ -11,9 +11,6 @@ COMPOSE_FILE="$SCRIPT_DIR/compose.yml"
 SCREEN_APP="cq"
 CQ_UPSTREAM_URL="${CQ_UPSTREAM_URL:-https://github.com/mozilla-ai/cq.git}"
 CQ_UPSTREAM_REF="${CQ_UPSTREAM_REF:-0.4.0}"
-# team-api image runs as user `app` (uid/gid 100/101 in upstream Dockerfile); bind mount must match.
-CQ_TEAM_API_UID="${CQ_TEAM_API_UID:-100}"
-CQ_TEAM_API_GID="${CQ_TEAM_API_GID:-101}"
 
 if [ -f "$HOME/scripts/docker/common.env" ]; then
   # shellcheck source=/dev/null
@@ -88,11 +85,39 @@ ensure_cq_env() {
   echo "[INFO] Wrote CQ_JWT_SECRET in $envf (API JWT signing key; keep the file private). You do not paste this into clients." >&2
 }
 
+# Compose `user:` for team-api: env (or common.env) > .env > current uid/gid (bind mount friendly).
+resolve_cq_team_ids() {
+  local envf="$SCRIPT_DIR/.env" line val
+  if [ -z "${CQ_TEAM_API_UID+x}" ] && [ -f "$envf" ]; then
+    if grep -qE '^CQ_TEAM_API_UID=' "$envf" 2>/dev/null; then
+      line="$(grep -E '^CQ_TEAM_API_UID=' "$envf" | tail -n1)"
+      val="${line#CQ_TEAM_API_UID=}"
+      val="${val//$'\r'/}"
+      val="${val//\"/}"
+      val="${val//\'/}"
+      [ -n "$val" ] && CQ_TEAM_API_UID="$val"
+    fi
+  fi
+  if [ -z "${CQ_TEAM_API_GID+x}" ] && [ -f "$envf" ]; then
+    if grep -qE '^CQ_TEAM_API_GID=' "$envf" 2>/dev/null; then
+      line="$(grep -E '^CQ_TEAM_API_GID=' "$envf" | tail -n1)"
+      val="${line#CQ_TEAM_API_GID=}"
+      val="${val//$'\r'/}"
+      val="${val//\"/}"
+      val="${val//\'/}"
+      [ -n "$val" ] && CQ_TEAM_API_GID="$val"
+    fi
+  fi
+  CQ_TEAM_API_UID="${CQ_TEAM_API_UID:-$(id -u)}"
+  CQ_TEAM_API_GID="${CQ_TEAM_API_GID:-$(id -g)}"
+  export CQ_TEAM_API_UID CQ_TEAM_API_GID
+}
+
 _cq_data_owner() {
   stat -c '%u:%g' "$1" 2>/dev/null || stat -f '%u:%g' "$1" 2>/dev/null || true
 }
 
-# Bind-mounted SQLite dir must be writable by cq-team-api (non-root, uid 100/101 in upstream image).
+# SQLite dir must match CQ_TEAM_API_UID:GID (see compose `user:`). mkdir as you; chown only if mismatched.
 # Only root can chown to another uid — try as current user, then sudo. Skip chown if already correct.
 ensure_cq_data_dir() {
   local d="${DOCKER_DL}/cq/data"
@@ -123,6 +148,7 @@ ensure_cq_data_dir() {
 
 ensure_upstream
 ensure_cq_env
+resolve_cq_team_ids
 
 run_compose() {
   docker compose -f "$COMPOSE_FILE" --project-directory "$SCRIPT_DIR" "$@"
