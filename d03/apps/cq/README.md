@@ -38,6 +38,41 @@ Deploys the [mozilla-ai/cq](https://github.com/mozilla-ai/cq) **team tier**: Fas
 
 Local-only mode omits `CQ_TEAM_*` and uses `~/.cq/local.db` on each machine.
 
+### Cursor (MCP)
+
+cq ships a **stdio MCP server** in the upstream repo (`plugins/cq/server`). Cursor does not use the Claude Code plugin; you add that server in **Cursor Settings → MCP** (or edit the MCP config JSON Cursor shows there — often `~/.cursor/mcp.json`).
+
+1. **On your Mac:** install [uv](https://docs.astral.sh/uv/) and clone cq (same tree as on d03 is fine):
+
+   ```bash
+   git clone --depth 1 --branch 0.4.0 https://github.com/mozilla-ai/cq.git ~/src/cq
+   cd ~/src/cq/plugins/cq/server && uv sync
+   ```
+
+   Adjust the path if you keep the repo elsewhere.
+
+2. **MCP entry** (merge into your existing `mcpServers` if you already have one):
+
+   ```json
+   {
+     "mcpServers": {
+       "cq": {
+         "command": "uv",
+         "args": ["run", "--directory", "/Users/YOU/src/cq/plugins/cq/server", "cq-mcp-server"],
+         "env": {
+           "CQ_TEAM_ADDR": "https://cq.asyla.org/api"
+         }
+       }
+     }
+   }
+   ```
+
+   Replace `/Users/YOU/src/cq/plugins/cq/server` with the real path. Your laptop must resolve `cq.asyla.org` (split-DNS / VPN / hosts) the same way the browser does.
+
+3. **Restart Cursor** (or reload MCP) and confirm the **cq** server is enabled and connected.
+
+The MCP process still uses **`~/.cq/local.db`** on the laptop for local cache/fallback; team sync goes to your server when `CQ_TEAM_ADDR` is set.
+
 ## “Each project has its own identity” — how cq models that
 
 cq’s PoC is **one team store per deployment**, not multi-tenant isolation. **Project identity is convention + `domain` tags** on each knowledge unit (e.g. `domain=memory-system`, `domain=gitea`, `domain=asyla`). Queries pass multiple domains; the API returns matching approved units ([team API `GET /query`](https://github.com/mozilla-ai/cq/blob/main/team-api/team_api/app.py)).
