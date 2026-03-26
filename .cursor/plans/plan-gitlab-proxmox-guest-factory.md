@@ -6,9 +6,16 @@
 - **Later**: same pipeline or follow-on jobs add Docker and app-specific setup (aligned with the existing **d03-as-template** pattern in this repo’s docs).
 - **Non-goal**: Replace or disrupt the **GitHub-based `asyla`** workflow until explicitly migrated; GitHub remains source of truth for host docs/scripts until then.
 
+## Scope and operating posture
+
+- Guests from this factory are for **lower-criticality** homelab workloads — acceptable downtime, not “household outage” tier. Design for **simplicity and low ongoing cost** (your time, compute, mental load), not maximum resilience.
+- **Primary evolution path**: small, readable artifacts (Python + YAML + CI) that **Cursor or similar** can extend or repair without you learning a new stack first.
+- **Terraform / HCL**: **deferred by default** — only worth revisiting if this grows into a large, long-lived inventory you want `plan`/`apply` review on; it adds learning curve and state/backend babysitting you explicitly want to avoid for this lane.
+
 ## Constraints and preferences
 
 - **No Ansible** — prefer other tooling for provisioning and post-boot steps.
+- **Prefer Python (or thin shell + `curl`)** over new declarative infra tools for the factory itself — fewer moving parts, no remote state service, easier for agent-assisted maintenance.
 - **SQLite / single-instance apps**: prior discussion (local disk + continuous backup, VM disk on NFS below the guest, etc.) applies to future app data; this plan only covers **VM creation + runner**.
 
 ## Prerequisites
@@ -29,23 +36,23 @@
 
 ## Implementation options (no Ansible)
 
-### Terraform vs Python (decision aid)
+### Decision (this project)
+
+- **Use Python** (`proxmoxer` or plain `httpx`/`urllib` against the Proxmox REST API) for clone/configure/start/wait; keep **one or two modules** and obvious entrypoints so agents can follow the flow.
+- **Do not adopt Terraform** for this factory unless requirements change (many resource types, strict plan/apply review, shared team). That keeps the stack **light** and avoids state files, provider upgrades, and HCL as a prerequisite.
+
+### Terraform vs Python (reference only)
 
 | Criterion | Terraform (e.g. `bpg/proxmox` provider) | Python (`proxmoxer` or `httpx` + API) |
 |-----------|----------------------------------------|--------------------------------------|
 | **Mental model** | Declared desired state; `plan` before `apply` | Imperative steps: clone, set, start |
 | **State** | State file tracks resources (drift, destroy) | No built-in state unless you add it |
 | **Review** | Good for “what will change?” in MRs | Easier to eyeball a short script |
-| **Learning** | HCL, providers, lifecycle, backends | Python only if already comfortable |
+| **Learning** | HCL, providers, lifecycle, backends | Reuses one common language; minimal new concepts |
 | **Homelab scale** | Fits well once you have several VM types or shared modules | Fits well for **one** factory flow and fast iteration |
 | **CI** | `terraform init/plan/apply` + remote state optional | `python provision.py` + optional JSON artifact |
 
-**Suggestion if undecided**
-
-- **Start with Python** when the goal is a **single, well-defined pipeline** (clone + params + start + wait + SSH) and you want to **ship quickly** without learning HCL and state backends first.
-- **Introduce Terraform** when you want **declarative inventory**, **plan/apply gates**, **multiple related resources** (DNS, firewall, buckets), or **team-style review** of infra diffs — migrate or wrap the same Proxmox operations in a provider.
-
-Either choice can live in a **new GitLab repo** under `asyla` (e.g. `proxmox-guest-factory`); keep secrets only in GitLab CI/CD variables.
+The new GitLab repo (e.g. `proxmox-guest-factory`) holds this code; **secrets only** in GitLab CI/CD variables.
 
 ### Ruled out
 
@@ -67,6 +74,6 @@ Either choice can live in a **new GitLab repo** under `asyla` (e.g. `proxmox-gue
 - [ ] Create empty GitLab project under `asyla`; enable CI/CD variables.
 - [ ] Ensure a LAN-reachable GitLab Runner runs jobs for that project.
 - [ ] Build or designate Proxmox **template VM** (minimal Debian cloud + cloud-init).
-- [ ] Implement **provision** + **bootstrap-runner** jobs (Python or Terraform per decision above).
+- [ ] Implement **provision** + **bootstrap-runner** jobs (**Python**, per decision above).
 - [ ] Document required pipeline variables and a **first-run example** in the new repo’s README.
 - [ ] (Optional) Add a one-line pointer from root [README.md](../../README.md) or [AGENTS.md](../../AGENTS.md) to this plan or the GitLab repo when it exists.
