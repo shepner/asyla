@@ -75,9 +75,9 @@ The new GitLab repo (e.g. `proxmox-guest-factory`) holds this code; **secrets on
 
 ## Next actions (checklist)
 
-- [ ] Create empty GitLab project under `asyla`; enable CI/CD variables.
-- [ ] Ensure a LAN-reachable GitLab Runner runs jobs for that project.
+- [x] Create GitLab project [proxmox-guest-factory](https://gitlab.com/asyla/proxmox-guest-factory); enable CI/CD variables.
+- [x] LAN-reachable GitLab Runner (user-operated).
 - [ ] Build or designate Proxmox **template VM** (minimal Debian cloud + cloud-init).
-- [ ] Implement **provision** + **bootstrap-runner** jobs (**Python**, per decision above).
-- [ ] Document **guest spec** schema, secret CI variables, and a **first-run example** (sample `guests/*.yaml`) in the new repo’s README.
-- [ ] (Optional) Add a one-line pointer from root [README.md](../../README.md) or [AGENTS.md](../../AGENTS.md) to this plan or the GitLab repo when it exists.
+- [x] Implement **provision** (`scripts/provision.py`) + **bootstrap-runner** (`scripts/bootstrap_runner.py` + CI job).
+- [x] Document guest spec, variables, `env.example`, README.
+- [ ] (Optional) Pointer from root [README.md](../../README.md) or [AGENTS.md](../../AGENTS.md) to this plan or the GitLab repo.
