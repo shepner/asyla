@@ -21,17 +21,17 @@
 ## Prerequisites
 
 - **Self-hosted GitLab Runner** (or other runner) that can reach **Proxmox** and **new guest IPs** on the LAN. GitLab.com SaaS runners cannot drive private Proxmox without a tunnel.
-- **Proxmox**: API token (or equivalent), a **template VM** (minimal Debian cloud image + cloud-init), storage for snippets if using `cicustom`, bridges/VLANs matching production.
+- **Proxmox**: API token (or equivalent), **Debian cloud `.qcow2`** on the node (or downloadable there, as in d03), target **VM disk storage** id, optional snippet storage for `cicustom`, bridges/VLANs matching production.
 - **GitLab CI/CD variables** (group or project, masked + protected where applicable): Proxmox API URL/token, SSH key for post-boot, runner registration token (or current GitLab runner auth flow).
 
 ## Target pipeline flow
 
 1. **Trigger + inputs**
-   - **Preferred**: Keep each guest’s **non-secret** parameters in a **versioned config file** in the factory repo (e.g. `guests/<name>.yaml` or `specs/<name>.yaml`). Same fields you would have passed as CI variables: `name` / hostname, `vmid`, `ip_cidr`, `gateway`, `dns`, `bridge`, `vlan`, `cpu`, `ram_mb`, `disk_gb`, `proxmox_node`, `template_vmid` (or cloud-image storage id), cloud-init template references, SSH **public** keys for bootstrap, etc.
+   - **Preferred**: Keep each guest’s **non-secret** parameters in a **versioned config file** in the factory repo (e.g. `guests/<name>.yaml` or `specs/<name>.yaml`). Same fields you would have passed as CI variables: `name` / hostname, `vmid`, `ip_cidr`, `gateway`, `dns`, `bridge`, `vlan`, `cpu`, `ram_mb`, `disk_gb`, `proxmox_node`, **`vm_disk_storage`** + **`cloud_image_import_from`** (absolute path on the node), cloud-init / `cicustom` references, SSH **public** keys for bootstrap, etc.
    - **Pipeline**: Run **manually** (or on MR when that file changes) with **one** thin CI variable such as `GUEST_SPEC=guests/myservice.yaml` — Python loads the YAML/JSON and drives provisioning. Optional: GitLab **workflow inputs** to pick the spec path without typing a long variable list.
    - **Secrets** (Proxmox API token, runner registration token, SSH **private** key for post-boot): stay in **GitLab CI/CD variables** only — not in the spec file. The spec may name *which* variable to use or assume standard names (`PROXMOX_TOKEN`, etc.).
    - **Escape hatch**: Ad-hoc runs can still override with CI variables if the script merges **file base + env overrides** (optional MVP+).
-2. **Provision**: Job talks to **Proxmox API** — clone template (or create from cloud image), set resources and network, attach **parameterized cloud-init** (snippet upload or API-driven `cicustom`). **Do not** commit secrets into cloud-init in git; generate per-run user-data/network-config in CI if they contain sensitive values.
+2. **Provision**: Job talks to **Proxmox API** — **create VM + import-from cloud qcow2** on the node (same pattern as [d03/build.sh](../../d03/build.sh): no template **clone**), set resources and network, attach **cloud-init** drive + Proxmox **ci\*** fields (optional `cicustom` for vendor/user-data snippets on the node). **Do not** commit secrets into cloud-init in git; generate per-run user-data/network-config in CI if they contain sensitive values.
 3. **First boot**: Cloud-init sets hostname, network, SSH keys, base packages (minimal v1 — **runner-first**, not the full d03 `runcmd` chain unless desired later).
 4. **Runner install**: After **SSH** (or **qemu-guest-agent**) is reachable, a **second job** installs `gitlab-runner` and registers non-interactively using CI variables. Keeps registration tokens out of long-lived Proxmox snippets.
 5. **Output**: Artifact or job log summary: `vmid`, hostname, IP, SSH target, runner name/tag.
@@ -64,7 +64,7 @@ The new GitLab repo (e.g. `proxmox-guest-factory`) holds this code; **secrets on
 
 ## Phases
 
-1. **MVP**: GitLab repo + CI skeleton; **guest spec file** (YAML) + loader in Python; Proxmox clone + parameterized cloud-init; SSH wait; install + register GitLab Runner; documented spec schema, CI variables for secrets, and template VM requirements.
+1. **MVP**: GitLab repo + CI skeleton; **guest spec file** (YAML) + loader in Python; Proxmox **import-from** cloud image + parameterized cloud-init (d03-style); SSH wait; install + register GitLab Runner; documented spec schema, CI variables for secrets, and node-local cloud image path + storage id.
 2. **Harden**: Idempotency or clear errors on duplicate `VMID`; qemu-guest-agent optional; structured job output (JSON artifact).
 3. **Extend**: Optional Docker + alignment with d03-style setup scripts (still optional to pull from GitHub until mirrored to GitLab).
 
@@ -77,7 +77,7 @@ The new GitLab repo (e.g. `proxmox-guest-factory`) holds this code; **secrets on
 
 - [x] Create GitLab project [proxmox-guest-factory](https://gitlab.com/asyla/proxmox-guest-factory); enable CI/CD variables.
 - [x] LAN-reachable GitLab Runner (user-operated).
-- [ ] Build or designate Proxmox **template VM** (minimal Debian cloud + cloud-init).
+- [x] Provision via **import-from** cloud qcow2 (d03 pattern); no template clone.
 - [x] Implement **provision** (`scripts/provision.py`) + **bootstrap-runner** (`scripts/bootstrap_runner.py` + CI job).
 - [x] Document guest spec, variables, `env.example`, README.
 - [ ] (Optional) Pointer from root [README.md](../../README.md) or [AGENTS.md](../../AGENTS.md) to this plan or the GitLab repo.
