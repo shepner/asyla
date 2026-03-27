@@ -36,7 +36,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VMID=103
 VM_NAME="d03"
 PROXMOX_HOST="vmh02"
-# Try generic image first (more likely to include cloud-init), fall back to nocloud
+# Cloud images live under the NAS mount (template/iso/). That path is NOT the same as
+# Proxmox "ISO" storage volids (pvesm list nas-data1-iso shows only .../iso/*.iso at the
+# storage root). build.sh uses qm disk import with this absolute path (root@pam SSH) —
+# no file move. For API import-from volume IDs, put or symlink qcow2 where pvesm lists it.
+#
+# Resolution (Step 5): (1) use generic if present; (2) else wget generic into IMAGE_PATH;
+# (3) else use nocloud at IMAGE_PATH_FALLBACK. No mv between dirs.
 IMAGE_PATH="/mnt/nas/data1/iso/template/iso/debian-13-generic-amd64.qcow2"
 IMAGE_PATH_FALLBACK="/mnt/nas/data1/iso/template/iso/debian-13-nocloud-amd64.qcow2"
 CLOUD_INIT_FILE="$SCRIPT_DIR/setup/cloud-init-userdata.yml"

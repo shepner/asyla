@@ -106,6 +106,8 @@ ssh root@vmh02 "pvesm path nas-data1-iso"
 # Then check: <path_from_pvesm>/template/iso/debian-13-nocloud-amd64.qcow2
 ```
 
+**`pvesm list nas-data1-iso` vs files under `template/iso/`:** Proxmox only lists volumes under the storage’s **content-type roots** (for this store, typically `…/iso/` as `nas-data1-iso:iso/<name>`). QCOW2 files you keep in `/mnt/nas/data1/iso/template/iso/` still exist on disk and work with `build.sh` because that script passes the **absolute path** to `qm disk import` over SSH as root. They will **not** appear in `pvesm list` unless you also place them (or symlink) under the path Proxmox indexes. **`build.sh` does not move images**; it prefers `debian-13-generic-amd64.qcow2`, may **download** it with `wget` into the same directory if missing, then falls back to the nocloud image.
+
 ### Step 2: Verify TrueNAS (nas01) iSCSI Configuration
 
 **⚠️ CRITICAL: Verify before proceeding**
