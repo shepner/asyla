@@ -31,7 +31,7 @@ Requires:
 
 - `build.sh` – Destroy/create VM 301 on vmh02, import Debian cloud image, cloud-init, verify.
 - `setup/` – cloud-init userdata/vendor, bootstrap, deploy_software, systemConfig, nfs, iscsi, docker, setup_manual, setup_ssh_keys, etc.
-- `apps/pihole/` – **symlink** into **`~/local/asyla/projects/pihole/hosts/ns02`**. Canonical git: **https://gitlab.com/asyla/pihole** (edit there; pull on VMs per [pihole `hosts/DEPLOY-VM.md`](../../../../asyla/projects/pihole/hosts/DEPLOY-VM.md)).
+- `apps/pihole/` – Pi-hole (`pihole.sh`, `compose.yml`). **Authoritative source:** **https://gitlab.com/asyla/pihole** — edit and version there; this tree holds a **copy** for `update_scripts.sh` / rsync to VMs (see [pihole `hosts/DEPLOY-VM.md`](../../../../asyla/projects/pihole/hosts/DEPLOY-VM.md)).
 - `update_scripts.sh`, `update.sh`, `update_all.sh` – Script update and OS maintenance.
 
 ## iSCSI
@@ -57,7 +57,7 @@ DNS server providing ad-blocking and DNS resolution for the network.
 - **DNS:** 10.0.0.11:53 (TCP/UDP)
 - **Start:** `~/scripts/ns02/apps/pihole/pihole.sh up`
 
-See [apps/pihole/README.md](apps/pihole/README.md) (via symlink) for details.
+See [apps/pihole/README.md](apps/pihole/README.md) for details.
 
 ## Maintenance
 
