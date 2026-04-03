@@ -1,6 +1,7 @@
 #!/bin/bash
 # Update Docker scripts from repository
-# Uses sparse git checkout to get only needed files
+# Uses sparse git checkout (GitHub shepner/asyla) plus overlay from GitLab asyla/pihole
+# (hosts/<hostname>/), for migrating nameserver trees to the Pi-hole GitLab project.
 
 set -euo pipefail
 
@@ -55,6 +56,39 @@ if [ -d "$WORKDIR/$HOSTNAME" ]; then
         fi
     done
 fi
+
+# Overlay from GitLab asyla/pihole: hosts/<hostname>/ mirrors this nameserver (private repo
+# returns HTTP 404 without auth — set GITLAB_TOKEN or ~/.config/asyla/gitlab_token).
+PIHOLE_GITLAB_REPO="${PIHOLE_GITLAB_REPO:-https://gitlab.com/asyla/pihole.git}"
+if [ -z "${GITLAB_TOKEN:-}" ] && [ -f "$TARGET_HOME/.config/asyla/gitlab_token" ]; then
+    GITLAB_TOKEN="$(head -1 "$TARGET_HOME/.config/asyla/gitlab_token" | tr -d '\r\n')"
+fi
+PIHOLE_WORK=$(mktemp -d)
+PIHOLE_CLONE_URL="$PIHOLE_GITLAB_REPO"
+if [ -n "${GITLAB_TOKEN:-}" ]; then
+    if command -v python3 >/dev/null 2>&1; then
+        _enc="$(printf '%s' "$GITLAB_TOKEN" | python3 -c "import sys,urllib.parse; print(urllib.parse.quote(sys.stdin.read().strip(), safe=''))")"
+        PIHOLE_CLONE_URL="https://oauth2:${_enc}@gitlab.com/asyla/pihole.git"
+    else
+        PIHOLE_CLONE_URL="https://oauth2:${GITLAB_TOKEN}@gitlab.com/asyla/pihole.git"
+    fi
+fi
+if GIT_TERMINAL_PROMPT=0 git clone --depth 1 "$PIHOLE_CLONE_URL" "$PIHOLE_WORK/pihole" 2>/dev/null; then
+    if [ -d "$PIHOLE_WORK/pihole/hosts/$HOSTNAME" ]; then
+        log_info "Overlaying from GitLab asyla/pihole (hosts/$HOSTNAME/)..."
+        mkdir -p "$TARGET_SCRIPTS/$HOSTNAME"
+        rsync -a "$PIHOLE_WORK/pihole/hosts/$HOSTNAME/" "$TARGET_SCRIPTS/$HOSTNAME/"
+    else
+        log_warn "GitLab pihole clone has no hosts/$HOSTNAME/; skipping overlay."
+    fi
+else
+    if [ -z "${GITLAB_TOKEN:-}" ]; then
+        log_warn "GitLab pihole clone failed (set GITLAB_TOKEN or $TARGET_HOME/.config/asyla/gitlab_token for private repo)."
+    else
+        log_warn "GitLab pihole clone failed; keeping GitHub-only tree."
+    fi
+fi
+rm -rf "$PIHOLE_WORK"
 
 if getent passwd "$TARGET_USER" >/dev/null 2>&1; then
     chown -R "$TARGET_USER:" "$TARGET_SCRIPTS" "$TARGET_HOME"/update.sh "$TARGET_HOME"/update_scripts.sh "$TARGET_HOME"/update_all.sh 2>/dev/null || true
