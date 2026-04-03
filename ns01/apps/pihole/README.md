@@ -1,7 +1,5 @@
 # Pi-hole DNS Server (ns01)
 
-**Canonical repo:** [gitlab.com/asyla/pihole](https://gitlab.com/asyla/pihole) — this directory is `hosts/ns01/` in that repo. On **ns01**, install these files as a **real directory** at `~/scripts/ns01/apps/pihole/` (rsync from a clone or from your workstation); see [`hosts/DEPLOY-VM.md` in the Pi-hole repo](https://gitlab.com/asyla/pihole/-/blob/main/hosts/DEPLOY-VM.md).
-
 Pi-hole DNS server running on ns01 (10.0.0.10). Provides DNS resolution and ad-blocking for the network.
 
 ## Prerequisites
@@ -20,8 +18,7 @@ Pi-hole DNS server running on ns01 (10.0.0.10). Provides DNS resolution and ad-b
 ## Run
 
 ```bash
-./pihole.sh up
-# or: ~/scripts/ns01/apps/pihole/pihole.sh up
+~/scripts/ns01/apps/pihole/pihole.sh up
 ```
 
 The script automatically sources `~/scripts/docker/common.env` if it exists.
@@ -48,7 +45,7 @@ Set `PIHOLE_API_PASSWORD` in `~/scripts/docker/common.env` or pass via environme
 
 ```bash
 export PIHOLE_API_PASSWORD=your_password
-./pihole.sh up
+~/scripts/ns01/apps/pihole/pihole.sh up
 ```
 
 If not set, Pi-hole will generate a random password (check logs).

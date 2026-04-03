@@ -31,7 +31,7 @@ Requires:
 
 - `build.sh` – Destroy/create VM 300 on vmh01, import Debian cloud image, cloud-init, verify.
 - `setup/` – cloud-init userdata/vendor, bootstrap, deploy_software, systemConfig, nfs, iscsi, docker, setup_manual, setup_ssh_keys, etc.
-- `apps/pihole/` – Pi-hole (`pihole.sh`, `compose.yml`). **Authoritative source:** **https://gitlab.com/asyla/pihole** — edit and version there; this tree holds a **copy** for `update_scripts.sh` / rsync to VMs (see [pihole `hosts/DEPLOY-VM.md`](../../../../asyla/projects/pihole/hosts/DEPLOY-VM.md)).
+- `apps/pihole/` – Pi-hole DNS server (pihole.sh, compose.yml).
 - `update_scripts.sh`, `update.sh`, `update_all.sh` – Script update and OS maintenance.
 
 ## iSCSI

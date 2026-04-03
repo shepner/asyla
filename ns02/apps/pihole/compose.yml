@@ -1,6 +1,6 @@
 # Pi-hole DNS server on ns02
 # Access via http://10.0.0.11/admin or http://pi.hole/admin
-# Run from this directory: ./pihole.sh up  (or from ~/scripts/ns02/apps/pihole/ after rsync)
+# Run: ~/scripts/ns02/apps/pihole/pihole.sh up
 # Requires: DOCKER_DL (/mnt/docker), DOCKER_UID, DOCKER_GID, LOCAL_TZ
 # Note: pihole.sh automatically sources ~/scripts/docker/common.env if it exists.
 
