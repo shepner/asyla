@@ -56,6 +56,13 @@ if [ -d "$WORKDIR/$HOSTNAME" ]; then
     done
 fi
 
+# Install the shared docker/ tree (common.env, common.sh, backup_all.sh, etc.).
+# update_scripts.sh used to git-checkout this dir without ever installing it.
+if [ -d "$WORKDIR/docker" ]; then
+    rm -rf "$TARGET_SCRIPTS/docker"
+    cp -r "$WORKDIR/docker" "$TARGET_SCRIPTS/"
+fi
+
 if getent passwd "$TARGET_USER" >/dev/null 2>&1; then
     chown -R "$TARGET_USER:" "$TARGET_SCRIPTS" "$TARGET_HOME"/update.sh "$TARGET_HOME"/update_scripts.sh "$TARGET_HOME"/update_all.sh 2>/dev/null || true
 fi

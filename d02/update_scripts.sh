@@ -50,7 +50,7 @@ git checkout master -- "$HOSTNAME" || log_warn "No $HOSTNAME directory found in 
 log_info "Checking out docker scripts..."
 git checkout master -- docker || log_warn "No docker directory found in repository"
 
-# Install into docker user's home: ~/scripts/d02/ and ~/update*.sh
+# Install into docker user's home: ~/scripts/d02/, ~/scripts/docker/, and ~/update*.sh
 log_info "Installing scripts to $TARGET_SCRIPTS and $TARGET_HOME..."
 mkdir -p "$TARGET_SCRIPTS"
 if [ -d "$WORKDIR/$HOSTNAME" ]; then
@@ -61,6 +61,13 @@ if [ -d "$WORKDIR/$HOSTNAME" ]; then
             cp "$TARGET_SCRIPTS/$HOSTNAME/$f" "$TARGET_HOME/"
         fi
     done
+fi
+
+# Install the shared docker/ tree (common.env, common.sh, backup_all.sh, etc.).
+# update_scripts.sh used to git-checkout this dir without ever installing it.
+if [ -d "$WORKDIR/docker" ]; then
+    rm -rf "$TARGET_SCRIPTS/docker"
+    cp -r "$WORKDIR/docker" "$TARGET_SCRIPTS/"
 fi
 
 # Set ownership so docker user can run scripts
