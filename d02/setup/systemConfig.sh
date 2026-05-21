@@ -41,9 +41,11 @@ timedatectl set-timezone America/Chicago 2>/dev/null || {
 log_info "Updating package lists..."
 apt update
 
-# Install and start QEMU guest agent first (for Proxmox) so it's available before long upgrade
-log_info "Installing and starting QEMU guest agent..."
-apt install -y qemu-guest-agent
+# Install and start QEMU guest agent first (for Proxmox) so it's available before long upgrade.
+# rsync is needed for the daily Plex (and other app) backup snapshots and for the
+# app-migration script (sudoers for /usr/bin/rsync is configured below).
+log_info "Installing QEMU guest agent and rsync..."
+apt install -y qemu-guest-agent rsync
 systemctl enable qemu-guest-agent
 systemctl start qemu-guest-agent
 

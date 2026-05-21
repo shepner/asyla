@@ -64,6 +64,7 @@ do_backup() {
 
   # Plex churn / regenerable paths (relative to $APP_ROOT, i.e. /mnt/docker/plex/).
   local excludes=(
+    --exclude="plexmediaserver/.ssh/"
     --exclude="plexmediaserver/Library/Application Support/Plex Media Server/Cache/"
     --exclude="plexmediaserver/Library/Application Support/Plex Media Server/Codecs/"
     --exclude="plexmediaserver/Library/Application Support/Plex Media Server/Crash Reports/"
@@ -148,9 +149,18 @@ if [ "$1" = "logs" ]; then
   exit 0
 fi
 
+# Validate all commands up-front so set -e inside run_cmd / do_backup is honored
+# during execution (the previous `if ! run_cmd` form silently swallowed errors).
 for cmd in "$@"; do
-  if ! run_cmd "$cmd"; then
-    echo "Usage: $0 backup|up|down|refresh|restart|logs [ ... ]" >&2
-    exit 1
-  fi
+  case "$cmd" in
+    backup|up|down|refresh|restart|logs) ;;
+    *)
+      echo "Usage: $0 backup|up|down|refresh|restart|logs [ ... ]" >&2
+      exit 1
+      ;;
+  esac
+done
+
+for cmd in "$@"; do
+  run_cmd "$cmd"
 done
