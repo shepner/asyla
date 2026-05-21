@@ -16,7 +16,7 @@ This is for a Debian Linux VM on Proxmox which will run Docker containers.
 
 - **VMID**: 102
 - **CPU**: 6 cores, 2 sockets
-- **Memory**: 25GB
+- **Memory**: 64GB
 - **Storage**: 64GB (qcow2 format)
 - **Network**: vmbr1 bridge, VLAN 100
 
@@ -102,19 +102,7 @@ ssh root@vmh02 "pvesm path nas-data1-iso"
 # Then check: <path_from_pvesm>/template/iso/debian-13-nocloud-amd64.qcow2
 ```
 
-### Step 2: Verify TrueNAS (nas01) iSCSI Configuration
-
-**⚠️ CRITICAL: Verify before proceeding**
-
-1. **Check iSCSI target configuration**:
-   - Log into TrueNAS (nas01)
-   - Verify iSCSI target `iqn.2005-10.org.freenas.ctl:nas01:d02:01` exists
-   - Check if initiator access controls need updating for new VM
-   - Verify old d02 instance can be safely disconnected
-
-2. **Document any required changes** before proceeding
-
-### Step 3: Shut Down and Remove Old d02 VM
+### Step 2: Shut Down and Remove Old d02 VM
 
 **⚠️ PRODUCTION SAFETY: Backup any critical data first**
 
@@ -138,17 +126,14 @@ qm shutdown $VMID
 # 2. Verify it's fully stopped
 qm status $VMID  # Should show "stopped"
 
-# 3. Disconnect iSCSI from old instance (if still connected)
-# (This may happen automatically when VM is stopped)
-
-# 4. Remove the old VM (⚠️ PERMANENT - ensure backups are complete)
+# 3. Remove the old VM (⚠️ PERMANENT - ensure backups are complete)
 qm destroy $VMID
 
-# 5. Verify old VM is removed
+# 4. Verify old VM is removed
 qm list | grep d02
 ```
 
-### Step 4: Create New d02 VM in Proxmox
+### Step 3: Create New d02 VM in Proxmox
 
 **⚠️ PRODUCTION: Verify all values before executing**
 
@@ -185,7 +170,7 @@ qm create $VMID \
   --name d02 \
   --sockets 2 \
   --cores 6 \
-  --memory 25600 \
+  --memory 65536 \
   --ostype l26 \
   --scsihw virtio-scsi-pci \
   --net0 virtio,bridge=vmbr1,firewall=1,tag=100 \
@@ -271,7 +256,7 @@ qm start $VMID
 - VGA display (`--vga std`) enables console access via VNC/noVNC in Proxmox web UI
 - Initial credentials: `root` / `TempPassword123!` - **change immediately after first login**
 
-### Step 5: Initial VM Login
+### Step 4: Initial VM Login
 
 **⚠️ IMPORTANT: Automated Cloud-init Setup**
 
@@ -382,7 +367,7 @@ This script handles:
 - DNS: 10.0.0.10, 10.0.0.11
 - Search Domain: asyla.org
 
-### Step 6: Verify User Account and SSH Setup
+### Step 5: Verify User Account and SSH Setup
 
 **Verify docker user is configured correctly:**
 ```bash
@@ -403,7 +388,7 @@ ssh docker@10.0.0.61 "hostname"
 
 **Note**: User account and SSH public key are already configured via cloud-init. The bootstrap script handles groups and UID/GID. Private key and config are copied manually to enable SSH to other docker hosts.
 
-### Step 7: Run Setup Scripts
+### Step 6: Run Setup Scripts
 
 **⚠️ PRODUCTION: Run scripts one at a time and verify each step**
 
@@ -418,7 +403,6 @@ curl -s https://raw.githubusercontent.com/shepner/asyla/master/d02/update_script
 ~/scripts/d02/setup/systemConfig.sh
 ~/scripts/d02/setup/nfs.sh
 ~/scripts/d02/setup/smb.sh
-~/scripts/d02/setup/iscsi.sh
 ~/scripts/d02/setup/docker.sh
 
 # After smb.sh, you MUST edit SMB credentials:
@@ -431,14 +415,14 @@ vi ~/.smbcredentials
 ~/update.sh
 ```
 
-### Step 8: Configure Docker Containers
+### Step 7: Configure Docker Containers
 
 **⚠️ TODO**: Determine which containers will run on d02
 - d02-old had no containers defined
 - This is a greenfield opportunity to set up docker-compose
 - See docker-compose configuration section below
 
-### Step 9: Remove Cloud Image from VM
+### Step 8: Remove Cloud Image from VM
 
 ```bash
 # From Proxmox host (vmh01 or vmh02) as root
@@ -454,7 +438,6 @@ The following scripts are available in the `setup/` directory:
 - `docker.sh` - Docker installation and configuration
 - `nfs.sh` - NFS client configuration
 - `smb.sh` - SMB client configuration
-- `iscsi.sh` - iSCSI client configuration
 
 ## Maintenance
 
@@ -533,24 +516,15 @@ From the VM console (as root): `curl -s https://raw.githubusercontent.com/shepne
 **If you can SSH but scripts/Docker were not installed:** Run once (as root or with sudo):  
 `curl -s https://raw.githubusercontent.com/shepner/asyla/master/d02/setup/deploy_software.sh | sudo bash`
 
-### SMB mount missing or not working (/mnt/nas/data1/media)
-
-**Fix:** SMB is configured to mount at boot using the NAS IP (not hostname) and SMB3. If you had an older entry (`//nas/media`, `noauto`), run once on d02 as **root** (e.g. from Proxmox console or `ssh root@d02`): `~/scripts/d02/setup/smb.sh` — that replaces the fstab line and installs a sudoers fragment so the docker user can run `sudo systemctl daemon-reload` and `sudo mount /mnt/nas/data1/media` without a password. Then as docker: `sudo systemctl daemon-reload` and `sudo mount /mnt/nas/data1/media` (or reboot). After that it mounts automatically at boot.
-
-### iSCSI mount missing or "can't find UUID" (including after boot)
-
-**Cause:** On Debian Trixie, **open-iscsi.service** never runs at boot because it checks `/etc/iscsi/nodes` while open-iscsi 2.1.9+ stores nodes in `/var/lib/iscsi/nodes`. The saved node may also have `node.startup = manual` (Debian bug #1090725).
-
-**Fix:** Run once `sudo ~/scripts/d02/setup/setup_iscsi_connect.sh` (after adding initiator to TrueNAS). That installs the override, sets the node to automatic, and enables services. Reboot to verify. If the node already exists with `manual`, set it:  
-`sudo iscsiadm -m node -T iqn.2005-10.org.freenas.ctl:nas01:d02:01 -p 10.0.0.24 --op update -n node.startup -v automatic`  
-`sudo iscsiadm -m node -T iqn.2005-10.org.freenas.ctl:nas01:d02:01 -p 10.0.0.24 --op update -n node.conn[0].startup -v automatic`  
-Then reboot. **Immediate mount:** `~/setup_manual.sh` (iSCSI step).
-
 **Prevention:**
 - Use `debian-13-generic-amd64.qcow2` instead of `debian-13-nocloud-amd64.qcow2` (more likely to include cloud-init)
 - Verify the Debian 13 cloud image includes cloud-init before use
 - The build script checks for both image types and prefers the generic one
 - Consider downloading a fresh image from https://cloud.debian.org/images/cloud/
+
+### SMB mount missing or not working (/mnt/nas/data1/media)
+
+**Fix:** SMB is configured to mount at boot using the NAS IP (not hostname) and SMB3. If you had an older entry (`//nas/media`, `noauto`), run once on d02 as **root** (e.g. from Proxmox console or `ssh root@d02`): `~/scripts/d02/setup/smb.sh` — that replaces the fstab line and installs a sudoers fragment so the docker user can run `sudo systemctl daemon-reload` and `sudo mount /mnt/nas/data1/media` without a password. Then as docker: `sudo systemctl daemon-reload` and `sudo mount /mnt/nas/data1/media` (or reboot). After that it mounts automatically at boot.
 
 ### Network Using DHCP Instead of Static IP
 
@@ -595,6 +569,6 @@ netplan apply
 
 **Architecture Constraints:**
 - Most containers use SQLite databases internally (architectural limitation)
-- iSCSI storage (`/mnt/docker`) used to avoid NFS file locking issues
+- Local SSD storage (`/mnt/docker`, 512 GB ext4 on a Proxmox virtual disk backed by `local-data2` LVM-thin) is used to avoid the SQLite + NFS file-locking issues that the previous iSCSI-on-TrueNAS layout was working around
 - Data is host-specific (backups to NFS required for resilience)
 - Backup process improvements will be implemented with docker-compose
