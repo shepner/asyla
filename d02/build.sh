@@ -77,7 +77,7 @@ ssh "root@$PROXMOX_HOST" "qm create $VMID \
   --name $VM_NAME \
   --sockets 2 \
   --cores 6 \
-  --memory 25600 \
+  --memory 65536 \
   --ostype l26 \
   --scsihw virtio-scsi-pci \
   --net0 virtio,bridge=vmbr1,firewall=1,tag=100 \
