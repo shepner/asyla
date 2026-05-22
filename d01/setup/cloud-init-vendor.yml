@@ -95,8 +95,6 @@ runcmd:
     /home/docker/scripts/d01/setup/nfs.sh || true
     echo "Running smb.sh..."
     /home/docker/scripts/d01/setup/smb.sh || true
-    echo "Running iscsi_install.sh..."
-    /home/docker/scripts/d01/setup/iscsi_install.sh || true
     echo "Running docker.sh..."
     /home/docker/scripts/d01/setup/docker.sh || {
       echo "ERROR: docker.sh failed"

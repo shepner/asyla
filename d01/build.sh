@@ -304,5 +304,5 @@ echo "     ssh d01 'chmod 600 ~/.ssh/docker_rsa ~/.ssh/config && chmod 700 ~/.ss
 echo "  3. Run: ssh d01 '~/scripts/d01/setup/setup_ssh_keys.sh'"
 echo "  4. Configure cloudflared: cp ~/scripts/d01/apps/cloudflared/.env.example ~/scripts/d01/apps/cloudflared/.env and set TUNNEL_TOKEN"
 echo "  5. Start cloudflared and internal-proxy: ~/scripts/d01/apps/cloudflared/cloudflared.sh up and ~/scripts/d01/apps/internal-proxy/internal-proxy.sh up"
-echo "  6. SMB + iSCSI: ~/setup_manual.sh"
+echo "  6. SMB credentials: ~/setup_manual.sh"
 echo ""

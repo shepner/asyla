@@ -5,7 +5,7 @@ Combined Sonarr, Radarr, Overseerr, Jackett, and Transmission on d01. All share 
 ## Prerequisites
 
 - `~/scripts/docker/common.env` (DOCKER_DL, DOCKER_UID, DOCKER_GID, LOCAL_TZ, DATA1)
-- `/mnt/docker` (iSCSI) and `/mnt/nas/data1/media` (SMB/NFS) mounted
+- `/mnt/docker` (local SSD, ext4) and `/mnt/nas/data1/media` (SMB/NFS) mounted
 - d01 cloudflared and internal-proxy running and attached to `media_net`
 
 ## Layout

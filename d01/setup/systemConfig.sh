@@ -40,8 +40,11 @@ apt update
 log_info "Upgrading system packages..."
 DEBIAN_FRONTEND=noninteractive apt upgrade -y
 
-log_info "Installing QEMU guest agent..."
-apt install -y qemu-guest-agent
+# rsync is needed for the daily app backup snapshots (plex.sh / backup_all.sh
+# and equivalents on d01) and for the app-migration script (sudoers entry for
+# /usr/bin/rsync is configured below).
+log_info "Installing QEMU guest agent and rsync..."
+apt install -y qemu-guest-agent rsync
 
 log_info "Enabling QEMU guest agent service..."
 systemctl enable qemu-guest-agent
