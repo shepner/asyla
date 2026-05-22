@@ -8,6 +8,19 @@
 # On up/restart, the script auto-migrates any .env found in the script dir to DATA_DIR
 # and ensures Caddy's TLS data directories exist before the container starts.
 # Backups: daily-friendly rsync snapshots with hardlinks, under ${DOCKER_D1}/internal-proxy-d01/<stamp>/.
+#
+# IMPORTANT — caddy-data perms for backup:
+#   Caddy runs as root inside the container and creates caddy-data/ as 0700 root:root,
+#   which blocks the unprivileged `docker` user from reading the Let's Encrypt account
+#   keys + issued certs during backup (rsync exits 23, snapshot is incomplete). The
+#   user-side fix is to give the `asyla` group read access (Caddy preserves group bits
+#   across renewals — it only manipulates owner bits):
+#     sudo chgrp -R asyla /mnt/docker/internal-proxy/caddy-data
+#     sudo chmod -R g+rX  /mnt/docker/internal-proxy/caddy-data
+#   This needs to be re-applied if caddy-data is ever wiped and re-created (e.g. a
+#   forced re-issue) — `internal-proxy.sh up` doesn't fix it (would need root). If a
+#   future scheduled backup logs `Permission denied … caddy-data`, run the two lines
+#   above.
 
 set -euo pipefail
 
