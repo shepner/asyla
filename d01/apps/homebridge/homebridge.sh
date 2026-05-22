@@ -2,17 +2,20 @@
 # Homebridge on d01. Usage: homebridge.sh [switch ...] e.g. backup|up|down|logs|refresh|update|restart
 # Switches can be combined (e.g. down backup up). Run from anywhere; loads ~/scripts/docker/common.env.
 # Homebridge uses host network (mDNS/HomeKit); homebridge-proxy exposes UI to tunnel.
+# Backups: daily-friendly rsync snapshots with hardlinks, under ${DOCKER_D1}/homebridge/<stamp>/.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="$SCRIPT_DIR/compose.yml"
-SCREEN_APP="homebridge"
 
 if [ -f "$HOME/scripts/docker/common.env" ]; then
   # shellcheck source=/dev/null
   . "$HOME/scripts/docker/common.env"
 fi
+# shellcheck source=/dev/null
+. "$HOME/scripts/docker/backup_lib.sh"
+
 DOCKER_DL="${DOCKER_DL:-/mnt/docker}"
 DOCKER_D1="${DOCKER_D1:-/mnt/nas/data1/docker}"
 
@@ -20,10 +23,13 @@ export DOCKER_DL
 export DOCKER_D1
 export LOCAL_TZ
 
-APP_ROOT="${DOCKER_DL}/homebridge"
+APP_NAME="homebridge"
+APP_ROOT="${DOCKER_DL}/${APP_NAME}"
+BACKUP_ROOT="${DOCKER_D1}/${APP_NAME}"
+BACKUP_KEEP="${BACKUP_KEEP:-14}"
 
 run_compose() {
-  docker compose -p homebridge -f "$COMPOSE_FILE" --project-directory "$APP_ROOT" "$@"
+  docker compose -p "$APP_NAME" -f "$COMPOSE_FILE" --project-directory "$APP_ROOT" "$@"
 }
 
 remove_stale_container() {
@@ -33,12 +39,19 @@ remove_stale_container() {
 }
 
 do_backup() {
-  stamp=$(date +%Y%m%d-%H%M%S)
-  archive="${DOCKER_D1}/homebridge-backup-${stamp}.tgz"
-  echo "[INFO] Backing up Homebridge data to $archive"
-  mkdir -p "$(dirname "$archive")"
-  tar -czf "$archive" -C "${DOCKER_DL}" homebridge 2>/dev/null || true
-  echo "[INFO] Done. Size: $(du -h "$archive" 2>/dev/null | cut -f1)"
+  # Keep: config.json, persist/ (HomeKit pairings — critical), accessories/.
+  # Skip: logs (churn), .npm cache, node_modules within plugins (regenerable).
+  do_rsync_snapshot_backup \
+    "$APP_ROOT" \
+    "$BACKUP_ROOT" \
+    "$BACKUP_KEEP" \
+    -- \
+    --exclude="**/logs/" \
+    --exclude="**/.npm/" \
+    --exclude="**/.cache/" \
+    --exclude="**/node_modules/" \
+    --exclude="*.log" \
+    --exclude="homebridge.log*"
 }
 
 do_update() {
@@ -50,13 +63,8 @@ do_update() {
 run_cmd() {
   local cmd="$1"
   case "$cmd" in
-    backup)
-      screen -S "backup-${SCREEN_APP}-$(date +%Y%m%d-%H%M%S)" -dm "$0" _backup
-      echo "[INFO] Backup running in screen; attach with: screen -r"
-      ;;
-    _backup)
-      do_backup
-      ;;
+    backup)  do_backup ;;
+    update)  do_update ;;
     up)
       echo "[INFO] Creating app dir if needed"
       mkdir -p "${APP_ROOT}"
@@ -78,13 +86,6 @@ run_cmd() {
       remove_stale_container
       run_compose up -d
       ;;
-    update)
-      screen -S "update-${SCREEN_APP}-$(date +%Y%m%d-%H%M%S)" -dm "$0" _update
-      echo "[INFO] Update running in screen; use 'up' or 'restart' to start when done. Attach: screen -r"
-      ;;
-    _update)
-      do_update
-      ;;
     restart)
       run_compose down
       remove_stale_container
@@ -102,8 +103,8 @@ if [ $# -eq 0 ]; then
   echo "Usage: $0 [switch ...]" >&2
   echo "  Switches can be combined, e.g. down backup up" >&2
   echo "" >&2
-  echo "  backup   - Create tgz of homebridge data to NFS (runs in screen)" >&2
-  echo "  update   - Pull latest images in screen; use up/restart to start" >&2
+  echo "  backup   - rsync snapshot of $APP_ROOT to $BACKUP_ROOT/<stamp>/ (incremental; keeps $BACKUP_KEEP snapshots)" >&2
+  echo "  update   - Pull latest images (no restart); use up/restart to start" >&2
   echo "  refresh  - Pull latest images + start (inline)" >&2
   echo "  up       - Start containers only" >&2
   echo "  down     - Stop and remove containers" >&2
@@ -120,8 +121,15 @@ if [ "$1" = "logs" ]; then
 fi
 
 for cmd in "$@"; do
-  if ! run_cmd "$cmd"; then
-    echo "Usage: $0 backup|up|down|logs|refresh|update|restart [ ... ]" >&2
-    exit 1
-  fi
+  case "$cmd" in
+    backup|update|up|down|logs|refresh|restart) ;;
+    *)
+      echo "Usage: $0 backup|up|down|logs|refresh|update|restart [ ... ]" >&2
+      exit 1
+      ;;
+  esac
+done
+
+for cmd in "$@"; do
+  run_cmd "$cmd"
 done

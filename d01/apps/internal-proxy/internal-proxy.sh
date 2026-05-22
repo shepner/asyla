@@ -7,20 +7,27 @@
 # Secrets/local state live in DATA_DIR (/mnt/docker/internal-proxy), NOT in ~/scripts/.
 # On up/restart, the script auto-migrates any .env found in the script dir to DATA_DIR
 # and ensures Caddy's TLS data directories exist before the container starts.
+# Backups: daily-friendly rsync snapshots with hardlinks, under ${DOCKER_D1}/internal-proxy-d01/<stamp>/.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
-SCREEN_APP="internal-proxy-d01"
 
 [ -f "$HOME/scripts/docker/common.env" ] && . "$HOME/scripts/docker/common.env"
+# shellcheck source=/dev/null
+. "$HOME/scripts/docker/backup_lib.sh"
+
 DOCKER_DL="${DOCKER_DL:-/mnt/docker}"
 DOCKER_D1="${DOCKER_D1:-/mnt/nas/data1/docker}"
 export DOCKER_DL
 
 DATA_DIR="${DOCKER_DL}/internal-proxy"
 export DATA_DIR
+
+# Suffix dest with -d01 in case d02 ever grows its own internal-proxy backup.
+BACKUP_ROOT="${DOCKER_D1}/internal-proxy-d01"
+BACKUP_KEEP="${BACKUP_KEEP:-14}"
 
 COMPOSE_FILE="docker-compose.yml"
 
@@ -64,12 +71,16 @@ run_compose() {
 }
 
 do_backup() {
-  stamp=$(date +%Y%m%d-%H%M%S)
-  archive="${DOCKER_D1}/internal-proxy-d01-backup-${stamp}.tgz"
-  echo "[INFO] Backing up $DATA_DIR to $archive"
-  mkdir -p "$(dirname "$archive")"
-  tar -czf "$archive" -C "$DATA_DIR" . 2>/dev/null || true
-  echo "[INFO] Done. Size: $(du -h "$archive" 2>/dev/null | cut -f1)"
+  # Keep: .env, Caddyfile (script-tracked separately but back up the copy here
+  # too), caddy-data/ (Let's Encrypt account + issued certs — important state).
+  # Skip: caddy-data/locks/ (transient), caddy-config/ (regenerable from config).
+  do_rsync_snapshot_backup \
+    "$DATA_DIR" \
+    "$BACKUP_ROOT" \
+    "$BACKUP_KEEP" \
+    -- \
+    --exclude="caddy-data/locks/" \
+    --exclude="caddy-config/"
 }
 
 do_update() {
@@ -89,13 +100,8 @@ prepare() {
 run_cmd() {
   local cmd="$1"
   case "$cmd" in
-    backup)
-      screen -S "backup-${SCREEN_APP}-$(date +%Y%m%d-%H%M%S)" -dm "$0" _backup
-      echo "[INFO] Backup running in screen; attach with: screen -r"
-      ;;
-    _backup)
-      do_backup
-      ;;
+    backup)  do_backup ;;
+    update)  do_update ;;
     up)
       prepare
       echo "[INFO] Starting internal proxy"
@@ -115,13 +121,6 @@ run_cmd() {
       run_compose pull
       run_compose up -d
       ;;
-    update)
-      screen -S "update-${SCREEN_APP}-$(date +%Y%m%d-%H%M%S)" -dm "$0" _update
-      echo "[INFO] Update running in screen; use 'up' or 'restart' to start when done. Attach: screen -r"
-      ;;
-    _update)
-      do_update
-      ;;
     logs)
       run_compose logs -f
       ;;
@@ -135,8 +134,8 @@ if [ $# -eq 0 ]; then
   echo "Usage: $0 [switch ...]" >&2
   echo "  Switches can be combined, e.g. down backup up" >&2
   echo "" >&2
-  echo "  backup   - Create tgz of DATA_DIR to NFS (runs in screen)" >&2
-  echo "  update   - Pull latest images in screen; use up/restart to start" >&2
+  echo "  backup   - rsync snapshot of $DATA_DIR to $BACKUP_ROOT/<stamp>/ (incremental; keeps $BACKUP_KEEP snapshots)" >&2
+  echo "  update   - Pull latest images (no restart); use up/restart to start" >&2
   echo "  refresh  - Pull latest images + start (inline)" >&2
   echo "  up       - Start containers only" >&2
   echo "  restart  - Down then up; use after update_scripts to reload Caddyfile" >&2
@@ -153,8 +152,15 @@ if [ "$1" = "logs" ]; then
 fi
 
 for cmd in "$@"; do
-  if ! run_cmd "$cmd"; then
-    echo "Usage: $0 backup|up|down|restart|logs|refresh|update [ ... ]" >&2
-    exit 1
-  fi
+  case "$cmd" in
+    backup|update|up|down|restart|refresh|logs) ;;
+    *)
+      echo "Usage: $0 backup|up|down|restart|logs|refresh|update [ ... ]" >&2
+      exit 1
+      ;;
+  esac
+done
+
+for cmd in "$@"; do
+  run_cmd "$cmd"
 done
