@@ -56,6 +56,8 @@ run_cmd() {
     down) run_compose down ;;
     restart) run_compose down; run_compose up -d ;;
     refresh) run_compose pull; run_compose up -d ;;
+    # Pull only, like the other d03 apps; use up or restart to apply the new image.
+    update) echo "[INFO] Pulling latest images (not starting app; use up or restart to start)"; run_compose pull ;;
     verify) do_verify ;;
     backup)
       screen -S "backup-${SCREEN_APP}-$(date +%Y%m%d-%H%M%S)" -dm "$0" _backup
@@ -68,7 +70,7 @@ run_cmd() {
 }
 
 if [ $# -eq 0 ]; then
-  echo "Usage: $0 pull|up|down|restart|verify|backup|logs" >&2
+  echo "Usage: $0 pull|up|down|restart|refresh|update|verify|backup|logs" >&2
   exit 1
 fi
 [ "$1" = "logs" ] && { run_compose logs -f "${@:2}"; exit 0; }
