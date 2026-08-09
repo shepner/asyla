@@ -1,0 +1,9 @@
+tc_datalogger_net
+gitea_net
+plane_net
+openbao_net
+uptimekuma_net
+vikunja_net
+cq_net
+agent_commons_net
+breeding_research_net

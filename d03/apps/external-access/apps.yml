@@ -1,0 +1,49 @@
+# Cloudflare Tunnel — d03 (token mode: dashboard hostnames; apps.yml documents origins)
+domain: asyla.org
+
+apps:
+  - app: tc_datalogger
+    hostname: tc-datalogger
+    service: tc-dashboard
+    port: 8080
+    access: true
+  - app: plane
+    hostname: plane
+    service: plane-proxy
+    port: 80
+    access: true
+  - app: uptime-kuma
+    hostname: status
+    service: uptime-kuma
+    port: 3001
+    access: true
+  - app: gitea
+    hostname: gitea
+    service: gitea
+    port: 3000
+    access: true
+  - app: openbao
+    hostname: vault
+    service: openbao
+    port: 8200
+    access: true
+  - app: vikunja
+    hostname: vikunja
+    service: vikunja
+    port: 3456
+    access: true
+  - app: cq
+    hostname: cq
+    service: cq-team-ui
+    port: 3000
+    access: true
+  - app: agent_commons
+    hostname: agent-commons
+    service: agent-commons
+    port: 8765
+    access: true
+  - app: breeding_research
+    hostname: breeding-research
+    service: breeding-research
+    port: 8080
+    access: true

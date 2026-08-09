@@ -2,7 +2,7 @@
 # Access via internal-proxy: https://agent-commons.asyla.org (web :8765, MCP :8766).
 # Run: ~/scripts/d03/apps/agent-commons/agent-commons.sh up
 #
-# Image: built on host via agent-commons.sh (native arch). Override with .env AGENT_COMMONS_IMAGE.
+# Image: Gitea registry (login on host if pull fails).
 
 networks:
   agent_commons_net:
@@ -11,7 +11,7 @@ networks:
 
 services:
   agent-commons:
-    image: ${AGENT_COMMONS_IMAGE:-agent-commons:local}
+    image: ${AGENT_COMMONS_IMAGE:-gitea.asyla.org/asyla/agent-commons:cb989764734bf3c41aefb61a5a04cec05ab4783f}
     container_name: agent-commons
     restart: unless-stopped
     environment:

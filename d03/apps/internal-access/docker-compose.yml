@@ -1,0 +1,55 @@
+# Internal HTTPS reverse proxy — d03. Start after backend app networks exist.
+
+services:
+  caddy-internal:
+    image: caddybuilds/caddy-cloudflare:latest
+    container_name: ${CADDY_CONTAINER_NAME:-caddy-internal-d03}
+    restart: unless-stopped
+    environment:
+      - CF_API_TOKEN=${CF_API_TOKEN}
+    ports:
+      - "${INTERNAL_PROXY_HTTP_PORT:-80}:80"
+      - "${INTERNAL_PROXY_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${DOCKER_DL:-/mnt/docker}/internal-proxy/caddy-data:/data
+      - ${DOCKER_DL:-/mnt/docker}/internal-proxy/caddy-config:/config
+    networks:
+      - tc_datalogger_net
+      - gitea_net
+      - plane_net
+      - openbao_net
+      - uptimekuma_net
+      - vikunja_net
+      - cq_net
+      - agent_commons_net
+      - breeding_research_net
+
+networks:
+  tc_datalogger_net:
+    external: true
+    name: tc_datalogger_net
+  gitea_net:
+    external: true
+    name: gitea_net
+  plane_net:
+    external: true
+    name: plane_net
+  openbao_net:
+    external: true
+    name: openbao_net
+  uptimekuma_net:
+    external: true
+    name: uptimekuma_net
+  vikunja_net:
+    external: true
+    name: vikunja_net
+  cq_net:
+    external: true
+    name: cq_net
+  agent_commons_net:
+    external: true
+    name: agent_commons_net
+  breeding_research_net:
+    external: true
+    name: breeding_research_net
