@@ -47,21 +47,20 @@ log_info "Starting comprehensive system maintenance (host: $HOST)..."
 log_info "Step 1: Updating scripts from repository..."
 "$HOME_DIR/update_scripts.sh"
 
-# Step 1.5 (d01/d02/d03): Ensure SMB mount configured and mounted
-if [ "$HOST" = "d01" ] || [ "$HOST" = "d02" ] || [ "$HOST" = "d03" ]; then
-    SMB_MOUNT="/mnt/nas/data1/media"
-    SETUP_SMB="$HOME_DIR/scripts/$HOST/setup/smb.sh"
-    if ! grep -q "/mnt/nas/data1/media.*cifs" /etc/fstab 2>/dev/null; then
-        log_info "Step 1.5: Configuring SMB client..."
-        [ -f "$SETUP_SMB" ] && "$SETUP_SMB" || log_warn "smb.sh not found: $SETUP_SMB"
-    fi
+# Step 1.5: Mount the SMB media share if this host declares one.
+# Unlike d01/d02, d03 does not use /mnt/nas/data1/media (its storage is the two NFS
+# mounts under /mnt/nas), so this never runs setup/smb.sh. Doing so would install
+# cifs-utils, write a placeholder ~/.smbcredentials, and append a credential-less
+# cifs line to /etc/fstab that fails to mount and can stall the next boot.
+SMB_MOUNT="/mnt/nas/data1/media"
+if grep -q "/mnt/nas/data1/media.*cifs" /etc/fstab 2>/dev/null; then
     if ! mountpoint -q "$SMB_MOUNT" 2>/dev/null; then
-        if grep -q "/mnt/nas/data1/media.*cifs" /etc/fstab 2>/dev/null; then
-            log_info "Step 1.5: Mounting SMB share $SMB_MOUNT..."
-            mount "$SMB_MOUNT" 2>/dev/null || true
-            mountpoint -q "$SMB_MOUNT" 2>/dev/null && log_info "  SMB mount OK." || log_warn "  SMB mount failed (will retry at boot)."
-        fi
+        log_info "Step 1.5: Mounting SMB share $SMB_MOUNT..."
+        mount "$SMB_MOUNT" 2>/dev/null || true
+        mountpoint -q "$SMB_MOUNT" 2>/dev/null && log_info "  SMB mount OK." || log_warn "  SMB mount failed (will retry at boot)."
     fi
+else
+    log_info "Step 1.5: No SMB media share declared in /etc/fstab, skipping."
 fi
 
 # Step 2: Update OS
