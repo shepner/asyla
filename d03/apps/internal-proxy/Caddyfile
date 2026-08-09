@@ -45,6 +45,21 @@ cq.asyla.org {
     reverse_proxy cq-team-ui:3000
 }
 
+agent-commons.asyla.org {
+    import internal_tls
+    handle /mcp* {
+        reverse_proxy agent-commons:8766
+    }
+    handle {
+        reverse_proxy agent-commons:8765
+    }
+}
+
+breeding-research.asyla.org {
+    import internal_tls
+    reverse_proxy breeding-research:8080
+}
+
 # Fallback for other hostnames / direct IP
 :80 {
     respond "d03 internal proxy ready" 200
