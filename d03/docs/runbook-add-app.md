@@ -1,5 +1,9 @@
 # Runbook: Adding a New Application to d03 Tunnel
 
+> **Superseded — historical reference.** This runbook drives `apps/cloudflared` and
+> `scripts/add-tunnel-app.sh`, both of which have been removed. The current procedure is to edit
+> `hosts/d03/apps.yml` in `asyla/projects/external-access` and run `external-access.sh genconfig`.
+
 This runbook provides step-by-step instructions for adding a new application to the Cloudflare Tunnel on d03. This is the standard process for all new applications.
 
 ## Prerequisites

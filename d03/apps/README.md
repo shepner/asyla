@@ -1,29 +1,45 @@
 # d03 apps
 
-All d03 apps use the same management pattern: a script with **up**, **down**, **restart**, **logs**, and **pull**.
+All d03 apps use the same management pattern: a script accepting **up**, **down**, **restart**,
+**backup**, **update**, **refresh**, and **logs**. `~/update_all.sh` discovers every directory
+under `~/scripts/d03/apps/` and runs `backup` then `update` on each.
+
+## Owned by this repo
+
+Deployed by `update_scripts.sh`, which copies `d03/` into `~/scripts/d03/`.
 
 | App | Script | Notes |
-|-----|--------|--------|
-| **cloudflared** | `~/scripts/d03/apps/cloudflared/cloudflared.sh` | Cloudflare Tunnel; needs `.env` with TUNNEL_TOKEN |
-| **internal-proxy** | `~/scripts/d03/apps/internal-proxy/internal-proxy.sh` | Caddy for split-DNS (ports 80/443); needs `.env` with CF_API_TOKEN for Let's Encrypt |
-| **TC_datalogger** | `~/scripts/d03/apps/TC_datalogger/tc_datalogger.sh` | Torn City API → BigQuery stack |
-| **gitea** | `~/scripts/d03/apps/gitea/gitea.sh` | Git server; internal only (gitea / gitea.asyla.org via proxy) |
-| **devteam/openbao** | `~/scripts/d03/apps/devteam/openbao/openbao.sh` | Secrets management; internal only (vault.asyla.org via proxy) |
-| **devteam/plane** | `~/scripts/d03/apps/devteam/plane/plane.sh` | Project management; external (plane.asyla.org via tunnel + access) |
-| **devteam/uptime-kuma** | `~/scripts/d03/apps/devteam/uptime-kuma/uptime-kuma.sh` | Monitoring; external (status.asyla.org via tunnel + access) |
-| **devteam/dispatcher** | `~/scripts/d03/apps/devteam/dispatcher/dispatcher.sh` | Cursor dispatcher (poll loop); build from knowledge-hub; needs `.config/env` with OpenBao token |
-| **cq** | `~/scripts/d03/apps/cq/cq.sh` | [Mozilla cq](https://github.com/mozilla-ai/cq) team API + UI; build from cloned `./upstream`; needs `.env` with `CQ_JWT_SECRET`; hostname `cq.asyla.org` |
+|-----|--------|-------|
+| **gitea** | `~/scripts/d03/apps/gitea/gitea.sh` | Git server, internal only (gitea.asyla.org via internal-access). `USER_UID`/`USER_GID` are both 1003 to match the migrated data volume |
+| **agent-commons** | `~/scripts/d03/apps/agent-commons/agent-commons.sh` | Problem/answer corpus; image pulled from the Gitea registry, overridable via `.env` `AGENT_COMMONS_IMAGE` |
+| **breeding-research** | `~/scripts/d03/apps/breeding-research/breeding-research.sh` | Scraper + API; needs `.env` |
+| **tc-datalogger** | `~/scripts/d03/apps/tc-datalogger/tc-datalogger.sh` | Torn City API → BigQuery stack; needs `.env` |
 
-Start order (proxy needs all app networks, devteam has internal dependencies):
+## Owned elsewhere — do not add them here
+
+The edge stack lives in its own repos under `asyla/projects/` and is deployed straight to the
+host with `scripts/deploy-host.sh d03` (`rsync --delete`). It lands in the same `apps/` directory
+and `update_all.sh` maintains it alongside the rest, but this repo must **not** carry a copy —
+two masters writing the same path is how the May 2026 drift happened.
+
+| App | Source repo | Notes |
+|-----|-------------|-------|
+| **external-access** | `asyla/projects/external-access` | Cloudflare Tunnel; per-host config in `hosts/d03/`; needs `host.env` |
+| **internal-access** | `asyla/projects/internal-access` | Caddy for split-DNS on ports 80/443; needs `host.env` with `CF_API_TOKEN` |
+
+To add a tunnel hostname, edit `hosts/d03/apps.yml` in `asyla/projects/external-access` and run
+`external-access.sh genconfig`. The old `d03/scripts/add-tunnel-app.sh` was removed: it wrote a
+YAML schema the current generator does not accept.
+
+## Start order
+
+The proxy needs every app network to exist first, so start the apps before the edge.
 
 ```bash
-~/scripts/d03/apps/TC_datalogger/tc_datalogger.sh up
 ~/scripts/d03/apps/gitea/gitea.sh up
-~/scripts/d03/apps/devteam/openbao/openbao.sh up
-~/scripts/d03/apps/devteam/plane/plane.sh up
-~/scripts/d03/apps/devteam/uptime-kuma/uptime-kuma.sh up
-~/scripts/d03/apps/cloudflared/cloudflared.sh up
-~/scripts/d03/apps/internal-proxy/internal-proxy.sh up
+~/scripts/d03/apps/agent-commons/agent-commons.sh up
+~/scripts/d03/apps/breeding-research/breeding-research.sh up
+~/scripts/d03/apps/tc-datalogger/tc-datalogger.sh up
+~/scripts/d03/apps/internal-access/internal-access.sh up
+~/scripts/d03/apps/external-access/external-access.sh up
 ```
-
-After adding **cq**, start it before restarting internal-proxy the first time (so `cq_net` exists), or create the network once with `docker network create cq_net` before `internal-proxy.sh up`.

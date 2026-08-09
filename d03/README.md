@@ -12,9 +12,9 @@ This is for a Debian Linux VM on Proxmox which will run Docker containers.
 - **Purpose**: Docker host for containerized applications
 - **OS**: Debian 13 (Trixie) - Current stable release
 
-**First application:** [TC_datalogger](https://github.com/shepner/TC_datalogger) (Torn City API → BigQuery). Self-contained in this repo under `d03/apps/TC_datalogger/`: provision on d03 (`provision.sh`), add credentials under `/mnt/docker/TC_datalogger/<service>/config/`, then `tc_datalogger.sh up`. Backup/update/refresh/rebuild via `tc_datalogger.sh`. See [BUILD_CHECKLIST.md](BUILD_CHECKLIST.md) Step 7 and [docker-compose.README.md](docker-compose.README.md).
+**Applications:** See [apps/README.md](apps/README.md) for the current app list and which repo owns each one. This repo owns `gitea`, `agent-commons`, `breeding-research`, and `tc-datalogger`; the edge stack is deployed separately from `asyla/projects/`.
 
-**Internet access:** Applications on d03 are exposed via **Cloudflare Tunnel** (no port forwarding required). Cloudflared and internal-proxy live under [apps/](apps/) with the same management pattern as d01 (`cloudflared.sh`, `internal-proxy.sh`). See [docs/cloudflare-tunnel.md](docs/cloudflare-tunnel.md) for setup and adding new apps. This is the reference implementation for all future applications and for migrating apps from other hosts.
+**Internet access:** Applications on d03 are exposed via **Cloudflare Tunnel** (no port forwarding required), terminated by `external-access` with `internal-access` (Caddy) fronting split-DNS on ports 80/443. Both are deployed from their own repos under `asyla/projects/` via `scripts/deploy-host.sh d03`. [docs/cloudflare-tunnel.md](docs/cloudflare-tunnel.md) describes the superseded `cloudflared` / `internal-proxy` layout and is kept for historical reference only.
 
 ## VM Specifications
 

@@ -1,9 +1,0 @@
-# Override: local config + credentials (no TUNNEL_TOKEN in command).
-# Volumes point at DATA_DIR paths on the host.
-
-services:
-  cloudflared:
-    command: ["tunnel", "run", "--config", "/etc/cloudflared/config.yml"]
-    volumes:
-      - ${DOCKER_DL:-/mnt/docker}/cloudflared/config.yml:/etc/cloudflared/config.yml:ro
-      - ${DOCKER_DL:-/mnt/docker}/cloudflared/credentials.json:/etc/cloudflared/credentials.json:ro

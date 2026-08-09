@@ -1,5 +1,12 @@
 # Cloudflare Tunnel Setup for d03
 
+> **Superseded — historical reference.** The `apps/cloudflared` and `apps/internal-proxy`
+> folders this document describes no longer exist. The edge was rebuilt during the 2026-05-30
+> cutover as `external-access` and `internal-access`, which live in their own repos under
+> `asyla/projects/` and deploy with `scripts/deploy-host.sh d03`. Paths and script names below
+> are out of date; the concepts (outbound-only tunnel, per-app `{app}_net`, Access by default)
+> still hold. For current procedure see `asyla/projects/external-access/README.md`.
+
 This document describes the Cloudflare Tunnel setup for d03, which provides internet access to applications without port forwarding. This is the **reference implementation** for all future applications on d03 and for migrating apps from other hosts (d01, etc.).
 
 ## Overview
