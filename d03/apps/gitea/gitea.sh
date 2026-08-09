@@ -41,6 +41,21 @@ do_update() {
   run_compose pull
 }
 
+do_verify() {
+  echo "[INFO] Health check https://gitea.asyla.org/ (via proxy) and local :3000"
+  if curl -sf -o /dev/null -w "%{http_code}" --max-time 15 http://127.0.0.1:3000/ | grep -qE '^(200|302)$'; then
+    echo "[INFO] Local :3000 OK"
+  else
+    echo "[WARN] Local :3000 check failed (container may still be starting)" >&2
+  fi
+  if curl -sfk -o /dev/null -w "%{http_code}" --max-time 20 https://gitea.asyla.org/ | grep -qE '^(200|302)$'; then
+    echo "[INFO] https://gitea.asyla.org OK"
+  else
+    echo "[ERROR] https://gitea.asyla.org check failed" >&2
+    return 1
+  fi
+}
+
 run_cmd() {
   local cmd="$1"
   case "$cmd" in
@@ -73,6 +88,9 @@ run_cmd() {
       run_compose down
       run_compose up -d
       ;;
+    verify)
+      do_verify
+      ;;
     logs)
       run_compose logs -f
       ;;
@@ -92,6 +110,7 @@ if [ $# -eq 0 ]; then
   echo "  up       - Start containers only" >&2
   echo "  down     - Stop and remove containers" >&2
   echo "  restart  - Down then up" >&2
+  echo "  verify   - curl local :3000 and https://gitea.asyla.org" >&2
   echo "  logs     - Follow logs (optionally for one service)" >&2
   exit 1
 fi
@@ -103,7 +122,7 @@ fi
 
 for cmd in "$@"; do
   if ! run_cmd "$cmd"; then
-    echo "Usage: $0 backup|update|refresh|up|down|restart|logs [ ... ]" >&2
+    echo "Usage: $0 backup|update|refresh|up|down|restart|verify|logs [ ... ]" >&2
     exit 1
   fi
 done

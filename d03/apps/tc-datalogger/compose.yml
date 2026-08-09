@@ -1,0 +1,102 @@
+# tc-datalogger on d03 — data under /mnt/docker/tc-datalogger
+# Dashboard: host :8081 (breeding-research uses :8080). Pipelines: Gitea images or local build.
+# Run: ~/scripts/d03/apps/tc-datalogger/tc-datalogger.sh up
+
+networks:
+  tc_datalogger_net:
+    name: tc_datalogger_net
+    driver: bridge
+
+services:
+  tc-faction-crimes:
+    image: ${TC_REGISTRY:-gitea.asyla.org/asyla}/tc-datalogger-faction-crimes:${TC_IMAGE_TAG}
+    container_name: tc-faction-crimes-pipeline
+    restart: unless-stopped
+    environment:
+      - TZ=${LOCAL_TZ:-America/Chicago}
+    networks:
+      - tc_datalogger_net
+    volumes:
+      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_faction_crimes/config/credentials.json:/app/config/credentials.json:ro
+      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_faction_crimes/config/TC_API_config.json:/app/config/TC_API_config.json:ro
+      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_faction_crimes/config/oc_records_schema.json:/app/config/oc_records_schema.json:ro
+      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_faction_crimes/logs:/app/logs
+
+  tc-faction-members:
+    image: ${TC_REGISTRY:-gitea.asyla.org/asyla}/tc-datalogger-faction-members:${TC_IMAGE_TAG}
+    container_name: tc-faction-members-pipeline
+    restart: unless-stopped
+    environment:
+      - TZ=${LOCAL_TZ:-America/Chicago}
+    volumes:
+      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_faction_members/config/credentials.json:/app/config/credentials.json:ro
+      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_faction_members/config/TC_API_config.json:/app/config/TC_API_config.json:ro
+      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_faction_members/logs:/app/logs
+    networks:
+      - tc_datalogger_net
+
+  tc-items:
+    image: ${TC_REGISTRY:-gitea.asyla.org/asyla}/tc-datalogger-items:${TC_IMAGE_TAG}
+    container_name: tc-items-pipeline
+    restart: unless-stopped
+    environment:
+      - TZ=${LOCAL_TZ:-America/Chicago}
+    volumes:
+      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_items/config/credentials.json:/app/config/credentials.json:ro
+      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_items/config/TC_API_config.json:/app/config/TC_API_config.json:ro
+      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_items/logs:/app/logs
+    networks:
+      - tc_datalogger_net
+
+  tc-user-events:
+    image: ${TC_REGISTRY:-gitea.asyla.org/asyla}/tc-datalogger-user-events:${TC_IMAGE_TAG}
+    container_name: tc-user-events-pipeline
+    restart: unless-stopped
+    environment:
+      - TZ=${LOCAL_TZ:-America/Chicago}
+    volumes:
+      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_user_events/config/credentials.json:/app/config/credentials.json:ro
+      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_user_events/config/TC_API_config.json:/app/config/TC_API_config.json:ro
+      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_user_events/logs:/app/logs
+    networks:
+      - tc_datalogger_net
+
+  tc-faction-chains:
+    image: ${TC_REGISTRY:-gitea.asyla.org/asyla}/tc-datalogger-faction-chains:${TC_IMAGE_TAG}
+    container_name: tc-faction-chains-pipeline
+    restart: unless-stopped
+    environment:
+      - TZ=${LOCAL_TZ:-America/Chicago}
+    volumes:
+      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_faction_chains/config/credentials.json:/app/config/credentials.json:ro
+      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_faction_chains/config/TC_API_config.json:/app/config/TC_API_config.json:ro
+      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_faction_chains/logs:/app/logs
+    networks:
+      - tc_datalogger_net
+
+  tc-dashboard:
+    image: ${TC_REGISTRY:-gitea.asyla.org/asyla}/tc-datalogger-dashboard:${TC_IMAGE_TAG}
+    container_name: tc-dashboard
+    restart: unless-stopped
+    environment:
+      - TZ=${LOCAL_TZ:-America/Chicago}
+      - DASHBOARD_PORT=8080
+      - DASHBOARD_BASE_PATH=/app/data
+      - DASHBOARD_SECRET_KEY=${DASHBOARD_SECRET_KEY:-}
+      - DASHBOARD_MODE=${DASHBOARD_MODE:-production}
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/config/credentials.json
+    ports:
+      - "8081:8080"
+    volumes:
+      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_faction_crimes/logs:/app/logs/faction_crimes:ro
+      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_faction_members/logs:/app/logs/faction_members:ro
+      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_items/logs:/app/logs/items:ro
+      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_user_events/logs:/app/logs/user_events:ro
+      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_faction_chains/logs:/app/logs/faction_chains:ro
+      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_dashboard/logs:/app/logs
+      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/repo/TC_dashboard:/app/data:ro
+      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/repo/sql_queries:/app/sql_queries:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_faction_crimes/config/credentials.json:/app/config/credentials.json:ro
+    networks:
+      - tc_datalogger_net

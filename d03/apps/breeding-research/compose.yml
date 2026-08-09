@@ -1,0 +1,29 @@
+# breeding-research on d03 — app data under /mnt/docker/breeding-research (GCP key, etc.)
+# Run: ~/scripts/d03/apps/breeding-research/breeding-research.sh up
+# Image: GitLab registry (BREEDING_RESEARCH_PULL=1) or local build (breeding-research:local).
+
+networks:
+  breeding_research_net:
+    name: breeding_research_net
+    driver: bridge
+
+services:
+  breeding-research:
+    image: ${BREEDING_RESEARCH_IMAGE:-breeding-research:local}
+    container_name: breeding-research
+    restart: unless-stopped
+    user: "65534:65534"
+    environment:
+      - TZ=${LOCAL_TZ:-America/Chicago}
+      - PORT=8080
+      - GCP_KEY_DIR=/data/app
+      - BQ_PROJECT_ID=${BQ_PROJECT_ID}
+      - BQ_DATASET_ID=${BQ_DATASET_ID}
+      - BASIC_AUTH_USER=${BASIC_AUTH_USER}
+      - BASIC_AUTH_PASS=${BASIC_AUTH_PASS}
+    ports:
+      - "8080:8080"
+    volumes:
+      - ${DOCKER_DL:-/mnt/docker}/breeding-research:/data/app:rw
+    networks:
+      - breeding_research_net

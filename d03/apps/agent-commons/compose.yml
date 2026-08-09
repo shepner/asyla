@@ -1,0 +1,31 @@
+# agent-commons on d03 — corpus under /mnt/docker/agent-commons (SQLite in /data).
+# Access via internal-proxy: https://agent-commons.asyla.org (web :8765, MCP :8766).
+# Run: ~/scripts/d03/apps/agent-commons/agent-commons.sh up
+#
+# Image: built on host via agent-commons.sh (native arch). Override with .env AGENT_COMMONS_IMAGE.
+
+networks:
+  agent_commons_net:
+    name: agent_commons_net
+    driver: bridge
+
+services:
+  agent-commons:
+    image: ${AGENT_COMMONS_IMAGE:-agent-commons:local}
+    container_name: agent-commons
+    restart: unless-stopped
+    environment:
+      - AGENT_COMMONS_DATA_DIR=/data
+      - AGENT_COMMONS_WEB_PORT=8765
+      - AGENT_COMMONS_MCP_PORT=8766
+      - AGENT_COMMONS_MCP_HOST=0.0.0.0
+      - AGENT_COMMONS_MCP_TRANSPORT=streamable-http
+      - AGENT_COMMONS_API_TOKEN=${AGENT_COMMONS_API_TOKEN:-}
+    ports:
+      # Published for k3s internal-proxy → d03 bridge until tunnel points at d03 Caddy
+      - "8765:8765"
+      - "8766:8766"
+    volumes:
+      - ${DOCKER_DL:-/mnt/docker}/agent-commons:/data
+    networks:
+      - agent_commons_net
