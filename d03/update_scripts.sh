@@ -55,12 +55,26 @@ log_info "Installing scripts to $TARGET_SCRIPTS and $TARGET_HOME..."
 mkdir -p "$TARGET_SCRIPTS"
 if [ -d "$WORKDIR/$HOSTNAME" ]; then
     cp -r "$WORKDIR/$HOSTNAME" "$TARGET_SCRIPTS/"
-    # Copy update scripts to home so ~/update.sh works
+    # IMPORTANT: use install(1), not cp, because update_scripts.sh is itself
+    # one of the files being replaced. cp truncates the destination inode
+    # in place, which corrupts the running bash's open file descriptor and
+    # produces "syntax error near unexpected token" mid-run. install(1)
+    # writes to a tempfile and rename(2)s atomically, leaving our running
+    # inode alone (bash keeps reading the original via its open fd).
     for f in update.sh update_scripts.sh update_all.sh; do
         if [ -f "$TARGET_SCRIPTS/$HOSTNAME/$f" ]; then
-            cp "$TARGET_SCRIPTS/$HOSTNAME/$f" "$TARGET_HOME/"
+            install -m 744 -p "$TARGET_SCRIPTS/$HOSTNAME/$f" "$TARGET_HOME/$f"
         fi
     done
+fi
+
+# Install the shared docker/ tree (common.env, common.sh, backup_all.sh, etc.).
+# Every app script on this host sources ~/scripts/docker/common.env; without
+# this the checkout above was discarded with the temp clone and each app fell
+# back to its built-in DOCKER_DL/DOCKER_D1 defaults.
+if [ -d "$WORKDIR/docker" ]; then
+    rm -rf "$TARGET_SCRIPTS/docker"
+    cp -r "$WORKDIR/docker" "$TARGET_SCRIPTS/"
 fi
 
 # Set ownership so docker user can run scripts
