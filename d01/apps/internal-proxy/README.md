@@ -36,6 +36,8 @@ App hostnames (sonarr.asyla.org, etc.) must exist in Cloudflare DNS (they usuall
 
 Same management: `internal-proxy.sh down|restart|logs|pull`. Networks are created automatically.
 
+Caddy runs as the `docker` user (`DOCKER_UID:DOCKER_GID`, compose `user:`), not as root. That way the nightly `backup` can read the certs and keys, which Caddy keeps at 0600. On `up`/`restart`/`refresh`, any file under `caddy-data/` or `caddy-config/` that is not owned by that user, or that others can read, is chowned and set back to owner-only. Don't `chgrp`/`chmod` those dirs by hand.
+
 ## Add hostnames
 
 Edit `Caddyfile` and add a block (hostname, `import internal_tls`, `reverse_proxy` to the app). Ensure the hostname has a DNS record in Cloudflare (can point anywhere for the challenge). Restart:
