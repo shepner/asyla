@@ -9,18 +9,16 @@
 # and ensures Caddy's TLS data directories exist before the container starts.
 # Backups: daily-friendly rsync snapshots with hardlinks, under ${DOCKER_D1}/internal-proxy-d01/<stamp>/.
 #
-# IMPORTANT — caddy-data perms for backup:
-#   Caddy runs as root inside the container and creates caddy-data/ as 0700 root:root,
-#   which blocks the unprivileged `docker` user from reading the Let's Encrypt account
-#   keys + issued certs during backup (rsync exits 23, snapshot is incomplete). The
-#   user-side fix is to give the `asyla` group read access (Caddy preserves group bits
-#   across renewals — it only manipulates owner bits):
-#     sudo chgrp -R asyla /mnt/docker/internal-proxy/caddy-data
-#     sudo chmod -R g+rX  /mnt/docker/internal-proxy/caddy-data
-#   This needs to be re-applied if caddy-data is ever wiped and re-created (e.g. a
-#   forced re-issue) — `internal-proxy.sh up` doesn't fix it (would need root). If a
-#   future scheduled backup logs `Permission denied … caddy-data`, run the two lines
-#   above.
+# caddy-data ownership and backup:
+#   Caddy writes every cert, key, and state file as 0600 in 0700 dirs, owned by
+#   whoever it runs as. It used to run as root, so the backup (the docker user)
+#   hit `Permission denied` and rsync exited 23. A chgrp/chmod g+rX workaround
+#   does not last: Caddy writes each file to a temp file and renames it, so every
+#   renewal and routine .json rewrite comes back root:root 0600. Caddy now
+#   runs as DOCKER_UID:DOCKER_GID (compose `user:`), and up/restart/refresh give
+#   any files still owned by root to that user, set to 0700/0600
+#   (ensure_data_ownership). The chown runs in a one-shot root container, so no
+#   sudo is needed.
 
 set -euo pipefail
 
@@ -37,6 +35,11 @@ export DOCKER_DL
 
 DATA_DIR="${DOCKER_DL}/internal-proxy"
 export DATA_DIR
+
+# UID:GID Caddy runs as (compose `user:`); must be the user that runs backups.
+DOCKER_UID="${DOCKER_UID:-1003}"
+DOCKER_GID="${DOCKER_GID:-1000}"
+export DOCKER_UID DOCKER_GID
 
 # Suffix dest with -d01 in case d02 ever grows its own internal-proxy backup.
 BACKUP_ROOT="${DOCKER_D1}/internal-proxy-d01"
@@ -83,6 +86,21 @@ run_compose() {
   docker compose -f "$COMPOSE_FILE" $env_args "$@"
 }
 
+# Hand anything under caddy-data/ or caddy-config/ not owned by DOCKER_UID (left
+# by the old root Caddy) or readable beyond the owner to DOCKER_UID:DOCKER_GID,
+# 0700/0600. The container is stopped first so a root Caddy cannot write another
+# root-owned file after the chown.
+ensure_data_ownership() {
+  local stray
+  stray=$(find "$DATA_DIR/caddy-data" "$DATA_DIR/caddy-config" \
+            \( ! -user "$DOCKER_UID" -o -perm /077 \) -print -quit 2>/dev/null || true)
+  [ -n "$stray" ] || return 0
+  echo "[INFO] Setting caddy-data/ and caddy-config/ to $DOCKER_UID:$DOCKER_GID, owner-only (e.g. $stray)"
+  run_compose down
+  run_compose run --rm --no-deps -T --user 0:0 --entrypoint sh caddy-internal \
+    -c "chown -R $DOCKER_UID:$DOCKER_GID /data /config && chmod -R go-rwx /data /config"
+}
+
 do_backup() {
   # Keep: .env, Caddyfile (script-tracked separately but back up the copy here
   # too), caddy-data/ (Let's Encrypt account + issued certs — important state).
@@ -104,6 +122,7 @@ do_update() {
 prepare() {
   migrate_secrets
   ensure_networks
+  ensure_data_ownership
   if [ ! -f "$DATA_DIR/.env" ]; then
     echo "[WARN] $DATA_DIR/.env not found — CF_API_TOKEN will be unset and TLS cert renewal will fail"
     echo "[WARN] Run deploy.sh from your workstation to copy the .env into place"

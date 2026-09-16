@@ -3,6 +3,12 @@
 # TLS: Let's Encrypt via Cloudflare DNS-01 (CF_API_TOKEN in /mnt/docker/internal-proxy/.env).
 # Same hostnames and certs as the external cloudflared tunnel, so URLs work identically internally and externally.
 
+{
+    # Caddy runs as the docker user (see docker-compose.yml), so it cannot install the
+    # `tls internal` root into the container's throwaway trust store; don't try.
+    skip_install_trust
+}
+
 (internal_tls) {
     tls {
         dns cloudflare {env.CF_API_TOKEN}

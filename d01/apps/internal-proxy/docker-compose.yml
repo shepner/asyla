@@ -9,6 +9,10 @@ services:
   caddy-internal:
     image: caddybuilds/caddy-cloudflare:latest
     container_name: caddy-internal-d01
+    # Run as the docker user so the nightly backup (also the docker user) can read
+    # the certs/keys Caddy writes as 0600. Binding 80/443 needs no root: Docker sets
+    # ip_unprivileged_port_start=0 in the container and the binary has cap_net_bind_service.
+    user: "${DOCKER_UID:-1003}:${DOCKER_GID:-1000}"
     restart: unless-stopped
     environment:
       - CF_API_TOKEN=${CF_API_TOKEN}
