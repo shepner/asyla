@@ -2,7 +2,8 @@
 # Plex on d02. Usage: plex.sh [switch ...] e.g. backup|up|down|refresh|restart|logs
 # Switches can be combined (e.g. down backup up). Run from anywhere; loads ~/scripts/docker/common.env.
 # Config lives under ${DOCKER_DL}/plex/plexmediaserver.
-# Backups: daily-friendly rsync snapshots with hardlinks, under ${DOCKER_D1}/plex/<stamp>/.
+# Backups: one rsync mirror at ${DOCKER_D1}/plex/mirror/; daily history is nas01's ZFS
+# snapshots of data1/docker (see README).
 
 set -euo pipefail
 
@@ -22,8 +23,7 @@ DATA1="${DATA1:-/mnt/nas/data1}"
 
 APP_NAME="plex"
 APP_ROOT="$DOCKER_DL/$APP_NAME"
-BACKUP_ROOT="$DOCKER_D1/$APP_NAME"
-BACKUP_KEEP="${BACKUP_KEEP:-14}"
+BACKUP_DIR="$DOCKER_D1/$APP_NAME/mirror"
 
 export DOCKER_DL
 export DOCKER_D1
@@ -40,16 +40,17 @@ run_compose() {
 }
 
 do_backup() {
-  # Daily-friendly incremental snapshot of the Plex config tree.
+  # Mirror of the Plex config tree. The tree has ~826k entries (Media/ and
+  # Metadata/ are ~400k each), which made the old hardlink-snapshot style take
+  # ~23 h per run over NFS; a mirror only touches what changed.
   # Plex's churn / regenerable dirs are excluded — they rebuild themselves and
   # are what made the old tgz backups hundreds of GB. Plex remains running
   # during backup; SQLite is in WAL mode and tolerates this well enough for
-  # "good enough" daily snapshots. For a guaranteed-clean snapshot run:
+  # "good enough" daily backups. For a guaranteed-clean copy run:
   #   plex.sh down backup up
-  do_rsync_snapshot_backup \
+  do_rsync_mirror_backup \
     "$APP_ROOT" \
-    "$BACKUP_ROOT" \
-    "$BACKUP_KEEP" \
+    "$BACKUP_DIR" \
     -- \
     --exclude="plexmediaserver/.ssh/" \
     --exclude="plexmediaserver/Library/Application Support/Plex Media Server/Cache/" \
@@ -87,7 +88,7 @@ if [ $# -eq 0 ]; then
   echo "Usage: $0 [switch ...]" >&2
   echo "  Switches can be combined, e.g. down backup up" >&2
   echo "" >&2
-  echo "  backup   - rsync snapshot of $APP_ROOT to $BACKUP_ROOT/<stamp>/ (incremental, daily-friendly; keeps $BACKUP_KEEP snapshots)" >&2
+  echo "  backup   - rsync mirror of $APP_ROOT to $BACKUP_DIR/ (history: NAS ZFS snapshots)" >&2
   echo "  refresh  - Pull latest images + start" >&2
   echo "  up       - Start containers only" >&2
   echo "  down     - Stop and remove containers" >&2
