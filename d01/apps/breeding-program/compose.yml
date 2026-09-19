@@ -1,0 +1,34 @@
+# breeding-program on d01 (FastAPI + BigQuery; sign-in via Cloudflare Access).
+# Reached only through cloudflared-d01 on breeding_program_net: no published ports, no LAN route.
+# Run: ~/scripts/d01/apps/breeding-program/breeding-program.sh up
+# App data: ${DOCKER_DL}/breeding-program/{app.env,secrets/,src/}; see README.md.
+
+networks:
+  breeding_program_net:
+    external: true
+    name: breeding_program_net
+
+services:
+  breeding-program:
+    image: ${BREEDING_PROGRAM_IMAGE:-breeding-program:local}
+    container_name: breeding-program
+    restart: unless-stopped
+    # Runs as the docker user so the mode-600 secrets it owns are readable (and backups can read them).
+    user: "${DOCKER_UID:-1003}:${DOCKER_GID:-1000}"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    env_file:
+      - ${DOCKER_DL:-/mnt/docker}/breeding-program/app.env
+    environment:
+      - TZ=${LOCAL_TZ:-America/Chicago}
+      - GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp-sa.json
+      - SESSION_SECRET_FILE=/secrets/session-secret
+    volumes:
+      - ${DOCKER_DL:-/mnt/docker}/breeding-program/secrets:/secrets:ro
+    networks:
+      - breeding_program_net

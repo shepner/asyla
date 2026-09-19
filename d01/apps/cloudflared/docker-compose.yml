@@ -23,6 +23,7 @@ services:
       - calibre_net
       - homebridge_net
       - duplicati_net
+      - breeding_program_net
 
 networks:
   d01_internal:
@@ -40,3 +41,6 @@ networks:
   duplicati_net:
     external: true
     name: duplicati_net
+  breeding_program_net:
+    external: true
+    name: breeding_program_net

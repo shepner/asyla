@@ -58,3 +58,10 @@ apps:
     service: duplicati
     port: 8200
     access: true
+  - app: breeding_program
+    hostname: breeding-program
+    service: breeding-program
+    port: 8080
+    # Own Access application (one-time PIN, email list), managed by
+    # d01/apps/breeding-program/cloudflare-access.py; not part of the shared app.
+    access: false
