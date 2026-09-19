@@ -94,14 +94,20 @@ do_up() {
 }
 
 do_verify() {
-  local status code
+  local status code i
+  # Right after a restart the app is still loading its data from BigQuery: wait up to 60 s before failing.
+  for i in $(seq 1 30); do
+    if docker exec "$APP_NAME" python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=4)" 2>/dev/null; then
+      break
+    fi
+    if [ "$i" -eq 30 ]; then
+      echo "[ERROR] in-container /healthz failed after 60 s" >&2; return 1
+    fi
+    sleep 2
+  done
+  echo "[INFO] in-container /healthz OK"
   status="$(docker inspect -f '{{.State.Health.Status}}' "$APP_NAME" 2>/dev/null || echo missing)"
   echo "[INFO] container health: $status"
-  if docker exec "$APP_NAME" python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=4)"; then
-    echo "[INFO] in-container /healthz OK"
-  else
-    echo "[ERROR] in-container /healthz failed" >&2; return 1
-  fi
   # Unauthenticated requests must be stopped by Cloudflare Access (redirect to the login page).
   code="$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 20 "$PUBLIC_URL/" || true)"
   echo "[INFO] $PUBLIC_URL/ -> $code"
