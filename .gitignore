@@ -85,3 +85,5 @@ config/*.json
 **/secrets.json
 # Cloudflared generated config (contains tunnel ID)
 **/cloudflared/config.yml
+
+__pycache__/
