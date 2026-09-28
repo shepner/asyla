@@ -24,17 +24,22 @@ Requires:
 3. Run: `~/scripts/d01/setup/setup_ssh_keys.sh`
 4. **Media stack:** `~/scripts/d01/apps/media/media.sh up` (sources common.env automatically)
 5. **Cloudflared:** `cd ~/scripts/d01/apps/cloudflared && cp .env.example .env` (set `TUNNEL_TOKEN` or `TUNNEL_ID`), then `~/scripts/d01/apps/cloudflared/cloudflared.sh up`
-6. **Internal proxy:** `~/scripts/d01/apps/internal-proxy/internal-proxy.sh up`
+6. **Internal proxy (Caddy, split DNS):** lives in `asyla/projects/internal-access`, not here. From the workstation:
+   `scripts/deploy-host.sh d01`, then `scripts/fleet.sh --host d01 up verify`. Secrets stay in
+   `/mnt/docker/internal-proxy/.env` (`CF_API_TOKEN`, `BREEDING_PROGRAM_LAN_SECRET`).
 7. SMB credentials: `~/setup_manual.sh`
 
-**Note:** All app scripts (`media.sh up`, `cloudflared.sh up`, `internal-proxy.sh up`) create required networks automatically.
+**Note:** All app scripts (`media.sh up`, `cloudflared.sh up`, `internal-access.sh up`) create required networks automatically.
 
 ## Layout
 
 - `build.sh` – Destroy/create VM 101 on vmh01, import Debian cloud image, cloud-init, verify.
 - `setup/` – cloud-init userdata/vendor, bootstrap, deploy_software, systemConfig, nfs, smb, docker, setup_manual, setup_ssh_keys, etc.
 - `apps/cloudflared/` – Cloudflare Tunnel (cloudflared.sh, compose, apps.yml, setup-tunnel-api.py).
-- `apps/internal-proxy/` – Caddy reverse proxy for split-DNS (internal-proxy.sh, Caddyfile).
+- Internal Caddy for split DNS: `asyla/projects/internal-access` (`hosts/d01/`), deployed to `~/scripts/d01/apps/internal-access/`.
+  The old `apps/internal-proxy/` was retired 2026-09-28.
+- `deploy.sh` – Workstation: push `.env` secrets (`apps/cloudflared/.env`; `internal-access.env` merged key by key),
+  run `update_scripts.sh`, deploy internal-access, restart services.
 - `apps/media/` – Media stack: Sonarr, Radarr, Overseerr, Jackett, Transmission (media.sh); access via cloudflared/internal proxy.
 - `update_scripts.sh`, `update.sh`, `update_all.sh` – Script update and OS maintenance.
 

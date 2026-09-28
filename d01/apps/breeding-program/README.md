@@ -20,6 +20,7 @@ data in BigQuery (GCP project `breeding-program`), sign-in by **Cloudflare Acces
 | `app.env.example` | Copied to `/mnt/docker/breeding-program/app.env` (mode 600) by `init` |
 | `push-source.sh` | **Workstation**: ships the repo's committed HEAD to `/mnt/docker/breeding-program/src` |
 | `cloudflare-access.py` | **On d01**: Access app + policy (prints `CF_ACCESS_AUD`); `--publish` adds ingress + DNS |
+| `/mnt/docker/internal-proxy/.env` | `BREEDING_PROGRAM_LAN_SECRET` for caddy-internal-d01 (copy of `lan-trust-secret`; `deploy.sh` keeps it when merging) |
 | `/mnt/docker/breeding-program/secrets/` | `gcp-sa.json`, `session-secret`, `lan-trust-secret` (mode 600, owner docker) |
 
 ## First deploy

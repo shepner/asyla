@@ -26,9 +26,9 @@ Matches the original `docker/duplicati.sh`:
 
 ## First-time setup
 
-1. Ensure **internal-proxy** is running (so `duplicati_net` exists, or run duplicati first to create it).
+1. Ensure **internal-access** (`~/scripts/d01/apps/internal-access/`, from `asyla/projects/internal-access`) is running (so `duplicati_net` exists, or run duplicati first to create it).
 2. Run `duplicati.sh up`.
-3. For split-DNS: point `duplicati.asyla.org` to d01 (e.g. Pi-hole). Use **https://duplicati.asyla.org** (not http); accept the self-signed cert once. If the hostname doesn’t load, on d01 run: `docker exec caddy-internal-d01 cat /etc/caddy/Caddyfile | grep -A2 duplicati` (should show the duplicati block) and `docker network inspect duplicati_net --format '{{range .Containers}}{{.Name}} {{end}}'` (should include `caddy-internal-d01` and `duplicati`). If either is missing, run `update_scripts.sh` then `internal-proxy.sh restart`.
+3. For split-DNS: point `duplicati.asyla.org` to d01 (e.g. Pi-hole). Use **https://duplicati.asyla.org** (not http); accept the self-signed cert once. If the hostname doesn’t load, on d01 run: `docker exec caddy-internal-d01 cat /etc/caddy/Caddyfile | grep -A2 duplicati` (should show the duplicati block) and `docker network inspect duplicati_net --format '{{range .Containers}}{{.Name}} {{end}}'` (should include `caddy-internal-d01` and `duplicati`). If either is missing, redeploy from internal-access on the workstation: `scripts/deploy-host.sh d01 && scripts/fleet.sh --host d01 restart`.
 4. Optional: run **setup-tunnel-api.py** in the cloudflared app dir to add tunnel + DNS + Cloudflare Access for `duplicati.asyla.org`.
 
 Set a strong web UI password in Duplicati settings (or use `DUPLICATI__WEBSERVICE_PASSWORD` in the compose).

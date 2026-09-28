@@ -18,7 +18,7 @@ Calibre e-book manager runs on d01 and is reachable via the cloudflared tunnel a
 
 ## First-time setup
 
-1. Ensure **media**, **cloudflared**, and **internal-proxy** are running (so `media_net` exists).
+1. Ensure **media**, **cloudflared**, and **internal-access** are running (so `media_net` exists).
 2. Run `calibre.sh up`.
 3. Run **setup-tunnel-api.py** (with your Cloudflare API token) so `calibre.asyla.org` gets tunnel ingress, DNS, and a Cloudflare Access application.
 4. Restart cloudflared if you run it after adding the new app.
