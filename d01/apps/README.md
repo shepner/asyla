@@ -2,6 +2,7 @@
 
 All d01 apps live here. Each has the same management pattern: a script (`media.sh`, `cloudflared.sh`, …) with **up**, **down**, **logs**, and **pull**.
 The internal Caddy is the exception: it comes from `asyla/projects/internal-access` (see below).
+Folders deployed here by other repos must be listed in `apps/.gitignore`, or `update_scripts.sh` deletes them.
 
 | App | Script | Notes |
 |-----|--------|--------|

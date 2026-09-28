@@ -43,7 +43,10 @@ Requires:
   `/mnt/docker/internal-proxy/.env` (mode 600); there is no workstation copy. To rotate, edit that file on d01, then
   run `~/scripts/d01/apps/internal-access/internal-access.sh restart`.
 - `apps/media/` – Media stack: Sonarr, Radarr, Overseerr, Jackett, Transmission (media.sh); access via cloudflared/internal proxy.
-- `update_scripts.sh`, `update.sh`, `update_all.sh` – Script update and OS maintenance.
+- `update_scripts.sh`, `update.sh`, `update_all.sh` – Script update and OS maintenance. `update_scripts.sh` mirrors the
+  repo into `~/scripts/d01/` and `~/scripts/docker/`: files the repo no longer has are **deleted** on the host unless a
+  repo `.gitignore` matches them (secrets such as `*.env`, and the foreign app folders in `apps/.gitignore`).
+  `~/update_scripts.sh --dry-run` lists what would be deleted and what is preserved.
 
 ## Application storage (`/mnt/docker`)
 
