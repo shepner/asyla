@@ -3,12 +3,14 @@
 Full tunnel automation via Cloudflare API.
 Creates or reuses a tunnel, pushes ingress from apps.yml, syncs DNS CNAMEs,
 and creates/updates a Cloudflare Access application for hostnames with access: true.
-Run from a machine with API credentials; copy the printed TUNNEL_TOKEN to d01 .env.
+Run on d01: credentials come from /mnt/docker/cloudflared/.env, the only copy (no workstation copy).
 
 Ref: https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/get-started/create-remote-tunnel-api/
 
 Usage:
-  ./setup-tunnel-api.py   (reads .env and apps.yml in script dir)
+  ~/scripts/d01/apps/cloudflared/setup-tunnel-api.py
+      (reads DATA_DIR/.env, DATA_DIR = $DATA_DIR or $DOCKER_DL/cloudflared or /mnt/docker/cloudflared;
+       falls back to .env in the script dir; apps.yml from the script dir)
   Or set: CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_ZONE_ID, CLOUDFLARE_API_TOKEN
   Optional: TUNNEL_ID (reuse existing), TUNNEL_NAME (default: d01),
             CLOUDFLARE_ACCESS_APP_NAME (default: d01 media)
@@ -24,7 +26,8 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 APPS_YAML = SCRIPT_DIR / "apps.yml"
-ENV_FILE = SCRIPT_DIR / ".env"
+DATA_DIR = Path(os.environ.get("DATA_DIR", f"{os.environ.get('DOCKER_DL', '/mnt/docker')}/cloudflared"))
+ENV_FILE = DATA_DIR / ".env" if (DATA_DIR / ".env").exists() else SCRIPT_DIR / ".env"
 API_BASE = "https://api.cloudflare.com/client/v4"
 
 
@@ -279,10 +282,13 @@ def main() -> None:
                         print("Access: allow policy already present.")
 
     print()
-    print("Add this to ~/scripts/d01/apps/cloudflared/.env on d01 (or your tunnel host):")
+    if os.environ.get("TUNNEL_TOKEN", "").strip() == tunnel_token:
+        print(f"TUNNEL_TOKEN in {ENV_FILE} is current.")
+        return
+    print(f"Set this in {DATA_DIR / '.env'} on the tunnel host (mode 600):")
     print(f"TUNNEL_TOKEN={tunnel_token}")
     print()
-    print("Then start the tunnel: ~/scripts/d01/apps/cloudflared/cloudflared.sh up")
+    print("Then restart the tunnel: ~/scripts/d01/apps/cloudflared/cloudflared.sh restart")
 
 
 if __name__ == "__main__":

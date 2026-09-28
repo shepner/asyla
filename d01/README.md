@@ -38,10 +38,12 @@ Requires:
 - `apps/cloudflared/` – Cloudflare Tunnel (cloudflared.sh, compose, apps.yml, setup-tunnel-api.py).
 - Internal Caddy for split DNS: `asyla/projects/internal-access` (`hosts/d01/`), deployed to `~/scripts/d01/apps/internal-access/`.
   The old `apps/internal-proxy/` was retired 2026-09-28.
-- `deploy.sh` – Workstation: push `apps/cloudflared/.env`, run `update_scripts.sh`, deploy internal-access, restart services.
-  The internal Caddy's secrets (`CF_API_TOKEN`, `BREEDING_PROGRAM_LAN_SECRET`) live only on d01 in
-  `/mnt/docker/internal-proxy/.env` (mode 600); there is no workstation copy. To rotate, edit that file on d01, then
-  run `~/scripts/d01/apps/internal-access/internal-access.sh restart`.
+- `deploy.sh` – Workstation: run `update_scripts.sh`, deploy internal-access, restart services. It pushes no secrets.
+- Secrets live only on d01 (mode 600); there are no workstation copies. To rotate, edit the file on d01, then restart:
+  - `/mnt/docker/cloudflared/.env` (`CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_ZONE_ID`, `CLOUDFLARE_API_TOKEN`, `TUNNEL_TOKEN`)
+    → `~/scripts/d01/apps/cloudflared/cloudflared.sh restart`
+  - `/mnt/docker/internal-proxy/.env` (`CF_API_TOKEN`, `BREEDING_PROGRAM_LAN_SECRET`)
+    → `~/scripts/d01/apps/internal-access/internal-access.sh restart`
 - `apps/media/` – Media stack: Sonarr, Radarr, Overseerr, Jackett, Transmission (media.sh); access via cloudflared/internal proxy.
 - `update_scripts.sh`, `update.sh`, `update_all.sh` – Script update and OS maintenance. `update_scripts.sh` mirrors the
   repo into `~/scripts/d01/` and `~/scripts/docker/`: files the repo no longer has are **deleted** on the host unless a

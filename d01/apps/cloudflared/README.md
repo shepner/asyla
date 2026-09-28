@@ -2,7 +2,7 @@
 
 This directory contains the Cloudflare Tunnel configuration for d01.
 
-**Deploying/updating on d01:** Run `~/update_scripts.sh` on the server (as root or with sudo). It pulls the repo and installs `d01/` into `~/scripts/d01/`, including `apps/cloudflared/`. After update_scripts, ensure `~/scripts/d01/apps/cloudflared/.env` exists with your `TUNNEL_TOKEN` (copy from `.env.example` if needed); `.env` is not in the repo.
+**Deploying/updating on d01:** Run `~/update_scripts.sh` on the server (as root or with sudo). It pulls the repo and installs `d01/` into `~/scripts/d01/`, including `apps/cloudflared/`. Secrets live only on d01 in `/mnt/docker/cloudflared/.env` (mode 600): `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_ZONE_ID`, `CLOUDFLARE_API_TOKEN`, `TUNNEL_TOKEN`. There is no workstation copy and `deploy.sh` pushes none. `cloudflared.sh` passes the file to compose with `--env-file` (and moves any `.env` it finds in the script dir there). To rotate a value, edit that file on d01, then `~/scripts/d01/apps/cloudflared/cloudflared.sh restart`.
 
 ## Files
 
@@ -23,28 +23,27 @@ One script creates or updates the tunnel, pushes ingress from `apps.yml`, and cr
    - **Zone** → DNS → Edit
    - **Account** → Access: Apps and Policies → Edit (so the script can create the Access app for login)
    ([Create token](https://dash.cloudflare.com/profile/api-tokens); see [Create a tunnel (API)](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/get-started/create-remote-tunnel-api/).)
-2. **From your laptop or CI** (where you have the token), in this repo:
+2. **On d01**, put the credentials in `/mnt/docker/cloudflared/.env` (mode 600; start from `.env.example`):
+   `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_ZONE_ID`, `CLOUDFLARE_API_TOKEN`. Then run:
    ```bash
-   cd d01/apps/cloudflared
-   cp .env.example .env
-   # Edit .env: set CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_ZONE_ID, CLOUDFLARE_API_TOKEN
-   ./setup-tunnel-api.py
+   ~/scripts/d01/apps/cloudflared/setup-tunnel-api.py
    ```
-3. **Copy the printed `TUNNEL_TOKEN=...`** into `~/scripts/d01/apps/cloudflared/.env` on d01 (create .env if needed).
-4. **On d01:** `~/scripts/d01/apps/cloudflared/cloudflared.sh up`. The tunnel runs with remote config; no config.yml or credentials.json on the server.
+   It reads that file (falling back to `.env` in the script dir). It reuses the tunnel named `d01` if it exists.
+3. If it prints a `TUNNEL_TOKEN=...` line, set that in `/mnt/docker/cloudflared/.env`. If the file already holds the
+   current token it says so and prints nothing secret.
+4. **On d01:** `~/scripts/d01/apps/cloudflared/cloudflared.sh restart`. The tunnel runs with remote config; no config.yml or credentials.json on the server.
 
-When you add or change apps in `apps.yml`, run `./setup-tunnel-api.py` again (same .env with API credentials); then restart cloudflared on d01 if you like (config is pulled from Cloudflare).
+When you add or change apps in `apps.yml`, push the change, run `~/update_scripts.sh` on d01, then run `setup-tunnel-api.py` there again (config is pulled from Cloudflare; a restart is optional).
 
 The script also creates or updates a **Cloudflare Access** application for hostnames with `access: true` in `apps.yml`, so visitors must log in (e.g. One-time PIN or Google) before reaching the app.
 
 ## Quick Start (manual token)
 
 1. **Get tunnel token** from Cloudflare Zero Trust dashboard (create a new tunnel for d01 or use an existing one).
-2. **Create .env file** on d01:
+2. **Create the .env file** on d01:
    ```bash
-   cd ~/scripts/d01/apps/cloudflared
-   cp .env.example .env
-   # Edit .env and add TUNNEL_TOKEN
+   install -m 600 ~/scripts/d01/apps/cloudflared/.env.example /mnt/docker/cloudflared/.env
+   # Edit /mnt/docker/cloudflared/.env and add TUNNEL_TOKEN
    ```
 3. **Start cloudflared** (same management as other apps: up/down/logs/pull):
    ```bash
@@ -95,7 +94,7 @@ When you add an app that should be exposed via the tunnel:
 
 1. Ensure the app’s compose uses a network that cloudflared is attached to (e.g. `media_net`), and add that network to cloudflared’s `networks` in `apps/cloudflared/docker-compose.yml` if needed.
 2. Add the app to `apps.yml` (hostname, service name, port).
-3. **If using API automation:** run `./setup-tunnel-api.py` again (from a machine with API credentials); optionally restart cloudflared on d01.
+3. **If using API automation:** after `~/update_scripts.sh`, run `~/scripts/d01/apps/cloudflared/setup-tunnel-api.py` on d01; optionally restart cloudflared.
 4. **If using manual token mode:** add the Public Hostname and DNS CNAME in the Cloudflare dashboard.
 5. **If using config file mode:** run `./generate-config.sh` and restart cloudflared with the config override.
 6. Restart cloudflared if you changed docker-compose or config.
