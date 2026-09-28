@@ -46,8 +46,9 @@ do_backup() {
 
 do_update() {
   echo "[INFO] Pulling latest images (not starting app; use up or restart to start)"
+  # Pull only. Never remove the container here: update_all.sh runs update and
+  # does not start the app again, so removing it here took the app down.
   run_compose pull
-  remove_stale_container
 }
 
 run_cmd() {
