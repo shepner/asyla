@@ -1,0 +1,6 @@
+# App folders that other repos deploy onto d01 (rsync from asyla/projects/<app>/scripts/deploy-host.sh).
+# update_scripts.sh deletes anything under ~/scripts/d01/ that this repo does not track unless a
+# .gitignore matches it, so every such folder must be listed here or the next update removes it.
+# Never add these folders to this repo: two masters writing one path is how d03 drifted.
+/internal-access/
+/external-access/
