@@ -25,8 +25,10 @@ log_info "Starting system update..."
 
 if command -v docker >/dev/null 2>&1; then
     log_info "Cleaning up Docker images and system..."
-    docker image prune --all -f || true
-    docker system prune --all -f || true
+    # Dangling images and old build cache only. --all also deleted images of stopped containers
+    # and the maint-rollback/* tags that host-maintenance keeps for rolling back an app update.
+    docker image prune -f || true
+    docker builder prune -f --filter until=168h || true
 fi
 
 log_info "Updating package lists..."
