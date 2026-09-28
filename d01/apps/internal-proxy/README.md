@@ -1,5 +1,10 @@
 # Internal reverse proxy (d01)
 
+> **Superseded 2026-09-28.** d01's `caddy-internal-d01` now runs from `asyla/projects/internal-access`
+> (`~/scripts/d01/apps/internal-access/`, same container name, same `/mnt/docker/internal-proxy` data and `.env`).
+> Don't run `internal-proxy.sh up|restart` here: it would fight over the container name and drop newer routes
+> (e.g. breeding-program). Edit `hosts/d01/` in internal-access and use its `deploy-host.sh` / `fleet.sh`.
+
 When **split DNS** (e.g. Pi-hole) points app hostnames to d01's IP (10.0.0.60), this Caddy container serves those hostnames on ports 80 and 443 and proxies to the apps.
 
 - **TLS:** Let's Encrypt certificates via Cloudflare DNS-01. No private CA, no trusting certs on workstations—browsers accept the certs automatically.
