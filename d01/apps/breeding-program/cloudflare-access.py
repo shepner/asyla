@@ -91,7 +91,7 @@ def ensure_access(cf: CF, account: str, emails: list[str]) -> dict:
         "name": APP_NAME,
         "type": "self_hosted",
         "domain": HOSTNAME,
-        "session_duration": "24h",
+        "session_duration": "730h",  # one month (owner decision 2026-09-28)
         "allowed_idps": otp,
         "auto_redirect_to_identity": True,
         "app_launcher_visible": False,

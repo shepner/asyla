@@ -1,5 +1,6 @@
 # breeding-program on d01 (FastAPI + BigQuery; sign-in via Cloudflare Access).
-# Reached only through cloudflared-d01 on breeding_program_net: no published ports, no LAN route.
+# Reached through cloudflared-d01 (Internet) and caddy-internal-d01 (LAN, split DNS) on breeding_program_net;
+# no published ports. The LAN proxy sends secrets/lan-trust-secret as X-Asyla-Lan-Auth.
 # Run: ~/scripts/d01/apps/breeding-program/breeding-program.sh up
 # App data: ${DOCKER_DL}/breeding-program/{app.env,secrets/,src/}; see README.md.
 
@@ -28,6 +29,7 @@ services:
       - TZ=${LOCAL_TZ:-America/Chicago}
       - GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp-sa.json
       - SESSION_SECRET_FILE=/secrets/session-secret
+      - LAN_TRUST_SECRET_FILE=/secrets/lan-trust-secret
     volumes:
       - ${DOCKER_DL:-/mnt/docker}/breeding-program/secrets:/secrets:ro
     networks:

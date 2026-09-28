@@ -49,13 +49,17 @@ do_init() {
     (umask 077; python3 -c "import secrets; print(secrets.token_urlsafe(48))" >"$SECRETS/session-secret")
     echo "[INFO] Generated $SECRETS/session-secret"
   fi
+  if [ ! -f "$SECRETS/lan-trust-secret" ]; then
+    (umask 077; python3 -c "import secrets; print(secrets.token_urlsafe(48))" >"$SECRETS/lan-trust-secret")
+    echo "[INFO] Generated $SECRETS/lan-trust-secret (copy it to the internal-proxy .env as BREEDING_PROGRAM_LAN_SECRET)"
+  fi
   docker network create breeding_program_net >/dev/null 2>&1 || true
   do_check || true
 }
 
 do_check() {
   local ok=0 f mode
-  for f in "$APP_ROOT/app.env" "$SECRETS/session-secret" "$SECRETS/gcp-sa.json"; do
+  for f in "$APP_ROOT/app.env" "$SECRETS/session-secret" "$SECRETS/lan-trust-secret" "$SECRETS/gcp-sa.json"; do
     if [ ! -f "$f" ]; then
       echo "[ERROR] missing $f" >&2; ok=1; continue
     fi
@@ -66,6 +70,9 @@ do_check() {
   done
   if [ -f "$APP_ROOT/app.env" ] && ! grep -qE '^CF_ACCESS_AUD=[0-9a-f]{20,}' "$APP_ROOT/app.env"; then
     echo "[ERROR] CF_ACCESS_AUD is not set in $APP_ROOT/app.env" >&2; ok=1
+  fi
+  if [ -f "$APP_ROOT/app.env" ] && ! grep -qE '^LAN_TRUST_EMAIL=.+@' "$APP_ROOT/app.env"; then
+    echo "[ERROR] LAN_TRUST_EMAIL is not set in $APP_ROOT/app.env" >&2; ok=1
   fi
   [ "$ok" -eq 0 ] && echo "[INFO] app.env and secrets OK"
   return "$ok"

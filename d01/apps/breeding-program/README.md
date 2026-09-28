@@ -4,10 +4,12 @@ Dog breeding / whelping app (source: `gitea.asyla.org/asyla/breeding-program`, p
 data in BigQuery (GCP project `breeding-program`), sign-in by **Cloudflare Access** (JWT verified in-app).
 
 - Public: `https://breeding-program.asyla.org` through `cloudflared-d01` on `breeding_program_net`.
-- **No LAN route**: no internal-proxy block and no Pi-hole record. Access is the only way in; a LAN
-  shortcut would bypass it and the app would answer 401.
-- Its own Access application (`breeding-program`, one-time PIN, email allow list). `access: false` in
-  `../cloudflared/apps.yml` keeps it out of the shared "d01 media" app.
+- **LAN** (owner decision 2026-09-28): Pi-hole points the same hostname at d01, and `caddy-internal-d01`
+  (`asyla/projects/internal-access`, `hosts/d01/Caddyfile`) adds `X-Asyla-Lan-Auth: <secrets/lan-trust-secret>`.
+  The app signs those requests in as `LAN_TRUST_EMAIL` without Cloudflare. Everyone on the LAN is that person.
+  The same secret goes in `/mnt/docker/internal-proxy/.env` as `BREEDING_PROGRAM_LAN_SECRET`.
+- Its own Access application (`breeding-program`, one-time PIN, email allow list, 1-month session). `access: false`
+  in `../cloudflared/apps.yml` keeps it out of the shared "d01 media" app.
 
 ## Files
 
@@ -18,7 +20,7 @@ data in BigQuery (GCP project `breeding-program`), sign-in by **Cloudflare Acces
 | `app.env.example` | Copied to `/mnt/docker/breeding-program/app.env` (mode 600) by `init` |
 | `push-source.sh` | **Workstation**: ships the repo's committed HEAD to `/mnt/docker/breeding-program/src` |
 | `cloudflare-access.py` | **On d01**: Access app + policy (prints `CF_ACCESS_AUD`); `--publish` adds ingress + DNS |
-| `/mnt/docker/breeding-program/secrets/` | `gcp-sa.json`, `session-secret` (mode 600, owner docker) |
+| `/mnt/docker/breeding-program/secrets/` | `gcp-sa.json`, `session-secret`, `lan-trust-secret` (mode 600, owner docker) |
 
 ## First deploy
 
