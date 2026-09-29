@@ -25,8 +25,7 @@ DATA_DIR="${DOCKER_DL}/cloudflared"
 export DATA_DIR
 
 # Suffix dest with -d01 to avoid collision with the d02 cloudflared backup root.
-BACKUP_ROOT="${DOCKER_D1}/cloudflared-d01"
-BACKUP_KEEP="${BACKUP_KEEP:-14}"
+BACKUP_DIR="${DOCKER_D1}/cloudflared-d01/mirror"
 
 COMPOSE_FILE="docker-compose.yml"
 
@@ -85,10 +84,7 @@ run_compose() {
 do_backup() {
   # cloudflared state is tiny: .env, credentials.json, config.yml — back up
   # the whole DATA_DIR. Nothing churny to exclude.
-  do_rsync_snapshot_backup \
-    "$DATA_DIR" \
-    "$BACKUP_ROOT" \
-    "$BACKUP_KEEP"
+  do_rsync_mirror_backup "$DATA_DIR" "$BACKUP_DIR"
 }
 
 do_update() {
@@ -145,7 +141,7 @@ if [ $# -eq 0 ]; then
   echo "Usage: $0 [switch ...]" >&2
   echo "  Switches can be combined, e.g. down backup up" >&2
   echo "" >&2
-  echo "  backup   - rsync snapshot of $DATA_DIR to $BACKUP_ROOT/<stamp>/ (incremental; keeps $BACKUP_KEEP snapshots)" >&2
+  echo "  backup   - rsync mirror of $DATA_DIR to $BACKUP_DIR (history: nas01 ZFS snapshots)" >&2
   echo "  update   - Pull latest images (no restart); use up/restart to start" >&2
   echo "  refresh  - Pull latest images + start (inline)" >&2
   echo "  up       - Start containers only" >&2

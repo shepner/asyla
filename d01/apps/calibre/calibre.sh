@@ -26,8 +26,7 @@ export LOCAL_TZ
 
 APP_NAME="calibre"
 APP_ROOT="${DOCKER_DL}/${APP_NAME}"
-BACKUP_ROOT="${DOCKER_D1}/${APP_NAME}"
-BACKUP_KEEP="${BACKUP_KEEP:-14}"
+BACKUP_DIR="${DOCKER_D1}/${APP_NAME}/mirror"
 
 run_compose() {
   docker compose -p "$APP_NAME" -f "$COMPOSE_FILE" --project-directory "$APP_ROOT" "$@"
@@ -38,10 +37,7 @@ remove_stale_calibre_container() {
 }
 
 do_backup() {
-  do_rsync_snapshot_backup \
-    "$APP_ROOT" \
-    "$BACKUP_ROOT" \
-    "$BACKUP_KEEP"
+  do_rsync_mirror_backup "$APP_ROOT" "$BACKUP_DIR"
 }
 
 do_update() {
@@ -94,7 +90,7 @@ if [ $# -eq 0 ]; then
   echo "Usage: $0 [switch ...]" >&2
   echo "  Switches can be combined, e.g. down backup up" >&2
   echo "" >&2
-  echo "  backup   - rsync snapshot of $APP_ROOT to $BACKUP_ROOT/<stamp>/ (incremental; keeps $BACKUP_KEEP snapshots)" >&2
+  echo "  backup   - rsync mirror of $APP_ROOT to $BACKUP_DIR (history: nas01 ZFS snapshots)" >&2
   echo "  update   - Pull latest images (no restart); use up/restart to start" >&2
   echo "  refresh  - Pull latest images + start (inline)" >&2
   echo "  up       - Start containers only" >&2

@@ -23,8 +23,7 @@ DOCKER_DL="${DOCKER_DL:-/mnt/docker}"
 DOCKER_D1="${DOCKER_D1:-/mnt/nas/data1/docker}"
 APP_NAME="tc-datalogger"
 APP_ROOT="$DOCKER_DL/$APP_NAME"
-# Newest archives kept in $DOCKER_D1; older ones are deleted after a successful backup.
-BACKUP_KEEP="${BACKUP_KEEP:-7}"
+BACKUP_DIR="$DOCKER_D1/$APP_NAME/mirror"
 export DOCKER_DL DOCKER_D1 TC_REGISTRY TC_IMAGE_TAG DASHBOARD_SECRET_KEY DASHBOARD_MODE LOCAL_TZ
 
 run_compose() {
@@ -33,7 +32,7 @@ run_compose() {
 
 do_backup() {
   # repo/ is a source checkout, not app state.
-  do_tgz_backup "$DOCKER_DL" "$APP_NAME" "$DOCKER_D1" "$APP_NAME" "$BACKUP_KEEP" -- --exclude="$APP_NAME/repo"
+  do_rsync_mirror_backup "$APP_ROOT" "$BACKUP_DIR" -- --exclude=/repo/
 }
 
 do_verify() {

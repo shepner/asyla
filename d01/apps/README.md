@@ -14,6 +14,23 @@ Folders deployed here by other repos must be listed in `apps/.gitignore`, or `up
 | **duplicati** | `~/scripts/d01/apps/duplicati/duplicati.sh` | Duplicati backup (internal proxy, optional tunnel) |
 | **breeding-program** | `~/scripts/d01/apps/breeding-program/breeding-program.sh` | Breeding app (tunnel + its own Access app; LAN route via internal-access, trusted as the owner). See its README |
 
+## Backups
+
+`<app>.sh backup` keeps one rsync mirror per app with `do_rsync_mirror_backup` from
+`~/scripts/docker/backup_lib.sh` (the style Plex on d02 uses): `/mnt/nas/data1/docker/<app>/mirror`,
+`cloudflared-d01/mirror`, and `media-<service>/mirror` per media service. A nightly run only writes what
+changed. History comes from nas01's daily ZFS snapshots of `data1/docker` (00:00, kept 2 weeks, replicated
+to the backup pool). `mirror/.backup-status` says `OK <time>` after a successful run.
+
+Restore the latest backup by rsyncing `mirror/` back with the app down. For an earlier day, copy
+`/mnt/data1/docker/.zfs/snapshot/auto-YYYY-MM-DD_00-00/<app>/mirror` as **root on nas01**; d01 can list
+snapshots over NFS but not read inside them. Full procedure:
+[d02/apps/plex/README.md](../../d02/apps/plex/README.md) (Restore).
+
+Until 2026-09-29 these were hardlink snapshot trees (`<YYYYMMDD-HHMMSS>/` plus `latest`, 14 kept) in the same
+folders. They are no longer written or pruned; delete them by hand once the mirrors have two weeks of
+snapshots (after 2026-10-14).
+
 Start after boot (order: media, then cloudflared, then internal-access, then calibre if desired):
 
 ```bash

@@ -16,7 +16,7 @@
 #   successful run and "IN PROGRESS ..." while one is running (or if it died), so
 #   a ZFS snapshot taken mid-run is recognizable.
 #
-# 2. Hardlink snapshots (legacy; only for small trees)
+# 2. Hardlink snapshots (legacy; no app uses it since 2026-09-29)
 #
 #   do_rsync_snapshot_backup <src_dir> <dest_root> <keep> [-- <extra rsync args>...]
 #
@@ -32,7 +32,7 @@
 #   nas01 data1), so a tree of a few hundred thousand entries takes many hours:
 #   Plex's ~826k entries took ~23 h per run. Use the mirror style for big trees.
 #
-# 3. Timestamped tarballs with retention (d03 apps)
+# 3. Timestamped tarballs with retention (no app uses it since 2026-09-29)
 #
 #   do_tgz_backup <parent_dir> <name> <dest_dir> <prefix> <keep> [-- <extra tar args>...]
 #

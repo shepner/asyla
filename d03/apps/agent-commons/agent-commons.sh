@@ -20,9 +20,7 @@ DOCKER_D1="${DOCKER_D1:-/mnt/nas/data1/docker}"
 
 APP_NAME="agent-commons"
 APP_ROOT="$DOCKER_DL/$APP_NAME"
-BACKUP_DIR="$DOCKER_D1"
-# Newest archives kept in $BACKUP_DIR; older ones are deleted after a successful backup.
-BACKUP_KEEP="${BACKUP_KEEP:-7}"
+BACKUP_DIR="$DOCKER_D1/$APP_NAME/mirror"
 
 export DOCKER_DL
 export DOCKER_D1
@@ -32,7 +30,7 @@ run_compose() {
 }
 
 do_backup() {
-  do_tgz_backup "$DOCKER_DL" "$APP_NAME" "$BACKUP_DIR" "$APP_NAME" "$BACKUP_KEEP"
+  do_rsync_mirror_backup "$APP_ROOT" "$BACKUP_DIR"
 }
 
 do_update() {
@@ -96,7 +94,7 @@ if [ $# -eq 0 ]; then
   echo "Usage: $0 [switch ...]" >&2
   echo "  Switches can be combined, e.g. down backup up" >&2
   echo "" >&2
-  echo "  backup   - Create tgz of $APP_ROOT under $BACKUP_DIR; keeps $BACKUP_KEEP (screen if interactive)" >&2
+  echo "  backup   - rsync mirror of $APP_ROOT to $BACKUP_DIR; history: nas01 ZFS snapshots (screen if interactive)" >&2
   echo "  update   - Pull images (screen if interactive); use up/restart to start" >&2
   echo "  refresh  - Pull + start (inline)" >&2
   echo "  up       - Start containers" >&2

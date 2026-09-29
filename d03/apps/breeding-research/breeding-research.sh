@@ -25,9 +25,7 @@ DOCKER_DL="${DOCKER_DL:-/mnt/docker}"
 DOCKER_D1="${DOCKER_D1:-/mnt/nas/data1/docker}"
 APP_NAME="breeding-research"
 APP_ROOT="$DOCKER_DL/$APP_NAME"
-BACKUP_DIR="$DOCKER_D1"
-# Newest archives kept in $BACKUP_DIR; older ones are deleted after a successful backup.
-BACKUP_KEEP="${BACKUP_KEEP:-7}"
+BACKUP_DIR="$DOCKER_D1/$APP_NAME/mirror"
 DEFAULT_IMAGE="breeding-research:local"
 BREEDING_RESEARCH_IMAGE="${BREEDING_RESEARCH_IMAGE:-$DEFAULT_IMAGE}"
 
@@ -85,7 +83,7 @@ ensure_image() {
 }
 
 do_backup() {
-  do_tgz_backup "$DOCKER_DL" "$APP_NAME" "$BACKUP_DIR" "$APP_NAME" "$BACKUP_KEEP"
+  do_rsync_mirror_backup "$APP_ROOT" "$BACKUP_DIR"
 }
 
 do_update() {

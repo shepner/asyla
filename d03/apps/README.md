@@ -4,9 +4,20 @@ All d03 apps use the same management pattern: a script accepting **up**, **down*
 **backup**, **update**, **refresh**, and **logs**. `~/update_all.sh` discovers every directory
 under `~/scripts/d03/apps/` and runs `backup` then `update` on each.
 
-**backup** writes `/mnt/nas/data1/docker/<App>-YYYYMMDD-HHMMSS.tgz` with `do_tgz_backup` from
-`~/scripts/docker/backup_lib.sh`, then deletes all but the newest `BACKUP_KEEP` (default 7) archives
-of that app. Only exact `<App>-<stamp>.tgz` names are pruned; `*-migrate-*.tgz` and other files are left alone.
+**backup** keeps one rsync mirror per app at `/mnt/nas/data1/docker/<App>/mirror` with
+`do_rsync_mirror_backup` from `~/scripts/docker/backup_lib.sh` (the style Plex on d02 uses). A nightly
+run only writes what changed. History comes from nas01: `data1/docker` is ZFS-snapshotted daily at
+00:00, kept 2 weeks, and replicated to the backup pool. `mirror/.backup-status` says `OK <time>` after a
+successful run and `IN PROGRESS ...` while one runs (or if it died).
+
+Restore the latest backup by rsyncing `mirror/` back into `/mnt/docker/<App>/` with the app down. For an
+earlier day, copy `/mnt/data1/docker/.zfs/snapshot/auto-YYYY-MM-DD_00-00/<App>/mirror` as **root on
+nas01**; hosts can list snapshots over NFS but not read inside them. Full procedure:
+[d02/apps/plex/README.md](../../d02/apps/plex/README.md) (Restore).
+
+Until 2026-09-29 backups were `<App>-YYYYMMDD-HHMMSS.tgz` archives in `/mnt/nas/data1/docker`. Those are
+no longer written or pruned; delete them by hand once the mirrors have two weeks of snapshots
+(after 2026-10-14).
 
 **backup** and **update** detach into a screen session only when a person runs them from a terminal.
 Anything that waits for the result gets the foreground and the real exit code: host-maintenance

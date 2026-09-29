@@ -22,7 +22,6 @@ DATA1="${DATA1:-/mnt/nas/data1}"
 
 APP_NAME="media"
 APP_ROOT="$DOCKER_DL"
-BACKUP_KEEP="${BACKUP_KEEP:-14}"
 
 export DOCKER_DL
 export DOCKER_D1
@@ -51,23 +50,22 @@ ensure_dirs() {
 }
 
 do_backup() {
-  # One snapshot tree per service, all rooted under DOCKER_D1/media-<service>/.
+  # One mirror per service at DOCKER_D1/media-<service>/mirror.
   # We back up the service's `config` dir only — the actual media library lives
   # on NFS already, downloads are transient and don't need backup.
   local rc=0
   local service src dest
   for service in "${MEDIA_SERVICES[@]}"; do
     src="${DOCKER_DL}/${service}/config"
-    dest="${DOCKER_D1}/media-${service}"
+    dest="${DOCKER_D1}/media-${service}/mirror"
     if [ ! -d "$src" ]; then
       echo "[INFO] Skipping $service (no config dir: $src)"
       continue
     fi
     echo "[INFO] === $service ==="
-    do_rsync_snapshot_backup \
+    do_rsync_mirror_backup \
       "$src" \
       "$dest" \
-      "$BACKUP_KEEP" \
       -- \
       --exclude="logs/" \
       --exclude="Logs/" \
@@ -123,8 +121,8 @@ if [ $# -eq 0 ]; then
   echo "Usage: $0 [switch ...]" >&2
   echo "  Switches can be combined, e.g. down backup up" >&2
   echo "" >&2
-  echo "  backup   - Per-service rsync snapshots of config dirs under \$DOCKER_D1/media-<service>/<stamp>/" >&2
-  echo "             (incremental; keeps $BACKUP_KEEP snapshots per service)" >&2
+  echo "  backup   - Per-service rsync mirrors of config dirs at \$DOCKER_D1/media-<service>/mirror" >&2
+  echo "             (history: nas01 ZFS snapshots)" >&2
   echo "  update   - Pull latest images (no restart); use up/restart to start" >&2
   echo "  refresh  - Pull latest images + start (inline)" >&2
   echo "  up       - Start containers only" >&2

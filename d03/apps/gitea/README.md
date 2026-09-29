@@ -5,7 +5,7 @@ Git server, internal only. Served by the internal-proxy at **gitea** or **gitea.
 ## Data
 
 - **Data:** `/mnt/docker/Gitea/data` (repos, SQLite DB, config)
-- **Backups:** `gitea.sh backup` → `Gitea-<stamp>.tgz` under `/mnt/nas/data1/docker` (~34 GB, ~27 min); keeps the newest `BACKUP_KEEP` (default 7)
+- **Backups:** `gitea.sh backup` → rsync mirror at `/mnt/nas/data1/docker/Gitea/mirror` (~33 GB, ~43k files); history is nas01's daily ZFS snapshots. See [../README.md](../README.md).
 
 ## Usage
 

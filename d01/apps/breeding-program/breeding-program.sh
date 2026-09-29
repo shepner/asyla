@@ -30,8 +30,7 @@ APP_NAME="breeding-program"
 APP_ROOT="${DOCKER_DL}/${APP_NAME}"
 SECRETS="${APP_ROOT}/secrets"
 SRC="${APP_ROOT}/src"
-BACKUP_ROOT="${DOCKER_D1}/${APP_NAME}"
-BACKUP_KEEP="${BACKUP_KEEP:-14}"
+BACKUP_DIR="${DOCKER_D1}/${APP_NAME}/mirror"
 PUBLIC_HOST="breeding-program.asyla.org"
 PUBLIC_URL="https://${PUBLIC_HOST}"
 
@@ -158,7 +157,7 @@ do_verify() {
 
 do_backup() {
   # Data lives in BigQuery; this keeps app.env and the secrets.
-  do_rsync_snapshot_backup "$APP_ROOT" "$BACKUP_ROOT" "$BACKUP_KEEP"
+  do_rsync_mirror_backup "$APP_ROOT" "$BACKUP_DIR"
 }
 
 run_cmd() {
