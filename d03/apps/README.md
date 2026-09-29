@@ -4,6 +4,15 @@ All d03 apps use the same management pattern: a script accepting **up**, **down*
 **backup**, **update**, **refresh**, and **logs**. `~/update_all.sh` discovers every directory
 under `~/scripts/d03/apps/` and runs `backup` then `update` on each.
 
+**backup** writes `/mnt/nas/data1/docker/<App>-YYYYMMDD-HHMMSS.tgz` with `do_tgz_backup` from
+`~/scripts/docker/backup_lib.sh`, then deletes all but the newest `BACKUP_KEEP` (default 7) archives
+of that app. Only exact `<App>-<stamp>.tgz` names are pruned; `*-migrate-*.tgz` and other files are left alone.
+
+**backup** and **update** detach into a screen session only when a person runs them from a terminal.
+Anything that waits for the result gets the foreground and the real exit code: host-maintenance
+(sets `MAINT_FOREGROUND=1`), `update_all.sh` (already inside screen, `$STY` set), cron, and
+non-interactive `ssh d03 '<app>.sh backup'`. Force it by hand with `MAINT_FOREGROUND=1 <app>.sh backup`.
+
 ## Owned by this repo
 
 Deployed by `update_scripts.sh`, which mirrors `d03/` into `~/scripts/d03/`: files this repo no longer

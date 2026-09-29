@@ -1,7 +1,7 @@
-# Shared rsync backup helpers. Source from any app's <app>.sh:
+# Shared backup helpers. Source from any app's <app>.sh:
 #   . "$HOME/scripts/docker/backup_lib.sh"
 #
-# Two styles. Both take a per-destination lock, so a manual `<app>.sh backup`
+# Three styles. All take a per-destination lock, so a manual `<app>.sh backup`
 # and the cron-driven backup_all.sh can never write the same destination at
 # the same time (a second run fails fast with an error instead).
 #
@@ -31,6 +31,20 @@
 #   a whole tree. Over NFS each of those is a synchronous round trip (~28 ms on
 #   nas01 data1), so a tree of a few hundred thousand entries takes many hours:
 #   Plex's ~826k entries took ~23 h per run. Use the mirror style for big trees.
+#
+# 3. Timestamped tarballs with retention (d03 apps)
+#
+#   do_tgz_backup <parent_dir> <name> <dest_dir> <prefix> <keep> [-- <extra tar args>...]
+#
+#   Writes <dest_dir>/<prefix>-YYYYMMDD-HHMMSS.tgz of <parent_dir>/<name>, then
+#   deletes all but the <keep> newest archives named exactly
+#   <prefix>-YYYYMMDD-HHMMSS.tgz. Anything else in dest_dir (other apps,
+#   <prefix>-migrate-*.tgz, differently-cased names) is never touched. The
+#   archive is written as .partial and renamed only when tar succeeds, so a
+#   failed run leaves nothing that looks complete and prunes nothing.
+#
+# Plus run_detached_if_interactive, which the d03 scripts use to decide whether
+# `backup` / `update` detach into screen (see its comment below).
 #
 # Designed to be safe under `set -euo pipefail`.
 
@@ -132,4 +146,75 @@ do_rsync_snapshot_backup() {
   fi
 
   echo "[INFO] Backup complete: $snapshot_dir"
+}
+
+do_tgz_backup() {
+  local parent="$1" name="$2" dest_dir="$3" prefix="$4" keep="$5"
+  shift 5
+  if [ "${1:-}" = "--" ]; then shift; fi
+  local extra_tar_args=("$@")
+
+  if ! [[ "$keep" =~ ^[1-9][0-9]*$ ]]; then
+    echo "[ERROR] keep must be a positive integer, got '$keep'" >&2
+    return 1
+  fi
+  if [ ! -d "$parent/$name" ]; then
+    echo "[ERROR] Source dir does not exist: $parent/$name" >&2
+    return 1
+  fi
+
+  _backup_lock "$dest_dir/$prefix" || return 1
+
+  local stamp archive partial rc=0
+  stamp=$(date +%Y%m%d-%H%M%S)
+  archive="$dest_dir/${prefix}-${stamp}.tgz"
+  partial="$archive.partial"
+
+  echo "[INFO] Backing up $parent/$name to $archive"
+  tar -czf "$partial" -C "$parent" "${extra_tar_args[@]}" "$name" || rc=$?
+  # GNU tar exit 1 means a file changed while it was read (live app); the
+  # archive is complete, so keep it and say so. Anything else is a failure.
+  if [ "$rc" -eq 1 ]; then
+    echo "[WARN] tar: some files changed while being archived; archive kept"
+  elif [ "$rc" -ne 0 ]; then
+    rm -f "$partial"
+    echo "[ERROR] tar exit $rc; no archive written" >&2
+    return "$rc"
+  fi
+  mv "$partial" "$archive"
+  echo "[INFO] Done. Size: $(du -h "$archive" | cut -f1)"
+
+  # Retention: keep only the N newest archives of exactly this prefix.
+  local removed=0 victim
+  while IFS= read -r victim; do
+    [ -n "$victim" ] || continue
+    rm -f "$victim" && removed=$((removed + 1))
+  done < <(ls -1d "$dest_dir/$prefix"-20[0-9][0-9][0-1][0-9][0-3][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9].tgz 2>/dev/null \
+            | sort | head -n -"$keep")
+  if [ "$removed" -gt 0 ]; then
+    echo "[INFO] Pruned $removed archive(s) older than the most recent $keep"
+  fi
+}
+
+# run_detached_if_interactive <label> <function> [args...]
+#
+# Runs <function> in a detached screen session only when a person started it
+# from a terminal, so an SSH drop can't kill a long backup. Every other caller
+# gets the function in the foreground and its real exit code:
+#   - MAINT_FOREGROUND=1 (host-maintenance sets it on every app-script call)
+#   - already inside screen ($STY set: host-maintenance and update_all.sh both
+#     run their tasks in screen, which gives the child a TTY, so -t 0 alone is
+#     not enough)
+#   - no TTY on stdin (cron, CI, ssh host cmd)
+# The detached session re-runs "$0" with the private _<label> entry point.
+run_detached_if_interactive() {
+  local label="$1" fn="$2"
+  shift 2
+  if [ "${MAINT_FOREGROUND:-0}" != "1" ] && [ -z "${STY:-}" ] && [ -t 0 ]; then
+    local session="${label}-${SCREEN_APP:-$(basename "$0" .sh)}-$(date +%Y%m%d-%H%M%S)"
+    screen -S "$session" -dm "$0" "_${label}"
+    echo "[INFO] ${label} running in screen $session; attach with: screen -r $session"
+  else
+    "$fn" "$@"
+  fi
 }

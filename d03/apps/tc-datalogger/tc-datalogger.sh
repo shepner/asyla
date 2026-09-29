@@ -10,6 +10,8 @@ if [ -f "$HOME/scripts/docker/common.env" ]; then
   # shellcheck source=/dev/null
   . "$HOME/scripts/docker/common.env"
 fi
+# shellcheck source=/dev/null
+. "$HOME/scripts/docker/backup_lib.sh"
 if [ -f "$SCRIPT_DIR/.env" ]; then
   set -a
   # shellcheck source=/dev/null
@@ -21,6 +23,8 @@ DOCKER_DL="${DOCKER_DL:-/mnt/docker}"
 DOCKER_D1="${DOCKER_D1:-/mnt/nas/data1/docker}"
 APP_NAME="tc-datalogger"
 APP_ROOT="$DOCKER_DL/$APP_NAME"
+# Newest archives kept in $DOCKER_D1; older ones are deleted after a successful backup.
+BACKUP_KEEP="${BACKUP_KEEP:-7}"
 export DOCKER_DL DOCKER_D1 TC_REGISTRY TC_IMAGE_TAG DASHBOARD_SECRET_KEY DASHBOARD_MODE LOCAL_TZ
 
 run_compose() {
@@ -28,11 +32,8 @@ run_compose() {
 }
 
 do_backup() {
-  stamp=$(date +%Y%m%d-%H%M%S)
-  archive="$DOCKER_D1/${APP_NAME}-${stamp}.tgz"
-  echo "[INFO] Backing up $APP_ROOT (excluding repo) to $archive"
-  tar -czf "$archive" -C "${DOCKER_DL}" --exclude="$APP_NAME/repo" "$APP_NAME"
-  echo "[INFO] Done: $(du -h "$archive" | cut -f1)"
+  # repo/ is a source checkout, not app state.
+  do_tgz_backup "$DOCKER_DL" "$APP_NAME" "$DOCKER_D1" "$APP_NAME" "$BACKUP_KEEP" -- --exclude="$APP_NAME/repo"
 }
 
 do_verify() {
@@ -59,10 +60,7 @@ run_cmd() {
     # Pull only, like the other d03 apps; use up or restart to apply the new image.
     update) echo "[INFO] Pulling latest images (not starting app; use up or restart to start)"; run_compose pull ;;
     verify) do_verify ;;
-    backup)
-      screen -S "backup-${SCREEN_APP}-$(date +%Y%m%d-%H%M%S)" -dm "$0" _backup
-      echo "[INFO] Backup in screen"
-      ;;
+    backup) run_detached_if_interactive backup do_backup ;;
     _backup) do_backup ;;
     logs) run_compose logs -f ;;
     *) return 1 ;;

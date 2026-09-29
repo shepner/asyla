@@ -13,12 +13,16 @@ if [ -f "$HOME/scripts/docker/common.env" ]; then
   # shellcheck source=/dev/null
   . "$HOME/scripts/docker/common.env"
 fi
+# shellcheck source=/dev/null
+. "$HOME/scripts/docker/backup_lib.sh"
 DOCKER_DL="${DOCKER_DL:-/mnt/docker}"
 DOCKER_D1="${DOCKER_D1:-/mnt/nas/data1/docker}"
 
 APP_NAME="agent-commons"
 APP_ROOT="$DOCKER_DL/$APP_NAME"
 BACKUP_DIR="$DOCKER_D1"
+# Newest archives kept in $BACKUP_DIR; older ones are deleted after a successful backup.
+BACKUP_KEEP="${BACKUP_KEEP:-7}"
 
 export DOCKER_DL
 export DOCKER_D1
@@ -28,11 +32,7 @@ run_compose() {
 }
 
 do_backup() {
-  stamp=$(date +%Y%m%d-%H%M%S)
-  archive="$BACKUP_DIR/${APP_NAME}-${stamp}.tgz"
-  echo "[INFO] Backing up $APP_ROOT to $archive"
-  tar -czf "$archive" -C "${DOCKER_DL}" "$APP_NAME"
-  echo "[INFO] Done. Size: $(du -h "$archive" | cut -f1)"
+  do_tgz_backup "$DOCKER_DL" "$APP_NAME" "$BACKUP_DIR" "$APP_NAME" "$BACKUP_KEEP"
 }
 
 do_update() {
@@ -54,15 +54,13 @@ run_cmd() {
   local cmd="$1"
   case "$cmd" in
     backup)
-      screen -S "backup-${SCREEN_APP}-$(date +%Y%m%d-%H%M%S)" -dm "$0" _backup
-      echo "[INFO] Backup running in screen; attach with: screen -r"
+      run_detached_if_interactive backup do_backup
       ;;
     _backup)
       do_backup
       ;;
     update)
-      screen -S "update-${SCREEN_APP}-$(date +%Y%m%d-%H%M%S)" -dm "$0" _update
-      echo "[INFO] Update running in screen; use up/restart when done. Attach: screen -r"
+      run_detached_if_interactive update do_update
       ;;
     _update)
       do_update
@@ -98,8 +96,8 @@ if [ $# -eq 0 ]; then
   echo "Usage: $0 [switch ...]" >&2
   echo "  Switches can be combined, e.g. down backup up" >&2
   echo "" >&2
-  echo "  backup   - Create tgz of $APP_ROOT under $BACKUP_DIR (screen)" >&2
-  echo "  update   - Pull images in screen; use up/restart to start" >&2
+  echo "  backup   - Create tgz of $APP_ROOT under $BACKUP_DIR; keeps $BACKUP_KEEP (screen if interactive)" >&2
+  echo "  update   - Pull images (screen if interactive); use up/restart to start" >&2
   echo "  refresh  - Pull + start (inline)" >&2
   echo "  up       - Start containers" >&2
   echo "  down     - Stop containers" >&2

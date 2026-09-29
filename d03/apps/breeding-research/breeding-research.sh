@@ -12,6 +12,8 @@ if [ -f "$HOME/scripts/docker/common.env" ]; then
   # shellcheck source=/dev/null
   . "$HOME/scripts/docker/common.env"
 fi
+# shellcheck source=/dev/null
+. "$HOME/scripts/docker/backup_lib.sh"
 if [ -f "$SCRIPT_DIR/.env" ]; then
   set -a
   # shellcheck source=/dev/null
@@ -24,6 +26,8 @@ DOCKER_D1="${DOCKER_D1:-/mnt/nas/data1/docker}"
 APP_NAME="breeding-research"
 APP_ROOT="$DOCKER_DL/$APP_NAME"
 BACKUP_DIR="$DOCKER_D1"
+# Newest archives kept in $BACKUP_DIR; older ones are deleted after a successful backup.
+BACKUP_KEEP="${BACKUP_KEEP:-7}"
 DEFAULT_IMAGE="breeding-research:local"
 BREEDING_RESEARCH_IMAGE="${BREEDING_RESEARCH_IMAGE:-$DEFAULT_IMAGE}"
 
@@ -81,11 +85,7 @@ ensure_image() {
 }
 
 do_backup() {
-  stamp=$(date +%Y%m%d-%H%M%S)
-  archive="$BACKUP_DIR/${APP_NAME}-${stamp}.tgz"
-  echo "[INFO] Backing up $APP_ROOT to $archive"
-  tar -czf "$archive" -C "${DOCKER_DL}" "$APP_NAME"
-  echo "[INFO] Done. Size: $(du -h "$archive" | cut -f1)"
+  do_tgz_backup "$DOCKER_DL" "$APP_NAME" "$BACKUP_DIR" "$APP_NAME" "$BACKUP_KEEP"
 }
 
 do_update() {
@@ -125,15 +125,9 @@ run_cmd() {
   case "$1" in
     build) do_build ;;
     rebuild) do_build --no-cache; run_compose up -d --force-recreate ;;
-    backup)
-      screen -S "backup-${SCREEN_APP}-$(date +%Y%m%d-%H%M%S)" -dm "$0" _backup
-      echo "[INFO] Backup in screen; attach: screen -r"
-      ;;
+    backup) run_detached_if_interactive backup do_backup ;;
     _backup) do_backup ;;
-    update)
-      screen -S "update-${SCREEN_APP}-$(date +%Y%m%d-%H%M%S)" -dm "$0" _update
-      echo "[INFO] Update in screen"
-      ;;
+    update) run_detached_if_interactive update do_update ;;
     _update) do_update ;;
     refresh) do_update; do_up ;;
     up) do_up ;;

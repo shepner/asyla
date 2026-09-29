@@ -479,7 +479,7 @@ From your **local workstation** (in the asyla repo), run the helper to check the
 Exit 0 = every host has a run with no failures; exit 1 = one or more hosts have failures or no run. The helper fetches `~/logs/update_all/latest` → `summary.txt` from each host.
 
 ### Backup
-[Backup procedures will be documented]
+Nightly from host-maintenance (gitlab.com/asyla/host-maintenance, `TASK=backup HOSTS=d03`), one app at a time. Each `<app>.sh backup` writes a timestamped tgz to `/mnt/nas/data1/docker` and keeps the newest `BACKUP_KEEP` (default 7). See [apps/README.md](apps/README.md).
 
 ### Monitoring
 [Monitoring setup will be documented]
