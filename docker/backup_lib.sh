@@ -50,8 +50,10 @@
 
 # _backup_lock <dest> — hold a non-blocking lock on <dest> for the rest of this
 # process. Prints why and returns 1 if another backup already holds it.
+# Re-entrant for the same dest, so one run can make two passes (gitea.sh).
 _backup_lock() {
   local dest="$1" key lock_file
+  [ "${_BACKUP_LOCK_DEST:-}" = "$dest" ] && return 0
   key=$(printf '%s' "$dest" | tr -c 'A-Za-z0-9._-' '_')
   lock_file="${BACKUP_LOCK_DIR:-/tmp}/backup-${key}.lock"
   exec {_BACKUP_LOCK_FD}>"$lock_file"
@@ -59,6 +61,7 @@ _backup_lock() {
     echo "[ERROR] Another backup to $dest is already running (lock $lock_file); not starting a second one" >&2
     return 1
   fi
+  _BACKUP_LOCK_DEST="$dest"
 }
 
 do_rsync_mirror_backup() {
@@ -83,10 +86,20 @@ do_rsync_mirror_backup() {
   # No --inplace: changed files are written to a temp name and renamed, so an
   # update never modifies an inode still hardlinked from an older copy.
   # The status file is excluded so --delete leaves it alone.
+  # rc is checked explicitly: callers often run this under `if ! run_cmd` or
+  # `run_cmd || ...`, where bash ignores set -e for the whole call.
+  local rc=0
   rsync -aH --delete --stats --human-readable \
     --exclude=/.backup-status \
     "${extra_rsync_args[@]}" \
-    "$src/" "$dest/"
+    "$src/" "$dest/" || rc=$?
+  if [ "$rc" -eq 24 ]; then
+    echo "[WARN] rsync: some source files vanished during the copy (live app)"
+  elif [ "$rc" -ne 0 ]; then
+    echo "FAILED (rsync exit $rc) $(date -Is) from $(hostname -s):$src" > "$status_file"
+    echo "[ERROR] rsync exit $rc; mirror at $dest is incomplete" >&2
+    return "$rc"
+  fi
 
   echo "OK $(date -Is) from $(hostname -s):$src" > "$status_file"
   echo "[INFO] Backup complete: $dest"
