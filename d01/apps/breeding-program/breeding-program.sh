@@ -32,7 +32,8 @@ SECRETS="${APP_ROOT}/secrets"
 SRC="${APP_ROOT}/src"
 BACKUP_ROOT="${DOCKER_D1}/${APP_NAME}"
 BACKUP_KEEP="${BACKUP_KEEP:-14}"
-PUBLIC_URL="https://breeding-program.asyla.org"
+PUBLIC_HOST="breeding-program.asyla.org"
+PUBLIC_URL="https://${PUBLIC_HOST}"
 
 run_compose() {
   docker compose -p "$APP_NAME" -f "$COMPOSE_FILE" --project-directory "$SCRIPT_DIR" "$@"
@@ -100,8 +101,22 @@ do_up() {
   docker network connect breeding_program_net cloudflared-d01 2>/dev/null || true
 }
 
+# PUBLIC_HOST's IPv4 from public DNS, bypassing the LAN split DNS (Pi-hole points it at d01).
+# dig @1.1.1.1 if installed, else Cloudflare DNS-over-HTTPS (getent can't pick a resolver). Empty if both fail.
+public_ip() {
+  local ip=""
+  if command -v dig >/dev/null 2>&1; then
+    ip="$(dig +short +time=5 +tries=2 A "$PUBLIC_HOST" @1.1.1.1 2>/dev/null | grep -E '^[0-9]+(\.[0-9]+){3}$' | head -1 || true)"
+  fi
+  if [ -z "$ip" ]; then
+    ip="$(curl -s --max-time 10 -H 'accept: application/dns-json' "https://1.1.1.1/dns-query?name=${PUBLIC_HOST}&type=A" \
+      | grep -oE '"data":"[0-9]+(\.[0-9]+){3}"' | head -1 | cut -d'"' -f4 || true)"
+  fi
+  echo "$ip"
+}
+
 do_verify() {
-  local status code i
+  local status code i ip lan_ip
   # Right after a restart the app is still loading its data from BigQuery: wait up to 60 s before failing.
   for i in $(seq 1 30); do
     if docker exec "$APP_NAME" python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=4)" 2>/dev/null; then
@@ -115,12 +130,29 @@ do_verify() {
   echo "[INFO] in-container /healthz OK"
   status="$(docker inspect -f '{{.State.Health.Status}}' "$APP_NAME" 2>/dev/null || echo missing)"
   echo "[INFO] container health: $status"
-  # Unauthenticated requests must be stopped by Cloudflare Access (redirect to the login page).
+  # Public path, pinned to a Cloudflare IP from public DNS: unauthenticated requests must be stopped by
+  # Cloudflare Access (redirect to the login page).
+  ip="$(public_ip)"
+  if [ -z "$ip" ]; then
+    echo "[WARN] could not resolve $PUBLIC_HOST from public DNS; public path not checked" >&2
+  else
+    code="$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 20 \
+      --resolve "$PUBLIC_HOST:443:$ip" "$PUBLIC_URL/" || true)"
+    echo "[INFO] public $PUBLIC_URL/ via $ip -> $code"
+    case "$code" in
+      30[27]\ *cloudflareaccess.com*) echo "[INFO] public path is behind Cloudflare Access" ;;
+      *) echo "[WARN] public path: expected a redirect to cloudflareaccess.com (not live yet, or Access missing)" >&2 ;;
+    esac
+  fi
+  # LAN path: split DNS sends the name to d01, caddy-internal-d01 adds X-Asyla-Lan-Auth and the app signs
+  # the request in as LAN_TRUST_EMAIL, so 200 is expected.
+  lan_ip="$(getent ahostsv4 "$PUBLIC_HOST" 2>/dev/null | awk 'NR == 1 {print $1}' || true)"
   code="$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 20 "$PUBLIC_URL/" || true)"
-  echo "[INFO] $PUBLIC_URL/ -> $code"
+  echo "[INFO] LAN $PUBLIC_URL/ via ${lan_ip:-?} -> $code"
   case "$code" in
-    30[27]\ *cloudflareaccess.com*) echo "[INFO] public URL is behind Cloudflare Access" ;;
-    *) echo "[WARN] expected a redirect to cloudflareaccess.com (not live yet, or Access missing)" >&2 ;;
+    200\ *) echo "[INFO] LAN path signed in through caddy-internal-d01" ;;
+    30[27]\ *cloudflareaccess.com*) echo "[WARN] LAN path went to Cloudflare Access (split DNS not in effect on d01?)" >&2 ;;
+    *) echo "[WARN] LAN path: expected 200 (check caddy-internal-d01, lan-trust-secret, LAN_TRUST_EMAIL)" >&2 ;;
   esac
 }
 

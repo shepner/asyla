@@ -56,5 +56,9 @@ Before deploying a schema change, apply it to BigQuery first (`scripts/bq/apply_
   `breeding_program_net` live; the cloudflared compose lists the network so it survives a recreate.
 - `../cloudflared/setup-tunnel-api.py` **replaces** the whole ingress list from `../cloudflared/apps.yml`;
   this app is listed there so a re-run keeps it.
+- `verify` checks two paths after `/healthz`: **public**, pinned (`curl --resolve`) to the Cloudflare IP from public
+  DNS (`dig @1.1.1.1`, or Cloudflare DNS-over-HTTPS when `dig` is missing), which must 302 to
+  `asyla.cloudflareaccess.com`; and **LAN**, the normal lookup (split DNS → d01 → `caddy-internal-d01`), which must
+  answer 200. Either mismatch prints a `[WARN]`.
 - Backups (`backup`): rsync snapshots of the app dir (env + secrets) to `${DOCKER_D1}/breeding-program`.
   The data itself is in BigQuery.
