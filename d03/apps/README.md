@@ -6,7 +6,9 @@ under `~/scripts/d03/apps/` and runs `backup` then `update` on each.
 
 ## Owned by this repo
 
-Deployed by `update_scripts.sh`, which copies `d03/` into `~/scripts/d03/`.
+Deployed by `update_scripts.sh`, which mirrors `d03/` into `~/scripts/d03/`: files this repo no longer
+has are deleted on the host unless a repo `.gitignore` matches them (`*.env` secrets, and the folders in
+`apps/.gitignore`).
 
 | App | Script | Notes |
 |-----|--------|-------|
@@ -21,6 +23,7 @@ The edge stack lives in its own repos under `asyla/projects/` and is deployed st
 host with `scripts/deploy-host.sh d03` (`rsync --delete`). It lands in the same `apps/` directory
 and `update_all.sh` maintains it alongside the rest, but this repo must **not** carry a copy —
 two masters writing the same path is how the May 2026 drift happened.
+They must be listed in `apps/.gitignore`, or `update_scripts.sh` deletes them.
 
 | App | Source repo | Notes |
 |-----|-------------|-------|

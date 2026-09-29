@@ -463,6 +463,10 @@ The following scripts are available in the `setup/` directory:
 ./update_scripts.sh
 ```
 
+`update_scripts.sh` mirrors the repo into `~/scripts/d03/` and `~/scripts/docker/`: files the repo no longer has
+are **deleted** on the host unless a repo `.gitignore` matches them (secrets such as `*.env`, and the foreign app
+folders in `apps/.gitignore`). `~/update_scripts.sh --dry-run` lists what would be deleted and what is preserved.
+
 ### Comprehensive update (update_all)
 `./update_all.sh` (as root or with sudo) runs in order: (1) update_scripts, (2) OS update, (3) backup and upgrade each app under `~/scripts/<host>/apps/`. Step 3 runs **one screen session per app** (parallel and disconnect-safe). If your SSH session drops, reattach with `screen -r update_<host>_<app>` to watch that app; the main script polls until all apps finish. Results are written to `~/logs/update_all/run_<timestamp>/` (per-app `.exit` codes, `summary.txt`, wrapper scripts).
 
