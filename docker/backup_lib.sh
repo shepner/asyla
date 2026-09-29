@@ -182,7 +182,7 @@ do_tgz_backup() {
     return "$rc"
   fi
   mv "$partial" "$archive"
-  echo "[INFO] Done. Size: $(du -h "$archive" | cut -f1)"
+  echo "[INFO] Done. Size: $(du -h --apparent-size "$archive" | cut -f1)"
 
   # Retention: keep only the N newest archives of exactly this prefix.
   local removed=0 victim
