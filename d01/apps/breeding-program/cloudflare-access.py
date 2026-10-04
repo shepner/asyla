@@ -3,6 +3,7 @@
 
   cloudflare-access.py --email a@x --email b@y         ensure the dedicated Access app + email policy; print AUD
   cloudflare-access.py --email ... --publish           also add the tunnel ingress rule and the DNS CNAME
+  cloudflare-access.py --open                          option B: any verified email (one-time PIN); the app authorizes
   cloudflare-access.py --status                        show what exists; change nothing
 
 Credentials: CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_ZONE_ID, CLOUDFLARE_API_TOKEN and TUNNEL_TOKEN from
@@ -27,6 +28,7 @@ HOSTNAME = "breeding-program.asyla.org"
 SERVICE = "http://breeding-program:8080"
 APP_NAME = "breeding-program"
 POLICY_NAME = "Allowed emails"
+OPEN_POLICY_NAME = "Any verified email"
 API = "https://api.cloudflare.com/client/v4"
 
 
@@ -82,7 +84,12 @@ def policy_emails(policy: dict) -> list[str]:
     return sorted(i["email"]["email"] for i in policy.get("include", []) if "email" in i)
 
 
-def ensure_access(cf: CF, account: str, emails: list[str]) -> dict:
+def policy_mode(policy: dict) -> str:
+    return "open (any verified email)" if any("everyone" in i for i in policy.get("include", [])) else "email list"
+
+
+def ensure_access(cf: CF, account: str, emails: list[str] | None) -> dict:
+    """emails=None writes the open policy (option B); a list writes the allow list."""
     idps = cf.req("GET", f"/accounts/{account}/access/identity_providers")["result"]
     otp = [i["id"] for i in idps if i.get("type") == "onetimepin"]
     if not otp:
@@ -104,9 +111,9 @@ def ensure_access(cf: CF, account: str, emails: list[str]) -> dict:
         app = cf.req("POST", f"/accounts/{account}/access/apps", payload)["result"]
         print(f"[INFO] Access app '{APP_NAME}' created")
     policy = {
-        "name": POLICY_NAME,
+        "name": POLICY_NAME if emails is not None else OPEN_POLICY_NAME,
         "decision": "allow",
-        "include": [{"email": {"email": e}} for e in emails],
+        "include": [{"email": {"email": e}} for e in emails] if emails is not None else [{"everyone": {}}],
         "precedence": 1,
     }
     existing = allow_policy(cf, account, app["id"])
@@ -114,7 +121,10 @@ def ensure_access(cf: CF, account: str, emails: list[str]) -> dict:
         cf.req("PUT", f"/accounts/{account}/access/apps/{app['id']}/policies/{existing['id']}", policy)
     else:
         cf.req("POST", f"/accounts/{account}/access/apps/{app['id']}/policies", policy)
-    print(f"[INFO] policy '{POLICY_NAME}': {', '.join(emails)}")
+    if emails is None:
+        print(f"[INFO] policy '{OPEN_POLICY_NAME}': everyone who completes a one-time PIN (the app authorizes)")
+    else:
+        print(f"[INFO] policy '{POLICY_NAME}': {', '.join(emails)}")
     return app
 
 
@@ -154,6 +164,7 @@ def status(cf: CF, account: str, zone: str, tunnel: str) -> None:
     if app:
         pol = allow_policy(cf, account, app["id"])
         print(f"[INFO] Access app '{app['name']}' domain={app['domain']} aud={app['aud']}")
+        print(f"[INFO] allow policy mode: {policy_mode(pol) if pol else 'NONE'}")
         print(f"[INFO] allow policy emails: {policy_emails(pol) if pol else 'NONE'}")
     else:
         print("[INFO] Access app: none")
@@ -166,6 +177,7 @@ def status(cf: CF, account: str, zone: str, tunnel: str) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--email", action="append", default=[], help="allowed email (repeat)")
+    ap.add_argument("--open", action="store_true", help="option B: allow any verified email (replaces the email list)")
     ap.add_argument("--publish", action="store_true", help="add ingress rule + DNS (after Access exists)")
     ap.add_argument("--status", action="store_true")
     args = ap.parse_args()
@@ -178,9 +190,11 @@ def main() -> None:
     if args.status:
         status(cf, account, zone, tunnel)
         return
-    if not args.email:
-        ap.error("--email is required (the full allow list; it replaces the policy's list)")
-    app = ensure_access(cf, account, sorted(set(args.email)))
+    if args.open and args.email:
+        ap.error("--open and --email are mutually exclusive")
+    if not args.open and not args.email:
+        ap.error("--email is required (the full allow list; it replaces the policy's list), or use --open")
+    app = ensure_access(cf, account, None if args.open else sorted(set(args.email)))
     print(f"CF_ACCESS_AUD={app['aud']}")
     if args.publish:
         publish(cf, account, zone, tunnel)
