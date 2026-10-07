@@ -1,6 +1,6 @@
 # breeding-research on d03 — app data under /mnt/docker/breeding-research (GCP key, etc.)
 # Run: ~/scripts/d03/apps/breeding-research/breeding-research.sh up
-# Image: GitLab registry (BREEDING_RESEARCH_PULL=1) or local build (breeding-research:local).
+# Image: local build from source (breeding-research:local), or a registry pull with BREEDING_RESEARCH_PULL=1.
 
 networks:
   breeding_research_net:

@@ -41,16 +41,12 @@ resolve_source_dir() {
     printf '%s' "$BREEDING_RESEARCH_SRC"
     return 0
   fi
-  for d in \
-    "$HOME/local/asyla/projects/breeding-research" \
-    "$HOME/asyla/projects/breeding-research" \
-    "$SCRIPT_DIR/.src/breeding-research"; do
-    if [ -f "$d/Dockerfile" ]; then
-      printf '%s' "$d"
-      return 0
-    fi
-  done
-  echo "[ERROR] breeding-research source not found. Set BREEDING_RESEARCH_SRC or clone to $SCRIPT_DIR/.src/breeding-research" >&2
+  d="$SCRIPT_DIR/.src/breeding-research"
+  if [ -f "$d/Dockerfile" ]; then
+    printf '%s' "$d"
+    return 0
+  fi
+  echo "[ERROR] breeding-research source not found. Set BREEDING_RESEARCH_SRC or clone https://gitlab.com/asyla/breeding-research.git to $d" >&2
   return 1
 }
 
