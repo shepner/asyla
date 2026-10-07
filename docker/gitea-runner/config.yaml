@@ -1,6 +1,6 @@
 # gitea-runner config for d01-d03 (native, host mode). Every key not set here keeps the default of
-# `gitea-runner config generate` (v4.1.0). Labels are not set here: they are given at registration
-# (gitea-runner.sh register) and kept in .runner.
+# `gitea-runner config generate` (v4.1.0). Labels are not set here: `gitea-runner.sh install` appends
+# this host's labels (RUNNER_LABELS) when it copies this file to /var/lib/gitea-runner/config.yaml.
 
 runner:
   file: .runner
