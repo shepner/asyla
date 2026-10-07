@@ -21,6 +21,9 @@ services:
       - GITEA__server__ROOT_URL=https://gitea.asyla.org/
       - GITEA__server__HTTP_PORT=3000
       - GITEA__security__INSTALL_LOCK=true
+      # Only an admin creates accounts. Any account can run host-mode Actions jobs as `docker`
+      # (sudo) on d01-d03 through the gitea-runner (operator, 2026-10-07).
+      - GITEA__service__DISABLE_REGISTRATION=true
     ports:
       # Published for k3s internal-proxy → d03 until tunnel uses d03 Caddy only
       - "3000:3000"
