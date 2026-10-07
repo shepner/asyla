@@ -8,3 +8,7 @@
 # Host-local source checkouts for native image builds (breeding-research.sh looks in
 # $SCRIPT_DIR/.src/<app> when BREEDING_RESEARCH_PULL=0).
 .src/
+
+# Host-local copies of an app's .env kept for rollback (e.g. .env.bak-20261007). They hold the same
+# secrets as .env, and without this pattern update_scripts.sh deletes them on its next run.
+.env.bak*
