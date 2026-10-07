@@ -31,5 +31,6 @@ This is the **asyla** project. Cursor is expected to **document and improve its 
   failed ... http+docker" and fell back to raw HTTP). Set `TC_IMAGE_TAG` in the d03 host `.env` and
   `.env.example`; `tc-datalogger.sh up` recreated all 6 containers on the new tag; `verify` passed
   (local `:8081/login` and public URL); the dashboard logs "Successfully connected to Docker via SDK".
-  The dashboard data pull is the operator's to trigger (needs their login). Roll back by setting
+  Data pull: the operator triggered the Trading dashboard pull at 14:15:44; `user_events`, `items` and
+  `faction_members` ran through Docker exec and returned success (dashboard log, `last_data_pull.json`). Roll back by setting
   `TC_IMAGE_TAG` back to `e6ad625d741d46d2638f4692afbfe89b959001bc` and running `up`.
