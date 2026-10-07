@@ -1,21 +1,11 @@
-# gitea-runner config for d01-d03. Every key not set here keeps the default of
-# `gitea-runner config generate` (v4.1.0). Labels are not set here: gitea-runner.sh passes them
-# per host through GITEA_RUNNER_LABELS.
+# gitea-runner config for d01-d03 (native, host mode). Every key not set here keeps the default of
+# `gitea-runner config generate` (v4.1.0). Labels are not set here: they are given at registration
+# (gitea-runner.sh register) and kept in .runner.
 
 runner:
   file: .runner
-  capacity: 2
+  # One job at a time: host jobs share the host (apt, compose, the app scripts' locks).
+  capacity: 1
   timeout: 3h
-  # Let running jobs finish when the container stops (compose stop_grace_period is 11m).
+  # Let a running job finish when the service stops (gitea-runner.service TimeoutStopSec is 11min).
   shutdown_timeout: 10m
-
-container:
-  # Empty: the runner creates a network per job.
-  network: ""
-  privileged: false
-  # Jobs may not bind-mount anything from the host.
-  valid_volumes: []
-  # "-": use the host daemon, but do not mount its socket into job containers. Jobs on these
-  # production hosts must not be able to control the host's other containers.
-  docker_host: "-"
-  force_pull: false

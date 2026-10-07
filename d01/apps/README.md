@@ -13,7 +13,7 @@ Folders deployed here by other repos must be listed in `apps/.gitignore`, or `up
 | **homebridge** | `~/scripts/d01/apps/homebridge/homebridge.sh` | Homebridge (tunnel + Access; host net + proxy) |
 | **duplicati** | `~/scripts/d01/apps/duplicati/duplicati.sh` | Duplicati backup (internal proxy, optional tunnel) |
 | **breeding-program** | `~/scripts/d01/apps/breeding-program/breeding-program.sh` | Breeding app (tunnel + its own Access app; LAN route via internal-access, trusted as the owner). See its README |
-| **gitea-runner** | `~/scripts/d01/apps/gitea-runner/gitea-runner.sh` | Gitea Actions runner (instance-wide; labels `asyla`, `d01`, `docker`). Symlink to the shared `docker/gitea-runner/`; see its README |
+| **gitea-runner** | `~/scripts/d01/apps/gitea-runner/gitea-runner.sh` | Gitea Actions runner, native (systemd); jobs run on the host as `docker`. Instance-wide; labels `asyla`, `d01`, `docker`. Symlink to the shared `docker/gitea-runner/`; see its README |
 
 ## Backups
 
