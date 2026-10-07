@@ -98,6 +98,11 @@ do_build() {
   short="${sha:0:7}"
   tag="$IMAGE_REPO:$short"
   old="$(docker image inspect -f '{{.Id}}' "$tag" 2>/dev/null || true)"
+  # Tag the current image before the build moves $tag: with the containerd image store an image
+  # whose last tag moved can no longer be looked up by ID, so tagging it afterwards fails.
+  if [ -n "$old" ]; then
+    docker image tag "$tag" "$tag-prev"
+  fi
   echo "[INFO] Building $tag from '$ref' (git archive in $GIT_CONTAINER)"
   # Archive to a file first: a truncated stream piped into docker build could still be tagged.
   context="$(mktemp)"
@@ -118,8 +123,9 @@ do_build() {
   rm -f "$context"
   new="$(docker image inspect -f '{{.Id}}' "$tag")"
   if [ -n "$old" ] && [ "$old" != "$new" ]; then
-    docker image tag "$old" "$tag-prev"
     echo "[INFO] The image previously tagged $tag is kept as $tag-prev"
+  elif [ -n "$old" ]; then
+    docker image rm "$tag-prev" >/dev/null  # unchanged build: drop the extra tag only
   fi
   echo "[INFO] Built $tag (app_version $short)"
 }
