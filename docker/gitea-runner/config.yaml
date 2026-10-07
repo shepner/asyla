@@ -4,8 +4,9 @@
 
 runner:
   file: .runner
-  # One job at a time: host jobs share the host (apt, compose, the app scripts' locks).
-  capacity: 1
+  # Same as the Mini: a low capacity left chains of small jobs queued for hours. Jobs that must not
+  # overlap say so themselves: a workflow `concurrency` group (Gitea >= 1.26) or the app scripts' locks.
+  capacity: 10
   timeout: 3h
   # Let a running job finish when the service stops (gitea-runner.service TimeoutStopSec is 11min).
   shutdown_timeout: 10m

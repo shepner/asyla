@@ -19,8 +19,10 @@ The files live here once. Each host's `apps/gitea-runner/gitea-runner.sh` is a s
 ## What a job gets
 
 `git`, `python3` (3.13 on Debian 13), `node` (Debian `nodejs`, installed by `install`; JavaScript
-actions such as `actions/checkout` need it), `docker`, and `sudo`. One job at a time per host
-(`capacity: 1`).
+actions such as `actions/checkout` need it), `docker`, and `sudo`. Up to 10 jobs run at once per
+host (`capacity: 10`, as on the Mini). Jobs that must not overlap (apt, reboots, one app's
+update) declare it: a workflow `concurrency:` group such as `d01-os` (Gitea 1.26+), or the app
+scripts' own locks.
 
 A job runs inside the service, so stopping the service ends it after `shutdown_timeout` (10 min).
 Work that must outlive the runner (a reboot, restarting this runner) has to leave the service's
