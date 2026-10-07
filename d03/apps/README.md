@@ -36,6 +36,7 @@ has are deleted on the host unless a repo `.gitignore` matches them (`*.env` sec
 | **agent-commons** | `~/scripts/d03/apps/agent-commons/agent-commons.sh` | Problem/answer corpus; image pulled from the Gitea registry, overridable via `.env` `AGENT_COMMONS_IMAGE` |
 | **breeding-research** | `~/scripts/d03/apps/breeding-research/breeding-research.sh` | Scraper + API; needs `.env` |
 | **tc-datalogger** | `~/scripts/d03/apps/tc-datalogger/tc-datalogger.sh` | Torn City API → BigQuery stack; needs `.env` |
+| **gitea-runner** | `~/scripts/d03/apps/gitea-runner/gitea-runner.sh` | Gitea Actions runner (instance-wide; labels `asyla`, `d03`, `docker`). Symlink to the shared `docker/gitea-runner/`; see its README |
 
 ## Owned elsewhere — do not add them here
 
