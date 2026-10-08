@@ -12,7 +12,7 @@ networks:
 
 services:
   agent-commons:
-    image: ${AGENT_COMMONS_IMAGE:-agent-commons:265b92d}
+    image: ${AGENT_COMMONS_IMAGE:-agent-commons:ac80921}
     container_name: agent-commons
     restart: unless-stopped
     environment:
