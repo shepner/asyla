@@ -1,0 +1,95 @@
+# d03 build spec, read by scripts/build_host.py (asyla hub decisions/host-build-and-recovery.md).
+# VM values match `qm config 103` on vmh01, 2026-10-07. d03 has no data disk yet: /mnt/docker is
+# on the root disk (asyla backlog: move d03's app data to its own data disk).
+[vm]
+node = "vmh01"
+vmid = 103
+sockets = 1
+cores = 6
+memory_mb = 49152
+ip = "10.0.0.62/24"
+os_disk = { storage = "local-data2", size = "256G" }
+cloudinit_storage = "local-data2"
+
+[setup]
+steps = ["systemConfig.sh", "nfs.sh", "docker.sh"]   # no SMB media mount on d03 (live, 2026-10-07)
+
+[[secret]]
+var = "D03_AGENT_COMMONS_ENV"
+path = "/home/docker/scripts/d03/apps/agent-commons/.env"
+owner = "docker:docker"
+mode = "600"
+[[secret]]
+var = "D03_BREEDING_RESEARCH_ENV"
+path = "/home/docker/scripts/d03/apps/breeding-research/.env"
+owner = "docker:docker"
+mode = "600"
+[[secret]]
+var = "D03_TC_DATALOGGER_ENV"
+path = "/home/docker/scripts/d03/apps/tc-datalogger/.env"
+owner = "docker:docker"
+mode = "600"
+[[secret]]
+var = "D03_BREEDING_RESEARCH_GCP_CREDENTIALS_JSON"
+path = "/mnt/docker/breeding-research/gcp-credentials.json"
+owner = "docker:docker"
+mode = "600"
+[[secret]]
+var = "D03_CLOUDFLARED_ENV"
+path = "/mnt/docker/cloudflared/.env"
+owner = "docker:docker"
+mode = "600"
+[[secret]]
+var = "D03_INTERNAL_PROXY_ENV"
+path = "/mnt/docker/internal-proxy/.env"
+owner = "docker:docker"
+mode = "600"
+[[secret]]
+var = "D03_DOCKER_CONFIG_JSON"           # registry login for gitea.asyla.org images
+path = "/home/docker/.docker/config.json"
+owner = "docker:docker"
+mode = "600"
+[[secret]]
+var = "D03_HOST_MAINTENANCE_SSH_KEY"     # host-maintenance jobs' key into d01-d03
+path = "/home/docker/.config/host-maintenance/ssh/id_ed25519"
+owner = "docker:docker"
+mode = "600"
+
+# Gitea first: the runner and the tc-datalogger images depend on it.
+[[app]]
+name = "gitea"
+verify = ["verify"]
+[[app]]
+name = "agent-commons"
+start = ["build", "up"]
+verify = ["verify"]
+[[app]]
+name = "breeding-research"
+start = ["build", "up"]
+verify = ["verify"]
+[[app]]
+name = "tc-datalogger"
+verify = ["verify"]
+
+[[external]]
+name = "internal-access"
+repo = "~/local/asyla/projects/internal-access"
+run = ["scripts/deploy-host.sh {host}", "scripts/fleet.sh --host {host} up verify"]
+[[external]]
+name = "external-access"
+repo = "~/local/asyla/projects/external-access"
+run = ["scripts/deploy-host.sh {host}", "scripts/fleet.sh --host {host} up verify"]
+[[external]]
+name = "host-maintenance runner"
+repo = "~/local/asyla/projects/host-maintenance"
+manual = "setup/setup-runner-d03.sh with a new project runner token (delete the old host-maintenance-d03 runner in GitLab first)"
+[[external]]
+name = "theorg-mini-deadman"
+repo = "~/local/theOrg"
+manual = ".cursor/helpers/runtime-watchdog/install-d03-deadman.sh (theOrg-owned; needs /etc/theorg-deadman/gitea.env)"
+[[external]]
+name = "GitLab runner 'd03 group' (proxmox-guest-factory CI)"
+manual = "pending the factory review (asyla backlog)"
+
+[runner]
+enabled = true

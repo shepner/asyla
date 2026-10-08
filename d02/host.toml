@@ -1,0 +1,27 @@
+# d02 build spec, read by scripts/build_host.py (asyla hub decisions/host-build-and-recovery.md).
+# VM values match `qm config 102` on vmh02, 2026-10-07.
+[vm]
+node = "vmh02"
+vmid = 102
+sockets = 2
+cores = 6
+memory_mb = 32768
+ip = "10.0.0.61/24"
+os_disk = { storage = "local-data2", size = "64G" }
+data_disk = { storage = "local-data2", size = "512G" }   # /mnt/docker
+cloudinit_storage = "local-data2"
+
+[setup]
+steps = ["systemConfig.sh", "nfs.sh", "smb.sh", "docker.sh"]
+
+[[secret]]
+var = "D02_SMBCREDENTIALS"
+path = "/home/docker/.smbcredentials"
+owner = "docker:docker"
+mode = "600"
+
+[[app]]
+name = "plex"
+
+[runner]
+enabled = true

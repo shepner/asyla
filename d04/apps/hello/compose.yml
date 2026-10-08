@@ -1,0 +1,13 @@
+# hello: the d04 build test app (asyla hub decisions/host-build-and-recovery.md). It has what a real
+# app has: data under ${DOCKER_DL}/hello (backed up, restored) and a secret from .env (GitLab).
+services:
+  hello:
+    image: busybox:1.37
+    container_name: hello
+    restart: unless-stopped
+    user: "${DOCKER_UID}:${DOCKER_GID}"
+    command: ["httpd", "-f", "-p", "8080", "-h", "/www"]
+    ports:
+      - "8099:8080"
+    volumes:
+      - ${DOCKER_DL}/hello/www:/www:ro

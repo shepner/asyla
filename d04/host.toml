@@ -1,0 +1,30 @@
+# d04: the build test host (asyla hub decisions/host-build-and-recovery.md). Created and destroyed
+# as testing needs (operator pre-approved, 2026-10-07). Its runner carries only the label
+# build-test, so it never takes a real job.
+[vm]
+node = "vmh02"
+vmid = 104
+sockets = 1
+cores = 4
+memory_mb = 8192
+ip = "10.0.0.63/24"
+os_disk = { storage = "local-data2", size = "32G" }
+data_disk = { storage = "local-data2", size = "16G" }   # /mnt/docker
+cloudinit_storage = "local-data2"
+disposable = true          # build_host.py may destroy and recreate it without --confirm
+
+[setup]
+steps = ["systemConfig.sh", "nfs.sh", "docker.sh"]
+
+[[secret]]
+var = "D04_HELLO_ENV"
+path = "/home/docker/scripts/d04/apps/hello/.env"
+owner = "docker:asyla"
+mode = "600"
+
+[[app]]
+name = "hello"
+verify = ["verify"]
+
+[runner]
+enabled = true

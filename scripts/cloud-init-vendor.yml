@@ -1,0 +1,34 @@
+#cloud-config
+# Vendor data for every d0N host built by scripts/build_host.py (uploaded as
+# local:snippets/<host>-vendor.yml). Proxmox's own cloud-init settings add the user `docker`
+# (ciuser, passwordless sudo), its SSH key, the address and DNS.
+#
+# Deliberately minimal: no secrets and nothing fetched from the repo. Everything after first boot
+# (deploy token, host scripts, data disk, setup, secrets, apps, runner) is done by build_host.py
+# over SSH, so a failed step is visible and re-runnable from the workstation.
+
+package_update: true
+packages: [git, curl, rsync, parted, qemu-guest-agent]
+
+runcmd:
+  # asyla group (GID 1000) and docker user (UID 1003), as on every d0N host. Proxmox's ciuser
+  # creates docker with UID 1000 first, so it is renumbered in place.
+  - |
+    set -e
+    getent group docker >/dev/null || groupadd docker
+    if ! getent group asyla >/dev/null; then
+      if getent group 1000 >/dev/null; then
+        # GID 1000 belongs to the ciuser's own group (docker): rename it to asyla.
+        groupmod -n asyla "$(getent group 1000 | cut -d: -f1)"
+        getent group docker >/dev/null || groupadd docker
+      else
+        groupadd -g 1000 asyla
+      fi
+    fi
+    if [ "$(id -u docker)" != 1003 ]; then
+      usermod -u 1003 -g asyla docker
+      chown -R docker:asyla /home/docker
+    fi
+    usermod -aG asyla,docker,sudo docker
+  - systemctl enable --now qemu-guest-agent ssh
+  - touch /var/lib/cloud/instance/asyla-vendor-done

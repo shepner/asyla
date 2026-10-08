@@ -1,0 +1,62 @@
+# d01 build spec, read by scripts/build_host.py (asyla hub decisions/host-build-and-recovery.md).
+# VM values match `qm config 101` on vmh02, 2026-10-07. Secrets: paths only; values live in GitLab
+# CI/CD variables of asyla/asyla-hosts (scripts/build_host.py secrets).
+[vm]
+node = "vmh02"
+vmid = 101
+sockets = 2
+cores = 6
+memory_mb = 65536
+ip = "10.0.0.60/24"
+os_disk = { storage = "local-data2", size = "128G" }
+data_disk = { storage = "local-data2", size = "128G" }   # /mnt/docker
+cloudinit_storage = "local-data2"
+
+[setup]
+steps = ["systemConfig.sh", "nfs.sh", "smb.sh", "docker.sh"]
+
+[[secret]]
+var = "D01_SMBCREDENTIALS"
+path = "/home/docker/.smbcredentials"
+owner = "docker:docker"
+mode = "600"
+[[secret]]
+var = "D01_BREEDING_PROGRAM_APP_ENV"
+path = "/mnt/docker/breeding-program/app.env"
+owner = "docker:asyla"
+mode = "600"
+[[secret]]
+var = "D01_CLOUDFLARED_ENV"
+path = "/mnt/docker/cloudflared/.env"
+owner = "docker:asyla"
+mode = "600"
+[[secret]]
+var = "D01_INTERNAL_PROXY_ENV"
+path = "/mnt/docker/internal-proxy/.env"
+owner = "docker:asyla"
+mode = "600"
+
+# Apps in start order. restore: the app has `<app>.sh restore` (NAS mirror -> APP_ROOT).
+[[app]]
+name = "media"
+[[app]]
+name = "calibre"
+[[app]]
+name = "duplicati"
+[[app]]
+name = "homebridge"
+[[app]]
+name = "breeding-program"
+start = ["build", "up"]
+verify = ["verify"]
+[[app]]
+name = "cloudflared"
+
+# Deployed onto this host by other repos, from the workstation.
+[[external]]
+name = "internal-access"
+repo = "~/local/asyla/projects/internal-access"
+run = ["scripts/deploy-host.sh {host}", "scripts/fleet.sh --host {host} up verify"]
+
+[runner]
+enabled = true

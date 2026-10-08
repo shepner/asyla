@@ -1,0 +1,14 @@
+# App folders that other repos deploy onto d04 (rsync from asyla/projects/<app>/scripts/deploy-host.sh).
+# update_scripts.sh deletes anything under ~/scripts/d04/ that this repo does not track unless a
+# .gitignore matches it, so every such folder must be listed here or the next update removes it.
+# Never add these folders to this repo: two masters writing one path is how d04 drifted.
+/internal-access/
+/external-access/
+
+# Host-local source checkouts for native image builds (breeding-research.sh looks in
+# $SCRIPT_DIR/.src/<app> when BREEDING_RESEARCH_PULL=0).
+.src/
+
+# Host-local copies of an app's .env kept for rollback (e.g. .env.bak-20261007). They hold the same
+# secrets as .env, and without this pattern update_scripts.sh deletes them on its next run.
+.env.bak*
