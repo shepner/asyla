@@ -60,11 +60,34 @@ git clone --depth 1 --no-checkout --filter=blob:none "https://github.com/$REPO.g
 
 cd "$WORKDIR"
 
+# checkout_tree <tree>: check out <tree> from master, or warn if master has no such directory.
+# A checkout that fails or comes out incomplete stops the run before anything is pruned: on
+# 2026-10-07 a checkout of docker/ broke partway (blobs are fetched lazily), the old
+# `|| log_warn` carried on, prune_tree deleted 45 host files, and cp put back only the 14
+# written before the break.
+checkout_tree() {
+    local tree="$1" want have
+    if [ -z "$(git ls-tree -d --name-only master -- "$tree")" ]; then
+        log_warn "No $tree directory found in repository"
+        return 0
+    fi
+    if ! git checkout master -- "$tree"; then
+        log_error "Checkout of $tree failed; stopping before anything is pruned or installed"
+        exit 1
+    fi
+    want=$(git ls-tree -r --name-only master -- "$tree" | wc -l)
+    have=$(git ls-files -- "$tree" | while IFS= read -r f; do [ -e "$f" ] || [ -L "$f" ] && echo "$f"; done | wc -l)
+    if [ "$want" -ne "$have" ]; then
+        log_error "Checkout of $tree is incomplete ($have of $want files); stopping before anything is pruned or installed"
+        exit 1
+    fi
+}
+
 log_info "Checking out host-specific scripts ($HOSTNAME)..."
-git checkout master -- "$HOSTNAME" || log_warn "No $HOSTNAME directory found in repository"
+checkout_tree "$HOSTNAME"
 
 log_info "Checking out docker scripts..."
-git checkout master -- docker || log_warn "No docker directory found in repository"
+checkout_tree docker
 
 # Not optional: the root .gitignore holds the *.env / secret patterns that keep
 # host-local secrets from being pruned below.
