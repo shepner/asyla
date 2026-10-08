@@ -45,6 +45,11 @@ path = "/mnt/docker/internal-proxy/.env"
 owner = "docker:docker"
 mode = "600"
 [[secret]]
+var = "D03_MS_PROCEDURAL_BACKUP_ENV"     # backup-only token; also re-deliverable by memory-system deliver-backup-token.sh
+path = "/home/docker/scripts/d03/apps/ms-procedural-backup/.env"
+owner = "docker:docker"
+mode = "600"
+[[secret]]
 var = "D03_DOCKER_CONFIG_JSON"           # registry login for gitea.asyla.org images
 path = "/home/docker/.docker/config.json"
 owner = "docker:docker"
@@ -69,6 +74,11 @@ start = ["build", "up"]
 verify = ["verify"]
 [[app]]
 name = "tc-datalogger"
+verify = ["verify"]
+[[app]]
+name = "ms-procedural-backup"   # no container: nightly pull of ms-procedural (Mini) into the NAS mirror
+start = []
+restore = false                 # its data is a copy of the Mini's; the next backup re-pulls it
 verify = ["verify"]
 
 [[external]]

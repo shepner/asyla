@@ -391,6 +391,9 @@ def phase_restore(spec: dict, apply: bool) -> None:
     host = spec["host"]
     for a in spec.get("app", []):
         name = a["name"]
+        if a.get("restore") is False:
+            print(f"restore {name}: not applicable (spec)")
+            continue
         if not app_has(host, name, "restore"):
             print(f"restore {name}: GAP - {name}.sh has no restore")
             continue
@@ -405,6 +408,9 @@ def phase_apps(spec: dict, apply: bool) -> None:
     host = spec["host"]
     for a in spec.get("app", []):
         cmds = a.get("start", ["up"])
+        if not cmds:
+            print(f"start {a['name']}: nothing to start (spec)")
+            continue
         print(f"start {a['name']}: {' '.join(cmds)}")
         if apply:
             ssh(host, f"{app_script(host, a['name'])} {' '.join(cmds)}", stream=True, timeout=3600)
@@ -502,7 +508,9 @@ def verify(spec: dict) -> int:
             running = [p for p in json.loads(r.stdout or "[]") if "running" in p.get("Status", "")
                        and f"/apps/{name}/" in p.get("ConfigFiles", "")]
             check(f"app {name} running", bool(running))
-        check(f"app {name} restore", app_has(host, name, "restore"), "" if app_has(host, name, "restore") else "no restore switch")
+        if a.get("restore") is not False:
+            has = app_has(host, name, "restore")
+            check(f"app {name} restore", has, "" if has else "no restore switch")
     if spec.get("runner", {}).get("enabled"):
         entries = runner_entries(host)
         online = [e for e in entries if e.get("status") in ("online", "idle", "active")]
