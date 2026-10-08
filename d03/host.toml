@@ -65,9 +65,9 @@ mode = "600"
 name = "gitea"
 verify = ["verify"]
 [[app]]
-name = "agent-commons"
-start = ["build", "up"]
-verify = ["verify"]
+name = "agent-commons"   # retired 2026-10-08: served by ms-procedural on the Mini; container stopped, kept for rollback until removal (G6)
+start = []
+restore = false
 [[app]]
 name = "breeding-research"
 start = ["build", "up"]
