@@ -1,5 +1,5 @@
 #!/bin/bash
-# Gitea Actions runner on d01-d03: native gitea-runner, systemd, jobs run on the host as `docker`.
+# Gitea Actions runner on d01-d03 (and the d04 build test host): native gitea-runner, systemd, jobs run on the host as `docker`.
 # Usage: gitea-runner.sh [switch ...]   Switches combine (e.g. install register up).
 # Shared by every d0N host: ~/scripts/<host>/apps/gitea-runner/gitea-runner.sh is a symlink here.
 #
@@ -26,11 +26,13 @@ DATA_DIR="/var/lib/gitea-runner"
 UNIT="gitea-runner.service"
 RUN_AS="docker"
 RUNNER_NAME="$(hostname -s)"
-RUNNER_LABELS=(asyla "$RUNNER_NAME" docker)
 
 case "$RUNNER_NAME" in
-  d01|d02|d03) ;;
-  *) echo "[ERROR] gitea-runner is for d01-d03 only, not $RUNNER_NAME" >&2; exit 1 ;;
+  d01|d02|d03) RUNNER_LABELS=(asyla "$RUNNER_NAME" docker) ;;
+  # The build test host: one label no workflow uses, so it never takes a real job
+  # (asyla decisions/host-build-and-recovery.md). Not "d04": old workflows still say runs-on: d04.
+  d04) RUNNER_LABELS=(build-test) ;;
+  *) echo "[ERROR] gitea-runner is for d01-d04 only, not $RUNNER_NAME" >&2; exit 1 ;;
 esac
 
 labels_csv() {

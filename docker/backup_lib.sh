@@ -43,6 +43,8 @@
 #   archive is written as .partial and renamed only when tar succeeds, so a
 #   failed run leaves nothing that looks complete and prunes nothing.
 #
+# Restore: do_rsync_mirror_restore <mirror_dir> <app_root> (see its comment).
+#
 # Plus run_detached_if_interactive, which the d03 scripts use to decide whether
 # `backup` / `update` detach into screen (see its comment below).
 #
@@ -103,6 +105,37 @@ do_rsync_mirror_backup() {
 
   echo "OK $(date -Is) from $(hostname -s):$src" > "$status_file"
   echo "[INFO] Backup complete: $dest"
+}
+
+# do_rsync_mirror_restore <mirror_dir> <app_root> — the inverse of do_rsync_mirror_backup, for a
+# rebuilt host (asyla decisions/host-build-and-recovery.md). Stop the app first.
+#   Refuses unless <mirror_dir>/.backup-status starts with "OK" (an interrupted or failed backup is
+#   not restored). Refuses if <app_root> already holds files, unless RESTORE_FORCE=1, so it never
+#   overwrites live data by accident. Takes the same lock as the backup of that mirror.
+#   Files the backup excluded (caches, clones) are not in the mirror; the app recreates them.
+do_rsync_mirror_restore() {
+  local src="$1" dest="$2" status
+  if [ ! -f "$src/.backup-status" ]; then
+    echo "[ERROR] No backup at $src (no .backup-status)" >&2
+    return 1
+  fi
+  status=$(head -1 "$src/.backup-status")
+  case "$status" in
+    OK*) ;;
+    *) echo "[ERROR] Last backup at $src is not complete: $status" >&2; return 1 ;;
+  esac
+  if [ -d "$dest" ] && [ -n "$(ls -A "$dest" 2>/dev/null)" ] && [ "${RESTORE_FORCE:-0}" != 1 ]; then
+    echo "[ERROR] $dest is not empty; refusing to restore over it (RESTORE_FORCE=1 to overwrite)" >&2
+    return 1
+  fi
+  _backup_lock "$src" || return 1
+  mkdir -p "$dest"
+  echo "[INFO] restore $src/ -> $dest/ (backup: $status)"
+  rsync -aH --delete --stats --human-readable --exclude=/.backup-status "$src/" "$dest/" || {
+    echo "[ERROR] rsync restore of $src failed; $dest is incomplete" >&2
+    return 1
+  }
+  echo "[INFO] Restore complete: $dest"
 }
 
 do_rsync_snapshot_backup() {

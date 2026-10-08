@@ -3,6 +3,10 @@
 # Uses sparse git checkout to get only needed files, then mirrors them into
 # ~/scripts/<host>/ and ~/scripts/docker/.
 #
+# Source: private GitLab asyla/asyla-hosts, read with the deploy token in /etc/asyla/asyla-hosts.env
+# (root, 0600; ASYLA_HOSTS_DEPLOY_USER / ASYLA_HOSTS_DEPLOY_TOKEN). git gets it from a credential
+# helper that reads that file, so the token is never in argv, a URL or a git config.
+#
 # Mirror rule: a path under ~/scripts/<host>/ or ~/scripts/docker/ is deleted
 # unless the repo tracks it or one of the repo's .gitignore files matches it.
 # .gitignore is the preserve list: secrets (*.env), runtime files (__pycache__/)
@@ -44,7 +48,8 @@ if [ "$EUID" -ne 0 ]; then
     exec sudo "$0" "$@"
 fi
 
-REPO="shepner/asyla"
+REPO_URL="${ASYLA_HOSTS_REPO_URL:-https://gitlab.com/asyla/asyla-hosts.git}"
+DEPLOY_ENV="/etc/asyla/asyla-hosts.env"
 HOSTNAME=$(hostname -s)
 TARGET_USER="docker"
 TARGET_HOME="/home/$TARGET_USER"
@@ -55,8 +60,19 @@ trap 'cd /; rm -rf "$TMPDIR_ROOT"' EXIT
 
 log_info "Updating scripts from repository..."
 
-log_info "Cloning repository (sparse checkout)..."
-git clone --depth 1 --no-checkout --filter=blob:none "https://github.com/$REPO.git" "$WORKDIR"
+if [ ! -r "$DEPLOY_ENV" ]; then
+    log_error "$DEPLOY_ENV is missing: it holds the read-only deploy token (installed by the host build)"
+    exit 1
+fi
+
+log_info "Cloning repository (sparse checkout) from $REPO_URL..."
+# Every git call below (the clone and the checkouts' lazy blob fetches) resets inherited
+# credential helpers, then answers from DEPLOY_ENV.
+export GIT_TERMINAL_PROMPT=0 GIT_CONFIG_COUNT=2
+export GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0=
+export GIT_CONFIG_KEY_1=credential.helper
+export GIT_CONFIG_VALUE_1="!f() { test \"\$1\" = get || return 0; . $DEPLOY_ENV; echo username=\$ASYLA_HOSTS_DEPLOY_USER; echo password=\$ASYLA_HOSTS_DEPLOY_TOKEN; }; f"
+git clone -q --depth 1 --no-checkout --filter=blob:none "$REPO_URL" "$WORKDIR"
 
 cd "$WORKDIR"
 
