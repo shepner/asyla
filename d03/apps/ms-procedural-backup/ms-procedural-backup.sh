@@ -59,15 +59,22 @@ header() {  # header <file> <name> → value, case-insensitive
 pull() {
   : "${MS_PROCEDURAL_BACKUP_TOKEN:?MS_PROCEDURAL_BACKUP_TOKEN is not set in $SCRIPT_DIR/.env (deliver-backup-token.sh)}"
   mkdir -p "$APP_ROOT"
-  local part="$APP_ROOT/procedural.db.partial" hdr="$APP_ROOT/.headers.$$" t0=$SECONDS
-  trap 'rm -f "$part" "$hdr"' RETURN
+  # Explicit cleanup, no `trap ... RETURN`: that trap is global in bash, so it fired again on later
+  # function returns with these locals out of scope and failed the run under set -u (2026-10-08).
+  local part="$APP_ROOT/procedural.db.partial" hdr t0=$SECONDS sent got
+  hdr="$(mktemp)"
   # The token goes to curl on stdin (--config -); printf is a builtin, so it is never in argv.
-  printf 'header = "Authorization: Bearer %s"\n' "$MS_PROCEDURAL_BACKUP_TOKEN" \
-    | curl --config - -fsS --max-time 1800 -D "$hdr" -o "$part" "$SOURCE_URL/api/v1/backup"
-  local sent got
+  if ! printf 'header = "Authorization: Bearer %s"\n' "$MS_PROCEDURAL_BACKUP_TOKEN" \
+      | curl --config - -fsS --max-time 1800 -D "$hdr" -o "$part" "$SOURCE_URL/api/v1/backup"; then
+    rm -f "$part" "$hdr"
+    echo "[ERROR] download from $SOURCE_URL/api/v1/backup failed; previous copy kept" >&2
+    return 1
+  fi
   sent="$(header "$hdr" X-Procedural-Check) $(header "$hdr" X-Procedural-Situations) $(header "$hdr" X-Procedural-Answers)"
+  rm -f "$hdr"
   got="$(check_copy "$part")"
   if [ "${got%% *}" != ok ] || [ "$got" != "$sent" ]; then
+    rm -f "$part"
     echo "[ERROR] copy failed its check: got '$got', sender said '$sent'; previous copy kept" >&2
     return 1
   fi
@@ -78,7 +85,7 @@ pull() {
 
 do_backup() {
   pull
-  do_rsync_mirror_backup "$APP_ROOT" "$BACKUP_DIR"
+  do_rsync_mirror_backup "$APP_ROOT" "$BACKUP_DIR" -- --exclude=*.partial
 }
 
 # verify: the token is set, the route answers with it, and the last copy checks out. Downloads nothing.
