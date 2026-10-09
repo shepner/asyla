@@ -15,11 +15,6 @@ cloudinit_storage = "local-data2"
 steps = ["systemConfig.sh", "nfs.sh", "docker.sh"]   # no SMB media mount on d03 (live, 2026-10-07)
 
 [[secret]]
-var = "D03_AGENT_COMMONS_ENV"
-path = "/home/docker/scripts/d03/apps/agent-commons/.env"
-owner = "docker:docker"
-mode = "600"
-[[secret]]
 var = "D03_BREEDING_RESEARCH_ENV"
 path = "/home/docker/scripts/d03/apps/breeding-research/.env"
 owner = "docker:docker"
@@ -60,14 +55,11 @@ path = "/home/docker/.config/host-maintenance/ssh/id_ed25519"
 owner = "docker:docker"
 mode = "600"
 
-# Gitea first: the runner and the tc-datalogger images depend on it.
+# Gitea first: the runner and the tc-datalogger images depend on it. (agent-commons retired
+# 2026-10-08: ms-procedural on the Mini; archive in /mnt/nas/data1/docker/agent-commons/mirror.)
 [[app]]
 name = "gitea"
 verify = ["verify"]
-[[app]]
-name = "agent-commons"   # retired 2026-10-08: served by ms-procedural on the Mini; container stopped, kept for rollback until removal (G6)
-start = []
-restore = false
 [[app]]
 name = "breeding-research"
 start = ["build", "up"]
