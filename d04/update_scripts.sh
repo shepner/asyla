@@ -13,6 +13,10 @@
 # and app folders that other repos deploy onto this host (d04/apps/.gitignore:
 # internal-access/, external-access/ from asyla/projects/*/scripts/deploy-host.sh).
 #
+# Replica: when <host>/host.toml has [replica] of = "dNN" (d04 as a d03 replica), the source
+# host's tree is checked out, pruned and installed too, as ~/scripts/dNN/, so its app scripts run
+# from the same paths as on the source. Only this host's update*.sh are installed in ~.
+#
 # Usage: update_scripts.sh [--dry-run]
 #   --dry-run  list what would be deleted and what is preserved; change nothing
 
@@ -102,6 +106,20 @@ checkout_tree() {
 log_info "Checking out host-specific scripts ($HOSTNAME)..."
 checkout_tree "$HOSTNAME"
 
+# The replica source (if any), from the spec just checked out; a bad value stops the run.
+REPLICA_OF=""
+if [ -f "$HOSTNAME/host.toml" ]; then
+    REPLICA_OF=$(python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb")).get("replica", {}).get("of", ""))' "$HOSTNAME/host.toml")
+fi
+if [ -n "$REPLICA_OF" ]; then
+    if ! [[ "$REPLICA_OF" =~ ^d0[0-9]$ ]] || [ "$REPLICA_OF" = "$HOSTNAME" ]; then
+        log_error "$HOSTNAME/host.toml: [replica] of = '$REPLICA_OF' is not another dNN host"
+        exit 1
+    fi
+    log_info "Checking out replica source scripts ($REPLICA_OF)..."
+    checkout_tree "$REPLICA_OF"
+fi
+
 log_info "Checking out docker scripts..."
 checkout_tree docker
 
@@ -162,6 +180,7 @@ prune_tree() {
 log_info "Pruning files no longer in the repository..."
 mkdir -p "$TARGET_SCRIPTS"
 prune_tree "$HOSTNAME"
+[ -z "$REPLICA_OF" ] || prune_tree "$REPLICA_OF"
 prune_tree docker
 
 if $DRY_RUN; then
@@ -183,6 +202,10 @@ if [ -d "$WORKDIR/$HOSTNAME" ]; then
             install -m 744 -p "$TARGET_SCRIPTS/$HOSTNAME/$f" "$TARGET_HOME/$f"
         fi
     done
+fi
+
+if [ -n "$REPLICA_OF" ] && [ -d "$WORKDIR/$REPLICA_OF" ]; then
+    cp -r "$WORKDIR/$REPLICA_OF" "$TARGET_SCRIPTS/"
 fi
 
 # Install the shared docker/ tree (common.env, common.sh, backup_all.sh, etc.).

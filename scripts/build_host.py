@@ -19,13 +19,21 @@ Build phases, in order (each is safe to re-run):
   bootstrap  deploy token to /etc/asyla/asyla-hosts.env, then the host's update_scripts.sh
              (from GitLab master, the same file the host will keep running)
   disk       data disk -> /mnt/docker (docker/setup/data_disk.sh; never formats a disk with data)
-  secrets    every [[secret]] from GitLab CI/CD variables to its path
+  secrets    every [[secret]] from GitLab CI/CD variables to its path, except those under
+             /mnt/docker/ (app data), which restore installs after the data is back
   setup      HOST/setup/<step> for each [setup].steps, as root
-  restore    `<app>.sh restore` for each app whose data is empty (from its NAS mirror)
+  restore    `<app>.sh restore` for each app whose data is empty (from its NAS mirror), then the
+             secrets under /mnt/docker/ (a restore refuses a non-empty data dir)
   apps       each app's start commands (default: up), in spec order
   external   other repos' deploy commands from the workstation; `manual` entries are listed
   runner     Gitea runner: delete this host's stale entry, install, register, up
   verify     mounts, every app's verify (or running containers), runner online
+
+Replica: a spec with [replica] of = "dNN" (d04 as a d03 replica) takes the source spec's
+[[secret]] and [[app]] lists (minus exclude_secrets) and runs the apps from ~/scripts/dNN/ (its
+updater installs that tree too). Its own [vm], [setup] and [runner] apply, and the source's
+[[external]] never do: a replica must not answer for the source's hostnames. With
+start_apps = false the apps phase starts nothing and verify checks that no container runs.
 
 Nothing here prints a secret (SEC): tokens and secret files move over SSH stdin or HTTPS bodies.
 Credentials come from the hub .env (~/local/hub/.env, or KNOWLEDGE_HUB_DOTENV): GITLAB_TOKEN,
@@ -62,6 +70,7 @@ SEARCHDOMAIN = "asyla.org"
 BRIDGE, VLAN = "vmbr1", 100
 SSH_KEY_PUB = Path.home() / ".ssh/docker_rsa.pub"
 DEPLOY_ENV = "/etc/asyla/asyla-hosts.env"
+DATA_ROOT = "/mnt/docker/"
 PHASES = ("vm", "bootstrap", "disk", "secrets", "setup", "restore", "apps", "external", "runner", "verify")
 SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
 
@@ -161,14 +170,36 @@ def load_spec(host: str) -> dict:
             raise Fail(f"{path}: [vm].{k} missing")
     if vm["node"] not in NODES:
         raise Fail(f"{path}: node {vm['node']} not in {NODES}")
+    spec["apps_tree"] = host
+    rep = spec.get("replica")
+    if rep:
+        src = rep.get("of", "")
+        src_path = REPO / src / "host.toml"
+        if src == host or not src_path.is_file():
+            raise Fail(f"{path}: [replica] of = {src!r} is not another host with a spec")
+        src_spec = tomllib.loads(src_path.read_text())
+        excl = set(rep.get("exclude_secrets", []))
+        unknown = excl - {s["var"] for s in src_spec.get("secret", [])}
+        if unknown:
+            raise Fail(f"{path}: exclude_secrets not in {src}: {sorted(unknown)}")
+        spec["secret"] = [s for s in src_spec.get("secret", []) if s["var"] not in excl] + spec.get("secret", [])
+        spec["app"] = src_spec.get("app", [])
+        spec["apps_tree"] = src
+        if spec.get("external"):
+            raise Fail(f"{path}: a replica has no [[external]] (it must not answer for {src}'s names)")
     for s in spec.get("secret", []):
         if not s.get("var", "").replace("_", "").isalnum():
             raise Fail(f"{path}: bad secret var {s.get('var')!r}")
     return spec
 
 
-def app_script(host: str, app: str) -> str:
-    return f"~/scripts/{host}/apps/{app}/{app}.sh"
+def app_script(tree: str, app: str) -> str:
+    """An app's script under ~/scripts/<tree>/apps (tree: the host, or a replica's source)."""
+    return f"~/scripts/{tree}/apps/{app}/{app}.sh"
+
+
+def starts_apps(spec: dict) -> bool:
+    return spec.get("replica", {}).get("start_apps", True)
 
 
 def ip_only(spec: dict) -> str:
@@ -306,12 +337,14 @@ def check_token(host: str) -> str:
     return sha
 
 
-def scripts_drift(host: str) -> tuple[str, list[str]]:
-    """GitLab master's SHA and the tracked HOST/ and docker/ paths whose ~/scripts copy differs from it."""
+def scripts_drift(spec: dict) -> tuple[str, list[str]]:
+    """GitLab master's SHA and the tracked HOST/, replica source and docker/ paths whose ~/scripts copy differs."""
+    host = spec["host"]
+    trees = sorted({host, spec["apps_tree"], "docker"})
     run(["git", "-C", str(REPO), "fetch", "-q", "origin", "master"])
     sha = run(["git", "-C", str(REPO), "rev-parse", "origin/master"]).stdout.strip()
     want = {}
-    for line in run(["git", "-C", str(REPO), "ls-tree", "-r", "origin/master", "--", host, "docker"]).stdout.splitlines():
+    for line in run(["git", "-C", str(REPO), "ls-tree", "-r", "origin/master", "--", *trees]).stdout.splitlines():
         meta, _, path = line.partition("\t")
         if meta.split()[1] == "blob":
             want[path] = meta.split()[2]
@@ -340,14 +373,16 @@ def phase_bootstrap(spec: dict, apply: bool) -> None:
 
 def phase_disk(spec: dict, apply: bool) -> None:
     host = spec["host"]
-    if not spec["vm"].get("data_disk"):
+    dd = spec["vm"].get("data_disk")
+    owner = (dd or {}).get("owner", "docker:asyla")
+    if not dd:
         print("no data disk in spec; /mnt/docker stays on the root disk")
         if apply:
-            ssh(host, "sudo install -d -o docker -g asyla /mnt/docker")
+            ssh(host, f"sudo install -d -o {owner.split(':')[0]} -g {owner.split(':')[1]} /mnt/docker")
         return
-    print("data disk scsi2 -> /mnt/docker")
+    print(f"data disk scsi2 -> /mnt/docker ({owner})")
     if apply:
-        ssh(host, "sudo ~/scripts/docker/setup/data_disk.sh scsi2 /mnt/docker docker:asyla", stream=True)
+        ssh(host, f"sudo ~/scripts/docker/setup/data_disk.sh scsi2 /mnt/docker {owner}", stream=True)
 
 
 def phase_setup(spec: dict, apply: bool) -> None:
@@ -382,9 +417,15 @@ def digest(v: str | None) -> str:
     return hashlib.sha256(v.encode()).hexdigest()[:12] if v is not None else "-"
 
 
-def secrets_cmd(spec: dict, action: str, apply: bool, only: list[str]) -> int:
+def in_app_data(s: dict) -> bool:
+    return s["path"].startswith(DATA_ROOT)
+
+
+def secrets_cmd(spec: dict, action: str, apply: bool, only: list[str], data: bool | None = None) -> int:
+    """data: None = every secret, False = those outside DATA_ROOT, True = those under it."""
     host, bad = spec["host"], 0
-    items = [s for s in spec.get("secret", []) if not only or s["var"] in only]
+    items = [s for s in spec.get("secret", []) if (not only or s["var"] in only)
+             and (data is None or in_app_data(s) == data)]
     for s in items:
         key, path = s["var"], s["path"]
         if action == "check":
@@ -432,8 +473,9 @@ def secrets_cmd(spec: dict, action: str, apply: bool, only: list[str]) -> int:
 
 # ---------------------------------------------------------------- apps, external, runner
 
-def app_has(host: str, app: str, switch: str) -> bool:
-    r = ssh(host, f"grep -qE '^[[:space:]]+([a-z_|-]+\\|)?{switch}(\\|[a-z_|-]+)?\\)' {app_script(host, app)}", check=False)
+def app_has(spec: dict, app: str, switch: str) -> bool:
+    r = ssh(spec["host"], f"grep -qE '^[[:space:]]+([a-z_|-]+\\|)?{switch}(\\|[a-z_|-]+)?\\)' "
+                          f"{app_script(spec['apps_tree'], app)}", check=False)
     return r.returncode == 0
 
 
@@ -444,18 +486,24 @@ def phase_restore(spec: dict, apply: bool) -> None:
         if a.get("restore") is False:
             print(f"restore {name}: not applicable (spec)")
             continue
-        if not app_has(host, name, "restore"):
+        if not app_has(spec, name, "restore"):
             print(f"restore {name}: GAP - {name}.sh has no restore")
             continue
         print(f"restore {name} (skipped by the app when its data dir is not empty)")
         if apply:
-            r = ssh(host, f"{app_script(host, name)} restore", check=False, stream=True)
+            r = ssh(host, f"{app_script(spec['apps_tree'], name)} restore", check=False, stream=True, timeout=7200)
             if r.returncode != 0:
                 print(f"  restore {name}: exit {r.returncode} (data present, or no complete backup); continuing")
+    print(f"secrets under {DATA_ROOT} (after the data, so a restore finds its data dir empty):")
+    if secrets_cmd(spec, "install", apply, [], data=True):
+        raise Fail("a secret is missing in GitLab")
 
 
 def phase_apps(spec: dict, apply: bool) -> None:
     host = spec["host"]
+    if not starts_apps(spec):
+        print(f"replica of {spec['apps_tree']}: start_apps = false; no app is started")
+        return
     for a in spec.get("app", []):
         cmds = a.get("start", ["up"])
         if not cmds:
@@ -463,7 +511,7 @@ def phase_apps(spec: dict, apply: bool) -> None:
             continue
         print(f"start {a['name']}: {' '.join(cmds)}")
         if apply:
-            ssh(host, f"{app_script(host, a['name'])} {' '.join(cmds)}", stream=True, timeout=3600)
+            ssh(host, f"{app_script(spec['apps_tree'], a['name'])} {' '.join(cmds)}", stream=True, timeout=3600)
 
 
 def phase_external(spec: dict, apply: bool) -> int:
@@ -506,7 +554,7 @@ def phase_runner(spec: dict, apply: bool) -> None:
         print("runner disabled in spec")
         return
     registered = ssh(host, "sudo test -s /var/lib/gitea-runner/.runner", check=False).returncode == 0
-    script = app_script(host, "gitea-runner")
+    script = app_script(host, "gitea-runner")   # always this host's own runner, never the source's
     if registered:
         print(f"{host} is registered locally; install + up only")
         if apply:
@@ -554,21 +602,39 @@ def verify(spec: dict) -> int:
         check("deploy token reads GitLab", bool(check_token(host)))
     except Fail as e:
         check("deploy token reads GitLab", False, str(e))
-    sha, drift = scripts_drift(host)
+    sha, drift = scripts_drift(spec)
     check(f"~/scripts matches GitLab master {sha[:12]}", not drift,
           f"{len(drift)} differ: {', '.join(drift[:5])}" if drift else "")
+    if spec["vm"].get("data_disk"):
+        r = ssh(host, "findmnt -no SOURCE /; findmnt -no SOURCE /mnt/docker", check=False)
+        src = r.stdout.split()
+        check("/mnt/docker on its own disk", len(src) == 2 and src[0] != src[1], " vs ".join(src))
+    if spec.get("replica"):
+        r = ssh(host, "findmnt -no OPTIONS /mnt/nas/data1/docker; findmnt -no OPTIONS /mnt/nas/data2/docker", check=False)
+        opts = [o.split(",")[0] for o in r.stdout.split()]
+        check("NAS docker shares read-only (replica: no backup can reach the source's mirrors)",
+              opts == ["ro", "ro"], " ".join(opts))
+    if not starts_apps(spec):
+        # The source's app verify would curl the source's public URLs and pass falsely here.
+        r = ssh(host, "docker ps --format '{{.Names}}'", check=False)
+        names = r.stdout.split()
+        check("no app container running (start_apps = false)", r.returncode == 0 and not names, " ".join(names))
+        r = ssh(host, f"sudo du -sh {DATA_ROOT}* 2>/dev/null", check=False)
+        print("  data: " + "; ".join(" ".join(l.split()[::-1]) for l in r.stdout.splitlines()))
     for a in spec.get("app", []):
         name = a["name"]
-        if a.get("verify"):
-            r = ssh(host, f"{app_script(host, name)} {' '.join(a['verify'])}", check=False)
+        if not starts_apps(spec):
+            pass   # not started: nothing to verify
+        elif a.get("verify"):
+            r = ssh(host, f"{app_script(spec['apps_tree'], name)} {' '.join(a['verify'])}", check=False)
             check(f"app {name}", r.returncode == 0, (r.stdout + r.stderr).strip().splitlines()[-1] if (r.stdout + r.stderr).strip() else "")
         else:
-            r = ssh(host, f"cd ~/scripts/{host}/apps/{name} && docker compose ls --format json", check=False)
+            r = ssh(host, f"cd ~/scripts/{spec['apps_tree']}/apps/{name} && docker compose ls --format json", check=False)
             running = [p for p in json.loads(r.stdout or "[]") if "running" in p.get("Status", "")
                        and f"/apps/{name}/" in p.get("ConfigFiles", "")]
             check(f"app {name} running", bool(running))
         if a.get("restore") is not False:
-            has = app_has(host, name, "restore")
+            has = app_has(spec, name, "restore")
             check(f"app {name} restore", has, "" if has else "no restore switch")
     if spec.get("runner", {}).get("enabled"):
         entries = runner_entries(host)
@@ -599,6 +665,9 @@ def plan(spec: dict) -> int:
         if live.get("maxcpu") != vm["sockets"] * vm["cores"]:
             diffs.append("cpu")
         print(f"  spec vs live: {'matches' if not diffs else 'DIFFERS: ' + ', '.join(diffs)}")
+    if spec.get("replica"):
+        print(f"  replica of {spec['apps_tree']}: apps from ~/scripts/{spec['apps_tree']}/, "
+              f"start_apps = {starts_apps(spec)}, excluded secrets {spec['replica'].get('exclude_secrets', [])}")
     print(f"  secrets: {len(spec.get('secret', []))}; apps: {', '.join(a['name'] for a in spec.get('app', []))}")
     gaps = sum(1 for e in spec.get("external", []) if e.get("manual"))
     print(f"  externals: {len(spec.get('external', []))} ({gaps} manual)")
@@ -611,7 +680,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("host")
     ap.add_argument("action", choices=["plan", "build", "verify", "token", "scripts-check", "secrets", "destroy"])
-    ap.add_argument("args", nargs="*", help="secrets: check|push|install [VAR ...]")
+    ap.add_argument("args", nargs="*", help="for the secrets action: check, push or install, then optional VAR names")
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--from", dest="start", choices=PHASES)
     ap.add_argument("--only", choices=PHASES)
@@ -625,7 +694,7 @@ def main() -> int:
         if a.action == "verify":
             return verify(spec)
         if a.action == "scripts-check":
-            sha, drift = scripts_drift(a.host)
+            sha, drift = scripts_drift(spec)
             print(f"{a.host}: ~/scripts vs GitLab master {sha[:12]}: "
                   f"{'matches' if not drift else str(len(drift)) + ' differ'}")
             for d in drift:
@@ -673,7 +742,8 @@ def main() -> int:
             elif p == "disk":
                 phase_disk(spec, a.apply)
             elif p == "secrets":
-                if secrets_cmd(spec, "install", a.apply, []):
+                # Alone (--only secrets) it installs every secret; in a build, app-data ones wait for restore.
+                if secrets_cmd(spec, "install", a.apply, [], data=None if a.only else False):
                     raise Fail("a secret is missing in GitLab")
             elif p == "setup":
                 phase_setup(spec, a.apply)

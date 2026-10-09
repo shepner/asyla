@@ -1,30 +1,34 @@
 # d04: the build test host (asyla hub decisions/host-build-and-recovery.md). Created and destroyed
 # as testing needs (operator pre-approved, 2026-10-07). Its runner carries only the label
 # build-test, so it never takes a real job.
+#
+# Now a d03 replica with its apps not started (asyla backlog 2026-10-09-hosts-d04-as-a-d03-replica):
+# the dry run for moving d03's /mnt/docker onto its own data disk. It takes d03's secrets and apps
+# from d03/host.toml, runs them from ~/scripts/d03/, restores their data from d03's NAS mirrors, and
+# mounts the NAS read-only (d04/setup/nfs.sh), so no d03 `backup` run here can write d03's mirrors.
+# Remove [replica] to return d04 to the hello test (d04/apps/hello).
+[replica]
+of = "d03"
+start_apps = false
+# host-maintenance's key into d01-d03: nothing on d04 uses it.
+exclude_secrets = ["D03_HOST_MAINTENANCE_SSH_KEY"]
+
 [vm]
 node = "vmh02"
 vmid = 104
 sockets = 1
-cores = 4
-memory_mb = 8192
+cores = 6                  # as d03
+memory_mb = 16384          # d03 has 49152; no app runs here
 ip = "10.0.0.63/24"
-os_disk = { storage = "local-data2", size = "32G" }
-data_disk = { storage = "local-data2", size = "16G" }   # /mnt/docker
+os_disk = { storage = "local-data2", size = "256G" }   # as d03 (thin)
+# /mnt/docker: vmh02 local-data1 is the other WD SA510 SSD (sdc; local-data2 is sdd), 1% used.
+# docker:docker as on d03 (d03's docker user's primary group is docker).
+data_disk = { storage = "local-data1", size = "128G", owner = "docker:docker" }
 cloudinit_storage = "local-data2"
 disposable = true          # build_host.py may destroy and recreate it without --confirm
 
 [setup]
 steps = ["systemConfig.sh", "nfs.sh", "docker.sh"]
-
-[[secret]]
-var = "D04_HELLO_ENV"
-path = "/home/docker/scripts/d04/apps/hello/.env"
-owner = "docker:asyla"
-mode = "600"
-
-[[app]]
-name = "hello"
-verify = ["verify"]
 
 [runner]
 enabled = true

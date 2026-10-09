@@ -52,26 +52,39 @@ for mount_point in /mnt/nas/data1/docker /mnt/nas/data2/docker; do
     fi
 done
 
-# Check if fstab entries already exist
-MOUNT_DATA1=false
-MOUNT_DATA2=false
+# A replica ([replica] in this host's host.toml, e.g. d04 as a d03 replica) mounts the NAS
+# read-only: it carries the source host's app scripts, whose `backup` writes the source host's
+# mirrors, and a read-only mount makes that impossible. Restore only reads the mirrors.
+SPEC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/host.toml"
+NFS_MODE=rw
+if [ -f "$SPEC" ] && python3 -c 'import sys, tomllib; sys.exit(0 if tomllib.load(open(sys.argv[1], "rb")).get("replica") else 1)' "$SPEC"; then
+    NFS_MODE=ro
+    log_info "Replica host: NAS docker shares are mounted read-only"
+fi
 
 # Use IP (10.0.0.24) not hostname 'nas' so NFS mounts work before DNS is available.
-if grep -q "10.0.0.24:/mnt/data1/docker" /etc/fstab; then
-    log_warn "NFS mount for data1/docker already exists in /etc/fstab, skipping..."
-else
-    log_info "Adding NFS mount for data1/docker to /etc/fstab..."
-    echo "10.0.0.24:/mnt/data1/docker /mnt/nas/data1/docker nfs rw,_netdev,auto,user 0 0" >> /etc/fstab
-    MOUNT_DATA1=true
-fi
-
-if grep -q "10.0.0.24:/mnt/data2/docker" /etc/fstab; then
-    log_warn "NFS mount for data2/docker already exists in /etc/fstab, skipping..."
-else
-    log_info "Adding NFS mount for data2/docker to /etc/fstab..."
-    echo "10.0.0.24:/mnt/data2/docker /mnt/nas/data2/docker nfs rw,_netdev,auto,user 0 0" >> /etc/fstab
-    MOUNT_DATA2=true
-fi
+# An existing entry with the other mode is replaced, and a mounted share is remounted.
+for share in data1 data2; do
+    export_path="10.0.0.24:/mnt/$share/docker"
+    mount_point="/mnt/nas/$share/docker"
+    line="$export_path $mount_point nfs $NFS_MODE,_netdev,auto,user 0 0"
+    if grep -qxF "$line" /etc/fstab; then
+        log_warn "NFS mount for $share/docker already in /etc/fstab ($NFS_MODE), skipping..."
+        continue
+    fi
+    if grep -q "^$export_path " /etc/fstab; then
+        log_info "Replacing the NFS entry for $share/docker in /etc/fstab ($NFS_MODE)..."
+        sed -i "\\#^$export_path #d" /etc/fstab
+        echo "$line" >> /etc/fstab
+        if mountpoint -q "$mount_point"; then
+            umount "$mount_point" || log_warn "Could not unmount $mount_point to change its mode"
+        fi
+    else
+        log_info "Adding NFS mount for $share/docker to /etc/fstab ($NFS_MODE)..."
+        echo "$line" >> /etc/fstab
+    fi
+done
+systemctl daemon-reload
 
 # Mount NFS shares now (if network is available)
 log_info "Attempting to mount NFS shares..."
