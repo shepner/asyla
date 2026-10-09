@@ -1,5 +1,5 @@
 #!/bin/bash
-# tc-datalogger on d03. Usage: tc-datalogger.sh [up|down|restart|verify|pull|backup|logs|...]
+# tc-datalogger on d03. Usage: tc-datalogger.sh [up|down|restart|verify|pull|backup|restore|logs|...]
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -61,13 +61,16 @@ run_cmd() {
     verify) do_verify ;;
     backup) run_detached_if_interactive backup do_backup ;;
     _backup) do_backup ;;
+    # Rebuilt host only: refuses unless APP_ROOT is empty and the mirror's last backup is OK.
+    # repo/ is not in the mirror (see do_backup): clone it again before `up`.
+    restore) do_rsync_mirror_restore "$BACKUP_DIR" "$APP_ROOT" ;;
     logs) run_compose logs -f ;;
     *) return 1 ;;
   esac
 }
 
 if [ $# -eq 0 ]; then
-  echo "Usage: $0 pull|up|down|restart|refresh|update|verify|backup|logs" >&2
+  echo "Usage: $0 pull|up|down|restart|refresh|update|verify|backup|restore|logs" >&2
   exit 1
 fi
 [ "$1" = "logs" ] && { run_compose logs -f "${@:2}"; exit 0; }

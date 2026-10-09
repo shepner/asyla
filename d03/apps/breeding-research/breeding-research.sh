@@ -1,5 +1,5 @@
 #!/bin/bash
-# breeding-research on d03. Usage: breeding-research.sh [build|backup|update|refresh|up|down|restart|verify|logs]
+# breeding-research on d03. Usage: breeding-research.sh [build|backup|restore|update|refresh|up|down|restart|verify|logs]
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -121,6 +121,8 @@ run_cmd() {
     rebuild) do_build --no-cache; run_compose up -d --force-recreate ;;
     backup) run_detached_if_interactive backup do_backup ;;
     _backup) do_backup ;;
+    # Rebuilt host only: refuses unless APP_ROOT is empty and the mirror's last backup is OK.
+    restore) do_rsync_mirror_restore "$BACKUP_DIR" "$APP_ROOT" ;;
     update) run_detached_if_interactive update do_update ;;
     _update) do_update ;;
     refresh) do_update; do_up ;;
@@ -134,7 +136,7 @@ run_cmd() {
 }
 
 if [ $# -eq 0 ]; then
-  echo "Usage: $0 build|backup|update|refresh|up|down|restart|verify|logs" >&2
+  echo "Usage: $0 build|backup|restore|update|refresh|up|down|restart|verify|logs" >&2
   exit 1
 fi
 

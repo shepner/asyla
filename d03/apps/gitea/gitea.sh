@@ -1,5 +1,5 @@
 #!/bin/bash
-# Gitea on d03. Usage: gitea.sh [switch ...] e.g. backup|update|refresh|up|down|restart|logs
+# Gitea on d03. Usage: gitea.sh [switch ...] e.g. backup|restore|update|refresh|up|down|restart|logs
 # Switches can be combined (e.g. down backup up). Run from anywhere; loads ~/scripts/docker/common.env.
 # Data under /mnt/docker/Gitea; backup mirrors it to /mnt/nas/data1/docker/Gitea/mirror (Gitea briefly stopped).
 
@@ -147,6 +147,10 @@ run_cmd() {
     _backup)
       do_backup
       ;;
+    # Rebuilt host only: refuses unless APP_ROOT is empty and the mirror's last backup is OK.
+    restore)
+      do_rsync_mirror_restore "$BACKUP_DIR" "$APP_ROOT"
+      ;;
     update)
       run_detached_if_interactive update do_update
       ;;
@@ -185,6 +189,7 @@ if [ $# -eq 0 ]; then
   echo "  Switches can be combined, e.g. down backup up" >&2
   echo "" >&2
   echo "  backup   - rsync mirror of $APP_ROOT to $BACKUP_DIR; history: nas01 ZFS snapshots (screen if interactive)" >&2
+  echo "  restore  - rsync $BACKUP_DIR back to an empty $APP_ROOT (rebuilt host; Gitea stopped)" >&2
   echo "  update   - Pull latest images (screen if interactive); use up/restart to start" >&2
   echo "  refresh  - Pull latest images + start (inline)" >&2
   echo "  up       - Start containers only" >&2
@@ -202,7 +207,7 @@ fi
 
 for cmd in "$@"; do
   if ! run_cmd "$cmd"; then
-    echo "Usage: $0 backup|update|refresh|up|down|restart|verify|logs [ ... ]" >&2
+    echo "Usage: $0 backup|restore|update|refresh|up|down|restart|verify|logs [ ... ]" >&2
     exit 1
   fi
 done

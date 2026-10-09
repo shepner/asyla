@@ -10,8 +10,7 @@
 [replica]
 of = "d03"
 start_apps = false
-# host-maintenance's key into d01-d03: nothing on d04 uses it.
-exclude_secrets = ["D03_HOST_MAINTENANCE_SSH_KEY"]
+# All 8 of d03's secrets, the host-maintenance SSH key included (operator, 2026-10-09).
 
 [vm]
 node = "vmh02"
