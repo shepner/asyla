@@ -238,10 +238,11 @@ def phase_vm(spec: dict, apply: bool, recreate: bool, confirm: str | None) -> No
         run(["ssh-keygen", "-R", name], check=False)
     wait_ssh(host)
     print("waiting for cloud-init")
-    ssh(host, "cloud-init status --wait >/dev/null; test -f /var/lib/cloud/instance/asyla-vendor-done", timeout=1800,
-        check=False, stream=False)
-    r = ssh(host, "cloud-init status; id docker", check=False)
+    ssh(host, "cloud-init status --wait >/dev/null", timeout=1800, check=False)
+    r = ssh(host, "cloud-init status; id docker; test -f /var/lib/cloud/instance/asyla-vendor-done", check=False)
     print(r.stdout.strip())
+    if r.returncode != 0 or "status: done" not in r.stdout:
+        raise Fail(f"cloud-init on {host} did not finish cleanly (see /var/log/cloud-init-output.log there)")
 
 
 def wait_ssh(host: str, minutes: int = 15) -> None:
@@ -520,6 +521,9 @@ def verify(spec: dict) -> int:
     if r.returncode != 0:
         return 1
     check("docker uid 1003", out[1] == "1003", out[1])
+    r = ssh(host, "id -gn docker; getent group docker | cut -d: -f3", check=False)
+    g = r.stdout.split()
+    check("docker group asyla, member of docker (GID 1000)", g[:1] == ["asyla"] and g[1:2] == ["1000"], " ".join(g))
     mounts = out[2].split()
     for m in ["/mnt/nas/data1/docker", "/mnt/nas/data2/docker"] + (["/mnt/docker"] if spec["vm"].get("data_disk") else []):
         check(f"mount {m}", m in mounts)

@@ -43,11 +43,14 @@ log_info "Creating NFS mount points..."
 mkdir -p /mnt/nas/data1/docker
 mkdir -p /mnt/nas/data2/docker
 
-# Set proper permissions on mount points
-chown docker:asyla /mnt/nas/data1/docker
-chown docker:asyla /mnt/nas/data2/docker
-chmod 755 /mnt/nas/data1/docker
-chmod 755 /mnt/nas/data2/docker
+# Set proper permissions on the mount points, never on a mounted NAS share (a re-run would
+# change the shared directory every host backs up to).
+for mount_point in /mnt/nas/data1/docker /mnt/nas/data2/docker; do
+    if ! mountpoint -q "$mount_point"; then
+        chown docker:asyla "$mount_point"
+        chmod 755 "$mount_point"
+    fi
+done
 
 # Check if fstab entries already exist
 MOUNT_DATA1=false

@@ -27,10 +27,13 @@ apt install -y nfs-common
 log_info "Creating NFS mount points..."
 mkdir -p /mnt/nas/data1/docker
 mkdir -p /mnt/nas/data2/docker
-chown docker:asyla /mnt/nas/data1/docker
-chown docker:asyla /mnt/nas/data2/docker
-chmod 755 /mnt/nas/data1/docker
-chmod 755 /mnt/nas/data2/docker
+# Never on a mounted NAS share (a re-run would change the shared directory every host backs up to).
+for mount_point in /mnt/nas/data1/docker /mnt/nas/data2/docker; do
+    if ! mountpoint -q "$mount_point"; then
+        chown docker:asyla "$mount_point"
+        chmod 755 "$mount_point"
+    fi
+done
 
 # Use IP (10.0.0.24) not hostname 'nas' so NFS mounts work before DNS is available.
 if ! grep -q "10.0.0.24:/mnt/data1/docker" /etc/fstab; then

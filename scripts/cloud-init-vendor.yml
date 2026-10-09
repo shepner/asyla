@@ -10,25 +10,14 @@
 package_update: true
 packages: [git, curl, rsync, parted, qemu-guest-agent]
 
+# IDs as on d01/d02: docker UID 1003, primary group asyla (GID 1001), member of docker (GID 1000,
+# the group NAS files carry). Created in bootcmd, which runs before cloud-init's users_groups
+# module, so Proxmox's ciuser finds docker already there and only adds its key and sudo rule.
+# (Renumbering in runcmd fails: by then build_host.py's SSH wait is logged in as docker, and
+# usermod refuses a user with running processes, as on d04 2026-10-09.)
+bootcmd:
+  - [sh, -c, "getent group docker >/dev/null || groupadd -g 1000 docker; getent group asyla >/dev/null || groupadd -g 1001 asyla; id docker >/dev/null 2>&1 || useradd -m -u 1003 -g asyla -G docker,sudo -s /bin/bash docker"]
+
 runcmd:
-  # asyla group (GID 1000) and docker user (UID 1003), as on every d0N host. Proxmox's ciuser
-  # creates docker with UID 1000 first, so it is renumbered in place.
-  - |
-    set -e
-    getent group docker >/dev/null || groupadd docker
-    if ! getent group asyla >/dev/null; then
-      if getent group 1000 >/dev/null; then
-        # GID 1000 belongs to the ciuser's own group (docker): rename it to asyla.
-        groupmod -n asyla "$(getent group 1000 | cut -d: -f1)"
-        getent group docker >/dev/null || groupadd docker
-      else
-        groupadd -g 1000 asyla
-      fi
-    fi
-    if [ "$(id -u docker)" != 1003 ]; then
-      usermod -u 1003 -g asyla docker
-      chown -R docker:asyla /home/docker
-    fi
-    usermod -aG asyla,docker,sudo docker
   - systemctl enable --now qemu-guest-agent ssh
-  - touch /var/lib/cloud/instance/asyla-vendor-done
+  - [sh, -c, "test \"$(id -u docker)\" = 1003 && test \"$(id -gn docker)\" = asyla && id -nG docker | grep -qw docker && touch /var/lib/cloud/instance/asyla-vendor-done"]
