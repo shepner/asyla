@@ -9,6 +9,7 @@ Usage:
   build_host.py HOST build [--apply] [--from PHASE] [--only PHASE] [--recreate [--confirm HOST]]
   build_host.py HOST verify                    # read-only
   build_host.py HOST token [--apply]           # deploy token file alone, then a GitLab read check
+  build_host.py HOST scripts-check             # read-only: ~/scripts vs GitLab master, file by file
   build_host.py HOST secrets check|push|install [--apply] [VAR ...]
   build_host.py HOST destroy --apply [--confirm HOST]
 
@@ -305,6 +306,26 @@ def check_token(host: str) -> str:
     return sha
 
 
+def scripts_drift(host: str) -> tuple[str, list[str]]:
+    """GitLab master's SHA and the tracked HOST/ and docker/ paths whose ~/scripts copy differs from it."""
+    run(["git", "-C", str(REPO), "fetch", "-q", "origin", "master"])
+    sha = run(["git", "-C", str(REPO), "rev-parse", "origin/master"]).stdout.strip()
+    want = {}
+    for line in run(["git", "-C", str(REPO), "ls-tree", "-r", "origin/master", "--", host, "docker"]).stdout.splitlines():
+        meta, _, path = line.partition("\t")
+        if meta.split()[1] == "blob":
+            want[path] = meta.split()[2]
+    paths = sorted(want)
+    # A symlink is hashed as git stores it: the link text, not the file it points to.
+    r = ssh(host, "cd ~/scripts && while IFS= read -r f; do if [ -L \"$f\" ]; then printf %s \"$(readlink \"$f\")\" "
+                  "| git hash-object --stdin; elif [ -f \"$f\" ]; then git hash-object -- \"$f\"; "
+                  "else echo missing; fi; done", stdin="\n".join(paths) + "\n", check=False)
+    have = r.stdout.split()
+    if r.returncode != 0 or len(have) != len(paths):
+        return sha, [f"cannot hash ~/scripts on {host} (exit {r.returncode})"]
+    return sha, [p for p, h in zip(paths, have) if want[p] != h]
+
+
 def phase_bootstrap(spec: dict, apply: bool) -> None:
     host = spec["host"]
     install_token(host, apply)
@@ -533,6 +554,9 @@ def verify(spec: dict) -> int:
         check("deploy token reads GitLab", bool(check_token(host)))
     except Fail as e:
         check("deploy token reads GitLab", False, str(e))
+    sha, drift = scripts_drift(host)
+    check(f"~/scripts matches GitLab master {sha[:12]}", not drift,
+          f"{len(drift)} differ: {', '.join(drift[:5])}" if drift else "")
     for a in spec.get("app", []):
         name = a["name"]
         if a.get("verify"):
@@ -586,7 +610,7 @@ def plan(spec: dict) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("host")
-    ap.add_argument("action", choices=["plan", "build", "verify", "token", "secrets", "destroy"])
+    ap.add_argument("action", choices=["plan", "build", "verify", "token", "scripts-check", "secrets", "destroy"])
     ap.add_argument("args", nargs="*", help="secrets: check|push|install [VAR ...]")
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--from", dest="start", choices=PHASES)
@@ -600,6 +624,13 @@ def main() -> int:
             return plan(spec)
         if a.action == "verify":
             return verify(spec)
+        if a.action == "scripts-check":
+            sha, drift = scripts_drift(a.host)
+            print(f"{a.host}: ~/scripts vs GitLab master {sha[:12]}: "
+                  f"{'matches' if not drift else str(len(drift)) + ' differ'}")
+            for d in drift:
+                print(f"  {d}")
+            return 1 if drift else 0
         if a.action == "token":
             if a.apply:
                 install_token(a.host, True)
