@@ -8,6 +8,7 @@ Usage:
   build_host.py HOST plan                      # read-only: spec, live VM, gaps
   build_host.py HOST build [--apply] [--from PHASE] [--only PHASE] [--recreate [--confirm HOST]]
   build_host.py HOST verify                    # read-only
+  build_host.py HOST token [--apply]           # deploy token file alone, then a GitLab read check
   build_host.py HOST secrets check|push|install [--apply] [VAR ...]
   build_host.py HOST destroy --apply [--confirm HOST]
 
@@ -272,17 +273,44 @@ def master_file(relpath: str) -> str:
     return run(["git", "-C", str(REPO), "show", f"origin/master:{relpath}"]).stdout
 
 
-def phase_bootstrap(spec: dict, apply: bool) -> None:
-    host = spec["host"]
+# The same credential helper update_scripts.sh uses: reads DEPLOY_ENV, never puts the token in argv.
+GIT_DEPLOY_AUTH = ("GIT_TERMINAL_PROMPT=0 GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0= "
+                   "GIT_CONFIG_KEY_1=credential.helper GIT_CONFIG_VALUE_1='!f() { test \"$1\" = get || return 0; "
+                   f". {DEPLOY_ENV}; echo username=$ASYLA_HOSTS_DEPLOY_USER; echo password=$ASYLA_HOSTS_DEPLOY_TOKEN; }}; f'")
+
+
+def install_token(host: str, apply: bool) -> None:
+    """Install DEPLOY_ENV alone (root 0600), then prove the host can read GitLab master with it."""
     user, token = need("ASYLA_HOSTS_DEPLOY_USER"), need("ASYLA_HOSTS_DEPLOY_TOKEN")
-    print(f"install {DEPLOY_ENV} (root 0600; value ...{token[-4:]}), then {host}/update_scripts.sh from GitLab master")
-    script = master_file(f"{host}/update_scripts.sh")
+    print(f"install {DEPLOY_ENV} on {host} (root 0600; value ...{token[-4:]}), then git ls-remote GitLab master")
     if not apply:
         return
     body = f"ASYLA_HOSTS_DEPLOY_USER={user}\nASYLA_HOSTS_DEPLOY_TOKEN={token}\n"
     ssh(host, f"sudo install -d -m 755 /etc/asyla && sudo sh -c 'umask 077; cat > {DEPLOY_ENV}.tmp' && "
               f"sudo chown root:root {DEPLOY_ENV}.tmp && sudo chmod 600 {DEPLOY_ENV}.tmp && "
               f"sudo mv {DEPLOY_ENV}.tmp {DEPLOY_ENV}", stdin=body)
+    check_token(host)
+
+
+def check_token(host: str) -> str:
+    """The master SHA the host reads from GitLab with its deploy token (Fail if it cannot)."""
+    r = ssh(host, f"sudo stat -c '%U:%G %a' {DEPLOY_ENV} && sudo env {GIT_DEPLOY_AUTH} "
+                  f"git ls-remote https://gitlab.com/{GITLAB_PROJECT}.git refs/heads/master", check=False)
+    lines = r.stdout.split()
+    if r.returncode != 0 or len(lines) < 2 or lines[0] != "root:root" or lines[1] != "600":
+        raise Fail(f"{host}: {DEPLOY_ENV} missing, wrong owner/mode, or cannot read GitLab (exit {r.returncode})")
+    sha = lines[2] if len(lines) > 2 else ""
+    print(f"{host}: {DEPLOY_ENV} root:root 600; GitLab master {sha[:12]}")
+    return sha
+
+
+def phase_bootstrap(spec: dict, apply: bool) -> None:
+    host = spec["host"]
+    install_token(host, apply)
+    print(f"then {host}/update_scripts.sh from GitLab master")
+    script = master_file(f"{host}/update_scripts.sh")
+    if not apply:
+        return
     ssh(host, "sudo apt-get install -y -qq git curl rsync >/dev/null", timeout=900)
     ssh(host, "cat > /tmp/update_scripts.sh && sudo bash /tmp/update_scripts.sh; rc=$?; rm -f /tmp/update_scripts.sh; exit $rc",
         stdin=script, stream=True)
@@ -497,7 +525,10 @@ def verify(spec: dict) -> int:
         check(f"mount {m}", m in mounts)
     if "smb.sh" in spec.get("setup", {}).get("steps", []):
         check("mount /mnt/nas/data1/media", "/mnt/nas/data1/media" in mounts)
-    check("deploy token file", ssh(host, f"sudo test -s {DEPLOY_ENV}", check=False).returncode == 0)
+    try:
+        check("deploy token reads GitLab", bool(check_token(host)))
+    except Fail as e:
+        check("deploy token reads GitLab", False, str(e))
     for a in spec.get("app", []):
         name = a["name"]
         if a.get("verify"):
@@ -551,7 +582,7 @@ def plan(spec: dict) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("host")
-    ap.add_argument("action", choices=["plan", "build", "verify", "secrets", "destroy"])
+    ap.add_argument("action", choices=["plan", "build", "verify", "token", "secrets", "destroy"])
     ap.add_argument("args", nargs="*", help="secrets: check|push|install [VAR ...]")
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--from", dest="start", choices=PHASES)
@@ -565,6 +596,16 @@ def main() -> int:
             return plan(spec)
         if a.action == "verify":
             return verify(spec)
+        if a.action == "token":
+            if a.apply:
+                install_token(a.host, True)
+            else:
+                install_token(a.host, False)
+                try:
+                    check_token(a.host)
+                except Fail as e:
+                    print(f"not usable yet: {e}")
+            return 0
         if a.action == "secrets":
             if not a.args or a.args[0] not in ("check", "push", "install"):
                 raise Fail("secrets needs check|push|install")
