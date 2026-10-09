@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Native docker image build for the host CPU (see agent-commons d03 app).
+# Native docker image build for the host CPU (the retired agent-commons d03 app used the same pattern; see git history).
 
 docker_native_platform() {
   case "$(uname -m)" in

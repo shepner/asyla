@@ -12,7 +12,7 @@ This is for a Debian Linux VM on Proxmox which will run Docker containers.
 - **Purpose**: Docker host for containerized applications
 - **OS**: Debian 13 (Trixie) - Current stable release
 
-**Applications:** See [apps/README.md](apps/README.md) for the current app list and which repo owns each one. This repo owns `gitea`, `agent-commons`, `breeding-research`, and `tc-datalogger`; the edge stack is deployed separately from `asyla/projects/`.
+**Applications:** See [apps/README.md](apps/README.md) for the current app list and which repo owns each one. This repo owns `gitea`, `breeding-research`, `tc-datalogger` and `ms-procedural-backup` (agent-commons was retired 2026-10-08: replaced by ms-procedural on the Mac Mini); the edge stack is deployed separately from `asyla/projects/`.
 
 **Internet access:** Applications on d03 are exposed via **Cloudflare Tunnel** (no port forwarding required), terminated by `external-access` with `internal-access` (Caddy) fronting split-DNS on ports 80/443. Both are deployed from their own repos under `asyla/projects/` via `scripts/deploy-host.sh d03`. [docs/cloudflare-tunnel.md](docs/cloudflare-tunnel.md) describes the superseded `cloudflared` / `internal-proxy` layout and is kept for historical reference only.
 

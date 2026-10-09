@@ -33,7 +33,7 @@ has are deleted on the host unless a repo `.gitignore` matches them (`*.env` sec
 | App | Script | Notes |
 |-----|--------|-------|
 | **gitea** | `~/scripts/d03/apps/gitea/gitea.sh` | Git server, internal only (gitea.asyla.org via internal-access). `USER_UID`/`USER_GID` are both 1003 to match the migrated data volume |
-| **agent-commons** | `~/scripts/d03/apps/agent-commons/agent-commons.sh` | Problem/answer corpus; image built on d03 by `agent-commons.sh build <ref>` from Gitea, deployed revision pinned in its `compose.yml` (see its README) |
+| **ms-procedural-backup** | `~/scripts/d03/apps/ms-procedural-backup/ms-procedural-backup.sh` | Nightly pull of ms-procedural's corpus (Mac Mini) into the NAS mirror; backup-only, no containers. agent-commons, which used to run here, was retired 2026-10-08 (theOrg plan ms-procedural-rename.plan.md); its data is archived in `/mnt/nas/data1/docker/agent-commons/mirror` |
 | **breeding-research** | `~/scripts/d03/apps/breeding-research/breeding-research.sh` | Scraper + API; needs `.env` |
 | **tc-datalogger** | `~/scripts/d03/apps/tc-datalogger/tc-datalogger.sh` | Torn City API → BigQuery stack; needs `.env` |
 | **gitea-runner** | `~/scripts/d03/apps/gitea-runner/gitea-runner.sh` | Gitea Actions runner, native (systemd); jobs run on the host as `docker`. Instance-wide; labels `asyla`, `d03`, `docker`. Symlink to the shared `docker/gitea-runner/`; see its README |
@@ -57,11 +57,10 @@ YAML schema the current generator does not accept.
 
 ## Start order
 
-The proxy needs every app network to exist first, so start the apps before the edge.
+The proxy needs every app network to exist first, so start the apps before the edge. `agent_commons_net` is kept although agent-commons is retired: internal-access and external-access still join it, until the edge drops it.
 
 ```bash
 ~/scripts/d03/apps/gitea/gitea.sh up
-~/scripts/d03/apps/agent-commons/agent-commons.sh up
 ~/scripts/d03/apps/breeding-research/breeding-research.sh up
 ~/scripts/d03/apps/tc-datalogger/tc-datalogger.sh up
 ~/scripts/d03/apps/internal-access/internal-access.sh up
