@@ -123,17 +123,42 @@ do_update() {
   run_compose pull
 }
 
+# verify waits this long for Gitea to answer before it reports. Right after up or restart the
+# container is running but Gitea is not serving yet: on 2026-10-10 `restart verify` exited 1 on a
+# healthy restart. A Gitea that already answers costs one request; one that never answers fails
+# as before, this much later. The URLs are variables so scripts/tests/test_gitea_verify.sh can
+# point verify at a stand-in.
+GITEA_VERIFY_WAIT_S="${GITEA_VERIFY_WAIT_S:-120}"
+GITEA_LOCAL_URL="${GITEA_LOCAL_URL:-http://127.0.0.1:3000}"
+GITEA_PUBLIC_URL="${GITEA_PUBLIC_URL:-https://gitea.asyla.org}"
+
+# Returns 0 once /api/healthz answers 200 (Gitea's own readiness check), 1 on timeout.
+wait_ready() {
+  local deadline waited=false
+  deadline=$(( $(date +%s) + GITEA_VERIFY_WAIT_S ))
+  until curl -sf -o /dev/null --max-time 5 "$GITEA_LOCAL_URL/api/healthz"; do
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      echo "[WARN] $GITEA_LOCAL_URL/api/healthz not passing after ${GITEA_VERIFY_WAIT_S}s" >&2
+      return 1
+    fi
+    $waited || echo "[INFO] Waiting up to ${GITEA_VERIFY_WAIT_S}s for Gitea to answer"
+    waited=true
+    sleep 2
+  done
+}
+
 do_verify() {
-  echo "[INFO] Health check https://gitea.asyla.org/ (via proxy) and local :3000"
-  if curl -sf -o /dev/null -w "%{http_code}" --max-time 15 http://127.0.0.1:3000/ | grep -qE '^(200|302)$'; then
+  echo "[INFO] Health check $GITEA_PUBLIC_URL/ (via proxy) and local :3000"
+  wait_ready || true                 # the checks below decide; this only gives Gitea time
+  if curl -sf -o /dev/null -w "%{http_code}" --max-time 15 "$GITEA_LOCAL_URL/" | grep -qE '^(200|302)$'; then
     echo "[INFO] Local :3000 OK"
   else
     echo "[WARN] Local :3000 check failed (container may still be starting)" >&2
   fi
-  if curl -sfk -o /dev/null -w "%{http_code}" --max-time 20 https://gitea.asyla.org/ | grep -qE '^(200|302)$'; then
-    echo "[INFO] https://gitea.asyla.org OK"
+  if curl -sfk -o /dev/null -w "%{http_code}" --max-time 20 "$GITEA_PUBLIC_URL/" | grep -qE '^(200|302)$'; then
+    echo "[INFO] $GITEA_PUBLIC_URL OK"
   else
-    echo "[ERROR] https://gitea.asyla.org check failed" >&2
+    echo "[ERROR] $GITEA_PUBLIC_URL check failed" >&2
     return 1
   fi
 }
