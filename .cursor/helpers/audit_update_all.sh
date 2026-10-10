@@ -3,8 +3,8 @@
 # Fetches the latest run summary from each host via SSH and reports pass/fail.
 #
 # Usage: audit_update_all.sh [host...]
-#   Default hosts: d01 d02 d03 ns01 ns02
-#   Or set HOSTS in the environment.
+#   Hosts: the arguments; else HOSTS from the environment (space-separated);
+#   else d01 d02 d03 ns01 ns02.
 # Exit: 0 if every host has a run with failed=0; 1 otherwise.
 
 set -euo pipefail
@@ -15,13 +15,15 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 if [ "$#" -gt 0 ]; then
-  HOSTS=("$@")
+  host_list=("$@")
+elif [ -n "${HOSTS:-}" ]; then
+  read -r -a host_list <<< "$HOSTS"
 else
-  HOSTS=(d01 d02 d03 ns01 ns02)
+  host_list=(d01 d02 d03 ns01 ns02)
 fi
 
 all_ok=0
-for host in "${HOSTS[@]}"; do
+for host in "${host_list[@]}"; do
   out=$(ssh -o ConnectTimeout=10 -o BatchMode=yes "$host" \
     'cd ~/logs/update_all && [ -L latest ] && cd "$(readlink latest)" && cat summary.txt 2>/dev/null' 2>/dev/null) || true
   if [ -z "$out" ]; then
