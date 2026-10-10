@@ -106,7 +106,7 @@ ssh root@vmh02 "pvesm path nas-data1-iso"
 # Then check: <path_from_pvesm>/template/iso/debian-13-nocloud-amd64.qcow2
 ```
 
-**`pvesm list nas-data1-iso` vs files under `template/iso/`:** Proxmox only lists volumes under the storage’s **content-type roots** (for this store, typically `…/iso/` as `nas-data1-iso:iso/<name>`). QCOW2 files you keep in `/mnt/nas/data1/iso/template/iso/` still exist on disk and work with `build.sh` because that script passes the **absolute path** to `qm disk import` over SSH as root. They will **not** appear in `pvesm list` unless you also place them (or symlink) under the path Proxmox indexes. **`build.sh` does not move images**; it prefers `debian-13-generic-amd64.qcow2`, may **download** it with `wget` into the same directory if missing, then falls back to the nocloud image.
+**`pvesm list nas-data1-iso` vs files under `template/iso/`:** Proxmox only lists volumes under the storage’s **content-type roots** (for this store, typically `…/iso/` as `nas-data1-iso:iso/<name>`). QCOW2 files you keep in `/mnt/nas/data1/iso/template/iso/` still exist on disk and work with `scripts/build_host.py` because it passes the **absolute path** to `qm` (`import-from=`) over SSH as root. They will **not** appear in `pvesm list` unless you also place them (or symlink) under the path Proxmox indexes. `build_host.py` uses `debian-13-generic-amd64.qcow2` and neither moves nor downloads images.
 
 ### Step 2: Verify TrueNAS (nas01) iSCSI Configuration
 
@@ -148,25 +148,20 @@ qm list | grep d03
 
 **⚠️ PRODUCTION: Verify all values before executing**
 
-**Recommended: Use Automated Build Script**
+**Recommended: `scripts/build_host.py`**
 
-For fully automated builds without console copy/paste, use the `build.sh` script:
+The build path is `scripts/build_host.py`, with the spec in `d03/host.toml`. It is dry by default,
+and rebuilding the existing VM needs `--recreate --confirm d03`:
 
 ```bash
 # From workstation (where repository is cloned)
-cd /path/to/asyla
-./d03/build.sh
+scripts/build_host.py d03 plan      # read-only: spec, live VM, gaps
+scripts/build_host.py d03 build     # dry run of every phase; add --apply to act
+scripts/build_host.py d03 verify    # read-only
 ```
 
-**What the automated build does:**
-- Stops and removes existing d03 VM (if present)
-- Creates new VM with correct specifications
-- Imports Debian cloud image (checks for both `generic` and `nocloud` variants)
-- Configures Proxmox built-in cloud-init (user, network, SSH keys)
-- Copies vendor file that installs cloud-init if missing and processes full config
-- Sets boot order correctly
-- Starts VM and waits for initialization
-- Verifies SSH access
+The old `d03/build.sh` was removed on 2026-10-10: it ran `qm destroy 103 --purge` with no
+confirmation.
 
 **Manual Build (Alternative)**
 
@@ -357,20 +352,7 @@ ssh d03 '~/scripts/d03/setup/setup_ssh_keys.sh'
 
 **Note**: The vendor file automatically installs cloud-init if missing, then processes our full user-data configuration. Everything is automated - no manual console steps needed!
 
-**Automated Build Option:**
-For fully automated builds, use the `build.sh` script from the repository:
-```bash
-# From workstation
-cd /path/to/asyla
-./d03/build.sh
-```
-
-This script handles:
-- VM creation and configuration
-- Cloud image import
-- Cloud-init setup (Proxmox built-in + vendor file)
-- SSH key handling
-- Initial verification
+**Automated build:** `scripts/build_host.py d03 build` (Step 3 above). The old `d03/build.sh` was removed on 2026-10-10.
 
 **Network Configuration**:
 - IP: 10.0.0.62/24

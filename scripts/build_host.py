@@ -129,19 +129,35 @@ def root(node: str) -> str:
     return f"root@{node}"
 
 
+HTTP_RETRY_WAITS = (2, 5)          # seconds before the second and third attempt
+
+
 def http(method: str, url: str, headers: dict, body: dict | None = None) -> tuple[int, object]:
+    """One API call. An HTTP status, error or not, is returned for the caller to judge. A
+    connection error (refused, reset, DNS, TLS, timeout) is retried twice for GET, PUT and
+    DELETE, which are safe to repeat; a POST is not, since the first attempt may have been
+    applied. A connection error that remains is a Fail, not a traceback."""
     req = urllib.request.Request(url, method=method, headers={**headers, "Content-Type": "application/json"},
                                  data=json.dumps(body).encode() if body is not None else None)
-    try:
-        with urllib.request.urlopen(req, timeout=60) as r:
-            raw = r.read().decode()
-            return r.status, (json.loads(raw) if raw.strip() else {})
-    except urllib.error.HTTPError as e:
-        raw = e.read().decode()[:500]
+    waits = HTTP_RETRY_WAITS if method in ("GET", "PUT", "DELETE") else ()
+    for attempt in range(len(waits) + 1):
         try:
-            return e.code, json.loads(raw)
-        except json.JSONDecodeError:
-            return e.code, raw
+            with urllib.request.urlopen(req, timeout=60) as r:
+                raw = r.read().decode()
+                return r.status, (json.loads(raw) if raw.strip() else {})
+        except urllib.error.HTTPError as e:
+            raw = e.read().decode()[:500]
+            try:
+                return e.code, json.loads(raw)
+            except json.JSONDecodeError:
+                return e.code, raw
+        except OSError as e:           # URLError, timeouts, ssl.SSLError, ConnectionError
+            where = f"{method} {url.split('?')[0]}"
+            if attempt == len(waits):
+                raise Fail(f"{where}: connection error after {attempt + 1} attempt(s): {e}") from None
+            print(f"  {where}: connection error ({e}); retrying in {waits[attempt]}s", flush=True)
+            time.sleep(waits[attempt])
+    raise AssertionError("unreachable")
 
 
 def gitlab(method: str, path: str, body: dict | None = None) -> tuple[int, object]:

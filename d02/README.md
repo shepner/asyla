@@ -137,25 +137,20 @@ qm list | grep d02
 
 **⚠️ PRODUCTION: Verify all values before executing**
 
-**Recommended: Use Automated Build Script**
+**Recommended: `scripts/build_host.py`**
 
-For fully automated builds without console copy/paste, use the `build.sh` script:
+The build path is `scripts/build_host.py`, with the spec in `d02/host.toml`. It is dry by default,
+and rebuilding the existing VM needs `--recreate --confirm d02`:
 
 ```bash
 # From workstation (where repository is cloned)
-cd /path/to/asyla
-./d02/build.sh
+scripts/build_host.py d02 plan      # read-only: spec, live VM, gaps
+scripts/build_host.py d02 build     # dry run of every phase; add --apply to act
+scripts/build_host.py d02 verify    # read-only
 ```
 
-**What the automated build does:**
-- Stops and removes existing d02 VM (if present)
-- Creates new VM with correct specifications
-- Imports Debian cloud image (checks for both `generic` and `nocloud` variants)
-- Configures Proxmox built-in cloud-init (user, network, SSH keys)
-- Copies vendor file that installs cloud-init if missing and processes full config
-- Sets boot order correctly
-- Starts VM and waits for initialization
-- Verifies SSH access
+The old `d02/build.sh` was removed on 2026-10-10: it ran `qm destroy 102 --purge` with no
+confirmation.
 
 **Manual Build (Alternative)**
 
@@ -346,20 +341,7 @@ ssh d02 '~/scripts/d02/setup/setup_ssh_keys.sh'
 
 **Note**: The vendor file automatically installs cloud-init if missing, then processes our full user-data configuration. Everything is automated - no manual console steps needed!
 
-**Automated Build Option:**
-For fully automated builds, use the `build.sh` script from the repository:
-```bash
-# From workstation
-cd /path/to/asyla
-./d02/build.sh
-```
-
-This script handles:
-- VM creation and configuration
-- Cloud image import
-- Cloud-init setup (Proxmox built-in + vendor file)
-- SSH key handling
-- Initial verification
+**Automated build:** `scripts/build_host.py d02 build` (Step 3 above). The old `d02/build.sh` was removed on 2026-10-10.
 
 **Network Configuration**:
 - IP: 10.0.0.61/24

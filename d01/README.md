@@ -7,20 +7,25 @@ Built from the same pattern as d02: Debian cloud image, cloud-init, Docker, NFS/
 ## Build (from workstation)
 
 ```bash
-cd /path/to/asyla
-./d01/build.sh
+scripts/build_host.py d01 plan      # read-only: spec, live VM, gaps
+scripts/build_host.py d01 build     # dry run of every phase; add --apply to act
+scripts/build_host.py d01 verify    # read-only
 ```
+
+The spec is `d01/host.toml`. Rebuilding the existing VM needs `--recreate --confirm d01`. The old
+`d01/build.sh` was removed on 2026-10-10: it ran `qm destroy 101 --purge` with no confirmation, on
+vmh01 (the spec has d01 on vmh02).
 
 Requires:
 
-- SSH to `root@vmh01`
+- SSH to the hypervisor as root (the node in `d01/host.toml`)
 - `d01` in `~/.ssh/config` (HostName 10.0.0.60, User docker)
 - `~/.ssh/docker_rsa.pub` for cloud-init
 
 ## After first boot
 
 1. SSH: `ssh d01`
-2. Copy SSH keys and config from workstation (see build.sh next steps).
+2. Copy SSH keys and config from workstation (`~/.ssh/docker_rsa`, `~/.ssh/config`; mode 600, `~/.ssh` 700).
 3. Run: `~/scripts/d01/setup/setup_ssh_keys.sh`
 4. **Media stack:** `~/scripts/d01/apps/media/media.sh up` (sources common.env automatically)
 5. **Cloudflared:** `cd ~/scripts/d01/apps/cloudflared && cp .env.example .env` (set `TUNNEL_TOKEN` or `TUNNEL_ID`), then `~/scripts/d01/apps/cloudflared/cloudflared.sh up`
@@ -33,7 +38,7 @@ Requires:
 
 ## Layout
 
-- `build.sh` – Destroy/create VM 101 on vmh01, import Debian cloud image, cloud-init, verify.
+- `host.toml` – the build spec read by `scripts/build_host.py` (VM shape, secrets, apps, externals).
 - `setup/` – cloud-init userdata/vendor, bootstrap, deploy_software, systemConfig, nfs, smb, docker, setup_manual, setup_ssh_keys, etc.
 - `apps/cloudflared/` – Cloudflare Tunnel (cloudflared.sh, compose, apps.yml, setup-tunnel-api.py).
 - Internal Caddy for split DNS: `asyla/projects/internal-access` (`hosts/d01/`), deployed to `~/scripts/d01/apps/internal-access/`.
