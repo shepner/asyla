@@ -93,8 +93,8 @@ runcmd:
     /home/docker/scripts/ns02/setup/systemConfig.sh || true
     echo "Running nfs.sh..."
     /home/docker/scripts/ns02/setup/nfs.sh || true
-    echo "Running iscsi_install.sh..."
-    /home/docker/scripts/ns02/setup/iscsi_install.sh || true
+    echo "Running setup_docker_local.sh..."
+    /home/docker/scripts/ns02/setup/setup_docker_local.sh || true
     echo "Running docker.sh..."
     /home/docker/scripts/ns02/setup/docker.sh || {
       echo "ERROR: docker.sh failed"

@@ -54,7 +54,7 @@ runcmd:
     curl -s https://raw.githubusercontent.com/shepner/asyla/master/ns01/update_scripts.sh | bash || true
   - [ bash, -c, 'test -f /home/docker/scripts/ns01/setup/systemConfig.sh && /home/docker/scripts/ns01/setup/systemConfig.sh || true' ]
   - [ bash, -c, 'test -f /home/docker/scripts/ns01/setup/nfs.sh && /home/docker/scripts/ns01/setup/nfs.sh || true' ]
-  - [ bash, -c, 'test -f /home/docker/scripts/ns01/setup/iscsi_install.sh && /home/docker/scripts/ns01/setup/iscsi_install.sh || true' ]
+  - [ bash, -c, 'test -f /home/docker/scripts/ns01/setup/setup_docker_local.sh && /home/docker/scripts/ns01/setup/setup_docker_local.sh || true' ]
   - [ bash, -c, 'test -f /home/docker/scripts/ns01/setup/docker.sh && /home/docker/scripts/ns01/setup/docker.sh || true' ]
   - [ bash, -c, 'test -f /home/docker/update.sh && /home/docker/update.sh || true' ]
   - [ bash, -c, 'nohup apt-get upgrade -y >> /var/log/cloud-init-upgrade.log 2>&1 &' ]
@@ -65,4 +65,4 @@ final_message: |
   1. SSH to ns01: ssh docker@10.0.0.10
   2. Copy SSH keys and config; run ~/scripts/ns01/setup/setup_ssh_keys.sh
   3. Start Pi-hole: ~/scripts/ns01/apps/pihole/pihole.sh up
-  4. iSCSI: ~/setup_manual.sh (after adding initiator to TrueNAS for iSCSI target nas01:ns01:01)
+  4. Storage: ~/setup_manual.sh (local /mnt/docker on root disk)

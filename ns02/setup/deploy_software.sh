@@ -62,8 +62,8 @@ log_info "Step 2: Run systemConfig.sh..."
 log_info "Step 3: Run nfs.sh..."
 "$TARGET_HOME/scripts/ns02/setup/nfs.sh" || { log_warn "nfs.sh exited non-zero (continuing)"; }
 
-log_info "Step 4: Run iscsi_install.sh..."
-"$TARGET_HOME/scripts/ns02/setup/iscsi_install.sh" || { log_warn "iscsi_install.sh exited non-zero (continuing)"; }
+log_info "Step 4: Ensure local /mnt/docker..."
+"$TARGET_HOME/scripts/ns02/setup/setup_docker_local.sh" || { log_warn "setup_docker_local.sh exited non-zero (continuing)"; }
 
 log_info "Step 5: Run docker.sh..."
 "$TARGET_HOME/scripts/ns02/setup/docker.sh" || { log_warn "docker.sh exited non-zero (continuing)"; }

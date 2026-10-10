@@ -59,7 +59,7 @@ runcmd:
 
   - [ bash, -c, 'test -f /home/docker/scripts/ns02/setup/systemConfig.sh && /home/docker/scripts/ns02/setup/systemConfig.sh || true' ]
   - [ bash, -c, 'test -f /home/docker/scripts/ns02/setup/nfs.sh && /home/docker/scripts/ns02/setup/nfs.sh || true' ]
-  - [ bash, -c, 'test -f /home/docker/scripts/ns02/setup/iscsi_install.sh && /home/docker/scripts/ns02/setup/iscsi_install.sh || true' ]
+  - [ bash, -c, 'test -f /home/docker/scripts/ns02/setup/setup_docker_local.sh && /home/docker/scripts/ns02/setup/setup_docker_local.sh || true' ]
   - [ bash, -c, 'test -f /home/docker/scripts/ns02/setup/docker.sh && /home/docker/scripts/ns02/setup/docker.sh || true' ]
   - [ bash, -c, 'test -f /home/docker/update.sh && /home/docker/update.sh || true' ]
 
@@ -67,10 +67,10 @@ runcmd:
 
 final_message: |
   ns02 VM setup complete!
-  Auto-ran: SSH, systemConfig, nfs, iSCSI initiator install, docker, update.
+  Auto-ran: SSH, systemConfig, nfs, local /mnt/docker, docker, update.
   apt-get upgrade runs in background; log: /var/log/cloud-init-upgrade.log
   Manual steps:
   1. SSH to ns02: ssh docker@10.0.0.11
   2. Copy SSH keys and config; run ~/scripts/ns02/setup/setup_ssh_keys.sh
   3. Start Pi-hole: ~/scripts/ns02/apps/pihole/pihole.sh up
-  4. iSCSI: ~/setup_manual.sh (after adding initiator to TrueNAS for iSCSI target nas01:ns02:01)
+  4. Storage: ~/setup_manual.sh (local /mnt/docker on root disk)

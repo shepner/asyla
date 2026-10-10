@@ -177,12 +177,10 @@ if [ -n "${SOFTWARE_MISSING:-}" ]; then
     $SSH_VERIFY "sudo ~/scripts/ns01/setup/systemConfig.sh" 2>/dev/null || log_warn "systemConfig.sh had warnings"
     log_info "Running nfs.sh..."
     $SSH_VERIFY "sudo ~/scripts/ns01/setup/nfs.sh" 2>/dev/null || log_warn "nfs.sh had warnings"
-    log_info "Running iscsi_install.sh..."
-    $SSH_VERIFY "sudo ~/scripts/ns01/setup/iscsi_install.sh" 2>/dev/null || log_warn "iscsi_install.sh had warnings"
     log_info "Running docker.sh..."
     $SSH_VERIFY "sudo ~/scripts/ns01/setup/docker.sh" 2>/dev/null || { log_error "docker.sh failed"; exit 1; }
-    log_info "Ensuring /mnt/docker exists for Pi-hole..."
-    $SSH_VERIFY "sudo mkdir -p /mnt/docker && sudo chown docker:asyla /mnt/docker 2>/dev/null || sudo chown docker:docker /mnt/docker; sudo chmod 755 /mnt/docker" 2>/dev/null || true
+    log_info "Ensuring local /mnt/docker for Pi-hole..."
+    $SSH_VERIFY "sudo ~/scripts/ns01/setup/setup_docker_local.sh" 2>/dev/null || log_warn "setup_docker_local.sh had warnings"
     log_info "Linking setup_manual.sh..."
     $SSH_VERIFY "ln -sf ~/scripts/ns01/setup/setup_manual.sh ~/setup_manual.sh" 2>/dev/null || true
     log_info "✅ Software deployed from local repo"

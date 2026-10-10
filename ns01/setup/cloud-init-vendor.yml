@@ -61,7 +61,7 @@ runcmd:
     [ -f /home/docker/scripts/ns01/setup/systemConfig.sh ] || { echo "ERROR: Scripts not found"; exit 1; }
     /home/docker/scripts/ns01/setup/systemConfig.sh || true
     /home/docker/scripts/ns01/setup/nfs.sh || true
-    /home/docker/scripts/ns01/setup/iscsi_install.sh || true
+    /home/docker/scripts/ns01/setup/setup_docker_local.sh || true
     /home/docker/scripts/ns01/setup/docker.sh || { echo "ERROR: docker.sh failed"; exit 1; }
     nohup bash -c '/home/docker/update.sh >> /var/log/cloud-init-upgrade.log 2>&1' &
     echo "=== Software installation complete ==="
