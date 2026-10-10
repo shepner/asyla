@@ -1,0 +1,29 @@
+# ns01 build spec, read by scripts/build_host.py (asyla hub decisions/host-build-and-recovery.md).
+# VM values match `qm config 300` on vmh01, 2026-10-10.
+#
+# ns01 is a DNS server (Pi-hole, host network): d01-d03 and the LAN resolve through it and ns02.
+# Change or rebuild one of the two at a time, with DNS answering on the other throughout, and
+# only with the operator's approval of the exact action. A build of this spec has not been run:
+# ns01/setup/ differs from d02's (no re-run fixes), and pihole.sh has no restore or verify switch.
+[vm]
+node = "vmh01"
+vmid = 300
+sockets = 1
+cores = 4
+memory_mb = 16384
+ip = "10.0.0.10/24"
+os_disk = { storage = "local-data1", size = "64G" }   # /mnt/docker is a directory on it
+cloudinit_storage = "nas-data1-vm"                       # as live; local-data1 would boot without the NAS
+startup = "order=10,up=180"                              # boots before the Docker hosts, as live
+
+[setup]
+steps = ["systemConfig.sh", "nfs.sh", "setup_docker_local.sh", "docker.sh"]
+
+# No [[secret]]: on 2026-10-10 the host holds no .env, no ~/.docker and no ~/.config. The Pi-hole
+# password lives in its data (/mnt/docker/pihole-ns01), which `pihole.sh backup` copies to the NAS.
+
+[[app]]
+name = "pihole"
+
+[runner]
+enabled = false

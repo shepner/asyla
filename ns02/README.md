@@ -7,9 +7,12 @@ Built from the same pattern as d01/d02/d03: Debian cloud image, cloud-init, Dock
 ## Build (from workstation)
 
 ```bash
-cd /path/to/asyla
-./ns02/build.sh
+scripts/build_host.py ns02 plan      # read-only: spec, live VM, gaps
 ```
+
+The spec is `ns02/host.toml`. `build_host.py ns02 build` has not been run for this host yet (see the
+spec's header). The old `ns02/build.sh` was removed on 2026-10-10: it ran `qm destroy 301 --purge`
+with no confirmation.
 
 Requires:
 
@@ -20,7 +23,7 @@ Requires:
 ## After first boot
 
 1. SSH: `ssh ns02`
-2. Copy SSH keys and config from workstation (see build.sh next steps).
+2. Copy SSH keys and config from workstation (`~/.ssh/docker_rsa`, `~/.ssh/config`; mode 600, `~/.ssh` 700).
 3. Run: `~/scripts/ns02/setup/setup_ssh_keys.sh`
 4. **Pi-hole:** `~/scripts/ns02/apps/pihole/pihole.sh up`
 5. Storage: `~/setup_manual.sh` (creates local `/mnt/docker` on the VM root disk)
@@ -29,7 +32,7 @@ Requires:
 
 ## Layout
 
-- `build.sh` – Destroy/create VM 301 on vmh02, import Debian cloud image, cloud-init, verify.
+- `host.toml` – the build spec read by `scripts/build_host.py` (VM shape, setup steps, apps).
 - `setup/` – cloud-init userdata/vendor, bootstrap, deploy_software, systemConfig, nfs, docker, setup_manual, setup_ssh_keys, etc.
 - `apps/pihole/` – Pi-hole DNS server (pihole.sh, compose.yml).
 - `update_scripts.sh`, `update.sh`, `update_all.sh` – Script update and OS maintenance.

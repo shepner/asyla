@@ -261,6 +261,8 @@ def phase_vm(spec: dict, apply: bool, recreate: bool, confirm: str | None) -> No
         f"{q} --scsi1 {vm['cloudinit_storage']}:cloudinit",
         f"{q} --boot order=scsi0",
     ]
+    if vm.get("startup"):              # boot order among the node's guests (ns01/ns02 come up first)
+        cmds.append(f"{q} --startup {shlex.quote(vm['startup'])}")
     if vm.get("data_disk"):
         dd = vm["data_disk"]
         cmds.append(f"{q} --scsi2 {dd['storage']}:{dd['size'].rstrip('G')},discard=on,ssd=1")
