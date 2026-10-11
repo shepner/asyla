@@ -22,6 +22,10 @@ services:
       - PUID=${DOCKER_UID:-1003}
       - PGID=${DOCKER_GID:-1000}
       - TZ=${LOCAL_TZ:-America/Chicago}
+      # Since Sonarr 4.0.20 a request that still carries X-Forwarded-For must log in, even from the
+      # LAN ("Disabled for Local Addresses" no longer applies). The header is only consumed when the
+      # proxy that sent it is listed here: the Docker bridge ranges, where Caddy and cloudflared sit.
+      - SONARR__SERVER__TRUSTEDNETWORKS=172.16.0.0/12
     volumes:
       - ${DOCKER_DL:-/mnt/docker}/sonarr/config:/config
       - ${DATA1:-/mnt/nas/data1}/media/Videos:/tv
@@ -40,6 +44,10 @@ services:
       - PUID=${DOCKER_UID:-1003}
       - PGID=${DOCKER_GID:-1000}
       - TZ=${LOCAL_TZ:-America/Chicago}
+      # Radarr (seen on 6.4.4): a request that still carries X-Forwarded-For must log in, even from the
+      # LAN ("Disabled for Local Addresses" no longer applies). The header is only consumed when the
+      # proxy that sent it is listed here: the Docker bridge ranges, where Caddy and cloudflared sit.
+      - RADARR__SERVER__TRUSTEDNETWORKS=172.16.0.0/12
     volumes:
       - ${DOCKER_DL:-/mnt/docker}/radarr/config:/config
       - ${DATA1:-/mnt/nas/data1}/media/Videos:/movies
