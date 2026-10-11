@@ -1,6 +1,6 @@
 # breeding-program (d01)
 
-Dog breeding / whelping app (source: `gitea.asyla.org/asyla/breeding-program`, private). FastAPI container,
+Dog breeding / whelping app (source: `gitea.asyla.org/personal/breeding-program`, private). FastAPI container,
 data in BigQuery (GCP project `breeding-program`), sign-in by **Cloudflare Access** (JWT verified in-app).
 
 - Public: `https://breeding-program.asyla.org` through `cloudflared-d01` on `breeding_program_net`.
