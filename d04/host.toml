@@ -10,7 +10,11 @@
 [replica]
 of = "d03"
 start_apps = false
-# All 8 of d03's secrets, the host-maintenance SSH key included (operator, 2026-10-09).
+# The 8 secrets d03 had on 2026-10-09, the host-maintenance SSH key included (operator, 2026-10-09).
+# Not the ms-chronicle backup token (added to d03 on 2026-10-11): that approval names d03's pull
+# only, and nothing on d04 uses it (no app runs here, the NAS is read-only). Remove the line to
+# include it once the operator says so.
+exclude_secrets = ["D03_MS_CHRONICLE_BACKUP_ENV"]
 
 [vm]
 node = "vmh02"
