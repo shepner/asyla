@@ -29,7 +29,8 @@ services:
       - "3000:3000"
     volumes:
       - ${DOCKER_DL}/Gitea/data:/data
-      - /etc/timezone:/etc/timezone:ro
+      # The zone comes from /etc/localtime. Do not mount /etc/timezone as well: Debian 13 has no
+      # such file, so Docker creates an empty root-owned directory at that path on the host.
       - /etc/localtime:/etc/localtime:ro
     networks:
       - gitea_net

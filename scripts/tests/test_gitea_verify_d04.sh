@@ -41,8 +41,9 @@ sed -i "s|^DOCKER_DL=.*|DOCKER_DL=$D/data|" "$D/docker/common.env"
 grep -q "^DOCKER_DL=$D/data\$" "$D/docker/common.env" || { echo "could not repoint DOCKER_DL" >&2; exit 2; }
 
 GITEA_SH="$D/d03/apps/gitea/gitea.sh"
-# compose.yml mounts /etc/timezone, which Debian 13 does not have: Docker then creates it as an
-# empty directory. Remove it afterwards if this run made it.
+# compose.yml once mounted /etc/timezone, which Debian 13 does not have: Docker then created it as
+# an empty directory on the host. A case below fails if that comes back; the cleanup still
+# removes a directory this run made.
 HAD_TIMEZONE=no; [ -e /etc/timezone ] && HAD_TIMEZONE=yes
 cleanup() {
   HOME="$D/home" bash "$GITEA_SH" down >/dev/null 2>&1
@@ -79,6 +80,12 @@ HOME="$D/home" bash "$GITEA_SH" _update 2>&1 | tail -1   # pull the image outsid
 run_gitea 120 up verify
 check "up verify, first start on empty data" '[ "$RC" -eq 0 ] && grep -q "Local :3000 OK" <<<"$OUT"'
 echo "      gitea version: $(curl -s --max-time 5 http://127.0.0.1:3000/api/v1/version)"
+
+HOST_TZ="$(date +'%Z %z')"; CONT_TZ="$(docker exec gitea date +'%Z %z' 2>&1)"
+check "the container has the host's time zone (host: $HOST_TZ; container: $CONT_TZ)" '[ "$CONT_TZ" = "$HOST_TZ" ]'
+check "starting Gitea created no /etc/timezone on the host" '[ "$HAD_TIMEZONE" = yes ] || [ ! -e /etc/timezone ]'
+check "the container mounts no /etc/timezone" \
+  '! docker inspect -f "{{range .Mounts}}{{.Destination}} {{end}}" gitea | grep -qw /etc/timezone'
 
 run_gitea 120 restart verify
 check "restart verify in one call" '[ "$RC" -eq 0 ] && grep -q "Local :3000 OK" <<<"$OUT"'
