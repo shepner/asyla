@@ -692,7 +692,8 @@ def plan(spec: dict) -> int:
 
 # ---------------------------------------------------------------- main
 
-def main() -> int:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """The command line as the Usage block above shows it; options may stand anywhere."""
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("host")
     ap.add_argument("action", choices=["plan", "build", "verify", "token", "scripts-check", "secrets", "destroy"])
@@ -702,7 +703,16 @@ def main() -> int:
     ap.add_argument("--only", choices=PHASES)
     ap.add_argument("--recreate", action="store_true")
     ap.add_argument("--confirm")
-    a = ap.parse_args()
+    # Intermixed: plain parse_args() fills `args` before the first option and then refuses a VAR
+    # after it, so `secrets push --apply VAR` (the documented order) was a usage error.
+    a = ap.parse_intermixed_args(argv)
+    if a.args and a.action != "secrets":
+        ap.error(f"{a.action} takes no further arguments: {' '.join(a.args)}")
+    return a
+
+
+def main() -> int:
+    a = parse_args()
     try:
         spec = load_spec(a.host)
         if a.action == "plan":
