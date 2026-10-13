@@ -1,7 +1,7 @@
 #!/bin/bash
-# Gitea Actions runner on d01-d03 (and the d04 build test host): native gitea-runner, systemd, jobs run on the host as `docker`.
+# Gitea Actions runner on d01-d03 (and any host whose spec gives it labels, such as the test01 build test host): native gitea-runner, systemd, jobs run on the host as `docker`.
 # Usage: gitea-runner.sh [switch ...]   Switches combine (e.g. install register up).
-# Shared by every d0N host: ~/scripts/<host>/apps/gitea-runner/gitea-runner.sh is a symlink here.
+# Shared by every host: ~/scripts/<host>/apps/gitea-runner/gitea-runner.sh is a symlink here.
 #
 #   install   Install or update (idempotent): nodejs if missing, the pinned binary (sha256 checked),
 #             /var/lib/gitea-runner/config.yaml with this host's labels, the systemd unit.
@@ -29,10 +29,24 @@ RUNNER_NAME="$(hostname -s)"
 
 case "$RUNNER_NAME" in
   d01|d02|d03) RUNNER_LABELS=(asyla "$RUNNER_NAME" docker) ;;
-  # The build test host: one label no workflow uses, so it never takes a real job
-  # (asyla decisions/host-build-and-recovery.md). Not "d04": old workflows still say runs-on: d04.
-  d04) RUNNER_LABELS=(build-test) ;;
-  *) echo "[ERROR] gitea-runner is for d01-d04 only, not $RUNNER_NAME" >&2; exit 1 ;;
+  # Any other host takes the labels its own spec gives it: [runner] labels in
+  # ~/scripts/<host>/host.toml. The build test host test01 holds one label no workflow uses
+  # (build-test), so it never takes a real job (asyla decisions/host-layout.md). A host with no
+  # labels in its spec gets no runner.
+  *)
+    RUNNER_SPEC="$SCRIPT_DIR/../../$RUNNER_NAME/host.toml"
+    RUNNER_LABELS=()
+    while IFS= read -r label; do RUNNER_LABELS+=("$label"); done < <(python3 -c '
+import re, sys, tomllib
+labels = tomllib.load(open(sys.argv[1], "rb")).get("runner", {}).get("labels", [])
+if not labels or not isinstance(labels, list) or not all(isinstance(l, str) and re.fullmatch("[a-z0-9][a-z0-9-]*", l) for l in labels):
+    sys.exit(1)
+print("\n".join(labels))' "$RUNNER_SPEC" 2>/dev/null)
+    if [ "${#RUNNER_LABELS[@]}" -eq 0 ]; then
+      echo "[ERROR] no usable [runner] labels for $RUNNER_NAME in $RUNNER_SPEC" >&2
+      exit 1
+    fi
+    ;;
 esac
 
 labels_csv() {

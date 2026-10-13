@@ -1,36 +1,36 @@
 #!/bin/bash
-# Real-container test of `gitea.sh up|restart verify`, on d04 only (the disposable build host).
+# Real-container test of `gitea.sh up|restart verify`, on test01 only (the disposable build host).
 # It starts the same Gitea image as d03 from this checkout's gitea.sh and compose.yml, on an
 # EMPTY data directory in a temp dir: never d03's restored data under /mnt/docker/Gitea, so no
 # repository, user, mirror or mail exists in it. It then checks that `up verify` and
 # `restart verify` pass in one call and that verify fails once Gitea is down, and removes the
 # container, the network and the temp dir. The offline twin is test_gitea_verify.sh.
 #
-#   scripts/tests/test_gitea_verify_d04.sh          # from the workstation; uses `ssh d04`
+#   scripts/tests/test_gitea_verify_test01.sh          # from the workstation; uses `ssh docker@test01`
 #
-# Refuses to run anywhere but d04, and when a container named gitea already exists there.
+# Refuses to run anywhere but test01, and when a container named gitea already exists there.
 
 set -uo pipefail
 
 if [ "${1:-}" != "--on-host" ]; then
   REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
   COPYFILE_DISABLE=1 tar -C "$REPO" -cf - d03/apps/gitea/gitea.sh d03/apps/gitea/compose.yml \
-      docker/common.env docker/backup_lib.sh scripts/tests/test_gitea_verify_d04.sh |
-    ssh -o BatchMode=yes -o ConnectTimeout=10 d04 '
+      docker/common.env docker/backup_lib.sh scripts/tests/test_gitea_verify_test01.sh |
+    ssh -o BatchMode=yes -o ConnectTimeout=10 -i ~/.ssh/docker_rsa docker@test01 '
       set -e
-      [ "$(hostname -s)" = d04 ] || { echo "not d04: refusing" >&2; exit 2; }
+      [ "$(hostname -s)" = test01 ] || { echo "not test01: refusing" >&2; exit 2; }
       D=$(mktemp -d /tmp/gitea-verify.XXXXXX)
       tar -C "$D" -xf - 2>/dev/null
-      exec bash "$D/scripts/tests/test_gitea_verify_d04.sh" --on-host "$D"'
+      exec bash "$D/scripts/tests/test_gitea_verify_test01.sh" --on-host "$D"'
   exit $?
 fi
 
-# ---- on d04 ----
+# ---- on test01 ----
 D="$2"
-[ "$(hostname -s)" = d04 ] || { echo "not d04: refusing" >&2; exit 2; }
+[ "$(hostname -s)" = test01 ] || { echo "not test01: refusing" >&2; exit 2; }
 case "$D" in /tmp/gitea-verify.*) ;; *) echo "unexpected dir $D: refusing" >&2; exit 2 ;; esac
 if [ -n "$(docker ps -aq --filter name='^gitea$')" ]; then
-  echo "a container named gitea already exists on d04: refusing (not removing $D)" >&2
+  echo "a container named gitea already exists on test01: refusing (not removing $D)" >&2
   exit 2
 fi
 

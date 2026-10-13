@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build, rebuild and verify a d0N Docker host from its spec, from the workstation.
+"""Build, rebuild and verify a Docker host (d0N, or the test host test01) from its spec, from the workstation.
 
 asyla hub decisions/host-build-and-recovery.md: a rebuild must reproduce everything a host runs,
 from nothing but GitLab (this repo, its CI/CD variables), the NAS backups and the hypervisor.
@@ -7,6 +7,7 @@ from nothing but GitLab (this repo, its CI/CD variables), the NAS backups and th
 Usage:
   build_host.py HOST plan                      # read-only: spec, live VM, gaps
   build_host.py HOST build [--apply] [--from PHASE] [--only PHASE] [--recreate [--confirm HOST]]
+                           [--node NODE]
   build_host.py HOST verify                    # read-only
   build_host.py HOST token [--apply]           # deploy token file alone, then a GitLab read check
   build_host.py HOST scripts-check             # read-only: ~/scripts vs GitLab master, file by file
@@ -29,7 +30,14 @@ Build phases, in order (each is safe to re-run):
   runner     Gitea runner: delete this host's stale entry, install, register, up
   verify     mounts, every app's verify (or running containers), runner online
 
-Replica: a spec with [replica] of = "dNN" (d04 as a d03 replica) takes the source spec's
+Node: [vm].node is where the VM is created. --node NODE overrides it for a spec with
+disposable = true only (the test host may run on either node); a production host's node is its
+spec's. Hold: a spec with a top-level hold = "reason" is not built or destroyed.
+
+Guests are reached as docker@HOST with ~/.ssh/docker_rsa, the user and key the vm phase gives
+them, so a host needs no entry in the workstation's ssh config.
+
+Replica: a spec with [replica] of = "dNN" (test01 as a d03 replica) takes the source spec's
 [[secret]] and [[app]] lists (minus exclude_secrets) and runs the apps from ~/scripts/dNN/ (its
 updater installs that tree too). Its own [vm], [setup] and [runner] apply, and the source's
 [[external]] never do: a replica must not answer for the source's hostnames. With
@@ -69,6 +77,8 @@ NAMESERVERS = "10.0.0.10 10.0.0.11"
 SEARCHDOMAIN = "asyla.org"
 BRIDGE, VLAN = "vmbr1", 100
 SSH_KEY_PUB = Path.home() / ".ssh/docker_rsa.pub"
+SSH_KEY = SSH_KEY_PUB.with_suffix("")
+GUEST_USER = "docker"
 DEPLOY_ENV = "/etc/asyla/asyla-hosts.env"
 DATA_ROOT = "/mnt/docker/"
 PHASES = ("vm", "bootstrap", "disk", "secrets", "setup", "restore", "apps", "external", "runner", "verify")
@@ -114,15 +124,23 @@ def run(cmd: list[str], stdin: str | None = None, timeout: int = 1800, check: bo
     return r
 
 
+def ssh_argv(target: str) -> list[str]:
+    """The ssh command for a target: user@host as given (a node), or a bare guest name, which is
+    reached as GUEST_USER with SSH_KEY whatever the workstation's ssh config says of that name."""
+    if "@" in target:
+        return SSH + [target]
+    return SSH + ["-i", str(SSH_KEY), f"{GUEST_USER}@{target}"]
+
+
 def ssh(target: str, command: str, stdin: str | None = None, timeout: int = 1800,
         check: bool = True, stream: bool = False) -> subprocess.CompletedProcess:
     if stream:
-        r = subprocess.run(SSH + [target, command], input=stdin if stdin is not None else "",
+        r = subprocess.run(ssh_argv(target) + [command], input=stdin if stdin is not None else "",
                            text=True, timeout=timeout)
         if check and r.returncode != 0:
             raise Fail(f"exit {r.returncode} on {target}: {command[:80]}")
         return r
-    return run(SSH + [target, command], stdin=stdin, timeout=timeout, check=check)
+    return run(ssh_argv(target) + [command], stdin=stdin, timeout=timeout, check=check)
 
 
 def root(node: str) -> str:
@@ -174,7 +192,7 @@ def step(msg: str) -> None:
 
 # ---------------------------------------------------------------- spec
 
-def load_spec(host: str) -> dict:
+def load_spec(host: str, node: str | None = None) -> dict:
     path = REPO / host / "host.toml"
     if not path.is_file():
         raise Fail(f"no spec: {path}")
@@ -186,6 +204,15 @@ def load_spec(host: str) -> dict:
             raise Fail(f"{path}: [vm].{k} missing")
     if vm["node"] not in NODES:
         raise Fail(f"{path}: node {vm['node']} not in {NODES}")
+    if node and node != vm["node"]:
+        if node not in NODES:
+            raise Fail(f"--node {node} not in {NODES}")
+        if not vm.get("disposable"):
+            raise Fail(f"{host} is not disposable: its node is its spec's ({vm['node']}), not --node {node}")
+        vm["node"] = node
+    labels = spec.get("runner", {}).get("labels", [])
+    if not isinstance(labels, list) or not all(isinstance(l, str) and l for l in labels):
+        raise Fail(f"{path}: [runner].labels must be a list of names")
     spec["apps_tree"] = host
     rep = spec.get("replica")
     if rep:
@@ -297,7 +324,8 @@ def wait_ssh(host: str, minutes: int = 15) -> None:
     deadline = time.time() + minutes * 60
     opts = ["-o", "StrictHostKeyChecking=accept-new"]
     while time.time() < deadline:
-        r = subprocess.run(SSH + opts + [host, "true"], capture_output=True, text=True)
+        argv = ssh_argv(host)
+        r = subprocess.run(argv[:-1] + opts + [argv[-1], "true"], capture_output=True, text=True)
         if r.returncode == 0:
             print(f"ssh {host}: up")
             return
@@ -657,6 +685,10 @@ def verify(spec: dict) -> int:
         online = [e for e in entries if e.get("status") in ("online", "idle", "active")]
         check("Gitea runner online", len(entries) == 1 and bool(online),
               ", ".join(f"id {e['id']} {e.get('status')} {[l['name'] for l in e.get('labels', [])]}" for e in entries))
+        want = spec["runner"].get("labels")
+        if want:
+            have = sorted({l["name"].split(":")[0] for e in entries for l in e.get("labels", [])})
+            check("Gitea runner labels are the spec's", have == sorted(want), f"{have} vs {sorted(want)}")
     for e in spec.get("external", []):
         if e.get("manual"):
             check(f"external {e['name']}", False, "manual step, not automated yet")
@@ -674,7 +706,7 @@ def plan(spec: dict) -> int:
         print(f"  live: {live.get('name')} on {live.get('node')} ({live.get('status')}), "
               f"{live.get('maxmem', 0) // 2**20} MB, {live.get('maxcpu')} vCPU")
         diffs = []
-        if live.get("node") != vm["node"]:
+        if live.get("node") != vm["node"] and not vm.get("disposable"):   # a disposable host may be on either node
             diffs.append(f"node {live.get('node')} != {vm['node']}")
         if live.get("maxmem", 0) // 2**20 != vm["memory_mb"]:
             diffs.append("memory")
@@ -703,6 +735,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--only", choices=PHASES)
     ap.add_argument("--recreate", action="store_true")
     ap.add_argument("--confirm")
+    ap.add_argument("--node", choices=NODES, help="create the VM on this node (a disposable spec only)")
     # Intermixed: plain parse_args() fills `args` before the first option and then refuses a VAR
     # after it, so `secrets push --apply VAR` (the documented order) was a usage error.
     a = ap.parse_intermixed_args(argv)
@@ -714,7 +747,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main() -> int:
     a = parse_args()
     try:
-        spec = load_spec(a.host)
+        spec = load_spec(a.host, a.node)
+        if spec.get("hold") and a.action in ("build", "destroy"):
+            raise Fail(f"{a.host} is on hold: {spec['hold']}")
         if a.action == "plan":
             return plan(spec)
         if a.action == "verify":

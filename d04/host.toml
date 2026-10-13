@@ -1,8 +1,11 @@
-# d04: the build test host (asyla hub decisions/host-build-and-recovery.md). Created and destroyed
-# as testing needs (operator pre-approved, 2026-10-07). Its runner carries only the label
-# build-test, so it never takes a real job.
-# The hello test (d04/apps/hello). To rehearse a production host instead, add [replica] of = "dNN"
-# (scripts/build_host.py docstring; the d03 replica of 2026-10-09 is in git history, 4decdd6..fad6650).
+# d04: theOrg's forge host, Gitea and its registry only (asyla hub decisions/host-layout.md).
+# NOT COMPLETE: what is left of the build test host, whose role moved to test01 on 2026-10-13.
+# The production spec ([vm] on vmh01, Gitea's app and secrets, its proxy and tunnel, the runner's
+# labels) comes with step 3 of that decision, proven on test01 first. Until then `hold` makes
+# build_host.py refuse to build it. d04 is not disposable: a build or a destroy needs
+# --confirm d04 and the operator's approval of the exact action.
+hold = "the production spec is not written yet (asyla hub decisions/host-layout.md, Consequences 3)"
+
 [vm]
 node = "vmh02"
 vmid = 104
@@ -13,20 +16,9 @@ ip = "10.0.0.63/24"
 os_disk = { storage = "local-data2", size = "32G" }
 data_disk = { storage = "local-data2", size = "16G" }   # /mnt/docker
 cloudinit_storage = "local-data2"
-disposable = true          # build_host.py may destroy and recreate it without --confirm
 
 [setup]
 steps = ["systemConfig.sh", "nfs.sh", "docker.sh"]
 
-[[secret]]
-var = "D04_HELLO_ENV"
-path = "/home/docker/scripts/d04/apps/hello/.env"
-owner = "docker:asyla"
-mode = "600"
-
-[[app]]
-name = "hello"
-verify = ["verify"]
-
 [runner]
-enabled = true
+enabled = false

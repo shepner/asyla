@@ -41,5 +41,5 @@ replace it from there when the contract changes, do not edit it here.
   one (it asks for the newest manifest, never the tarball), the mirror directory is there, and the
   newest pair has the sha256 and size its manifest recorded. Writes nothing.
 - **Tests:** `scripts/tests/test_ms_chronicle_backup.sh` (offline, against a local stub of the
-  contract) and `scripts/tests/test_ms_chronicle_backup_d04.sh` (the same cases on d04, into a temp
+  contract) and `scripts/tests/test_ms_chronicle_backup_test01.sh` (the same cases on test01, into a temp
   directory; never the real mirror).

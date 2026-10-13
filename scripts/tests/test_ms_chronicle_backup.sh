@@ -7,7 +7,7 @@
 #
 #   scripts/tests/test_ms_chronicle_backup.sh
 #
-# test_ms_chronicle_backup_d04.sh runs this same file on d04. Exit 0 when every case passes.
+# test_ms_chronicle_backup_test01.sh runs this same file on test01. Exit 0 when every case passes.
 
 set -uo pipefail
 

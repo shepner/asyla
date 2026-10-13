@@ -26,7 +26,8 @@ def _no_contact(*a, **kw):
 build_host.subprocess.run = _no_contact
 build_host.urllib.request.urlopen = _no_contact
 
-DEFAULTS = {"args": [], "apply": False, "start": None, "only": None, "recreate": False, "confirm": None}
+DEFAULTS = {"args": [], "apply": False, "start": None, "only": None, "recreate": False, "confirm": None,
+            "node": None}
 
 
 def parse(line: str) -> dict | str:
@@ -58,6 +59,23 @@ def refused(name: str, line: str, needle: str) -> bool:
     return good
 
 
+def spec_case(name: str, host: str, node: str | None, want: str, refused: bool = False) -> bool:
+    """load_spec(host, node) from this checkout's specs. `want` is the node the spec ends up with,
+    or with refused=True a piece of the Fail message. Reads files only."""
+    try:
+        got, failed = build_host.load_spec(host, node)["vm"]["node"], False
+    except build_host.Fail as e:
+        got, failed = str(e), True
+    good = failed == refused and (want in got if refused else got == want)
+    print(f"{'ok  ' if good else 'FAIL'}  {name}: load_spec({host!r}, {node!r}) -> {'Fail: ' if failed else ''}{got}")
+    return good
+
+
+def check(name: str, good: bool, detail: str = "") -> bool:
+    print(f"{'ok  ' if good else 'FAIL'}  {name}{': ' + detail if detail and not good else ''}")
+    return good
+
+
 def documented(name: str, text: str) -> bool:
     good = text in build_host.__doc__
     print(f"{'ok  ' if good else 'FAIL'}  {name}: {text!r} in the Usage block")
@@ -85,9 +103,9 @@ results = [
          "d03 secrets push --apply",
          "--apply d03 secrets push"),
     same("secrets install, one VAR, applied",
-         {"host": "d04", "action": "secrets", "args": ["install", "VAR_A"], "apply": True},
-         "d04 secrets install --apply VAR_A",
-         "d04 secrets install VAR_A --apply"),
+         {"host": "test01", "action": "secrets", "args": ["install", "VAR_A"], "apply": True},
+         "test01 secrets install --apply VAR_A",
+         "test01 secrets install VAR_A --apply"),
     # Without --apply nothing turns it on, whatever the VAR names are.
     same("secrets check, one VAR, dry",
          {"host": "d03", "action": "secrets", "args": ["check", "VAR_A"]},
@@ -96,32 +114,54 @@ results = [
          {"host": "d03", "action": "secrets", "args": ["push"]},
          "d03 secrets push"),
     # The other Usage lines still parse as before.
-    same("plan", {"host": "d04", "action": "plan"}, "d04 plan"),
-    same("verify", {"host": "d04", "action": "verify"}, "d04 verify"),
-    same("scripts-check", {"host": "d04", "action": "scripts-check"}, "d04 scripts-check"),
-    same("token", {"host": "d04", "action": "token", "apply": True}, "d04 token --apply", "--apply d04 token"),
-    same("build, dry", {"host": "d04", "action": "build"}, "d04 build"),
+    same("plan", {"host": "test01", "action": "plan"}, "test01 plan"),
+    same("verify", {"host": "test01", "action": "verify"}, "test01 verify"),
+    same("scripts-check", {"host": "test01", "action": "scripts-check"}, "test01 scripts-check"),
+    same("token", {"host": "test01", "action": "token", "apply": True}, "test01 token --apply", "--apply test01 token"),
+    same("build, dry", {"host": "test01", "action": "build"}, "test01 build"),
     same("build --recreate --apply",
-         {"host": "d04", "action": "build", "recreate": True, "apply": True},
-         "d04 build --recreate --apply",
-         "d04 build --apply --recreate",
-         "--recreate --apply d04 build"),
-    same("build --from", {"host": "d04", "action": "build", "apply": True, "start": "setup"},
-         "d04 build --apply --from setup"),
-    same("build --only", {"host": "d04", "action": "build", "only": "verify"}, "d04 build --only verify"),
+         {"host": "test01", "action": "build", "recreate": True, "apply": True},
+         "test01 build --recreate --apply",
+         "test01 build --apply --recreate",
+         "--recreate --apply test01 build"),
+    same("build --from", {"host": "test01", "action": "build", "apply": True, "start": "setup"},
+         "test01 build --apply --from setup"),
+    same("build --only", {"host": "test01", "action": "build", "only": "verify"}, "test01 build --only verify"),
     same("build --recreate --confirm",
          {"host": "d03", "action": "build", "recreate": True, "confirm": "d03"},
          "d03 build --recreate --confirm d03"),
-    same("destroy", {"host": "d04", "action": "destroy", "apply": True, "confirm": "d04"},
-         "d04 destroy --apply --confirm d04"),
+    same("destroy", {"host": "test01", "action": "destroy", "apply": True, "confirm": "test01"},
+         "test01 destroy --apply --confirm test01"),
     # Still refused: the intermixed parser must not start accepting stray words.
-    refused("a stray word after build", "d04 build apply", "build takes no further arguments: apply"),
-    refused("a stray word after an option", "d04 build --only verify extra", "build takes no further arguments: extra"),
-    refused("a stray word after destroy", "d04 destroy --apply d03", "destroy takes no further arguments: d03"),
+    refused("a stray word after build", "test01 build apply", "build takes no further arguments: apply"),
+    refused("a stray word after an option", "test01 build --only verify extra", "build takes no further arguments: extra"),
+    refused("a stray word after destroy", "test01 destroy --apply d03", "destroy takes no further arguments: d03"),
     refused("an unknown option", "d03 secrets push --aply VAR_A", "unrecognized arguments: --aply"),
     refused("an unknown action", "d03 secret push", "invalid choice"),
-    refused("an unknown phase", "d04 build --only nothing", "invalid choice"),
-    refused("no action", "d04", "required"),
+    refused("an unknown phase", "test01 build --only nothing", "invalid choice"),
+    refused("no action", "test01", "required"),
+    # --node: the test host may be built on either node; a production host's node is its spec's.
+    documented("usage, --node", "[--node NODE]"),
+    same("build --node", {"host": "test01", "action": "build", "recreate": True, "apply": True, "node": "vmh02"},
+         "test01 build --recreate --apply --node vmh02",
+         "--node vmh02 test01 build --apply --recreate"),
+    refused("an unknown node", "test01 build --node vmh09", "invalid choice"),
+    spec_case("test01 defaults to its spec's node", "test01", None, "vmh01"),
+    spec_case("test01 on the other node", "test01", "vmh02", "vmh02"),
+    spec_case("a production host keeps its node", "d03", "vmh02", "is not disposable", refused=True),
+    spec_case("a production host, its own node named", "d03", "vmh01", "vmh01"),
+    # The test role is test01's alone: no other spec may be recreated or destroyed without --confirm.
+    check("only test01 is disposable",
+          sorted(p.parent.name for p in build_host.REPO.glob("*/host.toml")
+                 if build_host.tomllib.loads(p.read_text()).get("vm", {}).get("disposable")) == ["test01"]),
+    check("test01 is VMID 901 at 10.0.0.69", (lambda vm: (vm["vmid"], vm["ip"]) == (901, "10.0.0.69/24"))(
+        build_host.load_spec("test01")["vm"])),
+    check("d04 is on hold until its production spec exists", bool(build_host.load_spec("d04").get("hold"))),
+    # Guests are reached as docker@HOST with the build's key; a node target is passed through.
+    check("ssh to a guest names the user and the key",
+          build_host.ssh_argv("test01")[-3:] == ["-i", str(build_host.SSH_KEY), "docker@test01"]),
+    check("ssh to a node is unchanged", build_host.ssh_argv("root@vmh01")[-1] == "root@vmh01"
+          and "-i" not in build_host.ssh_argv("root@vmh01")),
 ]
 print("all cases passed" if all(results) else f"{results.count(False)} case(s) failed")
 sys.exit(0 if all(results) else 1)

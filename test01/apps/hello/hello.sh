@@ -1,8 +1,8 @@
 #!/bin/bash
-# hello on d04: the build test app. Usage: hello.sh [switch ...]  (up|down|restart|backup|restore|verify|logs)
+# hello on test01: the build test app. Usage: hello.sh [switch ...]  (up|down|restart|backup|restore|verify|logs)
 # Data: ${DOCKER_DL}/hello/www (index.html with a marker the first `up` writes). Secret: .env
-# HELLO_GREETING (GitLab variable D04_HELLO_ENV), shown in the page. Backup: one rsync mirror at
-# ${DOCKER_D1}/hello-d04/mirror.
+# HELLO_GREETING (GitLab variable TEST01_HELLO_ENV), shown in the page. Backup: one rsync mirror at
+# ${DOCKER_D1}/hello-test01/mirror.
 
 set -euo pipefail
 
@@ -14,7 +14,7 @@ COMPOSE_FILE="$SCRIPT_DIR/compose.yml"
 DOCKER_DL="${DOCKER_DL:-/mnt/docker}"
 DOCKER_D1="${DOCKER_D1:-/mnt/nas/data1/docker}"
 APP_ROOT="$DOCKER_DL/hello"
-BACKUP_DIR="$DOCKER_D1/hello-d04/mirror"
+BACKUP_DIR="$DOCKER_D1/hello-test01/mirror"
 export DOCKER_DL DOCKER_UID DOCKER_GID
 
 env_value() { sed -n "s/^$1=//p" "$SCRIPT_DIR/.env" 2>/dev/null | tail -1; }
