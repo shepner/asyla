@@ -12,6 +12,7 @@ Usage:
   build_host.py HOST token [--apply]           # deploy token file alone, then a GitLab read check
   build_host.py HOST scripts-check             # read-only: ~/scripts vs GitLab master, file by file
   build_host.py HOST secrets check|push|install [--apply] [VAR ...]
+  build_host.py HOST secrets copy [--apply] VAR FROM_VAR   # VAR created in GitLab from FROM_VAR's value
   build_host.py HOST destroy --apply [--confirm HOST]
 
 Build phases, in order (each is safe to re-run):
@@ -468,6 +469,9 @@ def in_app_data(s: dict) -> bool:
 def secrets_cmd(spec: dict, action: str, apply: bool, only: list[str], data: bool | None = None) -> int:
     """data: None = every secret, False = those outside DATA_ROOT, True = those under it."""
     host, bad = spec["host"], 0
+    unknown = sorted(set(only) - {s["var"] for s in spec.get("secret", [])})
+    if unknown:     # a mistyped VAR used to match nothing and exit 0
+        raise Fail(f"{host}: not a [[secret]] of its spec: {', '.join(unknown)}")
     items = [s for s in spec.get("secret", []) if (not only or s["var"] in only)
              and (data is None or in_app_data(s) == data)]
     for s in items:
@@ -513,6 +517,29 @@ def secrets_cmd(spec: dict, action: str, apply: bool, only: list[str], data: boo
                           f"sudo sh -c 'umask 077; cat > {p}.tmp' && sudo chown {owner} {p}.tmp && "
                           f"sudo chmod {mode} {p}.tmp && sudo mv {p}.tmp {p}", stdin=g)
     return 1 if bad and action != "install" else (1 if bad else 0)
+
+
+def secret_copy(spec: dict, var: str, src: str, apply: bool) -> int:
+    """Create the spec's secret VAR in GitLab with the value of another variable, for a secret
+    renamed with its host (D04_HELLO_ENV to TEST01_HELLO_ENV). Never overwrites: a VAR that
+    exists with another value is refused. The source is left as it is."""
+    if var not in {s["var"] for s in spec.get("secret", [])}:
+        raise Fail(f"{spec['host']}: not a [[secret]] of its spec: {var}")
+    s, g = gitlab_secret(src), gitlab_secret(var)
+    if s is None:
+        raise Fail(f"GitLab variable {src} does not exist")
+    if g is not None:
+        if g != s:
+            raise Fail(f"GitLab variable {var} exists with another value ({digest(g)} vs {src} {digest(s)}); not overwritten")
+        print(f"  {var}: in sync with {src} ({digest(s)})")
+        return 0
+    print(f"  {var}: create from {src} ({len(s)} bytes, {digest(s)})")
+    if apply:
+        code, _ = gitlab("POST", var_path("").rstrip("/"), {"key": var, "value": s, "variable_type": "file",
+                                                             "protected": True, "masked": False, "raw": True})
+        if code not in (200, 201):
+            raise Fail(f"GitLab variable {var}: HTTP {code}")
+    return 0
 
 
 # ---------------------------------------------------------------- apps, external, runner
@@ -729,7 +756,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("host")
     ap.add_argument("action", choices=["plan", "build", "verify", "token", "scripts-check", "secrets", "destroy"])
-    ap.add_argument("args", nargs="*", help="for the secrets action: check, push or install, then optional VAR names")
+    ap.add_argument("args", nargs="*", help="for the secrets action: check, push or install, then optional VAR "
+                                            "names; or copy VAR FROM_VAR")
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--from", dest="start", choices=PHASES)
     ap.add_argument("--only", choices=PHASES)
@@ -772,8 +800,12 @@ def main() -> int:
                     print(f"not usable yet: {e}")
             return 0
         if a.action == "secrets":
+            if a.args and a.args[0] == "copy":
+                if len(a.args) != 3:
+                    raise Fail("secrets copy needs VAR FROM_VAR")
+                return secret_copy(spec, a.args[1], a.args[2], a.apply)
             if not a.args or a.args[0] not in ("check", "push", "install"):
-                raise Fail("secrets needs check|push|install")
+                raise Fail("secrets needs check|push|install, or copy VAR FROM_VAR")
             return secrets_cmd(spec, a.args[0], a.apply, a.args[1:])
         if a.action == "destroy":
             live = find_vm(spec["vm"]["vmid"])

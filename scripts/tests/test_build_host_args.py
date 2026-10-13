@@ -71,6 +71,18 @@ def spec_case(name: str, host: str, node: str | None, want: str, refused: bool =
     return good
 
 
+def fails(name: str, needle: str, call) -> bool:
+    """`call` raises build_host.Fail naming `needle`, without reaching a host or GitLab."""
+    try:
+        call()
+        got = "no Fail"
+    except build_host.Fail as e:
+        got = str(e)
+    good = needle in got
+    print(f"{'ok  ' if good else 'FAIL'}  {name}: {got}")
+    return good
+
+
 def check(name: str, good: bool, detail: str = "") -> bool:
     print(f"{'ok  ' if good else 'FAIL'}  {name}{': ' + detail if detail and not good else ''}")
     return good
@@ -140,6 +152,16 @@ results = [
     refused("an unknown action", "d03 secret push", "invalid choice"),
     refused("an unknown phase", "test01 build --only nothing", "invalid choice"),
     refused("no action", "test01", "required"),
+    # secrets copy, and a VAR that is not in the spec (it used to match nothing and exit 0).
+    documented("usage, secrets copy", "build_host.py HOST secrets copy [--apply] VAR FROM_VAR"),
+    same("secrets copy, applied",
+         {"host": "test01", "action": "secrets", "args": ["copy", "TEST01_HELLO_ENV", "D04_HELLO_ENV"], "apply": True},
+         "test01 secrets copy --apply TEST01_HELLO_ENV D04_HELLO_ENV",
+         "test01 secrets copy TEST01_HELLO_ENV D04_HELLO_ENV --apply"),
+    fails("an unknown VAR is refused before any call", "not a [[secret]] of its spec: NOPE",
+          lambda: build_host.secrets_cmd(build_host.load_spec("test01"), "check", False, ["NOPE"])),
+    fails("secrets copy to a VAR outside the spec", "not a [[secret]] of its spec: D04_HELLO_ENV",
+          lambda: build_host.secret_copy(build_host.load_spec("test01"), "D04_HELLO_ENV", "TEST01_HELLO_ENV", True)),
     # --node: the test host may be built on either node; a production host's node is its spec's.
     documented("usage, --node", "[--node NODE]"),
     same("build --node", {"host": "test01", "action": "build", "recreate": True, "apply": True, "node": "vmh02"},
