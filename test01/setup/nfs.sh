@@ -86,22 +86,36 @@ for share in data1 data2; do
 done
 systemctl daemon-reload
 
-# Mount NFS shares now (if network is available)
-log_info "Attempting to mount NFS shares..."
+# Mount the shares now. A share that does not mount fails this step, after a minute of tries for
+# a network that is still coming up. It used to be a warning and exit 0: the build then ran on
+# through restore and apps, which would start a rebuilt host's apps on empty data (test01,
+# 2026-10-14: the NAS's export list did not have the host's address; only verify noticed).
+log_info "Mounting NFS shares..."
+failed=""
 for mount_point in "/mnt/nas/data1/docker" "/mnt/nas/data2/docker"; do
-    # Skip if already mounted
     if mountpoint -q "$mount_point" 2>/dev/null; then
         log_info "✅ $mount_point already mounted"
         continue
     fi
-    
-    # Try to mount
-    if mount "$mount_point" 2>/dev/null; then
+    err=""
+    for attempt in 1 2 3 4 5 6; do
+        if err=$(mount "$mount_point" 2>&1); then
+            err=""
+            break
+        fi
+        [ "$attempt" -eq 6 ] || sleep 10
+    done
+    if [ -z "$err" ] && mountpoint -q "$mount_point"; then
         log_info "✅ Successfully mounted $mount_point"
     else
-        log_warn "⚠️  Could not mount $mount_point (network may not be ready; will mount on boot)"
+        log_error "Could not mount $mount_point: ${err:-mount reported success but nothing is mounted there}"
+        failed="$failed $mount_point"
     fi
 done
+if [ -n "$failed" ]; then
+    log_error "Not mounted:$failed. Is this host's address in the NAS's NFS export for each share? Stopping: restore and apps need the NAS."
+    exit 1
+fi
 
 # Clean up package cache
 log_info "Cleaning up package cache..."

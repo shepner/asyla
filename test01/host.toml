@@ -15,6 +15,7 @@ os_disk = { storage = "local-data2", size = "32G" }     # local-data2 exists on 
 data_disk = { storage = "local-data2", size = "16G" }   # /mnt/docker
 cloudinit_storage = "local-data2"
 disposable = true          # build_host.py may destroy and recreate it without --confirm
+startup = "order=90"       # after every production VM when a node boots; set at create, checked by verify
 
 [setup]
 steps = ["systemConfig.sh", "nfs.sh", "docker.sh"]

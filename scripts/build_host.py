@@ -26,10 +26,21 @@ Build phases, in order (each is safe to re-run):
   setup      HOST/setup/<step> for each [setup].steps, as root
   restore    `<app>.sh restore` for each app whose data is empty (from its NAS mirror), then the
              secrets under /mnt/docker/ (a restore refuses a non-empty data dir)
-  apps       each app's start commands (default: up), in spec order
+  apps       each app's start commands (default: up), in spec order, except the apps marked
+             after_external = true
   external   other repos' deploy commands from the workstation; `manual` entries are listed
+  late       the apps marked after_external = true: those that need this host's proxy or tunnel
+             up before they start (an app that pulls its images through the proxy)
   runner     Gitea runner: delete this host's stale entry, install, register, up
   verify     mounts, every app's verify (or running containers), runner online
+
+Pre-flight: a build that includes the vm phase first compares every [[secret]] file on the
+live host (for a replica: on its source) with its GitLab variable, by hash, and stops when one
+differs or exists on the host only: the rebuild would install another value than the host runs
+with, or none. A host that does not answer (a first build) has nothing to compare.
+
+Start order: an optional [vm].startup (Proxmox's form, "order=N[,up=S][,down=S]") is set when the
+VM is created and checked by verify.
 
 Node: [vm].node is where the VM is created. --node NODE overrides it for a spec with
 disposable = true only (the test host may run on either node); a production host's node is its
@@ -56,6 +67,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -82,7 +94,8 @@ SSH_KEY = SSH_KEY_PUB.with_suffix("")
 GUEST_USER = "docker"
 DEPLOY_ENV = "/etc/asyla/asyla-hosts.env"
 DATA_ROOT = "/mnt/docker/"
-PHASES = ("vm", "bootstrap", "disk", "secrets", "setup", "restore", "apps", "external", "runner", "verify")
+PHASES = ("vm", "bootstrap", "disk", "secrets", "setup", "restore", "apps", "external", "late", "runner", "verify")
+STARTUP_FORM = re.compile(r"order=\d+(,up=\d+)?(,down=\d+)?")
 SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
 
 
@@ -211,6 +224,8 @@ def load_spec(host: str, node: str | None = None) -> dict:
         if not vm.get("disposable"):
             raise Fail(f"{host} is not disposable: its node is its spec's ({vm['node']}), not --node {node}")
         vm["node"] = node
+    if "startup" in vm and not (isinstance(vm["startup"], str) and STARTUP_FORM.fullmatch(vm["startup"])):
+        raise Fail(f"{path}: [vm].startup must be order=N[,up=S][,down=S], not {vm['startup']!r}")
     labels = spec.get("runner", {}).get("labels", [])
     if not isinstance(labels, list) or not all(isinstance(l, str) and l for l in labels):
         raise Fail(f"{path}: [runner].labels must be a list of names")
@@ -226,7 +241,9 @@ def load_spec(host: str, node: str | None = None) -> dict:
         unknown = excl - {s["var"] for s in src_spec.get("secret", [])}
         if unknown:
             raise Fail(f"{path}: exclude_secrets not in {src}: {sorted(unknown)}")
-        spec["secret"] = [s for s in src_spec.get("secret", []) if s["var"] not in excl] + spec.get("secret", [])
+        # live_on: where the running copy of a secret file is (the pre-flight compares it there).
+        spec["secret"] = [{**s, "live_on": src} for s in src_spec.get("secret", []) if s["var"] not in excl] \
+            + spec.get("secret", [])
         spec["app"] = src_spec.get("app", [])
         spec["apps_tree"] = src
         if spec.get("external"):
@@ -283,7 +300,7 @@ def phase_vm(spec: dict, apply: bool, recreate: bool, confirm: str | None) -> No
         f"qm create {vmid} --name {host} --sockets {vm['sockets']} --cores {vm['cores']} "
         f"--memory {vm['memory_mb']} --ostype l26 --scsihw virtio-scsi-pci --vga std "
         f"--net0 virtio,bridge={BRIDGE},firewall=1,tag={VLAN} --onboot 1 "
-        f"--agent 1,fstrim_cloned_disks=1",
+        f"--agent 1,fstrim_cloned_disks=1" + (f" --startup {vm['startup']}" if vm.get("startup") else ""),
         f"{q} --scsi0 {d['storage']}:0,import-from={IMAGE},discard=on,ssd=1",
         f"qm resize {vmid} scsi0 {d['size']}",
         f"{q} --scsi1 {vm['cloudinit_storage']}:cloudinit",
@@ -478,9 +495,7 @@ def secrets_cmd(spec: dict, action: str, apply: bool, only: list[str], data: boo
         key, path = s["var"], s["path"]
         if action == "check":
             g, h = gitlab_secret(key), host_secret(host, path)
-            state = ("in sync" if g == h else "DIFFERS") if g is not None and h is not None else \
-                    ("MISSING in GitLab" if g is None and h is not None else
-                     "MISSING on host" if h is None and g is not None else "MISSING everywhere")
+            state = secret_state(g, h)
             bad += state != "in sync"
             print(f"  {key:44} {state:18} gitlab {digest(g)} host {digest(h)}  {path}")
         elif action == "push":
@@ -517,6 +532,43 @@ def secrets_cmd(spec: dict, action: str, apply: bool, only: list[str], data: boo
                           f"sudo sh -c 'umask 077; cat > {p}.tmp' && sudo chown {owner} {p}.tmp && "
                           f"sudo chmod {mode} {p}.tmp && sudo mv {p}.tmp {p}", stdin=g)
     return 1 if bad and action != "install" else (1 if bad else 0)
+
+
+def secret_state(g: str | None, h: str | None) -> str:
+    if g is not None and h is not None:
+        return "in sync" if g == h else "DIFFERS"
+    return "MISSING in GitLab" if h is not None else "MISSING on host" if g is not None else "MISSING everywhere"
+
+
+def preflight_secrets(spec: dict, apply: bool) -> None:
+    """Before a build that may replace a host: each [[secret]] file where it is live (the host, or
+    a replica's source) against its GitLab variable, by hash. A file that differs from GitLab, or
+    that GitLab does not have, stops the build: the rebuilt host would get another value than
+    the one in use, or none. A file missing on the host is installed by the build. Reads the
+    secret files (sudo cat over SSH) only with --apply; prints hashes, never a value."""
+    host = spec["host"]
+    by_host: dict[str, list[dict]] = {}
+    for s in spec.get("secret", []):
+        by_host.setdefault(s.get("live_on", host), []).append(s)
+    bad = []
+    for where, items in by_host.items():
+        print(f"pre-flight: {len(items)} secret file(s) on {where} against GitLab, by hash")
+        if not apply:
+            continue
+        if ssh(where, "true", check=False, timeout=30).returncode != 0:
+            if where != host:
+                raise Fail(f"{where} does not answer: its secret files cannot be compared with GitLab")
+            print(f"  {where} does not answer (a first build): nothing to compare")
+            continue
+        for s in items:
+            g, h = gitlab_secret(s["var"]), host_secret(where, s["path"])
+            state = secret_state(g, h)
+            print(f"  {s['var']:44} {state:18} gitlab {digest(g)} host {digest(h)}  {s['path']}")
+            if state not in ("in sync", "MISSING on host"):
+                bad.append(s["var"])
+    if bad:
+        raise Fail(f"pre-flight: {', '.join(bad)}: the host's file and GitLab disagree; settle it first "
+                   f"(`secrets check`, then `secrets push` once the host's file is known to be the right one)")
 
 
 def secret_copy(spec: dict, var: str, src: str, apply: bool) -> int:
@@ -570,12 +622,19 @@ def phase_restore(spec: dict, apply: bool) -> None:
         raise Fail("a secret is missing in GitLab")
 
 
-def phase_apps(spec: dict, apply: bool) -> None:
+def apps_in(spec: dict, late: bool) -> list[dict]:
+    """The apps of one start phase: `apps` (before the externals) or `late` (after them)."""
+    return [a for a in spec.get("app", []) if bool(a.get("after_external")) == late]
+
+
+def phase_apps(spec: dict, apply: bool, late: bool = False) -> None:
     host = spec["host"]
     if not starts_apps(spec):
         print(f"replica of {spec['apps_tree']}: start_apps = false; no app is started")
         return
-    for a in spec.get("app", []):
+    if late and not apps_in(spec, True):
+        print("no app is marked after_external")
+    for a in apps_in(spec, late):
         cmds = a.get("start", ["up"])
         if not cmds:
             print(f"start {a['name']}: nothing to start (spec)")
@@ -669,6 +728,13 @@ def verify(spec: dict) -> int:
         check(f"mount {m}", m in mounts)
     if "smb.sh" in spec.get("setup", {}).get("steps", []):
         check("mount /mnt/nas/data1/media", "/mnt/nas/data1/media" in mounts)
+    r = ssh(host, "command -v screen", check=False)   # host-maintenance runs its tasks in screen
+    check("screen is installed", r.returncode == 0)
+    if spec["vm"].get("startup"):
+        live = find_vm(spec["vm"]["vmid"])
+        r = ssh(root(live["node"]), f"qm config {spec['vm']['vmid']}", check=False) if live else None
+        have = next((l.split(": ", 1)[1] for l in (r.stdout.splitlines() if r else []) if l.startswith("startup: ")), "none")
+        check("VM start order is the spec's", have == spec["vm"]["startup"], f"{have} vs {spec['vm']['startup']}")
     try:
         check("deploy token reads GitLab", bool(check_token(host)))
     except Fail as e:
@@ -826,6 +892,9 @@ def main() -> int:
         if not a.apply:
             print("DRY RUN (no --apply): showing what each phase would do")
         gaps = 0
+        if "vm" in phases:
+            step("pre-flight")
+            preflight_secrets(spec, a.apply)
         for p in phases:
             step(p)
             if p == "vm":
@@ -846,6 +915,8 @@ def main() -> int:
                 phase_apps(spec, a.apply)
             elif p == "external":
                 gaps += phase_external(spec, a.apply)
+            elif p == "late":
+                phase_apps(spec, a.apply, late=True)
             elif p == "runner":
                 phase_runner(spec, a.apply)
             elif p == "verify" and a.apply:

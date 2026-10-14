@@ -88,6 +88,55 @@ def check(name: str, good: bool, detail: str = "") -> bool:
     return good
 
 
+def temp_specs(specs: dict[str, str]):
+    """load_spec() against throwaway specs: {host: host.toml text}. Returns a loader; files only."""
+    import tempfile
+    d = Path(tempfile.mkdtemp(prefix="build-host-spec-"))
+    for host, text in specs.items():
+        (d / host).mkdir()
+        (d / host / "host.toml").write_text(text)
+
+    def load(host: str) -> dict:
+        real, build_host.REPO = build_host.REPO, d
+        try:
+            return build_host.load_spec(host)
+        finally:
+            build_host.REPO = real
+    return load
+
+
+VM = ('[vm]\nnode = "vmh01"\nvmid = 999\nsockets = 1\ncores = 1\nmemory_mb = 1024\nip = "10.0.0.250/24"\n'
+      'os_disk = { storage = "local-data2", size = "8G" }\ncloudinit_storage = "local-data2"\n')
+SECRET = '[[secret]]\nvar = "{var}"\npath = "/home/docker/{var}.env"\n'
+
+
+def preflight(name: str, spec: dict, gitlab: dict, on_host: dict, up: set, want: str | None) -> bool:
+    """preflight_secrets(spec, apply=True) with GitLab and the hosts replaced by dicts:
+    gitlab {var: value}, on_host {(host, path): value}, up = the hosts that answer ssh.
+    want: None when the build may go on, else a piece of the Fail message."""
+    class R:
+        def __init__(self, rc): self.returncode, self.stdout = rc, ""
+    real = build_host.ssh, build_host.gitlab_secret, build_host.host_secret
+    build_host.ssh = lambda target, command, **kw: R(0 if target in up else 255)
+    build_host.gitlab_secret = gitlab.get
+    build_host.host_secret = lambda host, path: on_host.get((host, path))
+    out = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out):
+            build_host.preflight_secrets(spec, True)
+        got = None
+    except build_host.Fail as e:
+        got = str(e)
+    finally:
+        build_host.ssh, build_host.gitlab_secret, build_host.host_secret = real
+    good = (got is None) if want is None else (got is not None and want in got)
+    leaked = [v for v in list(gitlab.values()) + list(on_host.values()) if v and v in out.getvalue() + (got or "")]
+    good = good and not leaked
+    print(f"{'ok  ' if good else 'FAIL'}  pre-flight, {name}: {'goes on' if got is None else 'Fail: ' + got[:70]}"
+          + (" (a VALUE was printed)" if leaked else ""))
+    return good
+
+
 def documented(name: str, text: str) -> bool:
     good = text in build_host.__doc__
     print(f"{'ok  ' if good else 'FAIL'}  {name}: {text!r} in the Usage block")
@@ -184,6 +233,47 @@ results = [
           build_host.ssh_argv("test01")[-3:] == ["-i", str(build_host.SSH_KEY), "docker@test01"]),
     check("ssh to a node is unchanged", build_host.ssh_argv("root@vmh01")[-1] == "root@vmh01"
           and "-i" not in build_host.ssh_argv("root@vmh01")),
+    # Start order: apps marked after_external start in the `late` phase, after the externals.
+    documented("usage, the late phase", "late       the apps marked after_external = true"),
+    check("late comes after external and before runner",
+          build_host.PHASES.index("external") < build_host.PHASES.index("late") < build_host.PHASES.index("runner")),
+    same("build --only late", {"host": "test01", "action": "build", "only": "late"}, "test01 build --only late"),
+    check("apps: the unmarked apps, in spec order", [a["name"] for a in build_host.apps_in(
+        {"app": [{"name": "a"}, {"name": "b", "after_external": True}, {"name": "c"}]}, False)] == ["a", "c"]),
+    check("late: the marked apps only", [a["name"] for a in build_host.apps_in(
+        {"app": [{"name": "a"}, {"name": "b", "after_external": True}, {"name": "c"}]}, True)] == ["b"]),
+    check("no production spec marks an app late yet (each needs approval first)",
+          not any(a.get("after_external") for h in ("d01", "d02", "d03") if (build_host.REPO / h / "host.toml").is_file()
+                  for a in build_host.load_spec(h).get("app", []))),
+    # [vm].startup: Proxmox's form only, since it goes into a qm command line.
+    check("test01 has a start order", build_host.load_spec("test01")["vm"].get("startup") == "order=90"),
+    check("startup with delays is accepted",
+          temp_specs({"x": VM + 'startup = "order=15,up=30,down=60"\n'})("x")["vm"]["startup"] == "order=15,up=30,down=60"),
+    fails("startup with a shell character is refused", "[vm].startup must be",
+          lambda: temp_specs({"x": VM + 'startup = "order=1; reboot"\n'})("x")),
+    fails("startup that is not a string is refused", "[vm].startup must be",
+          lambda: temp_specs({"x": VM + 'startup = 15\n'})("x")),
+    # The pre-flight: host files against GitLab before a build that may replace the host.
+    check("secret states", [build_host.secret_state(g, h) for g, h in (("a", "a"), ("a", "b"), (None, "b"), ("a", None), (None, None))]
+          == ["in sync", "DIFFERS", "MISSING in GitLab", "MISSING on host", "MISSING everywhere"]),
+    check("pre-flight, dry: reaches no host and no GitLab",
+          build_host.preflight_secrets(build_host.load_spec("d03"), False) is None),
+    preflight("in sync", temp_specs({"x": VM + SECRET.format(var="A")})("x"),
+              {"A": "s3cret-one"}, {("x", "/home/docker/A.env"): "s3cret-one"}, {"x"}, None),
+    preflight("the host's file differs", temp_specs({"x": VM + SECRET.format(var="A")})("x"),
+              {"A": "s3cret-one"}, {("x", "/home/docker/A.env"): "s3cret-two"}, {"x"}, "pre-flight: A:"),
+    preflight("on the host only", temp_specs({"x": VM + SECRET.format(var="A")})("x"),
+              {}, {("x", "/home/docker/A.env"): "s3cret-two"}, {"x"}, "pre-flight: A:"),
+    preflight("in GitLab only (the build installs it)", temp_specs({"x": VM + SECRET.format(var="A")})("x"),
+              {"A": "s3cret-one"}, {}, {"x"}, None),
+    preflight("the host does not answer (a first build)", temp_specs({"x": VM + SECRET.format(var="A")})("x"),
+              {"A": "s3cret-one"}, {}, set(), None),
+    preflight("a replica: the source's files are read on the source",
+              temp_specs({"d07": VM + SECRET.format(var="A"), "x": VM + '[replica]\nof = "d07"\n' + SECRET.format(var="B")})("x"),
+              {"A": "s3cret-one", "B": "s3cret-b"}, {("d07", "/home/docker/A.env"): "s3cret-two"}, {"d07"}, "pre-flight: A:"),
+    preflight("a replica whose source does not answer",
+              temp_specs({"d07": VM + SECRET.format(var="A"), "x": VM + '[replica]\nof = "d07"\n'})("x"),
+              {"A": "s3cret-one"}, {}, {"x"}, "d07 does not answer"),
 ]
 print("all cases passed" if all(results) else f"{results.count(False)} case(s) failed")
 sys.exit(0 if all(results) else 1)

@@ -8,7 +8,8 @@
 # over SSH, so a failed step is visible and re-runnable from the workstation.
 
 package_update: true
-packages: [git, curl, rsync, parted, qemu-guest-agent]
+# screen: host-maintenance runs each host's nightly tasks in it, and app scripts detach long backups into it.
+packages: [git, curl, rsync, parted, qemu-guest-agent, screen]
 
 # IDs as on d01/d02: docker UID 1003, primary group asyla (GID 1001), member of docker (GID 1000,
 # the group NAS files carry). Created in bootcmd, which runs before cloud-init's users_groups
