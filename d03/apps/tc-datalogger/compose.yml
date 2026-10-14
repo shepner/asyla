@@ -9,7 +9,7 @@ networks:
 
 services:
   tc-faction-crimes:
-    image: ${TC_REGISTRY:-gitea.asyla.org/asyla}/tc-datalogger-faction-crimes:${TC_IMAGE_TAG}
+    image: ${TC_REGISTRY:-gitea.asyla.org/personal}/tc-datalogger-faction-crimes:${TC_IMAGE_TAG}
     container_name: tc-faction-crimes-pipeline
     restart: unless-stopped
     environment:
@@ -23,7 +23,7 @@ services:
       - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_faction_crimes/logs:/app/logs
 
   tc-faction-members:
-    image: ${TC_REGISTRY:-gitea.asyla.org/asyla}/tc-datalogger-faction-members:${TC_IMAGE_TAG}
+    image: ${TC_REGISTRY:-gitea.asyla.org/personal}/tc-datalogger-faction-members:${TC_IMAGE_TAG}
     container_name: tc-faction-members-pipeline
     restart: unless-stopped
     environment:
@@ -36,7 +36,7 @@ services:
       - tc_datalogger_net
 
   tc-items:
-    image: ${TC_REGISTRY:-gitea.asyla.org/asyla}/tc-datalogger-items:${TC_IMAGE_TAG}
+    image: ${TC_REGISTRY:-gitea.asyla.org/personal}/tc-datalogger-items:${TC_IMAGE_TAG}
     container_name: tc-items-pipeline
     restart: unless-stopped
     environment:
@@ -49,7 +49,7 @@ services:
       - tc_datalogger_net
 
   tc-user-events:
-    image: ${TC_REGISTRY:-gitea.asyla.org/asyla}/tc-datalogger-user-events:${TC_IMAGE_TAG}
+    image: ${TC_REGISTRY:-gitea.asyla.org/personal}/tc-datalogger-user-events:${TC_IMAGE_TAG}
     container_name: tc-user-events-pipeline
     restart: unless-stopped
     environment:
@@ -62,7 +62,7 @@ services:
       - tc_datalogger_net
 
   tc-faction-chains:
-    image: ${TC_REGISTRY:-gitea.asyla.org/asyla}/tc-datalogger-faction-chains:${TC_IMAGE_TAG}
+    image: ${TC_REGISTRY:-gitea.asyla.org/personal}/tc-datalogger-faction-chains:${TC_IMAGE_TAG}
     container_name: tc-faction-chains-pipeline
     restart: unless-stopped
     environment:
@@ -75,7 +75,7 @@ services:
       - tc_datalogger_net
 
   tc-dashboard:
-    image: ${TC_REGISTRY:-gitea.asyla.org/asyla}/tc-datalogger-dashboard:${TC_IMAGE_TAG}
+    image: ${TC_REGISTRY:-gitea.asyla.org/personal}/tc-datalogger-dashboard:${TC_IMAGE_TAG}
     container_name: tc-dashboard
     restart: unless-stopped
     environment:
