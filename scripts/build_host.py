@@ -56,8 +56,11 @@ updater installs that tree too). Its own [vm], [setup] and [runner] apply, and t
 start_apps = false the apps phase starts nothing and verify checks that no container runs.
 
 Nothing here prints a secret (SEC): tokens and secret files move over SSH stdin or HTTPS bodies.
-Credentials come from the hub .env (~/local/hub/.env, or KNOWLEDGE_HUB_DOTENV): GITLAB_TOKEN,
-GITEA_TOKEN, ASYLA_HOSTS_DEPLOY_USER / ASYLA_HOSTS_DEPLOY_TOKEN.
+Credentials come from the environment only (no credential file is read): GITLAB_TOKEN,
+GITEA_TOKEN, ASYLA_HOSTS_DEPLOY_USER / ASYLA_HOSTS_DEPLOY_TOKEN. In the asyla hub, from inside
+~/local/asyla (the vault client finds the hub from the working directory):
+  python3 core/tools/credentials.py exec GITLAB_TOKEN GITEA_TOKEN ASYLA_HOSTS_DEPLOY_USER \
+    ASYLA_HOSTS_DEPLOY_TOKEN -- python3 projects/asyla-hosts/scripts/build_host.py HOST ...
 
 Exit: 0 ok, 1 a step or check failed, 2 usage or spec error.
 """
@@ -105,25 +108,15 @@ class Fail(Exception):
 
 # ---------------------------------------------------------------- environment and remote calls
 
-def hub_env() -> dict[str, str]:
-    path = Path(os.environ.get("KNOWLEDGE_HUB_DOTENV") or Path.home() / "local/hub/.env")
-    env: dict[str, str] = {}
-    if path.is_file():
-        for line in path.read_text().splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, _, v = line.partition("=")
-                env[k.strip()] = v.strip().strip('"').strip("'")
-    return env
-
-
-ENV = hub_env()
+CREDENTIALS = ("GITLAB_TOKEN", "GITEA_TOKEN", "ASYLA_HOSTS_DEPLOY_USER", "ASYLA_HOSTS_DEPLOY_TOKEN")
 
 
 def need(key: str) -> str:
-    v = os.environ.get(key) or ENV.get(key, "")
+    v = os.environ.get(key, "")
     if not v:
-        raise Fail(f"{key} is not set (hub .env)")
+        raise Fail(f"{key} is not in the environment; run through the credentials capability, from inside "
+                   f"~/local/asyla: python3 core/tools/credentials.py exec {' '.join(CREDENTIALS)} -- "
+                   f"python3 projects/asyla-hosts/scripts/build_host.py ...")
     return v
 
 
