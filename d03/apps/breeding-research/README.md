@@ -1,14 +1,18 @@
 # breeding-research on d03
 
 FastAPI dog breeding research app. Data: **`/mnt/docker/breeding-research/`** (`gcp-credentials.json`, etc.).
-Source: the breeding-research repo (`https://gitlab.com/asyla/breeding-research.git`). It has no CI and
-publishes no registry image, so d03 builds the image from source (see `.env.example`).
+Source: the breeding-research repo, private on Gitea (`https://gitea.asyla.org/personal/breeding-research.git`;
+the GitLab copy `asyla/breeding-research` was archived on 2026-10-11 and gets no new commits). It has
+no CI and publishes no registry image, so d03 builds the image from source (see `.env.example`).
+d03 has no clone today (2026-10-14): the running `breeding-research:d03-migrate` image was built
+during the d03 migration. A clone of the private repo needs a read credential on d03; until one is
+decided, put the source in place from the Mac and set `BREEDING_RESEARCH_SRC`.
 
 ## Run
 
 ```bash
 cp .env.example .env   # then fill in BQ_* and BASIC_AUTH_*
-git clone https://gitlab.com/asyla/breeding-research.git .src/breeding-research   # or set BREEDING_RESEARCH_SRC
+git clone https://gitea.asyla.org/personal/breeding-research.git .src/breeding-research   # or set BREEDING_RESEARCH_SRC
 ~/scripts/d03/apps/breeding-research/breeding-research.sh up verify
 ```
 

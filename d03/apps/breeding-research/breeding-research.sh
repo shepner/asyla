@@ -46,7 +46,7 @@ resolve_source_dir() {
     printf '%s' "$d"
     return 0
   fi
-  echo "[ERROR] breeding-research source not found. Set BREEDING_RESEARCH_SRC or clone https://gitlab.com/asyla/breeding-research.git to $d" >&2
+  echo "[ERROR] breeding-research source not found. Set BREEDING_RESEARCH_SRC or clone https://gitea.asyla.org/personal/breeding-research.git to $d" >&2
   return 1
 }
 
