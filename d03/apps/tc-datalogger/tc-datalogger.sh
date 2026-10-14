@@ -31,8 +31,9 @@ run_compose() {
 }
 
 do_backup() {
-  # repo/ is a source checkout, not app state.
-  do_rsync_mirror_backup "$APP_ROOT" "$BACKUP_DIR" -- --exclude=/repo/
+  # repo/ is in the mirror too: it is a plain copy with no git remote that the dashboard
+  # mounts, so a rebuilt host has no other source for it (backup audit, gap G3, 2026-10-12).
+  do_rsync_mirror_backup "$APP_ROOT" "$BACKUP_DIR"
 }
 
 do_verify() {
