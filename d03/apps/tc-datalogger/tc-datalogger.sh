@@ -31,8 +31,8 @@ run_compose() {
 }
 
 do_backup() {
-  # repo/ is in the mirror too: it is a plain copy with no git remote that the dashboard
-  # mounts, so a rebuilt host has no other source for it (backup audit, gap G3, 2026-10-12).
+  # repo/ is in the mirror too: the dashboard mounts it, and the audit of 2026-10-12 found it
+  # in no backup (gap G3), so a rebuilt host would start without it.
   do_rsync_mirror_backup "$APP_ROOT" "$BACKUP_DIR"
 }
 
