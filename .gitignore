@@ -62,6 +62,8 @@ tags
 *credential*
 # Exception: script that creates credentials file (not the file itself)
 !**/setup_smb_credentials.sh
+# Exception: the secret scan's list of false positives (names where a finding is, never a value)
+!/.secret-scan-allow.toml
 *password*
 *.key
 *.pem
