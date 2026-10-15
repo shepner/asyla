@@ -1,12 +1,9 @@
 # test01: the build test host (asyla hub decisions/host-layout.md, decision 4). Created and
 # destroyed as testing needs (operator pre-approved for test01 only, 2026-10-13). Its runners
 # carry only the label or tag build-test, so they never take a real job.
-# The d04 proof (asyla backlog): test01 built the way d04 would be, as a d04 replica restoring
-# Gitea only from its NAS backup (d03's live mirror), with no way to write outward
-# (scripts/build_host.py docstring, Replica); the G1 proof's spec (9c4c98d) with of = "d04". It
-# runs d04's copy of gitea.sh; its `backup` refuses here (gitea.asyla.org is not test01). No
-# [[external]]: a replica must not answer for d04's names. This commit is reverted after the
-# proof, which brings back the hello test.
+# The hello test (test01/apps/hello). To rehearse a production host instead, add
+# [replica] of = "dNN" (scripts/build_host.py docstring; the d03 replica of 2026-10-09 is in git
+# history under d04/, 4decdd6..fad6650).
 [vm]
 node = "vmh01"             # the default; either node may carry it: build_host.py test01 build --node vmh02
 vmid = 901                 # a block of its own, away from the Docker hosts (101 up)
@@ -15,7 +12,7 @@ cores = 4
 memory_mb = 8192
 ip = "10.0.0.69/24"
 os_disk = { storage = "local-data2", size = "32G" }     # local-data2 exists on both nodes
-data_disk = { storage = "local-data2", size = "64G" }   # /mnt/docker: room for the restored Gitea (gap G1)
+data_disk = { storage = "local-data2", size = "16G" }   # /mnt/docker
 cloudinit_storage = "local-data2"
 disposable = true          # build_host.py may destroy and recreate it without --confirm
 startup = "order=90"       # after every production VM when a node boots; set at create, checked by verify
@@ -23,32 +20,57 @@ startup = "order=90"       # after every production VM when a node boots; set at
 [setup]
 steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "bashrc.sh"]   # build/setup/, sent by the build
 
-# No [runner], [gitlab_runner] or [host_maintenance]: a replica reaches nothing off the LAN.
-[replica]
-of = "d04"
-apps = ["gitea"]
-# Every d04 secret: Gitea's own are inside its restored data (app.ini), and excluding them all
-# keeps the pre-flight from comparing on d04, which does not exist yet.
-exclude_secrets = ["D04_CLOUDFLARED_ENV", "D04_INTERNAL_PROXY_ENV"]
-verify = ["http://{ip}:3000/api/healthz", "http://{ip}:3000/api/v1/version"]
+[[secret]]
+var = "TEST01_HELLO_ENV"
+path = "/home/docker/scripts/test01/apps/hello/.env"
+owner = "docker:asyla"
+mode = "600"
 
-# Into the restored app.ini before the first start. In Gitea 1.27.3 [cron] ENABLED does not stop
-# the tasks (routers/init.go calls cron.Init unconditionally): each outbound task is switched off
-# by its own section. The webhook allow-list falls back to [security], so both name a host that
-# cannot exist (.invalid, RFC 2606).
-[replica.gitea_config."cron.update_mirrors"]
-ENABLED = false
-[replica.gitea_config."cron.update_checker"]
-ENABLED = false
-[replica.gitea_config."cron.sync_external_users"]
-ENABLED = false
-[replica.gitea_config.mirror]
-ENABLED = false
-[replica.gitea_config.mailer]
-ENABLED = false
-[replica.gitea_config.actions]
-ENABLED = false
-[replica.gitea_config.webhook]
-ALLOWED_HOST_LIST = "webhook-delivery-disabled.invalid"
-[replica.gitea_config.security]
-ALLOWED_HOST_LIST = "webhook-delivery-disabled.invalid"
+# host-maintenance's key set (gap G11; build/setup/host_maintenance_keys.sh, setup phase). The
+# key is a throwaway one, made for a test01 build and deleted after it (asyla backlog, G11 proof):
+# it authorizes docker@test01 only, never d01 to d03. The pins are d01 to d03's ed25519 host keys
+# (ssh-keyscan -t ed25519 from the workstation, 2026-10-15, equal to its known_hosts); the build
+# scans each address from test01 and fails on another key.
+[[secret]]
+var = "TEST01_HOST_MAINTENANCE_SSH_KEY"
+path = "/home/docker/.config/host-maintenance/ssh/id_ed25519"
+owner = "docker:docker"
+mode = "600"
+
+[host_maintenance]
+identity = "/home/docker/.config/host-maintenance/ssh/id_ed25519"
+user = "docker"
+known_hosts = [
+  "10.0.0.60 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEWInJu/I6E2DxkusPBWL2c4gY4OBKVyvhuYz4VOfkrv",
+  "10.0.0.61 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPbeDGfZcftzPaZaKINRYpCqTWWPB8e5rgJQsoEVBvz8",
+  "10.0.0.62 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKLcHH61N2/2rTyKaIFbN1/UkNVik4suQSISbhhGgU9S",
+]
+
+[[app]]
+name = "hello"
+verify = ["verify"]
+
+# Deployed onto this host by other repos, from the workstation (asyla gap G5): internal-access's
+# test profile (hosts/test01: Caddy's internal CA only, no secret). `restore` before `up`, so every
+# build proves it: a new host warns (no backup yet); a rebuild takes the NAS snapshot and Caddy
+# keeps its CA and certificate. The backup folder internal-proxy-test01 stays on the NAS.
+[[external]]
+name = "internal-access"
+repo = "~/local/asyla/projects/internal-access"
+run = ["scripts/deploy-host.sh {host}", "scripts/fleet.sh --host {host} restore up verify"]
+
+[runner]
+enabled = true
+labels = ["build-test"]    # one label no workflow uses (docker/gitea-runner/gitea-runner.sh)
+
+# GitLab runners (build/gitlab-runner/gitlab-runner.sh, run by the build's runner phase); one
+# [[gitlab_runner.runners]] table each. GitLab description test01-build; tag build-test only, and
+# untagged jobs off, so it never takes a job.
+[[gitlab_runner.runners]]
+name = "build"
+scope = "group:asyla"
+tags = ["build-test"]
+executor = "docker"
+image = "python:3.12-alpine"
+volumes = []
+pull_policy = "if-not-present"
