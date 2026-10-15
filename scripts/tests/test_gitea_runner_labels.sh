@@ -35,7 +35,12 @@ case_() {
 case_ "d03 keeps its fixed labels" d03 "" "asyla:host,d03:host,docker:host"
 case_ "d03 ignores labels in its spec" d03 $'[runner]\nlabels = ["build-test"]' "asyla:host,d03:host,docker:host"
 case_ "test01 takes its spec's label" test01 $'[runner]\nenabled = true\nlabels = ["build-test"]' "build-test:host"
-case_ "the repo's own test01 spec" test01 "$(cat "$REPO/test01/host.toml")" "build-test:host"
+# While test01 rehearses a production host ([replica], no runner: e.g. gap G1), its hello spec as at 226904e.
+if grep -q '^\[replica\]' "$REPO/test01/host.toml"; then
+  case_ "test01's hello spec (226904e)" test01 "$(git -C "$REPO" show 226904e:test01/host.toml)" "build-test:host"
+else
+  case_ "the repo's own test01 spec" test01 "$(cat "$REPO/test01/host.toml")" "build-test:host"
+fi
 case_ "several labels, in order" d04 $'[runner]\nlabels = ["theorg", "prod", "d04"]' "theorg:host,prod:host,d04:host"
 case_ "no spec" d09 "" REFUSED
 case_ "a spec with no labels" d04 $'[runner]\nenabled = true' REFUSED

@@ -112,7 +112,26 @@ spec_refused("an unknown key in the table", sec + table(extra='hosts = ["d01"]\n
 spec_refused("no user", sec + table().replace('user = "docker"\n', ""), "nothing else")
 spec_refused("a bad secret owner", ENTRY.format(path=IDENT, owner="docker", mode="600") + table(), "USER:GROUP")
 
-t = build_host.load_spec("test01")
+def test01_spec() -> dict:
+    """test01's spec. While test01 rehearses a production host ([replica], e.g. gap G1), the hello
+    spec as committed at 226904e instead, so these cases keep a spec with the tables they test."""
+    t = build_host.load_spec("test01")
+    if not t.get("replica"):
+        return t
+    text = REAL_RUN(["git", "-C", str(build_host.REPO), "show", "226904e:test01/host.toml"],
+                    capture_output=True, text=True, check=True).stdout
+    d = Path(tempfile.mkdtemp(prefix="build-host-test01-"))
+    (d / "test01").mkdir()
+    (d / "test01" / "host.toml").write_text(text)
+    (d / "build").symlink_to(build_host.REPO / "build")
+    real, build_host.REPO = build_host.REPO, d
+    try:
+        return build_host.load_spec("test01")
+    finally:
+        build_host.REPO = real
+
+
+t = test01_spec()
 hm = t.get("host_maintenance", {})
 check("test01: the identity is TEST01_HOST_MAINTENANCE_SSH_KEY's path, user docker, d01 to d03 pinned",
       [x["var"] for x in t["secret"] if x["path"] == hm.get("identity")] == ["TEST01_HOST_MAINTENANCE_SSH_KEY"]

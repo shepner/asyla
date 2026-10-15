@@ -69,10 +69,21 @@ them, so a host needs no entry in the workstation's ssh config.
 
 Replica: a spec with [replica] of = "dNN" (test01 as a d03 replica) takes the source spec's
 [[secret]] and [[app]] lists (minus exclude_secrets) and runs the apps from ~/scripts/dNN/ (its
-updater installs that tree too). Its own [vm], [setup] and [runner] apply, and the source's
-[[external]] never do: a replica must not answer for the source's hostnames. With
-start_apps = false the apps phase starts nothing and verify checks that no container runs.
-[gitlab_runner] is the host's own, never the source's.
+updater installs that tree too). Its own [vm] and [setup] apply, and the source's [[external]]
+never do: a replica must not answer for the source's hostnames. With start_apps = false the apps
+phase starts nothing and verify checks that no container runs. [replica] keys: of, start_apps,
+exclude_secrets, apps (names: only these of the source's apps), gitea_config, verify.
+A replica writes nothing outward: before any app starts, the apps phase pulls the started apps'
+missing images, then applies build/setup/replica_egress.sh (nftables: the host reaches the LAN
+and its containers only, containers reach nothing off the host; a oneshot unit keeps it across
+boots) and checks that the host and each image cannot reach the internet; then
+[replica.gitea_config] (a table per app.ini section, e.g. "cron.update_mirrors" = {ENABLED = false})
+goes into the restored app.ini with Gitea's own environment-to-ini, and each key is read back.
+Any failure stops the build before an app starts. So a replica has no [runner] and no
+[gitlab_runner] (both need the internet; refused). verify, for a replica, never runs the
+source's app verify (it curls the source's public URLs): it waits for each [replica.verify] URL
+("http://{ip}:PORT/..."), checks the egress block from the host and each running container in
+place of the deploy token, and reads gitea_config back.
 
 GitLab runners: [gitlab_runner] runners = [{name, scope = "group:PATH" | "project:GROUP/PROJECT",
 tags, executor = "docker" | "shell", and for docker image, volumes, pull_policy}]. A rebuild
@@ -150,6 +161,26 @@ DEPLOY_ENV = "/etc/asyla/asyla-hosts.env"
 DATA_ROOT = "/mnt/docker/"
 PHASES = ("vm", "bootstrap", "disk", "secrets", "setup", "restore", "apps", "external", "late", "runner", "verify")
 STARTUP_FORM = re.compile(r"order=\d+(,up=\d+)?(,down=\d+)?")
+REPLICA_KEYS = ("of", "start_apps", "exclude_secrets", "apps", "gitea_config", "verify")
+REPLICA_EGRESS = "replica_egress.sh"   # build/setup/, run by the apps phase of a replica
+REPLICA_EGRESS_UNIT = "asyla-replica-egress.service"
+REPLICA_EGRESS_TABLE = "inet asyla_replica_egress"
+EGRESS_PROBES = ("https://gitlab.com", "https://github.com")   # a replica must reach neither
+# curl, else wget; 99: neither exists (no proof). $0 is the URL.
+EGRESS_PROBE_SH = ('if command -v curl >/dev/null 2>&1; then curl -s -o /dev/null -m 5 "$0"; '
+                   'elif command -v wget >/dev/null 2>&1; then wget -q -T 5 -O /dev/null "$0"; else exit 99; fi')
+INI_SECTION = re.compile(r"[a-z][a-z0-9_]*(\.[a-z0-9_]+)*")
+INI_KEY = re.compile(r"[A-Z][A-Z0-9_]*")
+INI_VALUE = re.compile(r"[A-Za-z0-9._:/,@-]*")
+# d03's gitea compose mounts ${DOCKER_DL}/Gitea/data at /data.
+GITEA_INI = "/data/gitea/conf/app.ini"
+GITEA_INI_HOST = "/mnt/docker/Gitea/data/gitea/conf/app.ini"
+# Prints {"section.KEY": value or null} for the asked keys only (app.ini holds secrets: never the file).
+INI_READ_PY = ("import configparser, json, sys\n"
+               "c = configparser.ConfigParser(interpolation=None, strict=False, allow_no_value=True)\n"
+               "c.read_string('[__root__]\\n' + open(sys.argv[1]).read())\n"
+               "print(json.dumps({s + '.' + k: c.get(s, k, fallback=None) for s, k in json.loads(sys.argv[2])}))\n")
+COMPOSE_ENV = '[ -f ~/scripts/docker/common.env ] && . ~/scripts/docker/common.env; export DOCKER_DL="${DOCKER_DL:-/mnt/docker}"'
 SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
 
 
@@ -282,6 +313,13 @@ def load_spec(host: str, node: str | None = None) -> dict:
         if src == host or not src_path.is_file():
             raise Fail(f"{path}: [replica] of = {src!r} is not another host with a spec")
         src_spec = tomllib.loads(src_path.read_text())
+        unknown_keys = set(rep) - set(REPLICA_KEYS)
+        if unknown_keys:
+            raise Fail(f"{path}: unknown [replica] keys: {sorted(unknown_keys)} (known: {', '.join(REPLICA_KEYS)})")
+        if spec.get("runner", {}).get("enabled") or spec.get("gitlab_runner"):
+            raise Fail(f"{path}: a replica has no [runner] or [gitlab_runner]: its egress is blocked")
+        if not isinstance(rep.get("start_apps", True), bool):
+            raise Fail(f"{path}: [replica].start_apps must be true or false")
         excl = set(rep.get("exclude_secrets", []))
         unknown = excl - {s["var"] for s in src_spec.get("secret", [])}
         if unknown:
@@ -289,7 +327,8 @@ def load_spec(host: str, node: str | None = None) -> dict:
         # live_on: where the running copy of a secret file is (the pre-flight compares it there).
         spec["secret"] = [{**s, "live_on": src} for s in src_spec.get("secret", []) if s["var"] not in excl] \
             + spec.get("secret", [])
-        spec["app"] = src_spec.get("app", [])
+        spec["app"] = replica_apps(path, rep, src, src_spec.get("app", []))
+        check_replica_config(path, rep, spec["app"])
         spec["apps_tree"] = src
         if spec.get("external"):
             raise Fail(f"{path}: a replica has no [[external]] (it must not answer for {src}'s names)")
@@ -305,6 +344,53 @@ def load_spec(host: str, node: str | None = None) -> dict:
         if missing:
             raise Fail(f"{path}: [setup].steps not in {BUILD_SETUP}/: {missing}")
     return spec
+
+
+def replica_apps(path: Path, rep: dict, src: str, apps: list[dict]) -> list[dict]:
+    """The source's [[app]] list, or only the apps [replica].apps names (in the source's order)."""
+    if "apps" not in rep:
+        return apps
+    names = rep["apps"]
+    if not isinstance(names, list) or not names or not all(isinstance(n, str) for n in names):
+        raise Fail(f"{path}: [replica].apps must be a list of app names")
+    unknown = set(names) - {a["name"] for a in apps}
+    if unknown:
+        raise Fail(f"{path}: [replica].apps not in {src}: {sorted(unknown)}")
+    return [a for a in apps if a["name"] in names]
+
+
+def check_replica_config(path: Path, rep: dict, apps: list[dict]) -> None:
+    """[replica.gitea_config] (app.ini section -> {KEY = value}) and [replica].verify (local URLs)."""
+    gc = rep.get("gitea_config", {})
+    if not isinstance(gc, dict):
+        raise Fail(f"{path}: [replica.gitea_config] must be a table of app.ini sections")
+    if gc and "gitea" not in {a["name"] for a in apps}:
+        raise Fail(f"{path}: [replica.gitea_config] needs the gitea app in the replica")
+    for sec, kv in gc.items():
+        if not INI_SECTION.fullmatch(sec) or not isinstance(kv, dict) or not kv:
+            raise Fail(f"{path}: [replica.gitea_config] section {sec!r} must be a lower-case app.ini "
+                       f"section name holding KEY = value pairs")
+        for k, v in kv.items():
+            if not INI_KEY.fullmatch(k):
+                raise Fail(f"{path}: [replica.gitea_config.{sec}] key {k!r} must be upper-case")
+            if isinstance(v, bool) or (isinstance(v, int) and not isinstance(v, bool)):
+                continue
+            if not isinstance(v, str) or not INI_VALUE.fullmatch(v):
+                raise Fail(f"{path}: [replica.gitea_config.{sec}] {k}: value must be true/false, a number "
+                           f"or plain text ({INI_VALUE.pattern})")
+    urls = rep.get("verify", [])
+    if not isinstance(urls, list) or not all(isinstance(u, str) and u.startswith("http://{ip}:")
+                                             and "{" not in u.replace("{ip}", "") and " " not in u for u in urls):
+        raise Fail(f"{path}: [replica].verify must be a list of local URLs \"http://{{ip}}:PORT/...\"")
+
+
+def ini_value(v) -> str:
+    return ("true" if v else "false") if isinstance(v, bool) else str(v)
+
+
+def gitea_env(section: str, key: str) -> str:
+    """The environment-to-ini name of an app.ini key (Gitea's cmd/config.go: '.' is _0x2E_)."""
+    return f"GITEA__{section.replace('.', '_0x2E_')}__{key}"
 
 
 def check_gitlab_runner_spec(path: Path, spec: dict) -> None:
@@ -822,8 +908,115 @@ def apps_in(spec: dict, late: bool) -> list[dict]:
     return [a for a in spec.get("app", []) if bool(a.get("after_external")) == late]
 
 
+def replica_images(spec: dict, apply: bool) -> list[str]:
+    """Pull the images of the replica's started apps that are missing (the last time it can: its
+    egress is blocked next) and return their names."""
+    if not starts_apps(spec):
+        return []
+    images = []
+    for a in spec.get("app", []):
+        if not a.get("start", ["up"]):
+            continue
+        print(f"images of {a['name']}: pulled when missing, before the egress block")
+        if not apply:
+            continue
+        d = f"~/scripts/{spec['apps_tree']}/apps/{a['name']}"
+        r = ssh(spec["host"], f"set -e; cd {d}; [ -f compose.yml ] || exit 0; {COMPOSE_ENV}; "
+                              "imgs=$(docker compose -f compose.yml config --images); for i in $imgs; do "
+                              "docker image inspect \"$i\" >/dev/null 2>&1 || docker pull -q \"$i\" >/dev/null; "
+                              "echo \"$i\"; done", timeout=1800)
+        images += [i for i in r.stdout.split() if i not in images]
+    return images
+
+
+def egress_checks(spec: dict, images: list[str] = (), containers: list[str] = ()) -> list[tuple[str, bool, str]]:
+    """(label, ok, detail) for the replica's egress block: the table and its unit, then no probe
+    URL from the host, from a container of each image, or from inside each running container.
+    A probe that cannot run (no curl or wget: 99; docker's own errors: 125 to 127) is no proof."""
+    host, out = spec["host"], []
+    r = ssh(host, f"sudo nft list table {REPLICA_EGRESS_TABLE} >/dev/null && systemctl is-enabled {REPLICA_EGRESS_UNIT}",
+            check=False)
+    out.append((f"egress block: nft table {REPLICA_EGRESS_TABLE}, {REPLICA_EGRESS_UNIT} enabled",
+                r.returncode == 0, r.stdout.strip()))
+    for url in EGRESS_PROBES:
+        r = ssh(host, f"curl -s -o /dev/null -m 5 {url}", check=False)
+        out.append((f"{host} cannot reach {url}", r.returncode not in (0, 127), f"curl exit {r.returncode}"))
+    probe = shlex.quote(EGRESS_PROBE_SH)
+    for img in images:
+        r = ssh(host, f"docker run --rm --entrypoint sh {shlex.quote(img)} -c {probe} {EGRESS_PROBES[0]}", check=False)
+        out.append((f"a container of {img} cannot reach {EGRESS_PROBES[0]}", r.returncode not in (0, 99, 125, 126, 127),
+                    f"exit {r.returncode}"))
+    for c in containers:
+        r = ssh(host, f"docker exec {shlex.quote(c)} sh -c {probe} {EGRESS_PROBES[1]}", check=False)
+        out.append((f"container {c} cannot reach {EGRESS_PROBES[1]}", r.returncode not in (0, 99, 125, 126, 127),
+                    f"exit {r.returncode}"))
+    return out
+
+
+def gitea_config_read(spec: dict) -> tuple[list[str], list[str]]:
+    """Each [replica.gitea_config] key as the restored app.ini has it: (lines "section KEY = value",
+    mismatches). Only the asked keys are read (python configparser on the host); never the file."""
+    gc = spec["replica"].get("gitea_config", {})
+    want = [[s, k] for s, kv in gc.items() for k in kv]
+    r = ssh(spec["host"], f"sudo python3 -c {shlex.quote(INI_READ_PY)} {GITEA_INI_HOST} {shlex.quote(json.dumps(want))}",
+            check=False)
+    if r.returncode != 0:
+        return [], [f"cannot read {GITEA_INI_HOST} (exit {r.returncode})"]
+    got = json.loads(r.stdout.strip().splitlines()[-1])
+    lines, bad = [], []
+    for s, k in want:
+        have, need = got.get(f"{s}.{k}"), ini_value(gc[s][k])
+        lines.append(f"[{s}] {k} = {have}")
+        same = have is not None and (have.strip().lower() == need if isinstance(gc[s][k], bool) else have.strip() == need)
+        if not same:
+            bad.append(f"[{s}] {k} = {have}, not {need}")
+    return lines, bad
+
+
+def apply_gitea_config(spec: dict, apply: bool) -> None:
+    """[replica.gitea_config] into the restored app.ini, with Gitea's own environment-to-ini (as its
+    start does), before the first start; the file keeps its owner. Then each key is read back."""
+    gc = spec["replica"].get("gitea_config", {})
+    if not gc:
+        return
+    env = [f"{gitea_env(s, k)}={ini_value(v)}" for s, kv in gc.items() for k, v in kv.items()]
+    print(f"gitea_config: {len(env)} key(s) into {GITEA_INI_HOST} with environment-to-ini, before Gitea starts")
+    if not apply:
+        return
+    flags = " ".join(f"-e {shlex.quote(e)}" for e in env)
+    ssh(spec["host"], f"set -e; test -f {GITEA_INI_HOST}; own=$(sudo stat -c %u:%g {GITEA_INI_HOST}); "
+                      f"cd ~/scripts/{spec['apps_tree']}/apps/gitea; {COMPOSE_ENV}; "
+                      f"docker compose -f compose.yml --project-directory . run --rm --no-deps -T "
+                      f"--entrypoint environment-to-ini {flags} gitea --config {GITEA_INI}; "
+                      f"sudo chown \"$own\" {GITEA_INI_HOST}", stream=True)
+    lines, bad = gitea_config_read(spec)
+    for line in lines:
+        print(f"  {line}")
+    if bad:
+        raise Fail(f"gitea_config not in app.ini: {'; '.join(bad)}")
+
+
+def replica_guard(spec: dict, apply: bool) -> None:
+    """A replica writes nothing outward: images, egress block, its check, gitea_config; all before any start."""
+    images = replica_images(spec, apply)
+    print(f"egress block: {BUILD_SETUP}/{REPLICA_EGRESS} ({REPLICA_EGRESS_TABLE}: LAN, established and the "
+          f"host's containers only), then {', '.join(EGRESS_PROBES)} must fail from the host and each image")
+    if apply:
+        build_step(spec["host"], REPLICA_EGRESS)
+        results = egress_checks(spec, images)
+        for label, ok, detail in results:
+            print(f"  [{'OK' if ok else 'FAIL'}] {label}{(': ' + detail) if detail else ''}")
+        bad = [c for c in results if not c[1]]
+        if bad:
+            raise Fail("egress block: " + "; ".join(f"{l} ({d})" for l, _, d in bad))
+        print(f"  egress blocked: the host and {len(images)} image(s) reach none of {', '.join(EGRESS_PROBES)}")
+    apply_gitea_config(spec, apply)
+
+
 def phase_apps(spec: dict, apply: bool, late: bool = False) -> None:
     host = spec["host"]
+    if spec.get("replica") and not late:
+        replica_guard(spec, apply)
     if not starts_apps(spec):
         print(f"replica of {spec['apps_tree']}: start_apps = false; no app is started")
         return
@@ -1126,10 +1319,19 @@ def verify(spec: dict) -> int:
         r = ssh(root(live["node"]), f"qm config {spec['vm']['vmid']}", check=False) if live else None
         have = next((l.split(": ", 1)[1] for l in (r.stdout.splitlines() if r else []) if l.startswith("startup: ")), "none")
         check("VM start order is the spec's", have == spec["vm"]["startup"], f"{have} vs {spec['vm']['startup']}")
-    try:
-        check("deploy token reads GitLab", bool(check_token(host)))
-    except Fail as e:
-        check("deploy token reads GitLab", False, str(e))
+    if spec.get("replica"):
+        # GitLab is unreachable by design: the egress block is checked in place of the deploy token.
+        r = ssh(host, "docker ps --format '{{.Names}}'", check=False)
+        for label, ok, detail in egress_checks(spec, containers=r.stdout.split()):
+            check(label, ok, detail)
+        if spec["replica"].get("gitea_config"):
+            lines, bad = gitea_config_read(spec)
+            check("gitea_config in the restored app.ini", not bad and bool(lines), "; ".join(bad or lines))
+    else:
+        try:
+            check("deploy token reads GitLab", bool(check_token(host)))
+        except Fail as e:
+            check("deploy token reads GitLab", False, str(e))
     sha, drift = scripts_drift(spec)
     check(f"~/scripts matches GitLab master {sha[:12]}", not drift,
           f"{len(drift)} differ: {', '.join(drift[:5])}" if drift else "")
@@ -1163,6 +1365,12 @@ def verify(spec: dict) -> int:
         name = a["name"]
         if not starts_apps(spec):
             pass   # not started: nothing to verify
+        elif spec.get("replica"):
+            # Never the source's verify: it curls the source's public URLs. Running, then [replica].verify.
+            r = ssh(host, f"cd ~/scripts/{spec['apps_tree']}/apps/{name} && docker compose ls --format json", check=False)
+            running = [p for p in json.loads(r.stdout or "[]") if "running" in p.get("Status", "")
+                       and f"/apps/{name}/" in p.get("ConfigFiles", "")]
+            check(f"app {name} running", bool(running))
         elif a.get("verify"):
             r = ssh(host, f"{app_script(spec['apps_tree'], name)} {' '.join(a['verify'])}", check=False)
             check(f"app {name}", r.returncode == 0, (r.stdout + r.stderr).strip().splitlines()[-1] if (r.stdout + r.stderr).strip() else "")
@@ -1174,6 +1382,11 @@ def verify(spec: dict) -> int:
         if a.get("restore") is not False:
             has = app_has(spec, name, "restore")
             check(f"app {name} restore", has, "" if has else "no restore switch")
+    for u in spec.get("replica", {}).get("verify", []) if starts_apps(spec) else []:
+        url = u.format(ip=ip_only(spec))
+        r = ssh(host, f"for i in $(seq 60); do curl -sf -o /dev/null -m 5 {shlex.quote(url)} && exit 0; sleep 2; done; "
+                      f"exit 1", check=False, timeout=600)
+        check(f"replica answers {url}", r.returncode == 0, "" if r.returncode == 0 else "not within 120 s")
     if spec.get("runner", {}).get("enabled"):
         entries = runner_entries(host)
         online = [e for e in entries if e.get("status") in ("online", "idle", "active")]
@@ -1212,6 +1425,9 @@ def plan(spec: dict) -> int:
     if spec.get("replica"):
         print(f"  replica of {spec['apps_tree']}: apps from ~/scripts/{spec['apps_tree']}/, "
               f"start_apps = {starts_apps(spec)}, excluded secrets {spec['replica'].get('exclude_secrets', [])}")
+        print(f"  replica egress blocked ({REPLICA_EGRESS}) before any start; gitea_config: "
+              f"{sum(len(kv) for kv in spec['replica'].get('gitea_config', {}).values())} key(s); "
+              f"verify URLs: {spec['replica'].get('verify', [])}")
     print(f"  secrets: {len(spec.get('secret', []))}; apps: {', '.join(a['name'] for a in spec.get('app', []))}")
     gaps = sum(1 for e in spec.get("external", []) if e.get("manual"))
     print(f"  externals: {len(spec.get('external', []))} ({gaps} manual)")

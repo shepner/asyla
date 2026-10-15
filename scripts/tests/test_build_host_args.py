@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import sys
 from pathlib import Path
 
@@ -109,6 +110,84 @@ def temp_specs(specs: dict[str, str]):
 VM = ('[vm]\nnode = "vmh01"\nvmid = 999\nsockets = 1\ncores = 1\nmemory_mb = 1024\nip = "10.0.0.250/24"\n'
       'os_disk = { storage = "local-data2", size = "8G" }\ncloudinit_storage = "local-data2"\n')
 SECRET = '[[secret]]\nvar = "{var}"\npath = "/home/docker/{var}.env"\n'
+
+
+APPS = '[[app]]\nname = "a"\n[[app]]\nname = "b"\n[[app]]\nname = "c"\n'
+GITEA_APP = '[[app]]\nname = "gitea"\n[[app]]\nname = "b"\n'
+REP_GITEA = '[replica]\nof = "d07"\napps = ["gitea"]\n'
+GC = '[replica.gitea_config."cron.update_mirrors"]\nENABLED = false\n'
+GL_RUNNER = ('[[gitlab_runner.runners]]\nname = "build"\nscope = "group:asyla"\ntags = ["t"]\nexecutor = "docker"\n'
+             'image = "python:3.12-alpine"\n')
+
+
+class Done:
+    def __init__(self, rc: int, out: str = ""):
+        self.returncode, self.stdout, self.stderr = rc, out, ""
+
+
+def with_ssh(fake, call):
+    """Run CALL with build_host.ssh replaced by FAKE(target, command) -> Done; returns (result, output)."""
+    real, build_host.ssh = build_host.ssh, lambda t, c, **kw: fake(t, c)
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            return call(), buf.getvalue()
+    finally:
+        build_host.ssh = real
+
+
+def replica_guard_dry() -> bool:
+    spec = temp_specs({"d07": VM + GITEA_APP, "x": VM + REP_GITEA + GC})("x")
+    res, out = with_ssh(lambda t, c: (_ for _ in ()).throw(AssertionError("dry run reached " + t)),
+                        lambda: build_host.replica_guard(spec, False))
+    return check("replica guard, dry: names images, the egress block and gitea_config; reaches no host",
+                 res is None and "replica_egress.sh" in out and "1 key(s)" in out, out)
+
+
+def egress_case() -> bool:
+    spec = temp_specs({"d07": VM + GITEA_APP, "x": VM + REP_GITEA})("x")
+
+    def fake(rcs):
+        def f(t, c):
+            for needle, rc in rcs:
+                if needle in c:
+                    return Done(rc)
+            return Done(0)
+        return f
+    blocked = fake([("nft list", 0), ("curl -s -o /dev/null -m 5 https", 28), ("docker run", 28), ("docker exec", 6)])
+    res, _ = with_ssh(blocked, lambda: build_host.egress_checks(spec, ["img:1"], ["gitea"]))
+    good = len(res) == 5 and all(ok for _, ok, _ in res)
+    open_host = fake([("nft list", 0), ("https://github.com", 0), ("curl -s", 28), ("docker run", 28)])
+    res2, _ = with_ssh(open_host, lambda: build_host.egress_checks(spec, ["img:1"]))
+    good2 = [ok for _, ok, _ in res2] == [True, True, False, True]   # table, gitlab, github, image
+    no_tool = fake([("nft list", 0), ("docker run", 99), ("curl -s", 127)])   # the image probe holds "curl -s" too
+    res3, _ = with_ssh(no_tool, lambda: build_host.egress_checks(spec, ["img:1"]))
+    good3 = [ok for _, ok, _ in res3] == [True, False, False, False]
+    no_table = fake([("nft list", 1), ("curl -s", 28)])
+    res4, _ = with_ssh(no_table, lambda: build_host.egress_checks(spec))
+    good4 = [ok for _, ok, _ in res4] == [False, True, True]
+    return check("egress checks: blocked passes; a reachable URL, a missing curl or wget, or no table fails",
+                 good and good2 and good3 and good4, str((res, res2, res3, res4)))
+
+
+def ini_read_case() -> bool:
+    spec = temp_specs({"d07": VM + GITEA_APP, "x": VM + REP_GITEA + GC
+                       + '[replica.gitea_config.webhook]\nALLOWED_HOST_LIST = "w.invalid"\n'})("x")
+    seen = []
+
+    def fake(got):
+        def f(t, c):
+            seen.append(c)
+            return Done(0, json.dumps(got) + "\n")
+        return f
+    (lines, bad), _ = with_ssh(fake({"cron.update_mirrors.ENABLED": "false", "webhook.ALLOWED_HOST_LIST": "w.invalid"}),
+                               lambda: build_host.gitea_config_read(spec))
+    (lines2, bad2), _ = with_ssh(fake({"cron.update_mirrors.ENABLED": "true", "webhook.ALLOWED_HOST_LIST": None}),
+                                 lambda: build_host.gitea_config_read(spec))
+    return check("gitea_config read back: the asked keys only; a wrong or missing value is a mismatch",
+                 not bad and lines == ["[cron.update_mirrors] ENABLED = false", "[webhook] ALLOWED_HOST_LIST = w.invalid"]
+                 and len(bad2) == 2 and build_host.GITEA_INI_HOST in seen[0] and "ENABLED" in seen[0],
+                 str((lines, bad, lines2, bad2)))
 
 
 def preflight(name: str, spec: dict, gitlab: dict, on_host: dict, up: set, want: str | None) -> bool:
@@ -341,7 +420,58 @@ results = [
     spec_dir_case("a step not in build/setup/ is refused", "d09", False, ["a.sh", "b.sh"], ["a.sh"], "not in build/setup/"),
     spec_dir_case("a legacy host keeps its setup/", "d02", True, ["a.sh"], [], None),
     check("test01's spec loads (its steps are in build/setup/)", build_host.load_spec("test01")["host"] == "test01"),
-    check("test01's build-only paths", build_host.build_only_paths(build_host.load_spec("test01")) == ["test01/setup", "test01/host.toml", "docker/setup"]),
+    check("test01's build-only paths", build_host.build_only_paths(build_host.load_spec("test01"))
+          == [p for t in sorted({"test01", build_host.load_spec("test01")["apps_tree"]}) for p in (f"{t}/setup", f"{t}/host.toml")]
+          + ["docker/setup"]),
+    # A replica (gap G1): apps filter, its keys, no runner, gitea_config and verify, the egress guard.
+    check("replica apps: only the named ones, in the source's order",
+          [a["name"] for a in temp_specs({"d07": VM + APPS, "x": VM + '[replica]\nof = "d07"\napps = ["c", "a"]\n'})("x")["app"]]
+          == ["a", "c"]),
+    check("replica apps: all of the source's without the key",
+          len(temp_specs({"d07": VM + APPS, "x": VM + '[replica]\nof = "d07"\n'})("x")["app"]) == 3),
+    fails("replica apps: an unknown app is refused", "[replica].apps not in d07",
+          lambda: temp_specs({"d07": VM + APPS, "x": VM + '[replica]\nof = "d07"\napps = ["zz"]\n'})("x")),
+    fails("replica apps: an empty list is refused", "must be a list of app names",
+          lambda: temp_specs({"d07": VM + APPS, "x": VM + '[replica]\nof = "d07"\napps = []\n'})("x")),
+    fails("replica: an unknown key is refused", "unknown [replica] keys",
+          lambda: temp_specs({"d07": VM + APPS, "x": VM + '[replica]\nof = "d07"\nstart = true\n'})("x")),
+    fails("replica: a Gitea runner is refused (its egress is blocked)", "no [runner] or [gitlab_runner]",
+          lambda: temp_specs({"d07": VM + APPS, "x": VM + '[replica]\nof = "d07"\n[runner]\nenabled = true\n'})("x")),
+    fails("replica: a GitLab runner is refused", "no [runner] or [gitlab_runner]",
+          lambda: temp_specs({"d07": VM + APPS, "x": VM + '[replica]\nof = "d07"\n' + GL_RUNNER})("x")),
+    fails("replica: start_apps must be a boolean", "start_apps must be true or false",
+          lambda: temp_specs({"d07": VM + APPS, "x": VM + '[replica]\nof = "d07"\nstart_apps = "no"\n'})("x")),
+    check("replica gitea_config: accepted",
+          temp_specs({"d07": VM + GITEA_APP, "x": VM + REP_GITEA + GC})("x")["replica"]["gitea_config"]["cron.update_mirrors"]
+          == {"ENABLED": False}),
+    fails("replica gitea_config: needs the gitea app", "needs the gitea app",
+          lambda: temp_specs({"d07": VM + APPS, "x": VM + '[replica]\nof = "d07"\napps = ["a"]\n' + GC})("x")),
+    fails("replica gitea_config: a lower-case key is refused", "must be upper-case",
+          lambda: temp_specs({"d07": VM + GITEA_APP, "x": VM + REP_GITEA + '[replica.gitea_config.mirror]\nenabled = false\n'})("x")),
+    fails("replica gitea_config: a section name with a space is refused", "lower-case app.ini section",
+          lambda: temp_specs({"d07": VM + GITEA_APP, "x": VM + REP_GITEA + '[replica.gitea_config."a b"]\nX = 1\n'})("x")),
+    fails("replica gitea_config: a value with a shell character is refused", "plain text",
+          lambda: temp_specs({"d07": VM + GITEA_APP, "x": VM + REP_GITEA + '[replica.gitea_config.webhook]\nALLOWED_HOST_LIST = "a;b"\n'})("x")),
+    fails("replica verify: a public URL is refused", "local URLs",
+          lambda: temp_specs({"d07": VM + GITEA_APP, "x": VM + REP_GITEA + 'verify = ["https://gitea.example.org/"]\n'})("x")),
+    fails("replica verify: another placeholder is refused", "local URLs",
+          lambda: temp_specs({"d07": VM + GITEA_APP, "x": VM + REP_GITEA + 'verify = ["http://{ip}:3000/{x}"]\n'})("x")),
+    check("environment-to-ini names: a dotted section is _0x2E_",
+          build_host.gitea_env("cron.update_mirrors", "ENABLED") == "GITEA__cron_0x2E_update_mirrors__ENABLED"
+          and build_host.gitea_env("webhook", "ALLOWED_HOST_LIST") == "GITEA__webhook__ALLOWED_HOST_LIST"),
+    check("app.ini values: booleans as Gitea writes them",
+          [build_host.ini_value(v) for v in (False, True, 3, "a.invalid")] == ["false", "true", "3", "a.invalid"]),
+    check("test01 as the G1 replica: Gitea only, no secret, the outbound tasks off",
+          not build_host.load_spec("test01").get("replica") or (
+              [a["name"] for a in build_host.load_spec("test01")["app"]] == ["gitea"]
+              and build_host.load_spec("test01")["secret"] == []
+              and all(build_host.load_spec("test01")["replica"]["gitea_config"][s]["ENABLED"] is False
+                      for s in ("cron.update_mirrors", "cron.update_checker", "cron.sync_external_users", "mirror"))
+              and {build_host.load_spec("test01")["replica"]["gitea_config"][s]["ALLOWED_HOST_LIST"] for s in ("webhook", "security")}
+              == {"webhook-delivery-disabled.invalid"})),
+    replica_guard_dry(),
+    egress_case(),
+    ini_read_case(),
     wrapper_case("wrapper: the command runs in the unpacked bundle", 'ls -R "$B"', 0, "x.sh"),
     wrapper_case("wrapper: a failing command's status comes back and the folder is removed", 'bash "$B/build/setup/x.sh"; exit 3', 3, "hi"),
     bundle_case(),

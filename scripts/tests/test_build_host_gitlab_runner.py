@@ -58,6 +58,25 @@ def load(text: str, host: str = "d09") -> dict:
         build_host.REPO = real
 
 
+def test01_spec() -> dict:
+    """test01's spec. While test01 rehearses a production host ([replica], e.g. gap G1), the hello
+    spec as committed at 226904e instead, so these cases keep a spec with the tables they test."""
+    t = build_host.load_spec("test01")
+    if not t.get("replica"):
+        return t
+    text = REAL_RUN(["git", "-C", str(build_host.REPO), "show", "226904e:test01/host.toml"],
+                    capture_output=True, text=True, check=True).stdout
+    d = Path(tempfile.mkdtemp(prefix="build-host-test01-"))
+    (d / "test01").mkdir()
+    (d / "test01" / "host.toml").write_text(text)
+    (d / "build").symlink_to(build_host.REPO / "build")
+    real, build_host.REPO = build_host.REPO, d
+    try:
+        return build_host.load_spec("test01")
+    finally:
+        build_host.REPO = real
+
+
 def spec_ok(name: str, text: str) -> dict | None:
     try:
         s = load(text)
@@ -106,7 +125,7 @@ spec_refused("an image on a shell runner",
              '[[gitlab_runner.runners]]\nname = "sh"\nscope = "group:asyla"\ntags = ["t"]\nexecutor = "shell"\nimage = "x"\n',
              "unknown keys")
 spec_refused("another key in the table", '[gitlab_runner]\nconcurrent = 2\n' + one, "only runners")
-t = build_host.load_spec("test01")
+t = test01_spec()
 check("test01: one group runner on asyla, tag build-test only",
       [(r["description"], r["scope"], r["tags"]) for r in build_host.gitlab_runners(t)]
       == [("test01-build", "group:asyla", ["build-test"])])
