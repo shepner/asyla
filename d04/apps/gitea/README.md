@@ -32,6 +32,10 @@ the digest shows it.
 03:00 is after theOrg's `deploy-all` (Gitea Actions, cron 06:00 UTC, runs until ~02:20 CDT) and after
 the 02:30 `scripts` task, which rewrites this script in place and must not run while Gitea is stopped.
 
+`gitea.sh backup` refuses (`[ERROR]`, exit 1) unless `gitea.asyla.org` resolves to one of this
+host's addresses (`getent ahostsv4`, `hostname -I`): every host's copy backs up to the same mirror,
+so only the host that serves Gitea may write it. `restore`, `verify` and the others do not check.
+
 Not backed up: `data/ssh/` (host keys for the built-in sshd, root-only; nothing can reach that sshd and
 the container regenerates the keys) and `gitea.db-journal`.
 

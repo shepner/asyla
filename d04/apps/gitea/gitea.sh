@@ -118,6 +118,29 @@ do_backup() {
   check_mirror_db
 }
 
+# Backup refuses on a host that does not serve gitea.asyla.org. Every host's gitea.sh backs up to
+# the same $BACKUP_DIR, so a copy that is not the live Gitea (d04 before the cutover, d03 after it,
+# a replica) would overwrite the live Gitea's backup with its own data. The serving host is the one
+# the name resolves to (d03: 10.0.0.62, its own address, 2026-10-15). Exits: the dispatcher would
+# take a return 1 for an unknown switch and print the usage.
+GITEA_SERVED_NAME="gitea.asyla.org"
+require_serving_host() {
+  local addrs mine a m
+  addrs="$(getent ahostsv4 "$GITEA_SERVED_NAME" 2>/dev/null | awk '{print $1}' | sort -u)" || addrs=""
+  if [ -z "$addrs" ]; then
+    echo "[ERROR] $GITEA_SERVED_NAME does not resolve here; not backing up (only the host that serves it backs up to $BACKUP_DIR)" >&2
+    exit 1
+  fi
+  mine="$(hostname -I 2>/dev/null)" || mine=""
+  for a in $addrs; do
+    for m in $mine; do
+      [ "$a" = "$m" ] && return 0
+    done
+  done
+  echo "[ERROR] $GITEA_SERVED_NAME resolves to ${addrs//$'\n'/ }, not to this host (${mine:-no address}); not backing up: $BACKUP_DIR belongs to the host that serves it" >&2
+  exit 1
+}
+
 do_update() {
   echo "[INFO] Pulling latest images (not starting app; use up or restart to start)"
   run_compose pull
@@ -172,9 +195,11 @@ run_cmd() {
   local cmd="$1"
   case "$cmd" in
     backup)
+      require_serving_host
       run_detached_if_interactive backup do_backup
       ;;
     _backup)
+      require_serving_host
       do_backup
       ;;
     # Rebuilt host only: refuses unless APP_ROOT is empty and the mirror's last backup is OK.
@@ -218,7 +243,8 @@ if [ $# -eq 0 ]; then
   echo "Usage: $0 [switch ...]" >&2
   echo "  Switches can be combined, e.g. down backup up" >&2
   echo "" >&2
-  echo "  backup   - rsync mirror of $APP_ROOT to $BACKUP_DIR; history: nas01 ZFS snapshots (screen if interactive)" >&2
+  echo "  backup   - rsync mirror of $APP_ROOT to $BACKUP_DIR; history: nas01 ZFS snapshots (screen if interactive);" >&2
+  echo "             refused unless $GITEA_SERVED_NAME resolves to this host" >&2
   echo "  restore  - rsync $BACKUP_DIR back to an empty $APP_ROOT (rebuilt host; Gitea stopped)" >&2
   echo "  update   - Pull latest images (screen if interactive); use up/restart to start" >&2
   echo "  refresh  - Pull latest images + start (inline)" >&2
