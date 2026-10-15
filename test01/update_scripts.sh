@@ -223,11 +223,13 @@ chmod 744 "$TARGET_HOME"/update.sh "$TARGET_HOME"/update_scripts.sh "$TARGET_HOM
 
 # Build files do not stay on this host (asyla hub, the rules gap "build new and cut over"): the
 # build sends build/setup/ and host.toml when it needs them (scripts/build_host.py). Remove each
-# installed tree's setup/ and host.toml; a replica source's tree carries both in the repo.
+# installed tree's setup/ and host.toml; a replica source's tree carries both in the repo. Also
+# docker/setup/, the legacy hosts' copy of the base build scripts (d01 to d03 keep it).
 for tree in "$HOSTNAME" $REPLICA_OF; do
     [ -d "$TARGET_SCRIPTS/$tree" ] || continue
     rm -rf -- "${TARGET_SCRIPTS:?}/${tree:?}/setup" "${TARGET_SCRIPTS:?}/${tree:?}/host.toml"
 done
+rm -rf -- "${TARGET_SCRIPTS:?}/docker/setup"
 rm -f -- "${TARGET_HOME:?}/setup_manual.sh"
 
-log_info "Scripts updated successfully (no build files kept: setup/ and host.toml are the build's)"
+log_info "Scripts updated successfully (no build files kept: setup/, host.toml and docker/setup/ are the build's)"

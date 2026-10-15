@@ -416,8 +416,9 @@ def check_token(host: str) -> str:
 
 
 def build_only_paths(spec: dict) -> list[str]:
-    """The tracked paths a new host's updater does not keep: each installed tree's setup/ and host.toml."""
-    return [p for t in sorted({spec["host"], spec["apps_tree"]}) for p in (f"{t}/setup", f"{t}/host.toml")]
+    """The tracked paths a new host's updater does not keep: each installed tree's setup/ and
+    host.toml, and docker/setup/ (the legacy hosts' copy of the base build scripts)."""
+    return [p for t in sorted({spec["host"], spec["apps_tree"]}) for p in (f"{t}/setup", f"{t}/host.toml")] + ["docker/setup"]
 
 
 def scripts_drift(spec: dict) -> tuple[str, list[str]]:

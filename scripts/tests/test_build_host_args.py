@@ -341,7 +341,7 @@ results = [
     spec_dir_case("a step not in build/setup/ is refused", "d09", False, ["a.sh", "b.sh"], ["a.sh"], "not in build/setup/"),
     spec_dir_case("a legacy host keeps its setup/", "d02", True, ["a.sh"], [], None),
     check("test01's spec loads (its steps are in build/setup/)", build_host.load_spec("test01")["host"] == "test01"),
-    check("test01's build-only paths", build_host.build_only_paths(build_host.load_spec("test01")) == ["test01/setup", "test01/host.toml"]),
+    check("test01's build-only paths", build_host.build_only_paths(build_host.load_spec("test01")) == ["test01/setup", "test01/host.toml", "docker/setup"]),
     wrapper_case("wrapper: the command runs in the unpacked bundle", 'ls -R "$B"', 0, "x.sh"),
     wrapper_case("wrapper: a failing command's status comes back and the folder is removed", 'bash "$B/build/setup/x.sh"; exit 3', 3, "hi"),
     bundle_case(),
