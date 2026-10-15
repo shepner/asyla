@@ -50,6 +50,15 @@ known_hosts = [
 name = "hello"
 verify = ["verify"]
 
+# Deployed onto this host by other repos, from the workstation (asyla gap G5): internal-access's
+# test profile (hosts/test01: Caddy's internal CA only, no secret). `restore` before `up`, so every
+# build proves it: a new host warns (no backup yet); a rebuild takes the NAS snapshot and Caddy
+# keeps its CA and certificate. The backup folder internal-proxy-test01 stays on the NAS.
+[[external]]
+name = "internal-access"
+repo = "~/local/asyla/projects/internal-access"
+run = ["scripts/deploy-host.sh {host}", "scripts/fleet.sh --host {host} restore up verify"]
+
 [runner]
 enabled = true
 labels = ["build-test"]    # one label no workflow uses (docker/gitea-runner/gitea-runner.sh)

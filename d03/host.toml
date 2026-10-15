@@ -86,7 +86,7 @@ verify = ["verify"]
 [[external]]
 name = "internal-access"
 repo = "~/local/asyla/projects/internal-access"
-run = ["scripts/deploy-host.sh {host}", "scripts/fleet.sh --host {host} up verify"]
+run = ["scripts/deploy-host.sh {host}", "scripts/fleet.sh --host {host} restore up verify"]
 [[external]]
 name = "external-access"
 repo = "~/local/asyla/projects/external-access"

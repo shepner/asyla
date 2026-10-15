@@ -50,7 +50,7 @@ They must be listed in `apps/.gitignore`, or `update_scripts.sh` deletes them.
 | App | Source repo | Notes |
 |-----|-------------|-------|
 | **external-access** | `asyla/projects/external-access` | Cloudflare Tunnel; per-host config in `hosts/d03/`; needs `host.env` |
-| **internal-access** | `asyla/projects/internal-access` | Caddy for split-DNS on ports 80/443; needs `host.env` with `CF_API_TOKEN` |
+| **internal-access** | `asyla/projects/internal-access` | Caddy for split-DNS on ports 80/443; per-host config `hosts/d03/host.conf`, `CF_API_TOKEN` in `/mnt/docker/internal-proxy/.env`; `restore` before `up` on a rebuild |
 
 To add a tunnel hostname, edit `hosts/d03/apps.yml` in `asyla/projects/external-access` and run
 `external-access.sh genconfig`. The old `d03/scripts/add-tunnel-app.sh` was removed: it wrote a
