@@ -3,8 +3,9 @@
 # bash, curl, python3 and coreutils d03 has, which the offline run on a workstation does not.
 # Nothing real is involved: the route is chronicle_backup_stub.py on test01's loopback, and the
 # mirror is a directory under a temp dir in /tmp. The script under test runs from a copy whose
-# common.env points DATA1 into that temp dir, so it cannot reach /mnt/nas; test01 mounts the NAS
-# read-only besides. This wrapper also shows that the real mirror path was not created or changed.
+# common.env points DATA1 into that temp dir, so it cannot reach /mnt/nas. test01 mounts the NAS
+# read-write (it is no replica; build/setup/nfs.sh mounts read-only only for one), so that pointing
+# is the only guard, and this wrapper shows that the real mirror path was not created or changed.
 #
 #   scripts/tests/test_ms_chronicle_backup_test01.sh          # from the workstation; uses `ssh docker@test01`
 #
