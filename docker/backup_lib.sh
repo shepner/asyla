@@ -92,7 +92,7 @@ do_rsync_mirror_backup() {
   # `run_cmd || ...`, where bash ignores set -e for the whole call.
   local rc=0
   rsync -aH --delete --stats --human-readable \
-    --exclude=/.backup-status \
+    --exclude=/.backup-status --exclude=/.backup-root \
     "${extra_rsync_args[@]}" \
     "$src/" "$dest/" || rc=$?
   if [ "$rc" -eq 24 ]; then
@@ -103,6 +103,14 @@ do_rsync_mirror_backup() {
     return "$rc"
   fi
 
+  # The mirror's top directory does not keep the source's mode and owner (the NAS share gives
+  # its own: breeding-research's 2775 came back 755 on 2026-10-09), so they are recorded for
+  # the restore. Before the status line: an OK mirror always has its .backup-root.
+  if ! stat -c '%a %u %g' "$src" > "$dest/.backup-root"; then
+    echo "FAILED (no .backup-root) $(date -Is) from $(hostname -s):$src" > "$status_file"
+    echo "[ERROR] could not record the mode and owner of $src in $dest/.backup-root" >&2
+    return 1
+  fi
   echo "OK $(date -Is) from $(hostname -s):$src" > "$status_file"
   echo "[INFO] Backup complete: $dest"
 }
@@ -113,6 +121,9 @@ do_rsync_mirror_backup() {
 #   not restored). Refuses if <app_root> already holds files, unless RESTORE_FORCE=1, so it never
 #   overwrites live data by accident. Takes the same lock as the backup of that mirror.
 #   Files the backup excluded (caches, clones) are not in the mirror; the app recreates them.
+#   <app_root> itself gets the mode and owner the backup recorded in <mirror_dir>/.backup-root
+#   (owner by sudo when this user may not set it). A mirror from before that file existed
+#   restores as it always did, with a warning naming the mode it left.
 do_rsync_mirror_restore() {
   local src="$1" dest="$2" status
   if [ ! -f "$src/.backup-status" ]; then
@@ -131,10 +142,35 @@ do_rsync_mirror_restore() {
   _backup_lock "$src" || return 1
   mkdir -p "$dest"
   echo "[INFO] restore $src/ -> $dest/ (backup: $status)"
-  rsync -aH --delete --stats --human-readable --exclude=/.backup-status "$src/" "$dest/" || {
+  rsync -aH --delete --stats --human-readable --exclude=/.backup-status --exclude=/.backup-root "$src/" "$dest/" || {
     echo "[ERROR] rsync restore of $src failed; $dest is incomplete" >&2
     return 1
   }
+  if [ -f "$src/.backup-root" ]; then
+    local root_mode root_uid root_gid
+    read -r root_mode root_uid root_gid < "$src/.backup-root" || true
+    if ! [[ "$root_mode" =~ ^[0-7]{3,4}$ && "$root_uid" =~ ^[0-9]+$ && "$root_gid" =~ ^[0-9]+$ ]]; then
+      echo "[ERROR] $src/.backup-root is not 'mode uid gid'; $dest keeps mode $(stat -c %a "$dest")" >&2
+      return 1
+    fi
+    # Owner first: chown clears a setgid bit.
+    if [ "$(stat -c '%u %g' "$dest")" != "$root_uid $root_gid" ]; then
+      chown "$root_uid:$root_gid" "$dest" 2>/dev/null || sudo -n chown "$root_uid:$root_gid" "$dest" || {
+        echo "[ERROR] could not set the owner of $dest to $root_uid:$root_gid" >&2
+        return 1
+      }
+    fi
+    # Five digits: GNU chmod keeps a directory's setgid bit for a shorter mode (755 on 2755 stays
+    # 2755), and rsync gave $dest the mirror directory's mode.
+    local mode5="0000$root_mode"; mode5="${mode5: -5}"
+    chmod "$mode5" "$dest" 2>/dev/null || sudo -n chmod "$mode5" "$dest" || {
+      echo "[ERROR] could not set the mode of $dest to $root_mode" >&2
+      return 1
+    }
+    echo "[INFO] $dest: mode $root_mode, owner $root_uid:$root_gid (from the backup)"
+  else
+    echo "[WARN] $src has no .backup-root (a backup older than this check): $dest keeps mode $(stat -c %a "$dest")" >&2
+  fi
   echo "[INFO] Restore complete: $dest"
 }
 
