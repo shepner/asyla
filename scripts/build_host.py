@@ -23,7 +23,8 @@ Build phases, in order (each is safe to re-run):
   disk       data disk -> /mnt/docker (build/setup/data_disk.sh; never formats a disk with data)
   secrets    every [[secret]] from GitLab CI/CD variables to its path, except those under
              /mnt/docker/ (app data), which restore installs after the data is back
-  setup      build/setup/<step> for each [setup].steps, as root
+  setup      build/setup/<step> for each [setup].steps, as root; then, for a spec with
+             [host_maintenance], build/setup/host_maintenance_keys.sh (below)
   restore    `<app>.sh restore` for each app whose data is empty (from its NAS mirror), then the
              secrets under /mnt/docker/ (a restore refuses a non-empty data dir)
   apps       each app's start commands (default: up), in spec order, except the apps marked
@@ -37,7 +38,7 @@ Build phases, in order (each is safe to re-run):
              (build/gitlab-runner/gitlab-runner.sh; the token over SSH stdin, into gitlab-runner's
              environment), concurrent = the number of runners, wait until online
   verify     mounts, every app's verify (or running containers), runners online with the spec's
-             labels or tags
+             labels or tags, the host-maintenance key set
 
 Pre-flight: a build that includes the vm phase first compares every [[secret]] file on the
 live host (for a replica: on its source) with its GitLab variable, by hash, and stops when one
@@ -78,6 +79,16 @@ tags, executor = "docker" | "shell", and for docker image, volumes, pull_policy}
 makes new runners (no GitLab CI secret holds a runner token); destroy deletes them. Listings are
 type-filtered (/groups/ID/runners?type=group_type): unfiltered, gitlab.com's shared runners
 fill the first page.
+
+host-maintenance key set (gap G11): a host that carries asyla/host-maintenance's runner has
+[host_maintenance] identity = "PATH" (the private key: the path of one [[secret]], mode 600, not
+under /mnt/docker/), user = "NAME" (whose ~/.ssh/authorized_keys gets the public key: the host
+is one the jobs manage) and known_hosts = ["ADDRESS ssh-ed25519 KEY", ...] (the managed hosts'
+keys, pinned). The setup phase runs build/setup/host_maintenance_keys.sh: IDENTITY.pub from
+`ssh-keygen -y`, known_hosts beside the key from the pins, the authorized_keys line (marked
+HM_MARK, once), modes 0700/0600/0644 with the secret's owner; then it scans each pinned address
+from the host and fails on a host that does not answer or offers another key. verify checks the
+.pub, the modes, the authorized_keys line and known_hosts against the spec.
 
 Nothing here prints a secret (SEC): tokens and secret files move over SSH stdin or HTTPS bodies.
 Credentials come from the environment only (no credential file is read): GITLAB_TOKEN,
@@ -120,6 +131,11 @@ GL_RUNNER_SCOPE = re.compile(r"(group|project):[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)
 GL_RUNNER_TAG = re.compile(r"[A-Za-z0-9_.:-]+")
 GL_EXECUTORS = ("docker", "shell")
 GL_PULL_POLICIES = ("always", "if-not-present", "never")
+HM_SCRIPT = "host_maintenance_keys.sh"   # build/setup/, run by the setup phase for [host_maintenance]
+HM_MARK = "asyla-build:host-maintenance"  # the end of its authorized_keys line (the script's MARK)
+HM_PIN = re.compile(r"[A-Za-z0-9.:-]+ ssh-ed25519 [A-Za-z0-9+/]+={0,2}")
+HM_PATH = re.compile(r"/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)+")
+HM_NAME = re.compile(r"[a-z_][a-z0-9_-]*")
 GL_ONLINE_WAIT = 180           # seconds the runner phase waits for a new GitLab runner to be online
 NODES = ("vmh01", "vmh02")
 IMAGE = "/mnt/nas/data1/iso/template/iso/debian-13-generic-amd64.qcow2"
@@ -280,6 +296,7 @@ def load_spec(host: str, node: str | None = None) -> dict:
     for s in spec.get("secret", []):
         if not s.get("var", "").replace("_", "").isalnum():
             raise Fail(f"{path}: bad secret var {s.get('var')!r}")
+    check_host_maintenance_spec(path, spec)
     if host not in LEGACY_HOSTS:
         own = REPO / host / "setup"
         if own.is_dir() and any(own.iterdir()):
@@ -332,6 +349,45 @@ def check_gitlab_runner_spec(path: Path, spec: dict) -> None:
         unknown = set(r) - allowed
         if unknown:
             raise Fail(f"{where}: runner {name}: unknown keys {sorted(unknown)}")
+
+
+def check_host_maintenance_spec(path: Path, spec: dict) -> None:
+    """[host_maintenance] identity, user, known_hosts (module docstring), or no table at all.
+    Checked after a replica's secrets are merged: the identity is one of the host's [[secret]]s."""
+    hm = spec.get("host_maintenance")
+    if hm is None:
+        return
+    where = f"{path}: [host_maintenance]"
+    want = {"identity", "user", "known_hosts"}
+    if not isinstance(hm, dict) or set(hm) != want:
+        raise Fail(f"{where} must hold identity, user and known_hosts, and nothing else")
+    ident = hm["identity"]
+    if not isinstance(ident, str) or not HM_PATH.fullmatch(ident) or ".." in ident.split("/"):
+        raise Fail(f"{where}: identity must be an absolute path, not {ident!r}")
+    if ident.startswith(DATA_ROOT):
+        raise Fail(f"{where}: identity under {DATA_ROOT} is installed after the setup phase; keep it outside")
+    owners = [s for s in spec.get("secret", []) if s.get("path") == ident]
+    if len(owners) != 1:
+        raise Fail(f"{where}: identity must be the path of one [[secret]] (the private key comes from GitLab)")
+    if str(owners[0].get("mode", "600")) != "600":
+        raise Fail(f"{where}: the identity's [[secret]] must have mode 600 (ssh refuses a wider one)")
+    owner = owners[0].get("owner", "docker:docker")
+    if not (isinstance(owner, str) and owner.count(":") == 1 and all(HM_NAME.fullmatch(x) for x in owner.split(":"))):
+        raise Fail(f"{where}: the identity's [[secret]] owner must be USER:GROUP, not {owner!r}")
+    if not isinstance(hm["user"], str) or not HM_NAME.fullmatch(hm["user"]):
+        raise Fail(f"{where}: user must be a user name, not {hm['user']!r}")
+    pins = hm["known_hosts"]
+    if not isinstance(pins, list) or not pins or not all(isinstance(p, str) and HM_PIN.fullmatch(p) for p in pins):
+        raise Fail(f"{where}: known_hosts must be a non-empty list of \"ADDRESS ssh-ed25519 KEY\" lines")
+    addrs = [p.split()[0] for p in pins]
+    if len(set(addrs)) != len(addrs):
+        raise Fail(f"{where}: known_hosts pins an address twice")
+
+
+def hm_owner(spec: dict) -> str:
+    """The owner of the host-maintenance key set: its identity's [[secret]] owner."""
+    ident = spec["host_maintenance"]["identity"]
+    return next(s.get("owner", "docker:docker") for s in spec["secret"] if s.get("path") == ident)
 
 
 def legacy(spec: dict) -> bool:
@@ -585,6 +641,13 @@ def phase_setup(spec: dict, apply: bool) -> None:
                 ssh(host, f"sudo ~/scripts/{host}/setup/{s}", stream=True, timeout=3600)
             else:
                 build_step(host, s)
+    hm = spec.get("host_maintenance")
+    if hm:
+        print(f"setup: {HM_SCRIPT} ({BUILD_SETUP}/, sent from GitLab master): {hm['identity']}.pub, "
+              f"known_hosts from {len(hm['known_hosts'])} pin(s) (each checked by ssh-keyscan from {host}), "
+              f"{hm['user']}'s authorized_keys")
+        if apply:
+            build_step(host, HM_SCRIPT)
 
 
 # ---------------------------------------------------------------- secrets
@@ -998,6 +1061,42 @@ def verify_gitlab_runners(spec: dict, check) -> None:
               f"{lines[:1]} {names} concurrent {conc}")
 
 
+def verify_host_maintenance(spec: dict, check) -> None:
+    """verify's lines for [host_maintenance]: the .pub is the key's public half, the key set's
+    modes and owner, the user's authorized_keys holds the key once (marked), known_hosts is the
+    spec's pinned list. The host prints public keys and file modes only, never the private key."""
+    hm = spec.get("host_maintenance")
+    if not hm:
+        return
+    q = shlex.quote
+    facts = (f"K={q(hm['identity'])}; D=$(dirname \"$K\"); H=$(getent passwd {q(hm['user'])} | cut -d: -f6); "
+             "P=$(ssh-keygen -y -f \"$K\" 2>/dev/null | cut -d' ' -f1,2); B=${P#* }; "
+             "echo \"derived $P\"; echo \"pubfile $(cut -d' ' -f1,2 \"$K.pub\" 2>/dev/null)\"; "
+             "for f in \"$D\" \"$K\" \"$K.pub\" \"$D/known_hosts\"; do "
+             "echo \"stat $(stat -c '%a %U:%G' \"$f\" 2>/dev/null || echo missing)\"; done; "
+             "if [ -n \"$B\" ]; then A=\"$H/.ssh/authorized_keys\"; "
+             f"echo \"auth $(grep -cF \" $B\" \"$A\" 2>/dev/null) $(grep -F \" $B\" \"$A\" 2>/dev/null | grep -cF {q(' ' + HM_MARK)})\"; "
+             "else echo 'auth - -'; fi; echo '--- known_hosts'; cat \"$D/known_hosts\" 2>/dev/null")
+    r = ssh(spec["host"], f"sudo bash -c {q(facts)}", check=False)
+    head, _, kh = r.stdout.partition("--- known_hosts\n")
+    lines = head.splitlines()
+    derived = next((l[8:] for l in lines if l.startswith("derived ")), "")
+    pubfile = next((l[8:] for l in lines if l.startswith("pubfile ")), "")
+    check(f"host-maintenance {hm['identity']}.pub is ssh-keygen -y of the key",
+          len(derived.split()) == 2 and derived == pubfile,
+          f"...{derived[-8:]} vs ...{pubfile[-8:]}" if derived else "the key does not read")
+    owner = hm_owner(spec)
+    stats = [l[5:] for l in lines if l.startswith("stat ")]
+    want = [f"700 {owner}", f"600 {owner}", f"644 {owner}", f"644 {owner}"]
+    check("host-maintenance key dir 700, key 600, .pub and known_hosts 644, owner the secret's",
+          stats == want, "; ".join(stats))
+    auth = next((l.split()[1:] for l in lines if l.startswith("auth ")), [])
+    check(f"{hm['user']}'s authorized_keys holds the host-maintenance key once, marked",
+          auth == ["1", "1"], f"{auth[0] if auth else '-'} line(s), {auth[1] if len(auth) > 1 else '-'} marked")
+    check("host-maintenance known_hosts is the spec's pinned list",
+          kh.splitlines() == hm["known_hosts"], f"{len(kh.splitlines())} line(s) vs {len(hm['known_hosts'])} pinned")
+
+
 def verify(spec: dict) -> int:
     host, bad = spec["host"], 0
 
@@ -1085,6 +1184,7 @@ def verify(spec: dict) -> int:
             have = sorted({l["name"].split(":")[0] for e in entries for l in e.get("labels", [])})
             check("Gitea runner labels are the spec's", have == sorted(want), f"{have} vs {sorted(want)}")
     verify_gitlab_runners(spec, check)
+    verify_host_maintenance(spec, check)
     for e in spec.get("external", []):
         if e.get("manual"):
             check(f"external {e['name']}", False, "manual step, not automated yet")
@@ -1117,6 +1217,10 @@ def plan(spec: dict) -> int:
     print(f"  externals: {len(spec.get('external', []))} ({gaps} manual)")
     for r in gitlab_runners(spec):
         print(f"  GitLab runner {r['description']}: {r['scope']}, {r['executor']}, tags {r['tags']}")
+    hm = spec.get("host_maintenance")
+    if hm:
+        print(f"  host-maintenance key set: {hm['identity']} (+ .pub, known_hosts: "
+              f"{', '.join(p.split()[0] for p in hm['known_hosts'])}), authorized for {hm['user']}")
     return 0
 
 

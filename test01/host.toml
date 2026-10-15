@@ -26,6 +26,26 @@ path = "/home/docker/scripts/test01/apps/hello/.env"
 owner = "docker:asyla"
 mode = "600"
 
+# host-maintenance's key set (gap G11; build/setup/host_maintenance_keys.sh, setup phase). The
+# key is a throwaway one, made for a test01 build and deleted after it (asyla backlog, G11 proof):
+# it authorizes docker@test01 only, never d01 to d03. The pins are d01 to d03's ed25519 host keys
+# (ssh-keyscan -t ed25519 from the workstation, 2026-10-15, equal to its known_hosts); the build
+# scans each address from test01 and fails on another key.
+[[secret]]
+var = "TEST01_HOST_MAINTENANCE_SSH_KEY"
+path = "/home/docker/.config/host-maintenance/ssh/id_ed25519"
+owner = "docker:docker"
+mode = "600"
+
+[host_maintenance]
+identity = "/home/docker/.config/host-maintenance/ssh/id_ed25519"
+user = "docker"
+known_hosts = [
+  "10.0.0.60 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEWInJu/I6E2DxkusPBWL2c4gY4OBKVyvhuYz4VOfkrv",
+  "10.0.0.61 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPbeDGfZcftzPaZaKINRYpCqTWWPB8e5rgJQsoEVBvz8",
+  "10.0.0.62 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKLcHH61N2/2rTyKaIFbN1/UkNVik4suQSISbhhGgU9S",
+]
+
 [[app]]
 name = "hello"
 verify = ["verify"]
