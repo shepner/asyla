@@ -1,6 +1,6 @@
 # test01: the build test host (asyla hub decisions/host-layout.md, decision 4). Created and
-# destroyed as testing needs (operator pre-approved for test01 only, 2026-10-13). Its runner
-# carries only the label build-test, so it never takes a real job.
+# destroyed as testing needs (operator pre-approved for test01 only, 2026-10-13). Its runners
+# carry only the label or tag build-test, so they never take a real job.
 # The hello test (test01/apps/hello). To rehearse a production host instead, add
 # [replica] of = "dNN" (scripts/build_host.py docstring; the d03 replica of 2026-10-09 is in git
 # history under d04/, 4decdd6..fad6650).
@@ -33,3 +33,15 @@ verify = ["verify"]
 [runner]
 enabled = true
 labels = ["build-test"]    # one label no workflow uses (docker/gitea-runner/gitea-runner.sh)
+
+# GitLab runners (build/gitlab-runner/gitlab-runner.sh, run by the build's runner phase); one
+# [[gitlab_runner.runners]] table each. GitLab description test01-build; tag build-test only, and
+# untagged jobs off, so it never takes a job.
+[[gitlab_runner.runners]]
+name = "build"
+scope = "group:asyla"
+tags = ["build-test"]
+executor = "docker"
+image = "python:3.12-alpine"
+volumes = []
+pull_policy = "if-not-present"

@@ -31,8 +31,13 @@ Build phases, in order (each is safe to re-run):
   external   other repos' deploy commands from the workstation; `manual` entries are listed
   late       the apps marked after_external = true: those that need this host's proxy or tunnel
              up before they start (an app that pulls its images through the proxy)
-  runner     Gitea runner: delete this host's stale entry, install, register, up
-  verify     mounts, every app's verify (or running containers), runner online
+  runner     Gitea runner: delete this host's stale entry, install, register, up; then each
+             [gitlab_runner] runner: delete GitLab's entries with its description (HOST-NAME),
+             create a new one (POST /user/runners, untagged jobs off), register it on the host
+             (build/gitlab-runner/gitlab-runner.sh; the token over SSH stdin, into gitlab-runner's
+             environment), concurrent = the number of runners, wait until online
+  verify     mounts, every app's verify (or running containers), runners online with the spec's
+             labels or tags
 
 Pre-flight: a build that includes the vm phase first compares every [[secret]] file on the
 live host (for a replica: on its source) with its GitLab variable, by hash, and stops when one
@@ -44,9 +49,12 @@ Build files: one set of base build scripts in build/setup/, and a host is its HO
 they need from GitLab master (`git archive` of build/, HOST/host.toml and, for the runner,
 docker/gitea-runner/) inside the SSH command, unpack it into a mktemp folder that a trap removes,
 and run from there with HOST_SPEC set; nothing of the build stays on the host, and verify checks
-that. The legacy hosts d01 to d03 (LEGACY_HOSTS) keep HOST/setup/ and their old phases until each
-is replaced (operator: "Let the legacy servers behave in their legacy ways"); any other spec is
-refused if HOST/setup/ exists or a step is not in build/setup/.
+that. GitLab runners the same way: build/gitlab-runner/ is sent, never kept (the updaters install
+only HOST/ and docker/), and the host keeps only the gitlab-runner package, its apt source and
+key, /etc/gitlab-runner/config.toml and the unit. The legacy hosts d01 to d03 (LEGACY_HOSTS)
+keep HOST/setup/ and their old phases until each is replaced (operator: "Let the legacy servers
+behave in their legacy ways"); any other spec is refused if HOST/setup/ exists or a step is not
+in build/setup/.
 
 Start order: an optional [vm].startup (Proxmox's form, "order=N[,up=S][,down=S]") is set when the
 VM is created and checked by verify.
@@ -63,6 +71,13 @@ Replica: a spec with [replica] of = "dNN" (test01 as a d03 replica) takes the so
 updater installs that tree too). Its own [vm], [setup] and [runner] apply, and the source's
 [[external]] never do: a replica must not answer for the source's hostnames. With
 start_apps = false the apps phase starts nothing and verify checks that no container runs.
+[gitlab_runner] is the host's own, never the source's.
+
+GitLab runners: [gitlab_runner] runners = [{name, scope = "group:PATH" | "project:GROUP/PROJECT",
+tags, executor = "docker" | "shell", and for docker image, volumes, pull_policy}]. A rebuild
+makes new runners (no GitLab CI secret holds a runner token); destroy deletes them. Listings are
+type-filtered (/groups/ID/runners?type=group_type): unfiltered, gitlab.com's shared runners
+fill the first page.
 
 Nothing here prints a secret (SEC): tokens and secret files move over SSH stdin or HTTPS bodies.
 Credentials come from the environment only (no credential file is read): GITLAB_TOKEN,
@@ -98,6 +113,14 @@ GITEA_API = "https://gitea.asyla.org/api/v1"
 GITEA_TOKEN_HOST = "d03"
 LEGACY_HOSTS = ("d01", "d02", "d03")   # HOST/setup/ on the host, run from ~/scripts (the old way)
 BUILD_SETUP = "build/setup"
+BUILD_GITLAB_RUNNER = "build/gitlab-runner"
+GITLAB_URL = "https://gitlab.com"
+GL_RUNNER_NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
+GL_RUNNER_SCOPE = re.compile(r"(group|project):[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*")
+GL_RUNNER_TAG = re.compile(r"[A-Za-z0-9_.:-]+")
+GL_EXECUTORS = ("docker", "shell")
+GL_PULL_POLICIES = ("always", "if-not-present", "never")
+GL_ONLINE_WAIT = 180           # seconds the runner phase waits for a new GitLab runner to be online
 NODES = ("vmh01", "vmh02")
 IMAGE = "/mnt/nas/data1/iso/template/iso/debian-13-generic-amd64.qcow2"
 GATEWAY = "10.0.0.1"
@@ -234,6 +257,7 @@ def load_spec(host: str, node: str | None = None) -> dict:
     labels = spec.get("runner", {}).get("labels", [])
     if not isinstance(labels, list) or not all(isinstance(l, str) and l for l in labels):
         raise Fail(f"{path}: [runner].labels must be a list of names")
+    check_gitlab_runner_spec(path, spec)
     spec["apps_tree"] = host
     rep = spec.get("replica")
     if rep:
@@ -264,6 +288,50 @@ def load_spec(host: str, node: str | None = None) -> dict:
         if missing:
             raise Fail(f"{path}: [setup].steps not in {BUILD_SETUP}/: {missing}")
     return spec
+
+
+def check_gitlab_runner_spec(path: Path, spec: dict) -> None:
+    """[gitlab_runner] runners = [{name, scope, tags, executor, and for docker: image, volumes,
+    pull_policy}], or no table at all. Values go into a gitlab-runner command line and the API."""
+    gr = spec.get("gitlab_runner")
+    if gr is None:
+        return
+    where = f"{path}: [gitlab_runner]"
+    if not isinstance(gr, dict) or set(gr) != {"runners"}:
+        raise Fail(f"{where} must hold only runners = [...]")
+    runners = gr["runners"]
+    if not isinstance(runners, list) or not runners or not all(isinstance(r, dict) for r in runners):
+        raise Fail(f"{where}.runners must be a non-empty list of tables")
+    seen = set()
+    for r in runners:
+        name = r.get("name")
+        if not isinstance(name, str) or not GL_RUNNER_NAME.fullmatch(name):
+            raise Fail(f"{where}: runner name must be lower-case letters, digits and dashes, not {name!r}")
+        if name in seen:
+            raise Fail(f"{where}: runner {name} named twice")
+        seen.add(name)
+        allowed = {"name", "scope", "tags", "executor"}
+        if not isinstance(r.get("scope"), str) or not GL_RUNNER_SCOPE.fullmatch(r["scope"]):
+            raise Fail(f"{where}: runner {name}: scope must be group:PATH or project:GROUP/PROJECT, not {r.get('scope')!r}")
+        tags = r.get("tags")
+        if not isinstance(tags, list) or not tags or not all(isinstance(t, str) and GL_RUNNER_TAG.fullmatch(t) for t in tags) \
+                or len(set(tags)) != len(tags):
+            raise Fail(f"{where}: runner {name}: tags must be a non-empty list of distinct tag names "
+                       f"(a runner without tags would take untagged jobs)")
+        if r.get("executor") not in GL_EXECUTORS:
+            raise Fail(f"{where}: runner {name}: executor must be one of {GL_EXECUTORS}, not {r.get('executor')!r}")
+        if r["executor"] == "docker":
+            allowed |= {"image", "volumes", "pull_policy"}
+            if not isinstance(r.get("image"), str) or not r["image"] or any(c.isspace() for c in r["image"]):
+                raise Fail(f"{where}: runner {name}: a docker runner needs image = \"...\"")
+            vols = r.get("volumes", [])
+            if not isinstance(vols, list) or not all(isinstance(v, str) and v and not any(c.isspace() for c in v) for v in vols):
+                raise Fail(f"{where}: runner {name}: volumes must be a list of HOST:CONTAINER[:MODE] or PATH strings")
+            if r.get("pull_policy", "if-not-present") not in GL_PULL_POLICIES:
+                raise Fail(f"{where}: runner {name}: pull_policy must be one of {GL_PULL_POLICIES}")
+        unknown = set(r) - allowed
+        if unknown:
+            raise Fail(f"{where}: runner {name}: unknown keys {sorted(unknown)}")
 
 
 def legacy(spec: dict) -> bool:
@@ -372,6 +440,7 @@ def destroy_vm(spec: dict, apply: bool, node: str) -> None:
     print(f"destroy VM {vmid} ({host}) on {node} with its disks")
     if spec["runner"].get("enabled") if "runner" in spec else False:
         delete_runner_entry(host, apply)
+    delete_gitlab_runner_entries(spec, apply)
     if apply:
         ssh(root(node), f"qm stop {vmid} --skiplock 1 >/dev/null 2>&1 || true; qm destroy {vmid} --purge 1")
 
@@ -741,10 +810,128 @@ def delete_runner_entry(host: str, apply: bool) -> None:
                 raise Fail(f"delete runner {r['id']}: HTTP {code}")
 
 
+def gitlab_runners(spec: dict) -> list[dict]:
+    """The spec's GitLab runners, each with its description in GitLab: HOST-NAME."""
+    return [{**r, "description": f"{spec['host']}-{r['name']}"}
+            for r in spec.get("gitlab_runner", {}).get("runners", [])]
+
+
+def gl_scope(scope: str) -> tuple[str, str]:
+    """group:asyla -> ("group", "/groups/asyla"); project:a/b -> ("project", "/projects/a%2Fb")."""
+    kind, _, where = scope.partition(":")
+    return kind, f"/{kind}s/{urllib.parse.quote(where, safe='')}"
+
+
+def gl_scope_id(scope: str) -> int:
+    code, body = gitlab("GET", gl_scope(scope)[1])
+    if code != 200 or not isinstance(body, dict) or not isinstance(body.get("id"), int):
+        raise Fail(f"GitLab {scope}: HTTP {code}")
+    return body["id"]
+
+
+def gl_runner_entries(scope: str, description: str) -> list[dict]:
+    """The runners of SCOPE with this description. Listed with a type filter: an unfiltered
+    listing shows gitlab.com's shared runners first and pages them at 100, hiding our own."""
+    kind, base = gl_scope(scope)
+    code, body = gitlab("GET", f"{base}/runners?type={kind}_type&per_page=100")
+    if code != 200 or not isinstance(body, list):
+        raise Fail(f"GitLab runner list of {scope}: HTTP {code}")
+    return [e for e in body if e.get("description") == description]
+
+
+def delete_gitlab_runner_entries(spec: dict, apply: bool) -> None:
+    """Delete the entries GitLab has for the spec's runners (matched by description, HOST-NAME)."""
+    for r in gitlab_runners(spec):
+        for e in gl_runner_entries(r["scope"], r["description"]):
+            print(f"delete GitLab runner {r['description']} (id {e['id']}, {e.get('status')}) from {r['scope']}")
+            if apply:
+                code, _ = gitlab("DELETE", f"/runners/{e['id']}")
+                if code not in (200, 204):
+                    raise Fail(f"delete GitLab runner {e['id']}: HTTP {code}")
+
+
+def create_gitlab_runner(r: dict) -> tuple[int, str]:
+    """POST /user/runners for one spec runner: (id, its authentication token). Untagged jobs off."""
+    kind, _ = gl_scope(r["scope"])
+    body = {"runner_type": f"{kind}_type", f"{kind}_id": gl_scope_id(r["scope"]), "description": r["description"],
+            "tag_list": ",".join(r["tags"]), "run_untagged": False}
+    code, b = gitlab("POST", "/user/runners", body)
+    if code != 201 or not isinstance(b, dict) or not b.get("token") or not isinstance(b.get("id"), int):
+        raise Fail(f"create GitLab runner {r['description']} in {r['scope']}: HTTP {code}")   # never the body
+    return b["id"], b["token"]
+
+
+def gl_register_args(r: dict) -> list[str]:
+    """gitlab-runner register's options for one spec runner (all but --name and the token).
+    --limit 1: one job at a time per runner, as on d03."""
+    a = ["--url", GITLAB_URL, "--executor", r["executor"], "--limit", "1"]
+    if r["executor"] == "docker":
+        a += ["--docker-image", r["image"], "--docker-pull-policy", r.get("pull_policy", "if-not-present")]
+        for v in r.get("volumes", []):
+            a += ["--docker-volumes", v]
+    return a
+
+
+def gl_runner_detail(rid: int) -> dict:
+    code, body = gitlab("GET", f"/runners/{rid}")
+    if code != 200 or not isinstance(body, dict):
+        raise Fail(f"GitLab runner {rid}: HTTP {code}")
+    return body
+
+
+def phase_gitlab_runner(spec: dict, apply: bool) -> None:
+    """Each [gitlab_runner] runner: delete GitLab's entries with its description, create a new one
+    (POST /user/runners), register it on the host with the new token over SSH stdin
+    (build/gitlab-runner/gitlab-runner.sh, sent from GitLab master), then set concurrent and wait
+    until GitLab sees each one online. A rebuild makes new runners: no token is kept anywhere but
+    the host's /etc/gitlab-runner/config.toml."""
+    host, runners = spec["host"], gitlab_runners(spec)
+    if not runners:
+        print("no [gitlab_runner] in spec")
+        return
+    print(f"GitLab runners {', '.join(r['description'] for r in runners)}: gitlab-runner from GitLab's apt "
+          f"repository ({BUILD_GITLAB_RUNNER}/, sent from GitLab master), a new entry each (token over stdin only)")
+    delete_gitlab_runner_entries(spec, apply)
+
+    def gl_run(args: str, stdin: str | None = None) -> None:
+        build_run(host, [BUILD_GITLAB_RUNNER], f'bash "$B/{BUILD_GITLAB_RUNNER}/gitlab-runner.sh" {args}',
+                  as_root=True, stdin=stdin)
+
+    for r in runners:
+        print(f"  {r['description']}: {gl_scope(r['scope'])[0]} runner on {r['scope']}, tags {r['tags']}, "
+              f"untagged jobs off; register {shlex.join(gl_register_args(r))}")
+    if not apply:
+        return
+    gl_run("install")
+    created = {}
+    for r in runners:
+        rid, token = create_gitlab_runner(r)
+        created[r["description"]] = rid
+        print(f"created GitLab runner {r['description']}: id {rid}")
+        gl_run(f"register {shlex.quote(r['description'])} {shlex.join(gl_register_args(r))}", stdin=token + "\n")
+        token = ""
+    gl_run("finish " + shlex.join(r["description"] for r in runners))
+    deadline = time.time() + GL_ONLINE_WAIT
+    waiting = dict(created)
+    while waiting:
+        waiting = {d: i for d, i in waiting.items() if gl_runner_detail(i).get("status") != "online"}
+        if not waiting:
+            break
+        if time.time() > deadline:
+            raise Fail(f"GitLab runner(s) not online after {GL_ONLINE_WAIT}s: {', '.join(waiting)}")
+        time.sleep(10)
+    print(f"GitLab runners online: {', '.join(created)}")
+
+
 def phase_runner(spec: dict, apply: bool) -> None:
+    phase_gitea_runner(spec, apply)
+    phase_gitlab_runner(spec, apply)
+
+
+def phase_gitea_runner(spec: dict, apply: bool) -> None:
     host = spec["host"]
     if not spec.get("runner", {}).get("enabled"):
-        print("runner disabled in spec")
+        print("Gitea runner disabled in spec")
         return
     registered = ssh(host, "sudo test -s /var/lib/gitea-runner/.runner", check=False).returncode == 0
     script = app_script(host, "gitea-runner")   # always this host's own runner, never the source's
@@ -780,6 +967,36 @@ def phase_runner(spec: dict, apply: bool) -> None:
 
 
 # ---------------------------------------------------------------- verify and plan
+
+def verify_gitlab_runners(spec: dict, check) -> None:
+    """verify's GitLab runner lines: each spec runner has one entry, online, with exactly the
+    spec's tags and untagged jobs off; the host's gitlab-runner is active with the spec's
+    runners only and concurrent = their number."""
+    host = spec["host"]
+    gl = gitlab_runners(spec)
+    for r in gl:
+        entries = gl_runner_entries(r["scope"], r["description"])
+        check(f"GitLab runner {r['description']} online in {r['scope']}",
+              len(entries) == 1 and entries[0].get("status") == "online",
+              ", ".join(f"id {e['id']} {e.get('status')}" for e in entries) or "no entry")
+        if len(entries) == 1:
+            d = gl_runner_detail(entries[0]["id"])
+            have = sorted(d.get("tag_list") or [])
+            check(f"GitLab runner {r['description']} tags are the spec's, untagged jobs off",
+                  have == sorted(r["tags"]) and d.get("run_untagged") is False,
+                  f"{have} vs {sorted(r['tags'])}, run_untagged {d.get('run_untagged')}")
+    if gl:
+        # The names and concurrent only: config.toml's token lines are never read here.
+        r = ssh(host, "systemctl is-active gitlab-runner; sudo grep -E '^concurrent = |^  name = ' "
+                      "/etc/gitlab-runner/config.toml", check=False)
+        lines = r.stdout.splitlines()
+        names = sorted(l.split("=", 1)[1].strip().strip('"') for l in lines if l.startswith("  name = "))
+        conc = next((l.split("=", 1)[1].strip() for l in lines if l.startswith("concurrent = ")), "none")
+        want = sorted(x["description"] for x in gl)
+        check("gitlab-runner active with the spec's runners only, concurrent = their number",
+              lines[:1] == ["active"] and names == want and conc == str(len(gl)),
+              f"{lines[:1]} {names} concurrent {conc}")
+
 
 def verify(spec: dict) -> int:
     host, bad = spec["host"], 0
@@ -867,6 +1084,7 @@ def verify(spec: dict) -> int:
         if want:
             have = sorted({l["name"].split(":")[0] for e in entries for l in e.get("labels", [])})
             check("Gitea runner labels are the spec's", have == sorted(want), f"{have} vs {sorted(want)}")
+    verify_gitlab_runners(spec, check)
     for e in spec.get("external", []):
         if e.get("manual"):
             check(f"external {e['name']}", False, "manual step, not automated yet")
@@ -897,6 +1115,8 @@ def plan(spec: dict) -> int:
     print(f"  secrets: {len(spec.get('secret', []))}; apps: {', '.join(a['name'] for a in spec.get('app', []))}")
     gaps = sum(1 for e in spec.get("external", []) if e.get("manual"))
     print(f"  externals: {len(spec.get('external', []))} ({gaps} manual)")
+    for r in gitlab_runners(spec):
+        print(f"  GitLab runner {r['description']}: {r['scope']}, {r['executor']}, tags {r['tags']}")
     return 0
 
 
