@@ -1,9 +1,9 @@
 #!/bin/bash
-# Failure-path test of setup/nfs.sh, on test01 only (the disposable build host): a share that
+# Failure-path test of build/setup/nfs.sh, on test01 only (the disposable build host): a share that
 # does not mount must fail the setup step. It used to be a warning and exit 0, so a build ran on
 # through restore and apps with no NAS (test01, 2026-10-14).
 #
-# It runs this checkout's test01/setup/nfs.sh with a `mount` that always refuses (and `apt`,
+# It runs this checkout's build/setup/nfs.sh (HOST_SPEC = test01/host.toml) with a `mount` that always refuses (and `apt`,
 # `sleep` and `systemctl` that do nothing) first in PATH, once with /mnt/nas/data2/docker
 # unmounted (expected: exit 1, that share named, data1 not named) and once with both shares
 # mounted (expected: exit 0). It then mounts data2 again with the real mount and checks it.
@@ -17,7 +17,7 @@ set -uo pipefail
 
 if [ "${1:-}" != "--on-host" ]; then
   REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-  COPYFILE_DISABLE=1 tar -C "$REPO" -cf - test01/setup/nfs.sh test01/host.toml \
+  COPYFILE_DISABLE=1 tar -C "$REPO" -cf - build/setup/nfs.sh test01/host.toml \
       scripts/tests/test_nfs_mount_failure_test01.sh |
     ssh -o BatchMode=yes -o ConnectTimeout=10 -i ~/.ssh/docker_rsa docker@test01 '
       set -e
@@ -52,7 +52,7 @@ cleanup() {
 trap cleanup EXIT
 
 run_nfs() {   # sets RC and OUT
-  OUT=$(sudo -n env PATH="$D/bin:$PATH" bash "$D/test01/setup/nfs.sh" 2>&1)
+  OUT=$(sudo -n env PATH="$D/bin:$PATH" HOST_SPEC="$D/test01/host.toml" bash "$D/build/setup/nfs.sh" 2>&1)
   RC=$?
 }
 

@@ -20,10 +20,10 @@ Build phases, in order (each is safe to re-run):
              first: allowed freely only for a spec with disposable = true, else needs --confirm HOST)
   bootstrap  deploy token to /etc/asyla/asyla-hosts.env, then the host's update_scripts.sh
              (from GitLab master, the same file the host will keep running)
-  disk       data disk -> /mnt/docker (docker/setup/data_disk.sh; never formats a disk with data)
+  disk       data disk -> /mnt/docker (build/setup/data_disk.sh; never formats a disk with data)
   secrets    every [[secret]] from GitLab CI/CD variables to its path, except those under
              /mnt/docker/ (app data), which restore installs after the data is back
-  setup      HOST/setup/<step> for each [setup].steps, as root
+  setup      build/setup/<step> for each [setup].steps, as root
   restore    `<app>.sh restore` for each app whose data is empty (from its NAS mirror), then the
              secrets under /mnt/docker/ (a restore refuses a non-empty data dir)
   apps       each app's start commands (default: up), in spec order, except the apps marked
@@ -38,6 +38,15 @@ Pre-flight: a build that includes the vm phase first compares every [[secret]] f
 live host (for a replica: on its source) with its GitLab variable, by hash, and stops when one
 differs or exists on the host only: the rebuild would install another value than the host runs
 with, or none. A host that does not answer (a first build) has nothing to compare.
+
+Build files: one set of base build scripts in build/setup/, and a host is its HOST/host.toml
+(asyla hub, the rules gap "build new and cut over"). The disk, setup and runner phases send what
+they need from GitLab master (`git archive` of build/, HOST/host.toml and, for the runner,
+docker/gitea-runner/) inside the SSH command, unpack it into a mktemp folder that a trap removes,
+and run from there with HOST_SPEC set; nothing of the build stays on the host, and verify checks
+that. The legacy hosts d01 to d03 (LEGACY_HOSTS) keep HOST/setup/ and their old phases until each
+is replaced (operator: "Let the legacy servers behave in their legacy ways"); any other spec is
+refused if HOST/setup/ exists or a step is not in build/setup/.
 
 Start order: an optional [vm].startup (Proxmox's form, "order=N[,up=S][,down=S]") is set when the
 VM is created and checked by verify.
@@ -67,6 +76,7 @@ Exit: 0 ok, 1 a step or check failed, 2 usage or spec error.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -86,6 +96,8 @@ GITLAB_PROJECT = "asyla/asyla-hosts"
 GITLAB_API = "https://gitlab.com/api/v4"
 GITEA_API = "https://gitea.asyla.org/api/v1"
 GITEA_TOKEN_HOST = "d03"
+LEGACY_HOSTS = ("d01", "d02", "d03")   # HOST/setup/ on the host, run from ~/scripts (the old way)
+BUILD_SETUP = "build/setup"
 NODES = ("vmh01", "vmh02")
 IMAGE = "/mnt/nas/data1/iso/template/iso/debian-13-generic-amd64.qcow2"
 GATEWAY = "10.0.0.1"
@@ -244,7 +256,18 @@ def load_spec(host: str, node: str | None = None) -> dict:
     for s in spec.get("secret", []):
         if not s.get("var", "").replace("_", "").isalnum():
             raise Fail(f"{path}: bad secret var {s.get('var')!r}")
+    if host not in LEGACY_HOSTS:
+        own = REPO / host / "setup"
+        if own.is_dir() and any(own.iterdir()):
+            raise Fail(f"{REPO / host / 'setup'}: a host has no build scripts of its own; they are in {BUILD_SETUP}/")
+        missing = [s for s in spec.get("setup", {}).get("steps", []) if not (REPO / BUILD_SETUP / s).is_file()]
+        if missing:
+            raise Fail(f"{path}: [setup].steps not in {BUILD_SETUP}/: {missing}")
     return spec
+
+
+def legacy(spec: dict) -> bool:
+    return spec["host"] in LEGACY_HOSTS
 
 
 def app_script(tree: str, app: str) -> str:
@@ -392,6 +415,11 @@ def check_token(host: str) -> str:
     return sha
 
 
+def build_only_paths(spec: dict) -> list[str]:
+    """The tracked paths a new host's updater does not keep: each installed tree's setup/ and host.toml."""
+    return [p for t in sorted({spec["host"], spec["apps_tree"]}) for p in (f"{t}/setup", f"{t}/host.toml")]
+
+
 def scripts_drift(spec: dict) -> tuple[str, list[str]]:
     """GitLab master's SHA and the tracked HOST/, replica source and docker/ paths whose ~/scripts copy differs."""
     host = spec["host"]
@@ -399,9 +427,10 @@ def scripts_drift(spec: dict) -> tuple[str, list[str]]:
     run(["git", "-C", str(REPO), "fetch", "-q", "origin", "master"])
     sha = run(["git", "-C", str(REPO), "rev-parse", "origin/master"]).stdout.strip()
     want = {}
+    skip = () if legacy(spec) else build_only_paths(spec)
     for line in run(["git", "-C", str(REPO), "ls-tree", "-r", "origin/master", "--", *trees]).stdout.splitlines():
         meta, _, path = line.partition("\t")
-        if meta.split()[1] == "blob":
+        if meta.split()[1] == "blob" and not any(path == s or path.startswith(s + "/") for s in skip):
             want[path] = meta.split()[2]
     paths = sorted(want)
     # A symlink is hashed as git stores it: the link text, not the file it points to.
@@ -426,6 +455,40 @@ def phase_bootstrap(spec: dict, apply: bool) -> None:
         stdin=script, stream=True)
 
 
+def bundle(paths: list[str], ref: str = "origin/master") -> str:
+    """base64 of a tar.gz of PATHS as REF has them (origin/master: what GitLab holds, fetched first)."""
+    if ref == "origin/master":
+        run(["git", "-C", str(REPO), "fetch", "-q", "origin", "master"])
+    r = subprocess.run(["git", "-C", str(REPO), "archive", "--format=tar.gz", ref, "--", *paths],
+                       capture_output=True, timeout=120)
+    if r.returncode != 0:
+        raise Fail(f"git archive {ref} {' '.join(paths)}: exit {r.returncode}")
+    return base64.b64encode(r.stdout).decode()
+
+
+BUILD_DIR_GLOB = "asyla-build.*"   # verify: none of these may be left on a host
+
+
+def bundle_script(b64: str, command: str, base: str) -> str:
+    """A bash script that unpacks the bundle into a new folder under BASE, runs COMMAND there ($B
+    is the folder) and removes the folder however COMMAND ends, keeping its exit status."""
+    return (f"set -e\nB=$(mktemp -d {base}/{BUILD_DIR_GLOB[:-1]}XXXXXX)\ntrap 'rm -rf \"$B\"' EXIT\n"
+            f"printf %s '{b64}' | base64 -d | tar -xzf - -C \"$B\"\n{command}\n")
+
+
+def build_run(host: str, paths: list[str], command: str, as_root: bool, stdin: str | None = None) -> None:
+    """Run COMMAND on HOST from a bundle of PATHS (see bundle_script): as root under /root, or as
+    the guest user under /tmp. The bundle travels in the command, so stdin stays free."""
+    script = bundle_script(bundle(paths), command, "/root" if as_root else "/tmp")
+    ssh(host, f"{'sudo ' if as_root else ''}bash -c {shlex.quote(script)}", stdin=stdin, stream=True, timeout=3600)
+
+
+def build_step(host: str, script: str, args: str = "") -> None:
+    """build/setup/SCRIPT as root, with HOST_SPEC naming the host's own host.toml."""
+    build_run(host, ["build", f"{host}/host.toml"],
+              f'HOST_SPEC="$B/{host}/host.toml" bash "$B/{BUILD_SETUP}/{script}" {args}'.rstrip(), as_root=True)
+
+
 def phase_disk(spec: dict, apply: bool) -> None:
     host = spec["host"]
     dd = spec["vm"].get("data_disk")
@@ -437,15 +500,21 @@ def phase_disk(spec: dict, apply: bool) -> None:
         return
     print(f"data disk scsi2 -> /mnt/docker ({owner})")
     if apply:
-        ssh(host, f"sudo ~/scripts/docker/setup/data_disk.sh scsi2 /mnt/docker {owner}", stream=True)
+        if legacy(spec):
+            ssh(host, f"sudo ~/scripts/docker/setup/data_disk.sh scsi2 /mnt/docker {owner}", stream=True)
+        else:
+            build_step(host, "data_disk.sh", f"scsi2 /mnt/docker {shlex.quote(owner)}")
 
 
 def phase_setup(spec: dict, apply: bool) -> None:
     host = spec["host"]
     for s in spec.get("setup", {}).get("steps", []):
-        print(f"setup: {s}")
+        print(f"setup: {s}" + ("" if legacy(spec) else f" ({BUILD_SETUP}/, sent from GitLab master)"))
         if apply:
-            ssh(host, f"sudo ~/scripts/{host}/setup/{s}", stream=True, timeout=3600)
+            if legacy(spec):
+                ssh(host, f"sudo ~/scripts/{host}/setup/{s}", stream=True, timeout=3600)
+            else:
+                build_step(host, s)
 
 
 # ---------------------------------------------------------------- secrets
@@ -678,23 +747,35 @@ def phase_runner(spec: dict, apply: bool) -> None:
         return
     registered = ssh(host, "sudo test -s /var/lib/gitea-runner/.runner", check=False).returncode == 0
     script = app_script(host, "gitea-runner")   # always this host's own runner, never the source's
+    if not legacy(spec):
+        # gitea-runner.sh reads its labels from ../../HOST/host.toml beside itself, which a new
+        # host does not keep: run it from a bundle that has both.
+        script = "docker/gitea-runner/gitea-runner.sh (sent with HOST/host.toml)"
+
+    def runner(switches: str, stdin: str | None = None) -> None:
+        if legacy(spec):
+            ssh(host, f"{app_script(host, 'gitea-runner')} {switches}", stdin=stdin, stream=stdin is None)
+        else:
+            build_run(host, ["docker/gitea-runner", f"{host}/host.toml"],
+                      f'bash "$B/docker/gitea-runner/gitea-runner.sh" {switches}', as_root=False, stdin=stdin)
+
     if registered:
         print(f"{host} is registered locally; install + up only")
         if apply:
-            ssh(host, f"{script} install up", stream=True)
+            runner("install up")
         return
     delete_runner_entry(host, apply)
     print(f"{script} install, register (instance token from {GITEA_TOKEN_HOST}, stdin only), up")
     if not apply:
         return
-    ssh(host, f"{script} install", stream=True)
+    runner("install")
     r = ssh(GITEA_TOKEN_HOST, "docker exec -u git gitea gitea actions generate-runner-token", timeout=120)
     token = r.stdout.strip().splitlines()[-1] if r.stdout.strip() else ""
     if not token:
         raise Fail("no registration token from Gitea")
-    ssh(host, f"{script} register", stdin=token + "\n")
+    runner("register", stdin=token + "\n")
     token = ""
-    ssh(host, f"{script} up", stream=True)
+    runner("up")
 
 
 # ---------------------------------------------------------------- verify and plan
@@ -735,6 +816,16 @@ def verify(spec: dict) -> int:
     sha, drift = scripts_drift(spec)
     check(f"~/scripts matches GitLab master {sha[:12]}", not drift,
           f"{len(drift)} differ: {', '.join(drift[:5])}" if drift else "")
+    if not legacy(spec):
+        paths = " ".join(f"/home/{GUEST_USER}/scripts/{p}" for p in build_only_paths(spec))
+        find = (f"shopt -s nullglob; for p in /tmp/{BUILD_DIR_GLOB} /root/{BUILD_DIR_GLOB} {paths}; do "
+                f"if [ -e \"$p\" ]; then echo \"$p\"; fi; done")
+        r = ssh(host, f"sudo bash -c {shlex.quote(find)}", check=False)
+        left = r.stdout.split()
+        check("no build files on the host", r.returncode == 0 and not left, " ".join(left))
+        r = ssh(host, "test -f /usr/local/share/asyla/docker_bashrc_additions.sh && "
+                      "grep -qF /usr/local/share/asyla/docker_bashrc_additions.sh ~/.bashrc", check=False)
+        check("bash additions installed (bashrc.sh)", r.returncode == 0)
     if spec["vm"].get("data_disk"):
         r = ssh(host, "findmnt -no SOURCE /; findmnt -no SOURCE /mnt/docker", check=False)
         src = r.stdout.split()

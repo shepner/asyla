@@ -55,9 +55,11 @@ done
 # A replica ([replica] in this host's host.toml, e.g. test01 as a d03 replica) mounts the NAS
 # read-only: it carries the source host's app scripts, whose `backup` writes the source host's
 # mirrors, and a read-only mount makes that impossible. Restore only reads the mirrors.
-SPEC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/host.toml"
+# HOST_SPEC: this host's host.toml, which the build sends with this script (build_host.py).
+SPEC="${HOST_SPEC:?HOST_SPEC must name the host.toml of this host}"
+[ -f "$SPEC" ] || { log_error "HOST_SPEC $SPEC is not a file"; exit 1; }
 NFS_MODE=rw
-if [ -f "$SPEC" ] && python3 -c 'import sys, tomllib; sys.exit(0 if tomllib.load(open(sys.argv[1], "rb")).get("replica") else 1)' "$SPEC"; then
+if python3 -c 'import sys, tomllib; sys.exit(0 if tomllib.load(open(sys.argv[1], "rb")).get("replica") else 1)' "$SPEC"; then
     NFS_MODE=ro
     log_info "Replica host: NAS docker shares are mounted read-only"
 fi

@@ -1,6 +1,6 @@
 #!/bin/bash
-# Purpose: Bash profile additions for docker user (d04): history search and completion.
-# Usage: Source from ~/.bashrc; update_scripts.sh appends the source line if missing.
+# Purpose: Bash profile additions for the docker user: history search and completion.
+# Usage: Sourced from ~/.bashrc; the build's bashrc.sh step installs it and the source line.
 # - Up/Down: search history by current line prefix (e.g. type "docker" then Up to cycle matching commands).
 # - Tab: normal readline completion; loads bash-completion if installed.
 

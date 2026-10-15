@@ -18,7 +18,7 @@ disposable = true          # build_host.py may destroy and recreate it without -
 startup = "order=90"       # after every production VM when a node boots; set at create, checked by verify
 
 [setup]
-steps = ["systemConfig.sh", "nfs.sh", "docker.sh"]
+steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "bashrc.sh"]   # build/setup/, sent by the build
 
 [[secret]]
 var = "TEST01_HELLO_ENV"

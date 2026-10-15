@@ -128,8 +128,4 @@ else
 fi
 
 log_info "System configuration completed successfully!"
-log_info ""
-log_info "Note: To enable app migration script, ensure SSH keys are configured:"
-log_info "  Run: ~/scripts/test01/setup/setup_ssh_keys.sh"
-log_info "  Or manually copy SSH keys from workstation (see test01/README.md)"
 

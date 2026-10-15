@@ -18,7 +18,7 @@ data_disk = { storage = "local-data2", size = "16G" }   # /mnt/docker
 cloudinit_storage = "local-data2"
 
 [setup]
-steps = ["systemConfig.sh", "nfs.sh", "docker.sh"]
+steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "bashrc.sh"]   # build/setup/, sent by the build
 
 [runner]
 enabled = false

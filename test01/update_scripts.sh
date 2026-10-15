@@ -17,6 +17,8 @@
 # host's tree is checked out, pruned and installed too, as ~/scripts/dNN/, so its app scripts run
 # from the same paths as on the source. Only this host's update*.sh are installed in ~.
 #
+# Build files: setup/ and host.toml are removed from every installed tree after the copy.
+#
 # Usage: update_scripts.sh [--dry-run]
 #   --dry-run  list what would be deleted and what is preserved; change nothing
 
@@ -219,21 +221,13 @@ fi
 find "$TARGET_SCRIPTS" -name "*.sh" -exec chmod 744 {} \;
 chmod 744 "$TARGET_HOME"/update.sh "$TARGET_HOME"/update_scripts.sh "$TARGET_HOME"/update_all.sh 2>/dev/null || true
 
-if [ -f "$TARGET_SCRIPTS/$HOSTNAME/setup/setup_manual.sh" ]; then
-    ln -sf "$TARGET_SCRIPTS/$HOSTNAME/setup/setup_manual.sh" "$TARGET_HOME/setup_manual.sh"
-    chown -h "$TARGET_USER:" "$TARGET_HOME/setup_manual.sh" 2>/dev/null || true
-fi
+# Build files do not stay on this host (asyla hub, the rules gap "build new and cut over"): the
+# build sends build/setup/ and host.toml when it needs them (scripts/build_host.py). Remove each
+# installed tree's setup/ and host.toml; a replica source's tree carries both in the repo.
+for tree in "$HOSTNAME" $REPLICA_OF; do
+    [ -d "$TARGET_SCRIPTS/$tree" ] || continue
+    rm -rf -- "${TARGET_SCRIPTS:?}/${tree:?}/setup" "${TARGET_SCRIPTS:?}/${tree:?}/host.toml"
+done
+rm -f -- "${TARGET_HOME:?}/setup_manual.sh"
 
-if [ -f "$TARGET_SCRIPTS/$HOSTNAME/setup/docker_bashrc_additions.sh" ]; then
-    BASHRC="$TARGET_HOME/.bashrc"
-    touch "$BASHRC"
-    if ! grep -q 'docker_bashrc_additions.sh' "$BASHRC" 2>/dev/null; then
-        echo "" >> "$BASHRC"
-        echo "# History search (Up/Down by prefix) and completion - asyla test01" >> "$BASHRC"
-        echo '[ -f "$HOME/scripts/test01/setup/docker_bashrc_additions.sh" ] && . "$HOME/scripts/test01/setup/docker_bashrc_additions.sh"' >> "$BASHRC"
-        log_info "Added history-search and completion to $BASHRC"
-    fi
-    chown "$TARGET_USER:" "$BASHRC" 2>/dev/null || true
-fi
-
-log_info "Scripts updated successfully! Setup scripts are in $TARGET_SCRIPTS/$HOSTNAME/setup/"
+log_info "Scripts updated successfully (no build files kept: setup/ and host.toml are the build's)"

@@ -23,6 +23,7 @@ def _no_contact(*a, **kw):
     raise AssertionError(f"the parser test reached out: {a[:1]}")
 
 
+REAL_RUN = build_host.subprocess.run   # the wrapper cases run bash and git locally only
 build_host.subprocess.run = _no_contact
 build_host.urllib.request.urlopen = _no_contact
 
@@ -140,6 +141,65 @@ def preflight(name: str, spec: dict, gitlab: dict, on_host: dict, up: set, want:
 def documented(name: str, text: str) -> bool:
     good = text in build_host.__doc__
     print(f"{'ok  ' if good else 'FAIL'}  {name}: {text!r} in the Usage block")
+    return good
+
+
+def spec_dir_case(name: str, host: str, setup_dir: bool, steps: list[str], build_steps: list[str],
+                  needle: str | None) -> bool:
+    """load_spec() on a throwaway repo with HOST/host.toml, maybe HOST/setup/, and build/setup/ files."""
+    import tempfile
+    d = Path(tempfile.mkdtemp(prefix="build-host-tree-"))
+    (d / host).mkdir()
+    (d / host / "host.toml").write_text(VM + f"[setup]\nsteps = {steps!r}\n".replace("'", '"'))
+    if setup_dir:
+        (d / host / "setup").mkdir()
+        (d / host / "setup" / "old.sh").write_text("#!/bin/bash\n")
+    (d / "build" / "setup").mkdir(parents=True)
+    for s in build_steps:
+        (d / "build" / "setup" / s).write_text("#!/bin/bash\n")
+    real, build_host.REPO = build_host.REPO, d
+    try:
+        build_host.load_spec(host)
+        got = None
+    except build_host.Fail as e:
+        got = str(e)
+    finally:
+        build_host.REPO = real
+    good = got is None if needle is None else (got is not None and needle in got)
+    print(f"{'ok  ' if good else 'FAIL'}  {name}{'' if good else f': {got!r}'}")
+    return good
+
+
+def wrapper_case(name: str, command: str, want_rc: int, want_in_listing: str) -> bool:
+    """bundle_script() run by local bash on a hand-made bundle: COMMAND's exit status comes back,
+    the bundle is unpacked where COMMAND runs, and the folder is gone afterwards."""
+    import base64, io, tarfile, tempfile
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        data = b"#!/bin/bash\necho hi\n"
+        info = tarfile.TarInfo("build/setup/x.sh"); info.size = len(data); info.mode = 0o755
+        tf.addfile(info, io.BytesIO(data))
+    base = Path(tempfile.mkdtemp(prefix="build-host-base-"))
+    script = build_host.bundle_script(base64.b64encode(buf.getvalue()).decode(), command, str(base))
+    r = REAL_RUN(["bash", "-c", script], capture_output=True, text=True, timeout=60)
+    left = [p.name for p in base.iterdir()]
+    good = r.returncode == want_rc and want_in_listing in r.stdout and not left
+    print(f"{'ok  ' if good else 'FAIL'}  {name}" + ("" if good else f": rc {r.returncode}, out {r.stdout!r}, left {left}"))
+    base.rmdir()
+    return good
+
+
+def bundle_case() -> bool:
+    """bundle() of a path at HEAD (no fetch) decodes to a tar.gz holding that path."""
+    import base64, io, tarfile
+    real = build_host.subprocess.run
+    build_host.subprocess.run = REAL_RUN
+    try:
+        names = tarfile.open(fileobj=io.BytesIO(base64.b64decode(build_host.bundle(["scripts/tests"], ref="HEAD")))).getnames()
+    finally:
+        build_host.subprocess.run = real
+    good = "scripts/tests/test_build_host_args.py" in names
+    print(f"{'ok  ' if good else 'FAIL'}  bundle of HEAD holds the asked path")
     return good
 
 
@@ -274,6 +334,17 @@ results = [
     preflight("a replica whose source does not answer",
               temp_specs({"d07": VM + SECRET.format(var="A"), "x": VM + '[replica]\nof = "d07"\n'})("x"),
               {"A": "s3cret-one"}, {}, {"x"}, "d07 does not answer"),
+    # Build files (one set in build/setup/; the legacy hosts keep HOST/setup/).
+    check("the legacy hosts", build_host.LEGACY_HOSTS == ("d01", "d02", "d03")),
+    spec_dir_case("a new host with its steps in build/setup/", "d09", False, ["a.sh"], ["a.sh"], None),
+    spec_dir_case("a new host with a setup/ of its own is refused", "d09", True, ["a.sh"], ["a.sh"], "no build scripts of its own"),
+    spec_dir_case("a step not in build/setup/ is refused", "d09", False, ["a.sh", "b.sh"], ["a.sh"], "not in build/setup/"),
+    spec_dir_case("a legacy host keeps its setup/", "d02", True, ["a.sh"], [], None),
+    check("test01's spec loads (its steps are in build/setup/)", build_host.load_spec("test01")["host"] == "test01"),
+    check("test01's build-only paths", build_host.build_only_paths(build_host.load_spec("test01")) == ["test01/setup", "test01/host.toml"]),
+    wrapper_case("wrapper: the command runs in the unpacked bundle", 'ls -R "$B"', 0, "x.sh"),
+    wrapper_case("wrapper: a failing command's status comes back and the folder is removed", 'bash "$B/build/setup/x.sh"; exit 3', 3, "hi"),
+    bundle_case(),
 ]
 print("all cases passed" if all(results) else f"{results.count(False)} case(s) failed")
 sys.exit(0 if all(results) else 1)
