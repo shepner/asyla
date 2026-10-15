@@ -1,0 +1,36 @@
+# Gitea on d04 — data under /mnt/docker/Gitea (d04's data disk)
+# Follows https://docs.gitea.com/installation/install-with-docker
+# Access via internal-proxy (hostname gitea or gitea.asyla.org). No ports published (proxy only).
+# Run with: ~/scripts/d04/apps/gitea/gitea.sh up
+# Requires DOCKER_DL (e.g. /mnt/docker) and LOCAL_TZ in environment.
+
+networks:
+  gitea_net:
+    name: gitea_net
+    driver: bridge
+
+services:
+  gitea:
+    image: docker.gitea.com/gitea:1
+    container_name: gitea
+    restart: unless-stopped
+    environment:
+      # Match k3s deployment (fsGroup / USER_UID 1003) so migrated files keep ownership
+      - USER_UID=1003
+      - USER_GID=1003
+      - GITEA__server__ROOT_URL=https://gitea.asyla.org/
+      - GITEA__server__HTTP_PORT=3000
+      - GITEA__security__INSTALL_LOCK=true
+      # Only an admin creates accounts. Any account can run host-mode Actions jobs as `docker`
+      # (sudo) on d01-d04 through the gitea-runner (operator, 2026-10-07).
+      - GITEA__service__DISABLE_REGISTRATION=true
+    ports:
+      # Published as on d03: verify and the build's replica checks use the host's :3000
+      - "3000:3000"
+    volumes:
+      - ${DOCKER_DL}/Gitea/data:/data
+      # The zone comes from /etc/localtime. Do not mount /etc/timezone as well: Debian 13 has no
+      # such file, so Docker creates an empty root-owned directory at that path on the host.
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - gitea_net

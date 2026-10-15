@@ -1,5 +1,6 @@
 #!/bin/bash
-# Offline test of `gitea.sh verify` and `gitea.sh restart verify` (d03/apps/gitea/gitea.sh).
+# Offline test of `gitea.sh verify` and `gitea.sh restart verify` (d03/apps/gitea/gitea.sh), and of
+# d04's copy, where a local :3000 failure fails verify (cases 5 and 6).
 # Touches no host and no real Gitea: `docker` is a stub on PATH, and Gitea is a stand-in HTTP
 # server on a free local port that starts answering a few seconds after the stub's `up`, as the
 # real container does. Needs bash, curl and python3. Run from anywhere:
@@ -12,6 +13,7 @@ set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 GITEA_SH="$REPO/d03/apps/gitea/gitea.sh"
+GITEA_SH_D04="$REPO/d04/apps/gitea/gitea.sh"
 T="$(mktemp -d)"
 trap 'stop_standin; rm -rf "$T"' EXIT
 
@@ -20,7 +22,9 @@ trap 'stop_standin; rm -rf "$T"' EXIT
 mkdir -p "$T/home" "$T/bin"
 ln -s "$REPO" "$T/home/scripts"
 
-PORT="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+free_port() { python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'; }
+PORT="$(free_port)"
+DEAD_PORT="$(free_port)"   # nothing listens here: a Gitea whose local :3000 does not answer
 
 cat > "$T/standin.py" <<'PY'
 import http.server, sys
@@ -54,13 +58,14 @@ stop_standin() {
   rm -f "$T/standin.pid"
 }
 
-# run_gitea <wait seconds> <standin delay> <switch ...>: sets RC, OUT and TOOK.
+# run_gitea <wait seconds> <standin delay> <switch ...>: sets RC, OUT and TOOK. SH and LOCAL_PORT
+# pick the copy under test and its local port (default: d03's, the stand-in's port).
 run_gitea() {
   local wait_s="$1" delay="$2" t0=$SECONDS
   shift 2
   OUT="$(HOME="$T/home" PATH="$T/bin:$PATH" STANDIN_DELAY="$delay" \
-    GITEA_VERIFY_WAIT_S="$wait_s" GITEA_LOCAL_URL="http://127.0.0.1:$PORT" \
-    GITEA_PUBLIC_URL="http://127.0.0.1:$PORT" bash "$GITEA_SH" "$@" 2>&1)"
+    GITEA_VERIFY_WAIT_S="$wait_s" GITEA_LOCAL_URL="http://127.0.0.1:${LOCAL_PORT:-$PORT}" \
+    GITEA_PUBLIC_URL="http://127.0.0.1:$PORT" bash "${SH:-$GITEA_SH}" "$@" 2>&1)"
   RC=$?
   TOOK=$((SECONDS - t0))
 }
@@ -97,6 +102,22 @@ stop_standin
 # 4. Gitea never comes up: verify still fails, after the bounded wait and not before.
 run_gitea 4 never restart verify
 check "restart verify, Gitea never answers" '[ "$RC" -ne 0 ] && [ "$TOOK" -ge 4 ] && [ "$TOOK" -le 15 ] && grep -q "check failed" <<<"$OUT"'
+stop_standin
+
+# 5. d04's copy: the public URL answers (as d03's Gitea does until the cutover) but local :3000
+#    does not. verify must fail.
+run_gitea 0 0 up
+sleep 1
+SH="$GITEA_SH_D04" LOCAL_PORT="$DEAD_PORT" run_gitea 1 0 verify
+check "d04 verify, local :3000 down, public up: fails" '[ "$RC" -eq 1 ] && grep -q "Local :3000 check failed" <<<"$OUT"'
+
+# 6. Control: d03's copy in the same state passes with a warning, so case 5 tests d04's change.
+LOCAL_PORT="$DEAD_PORT" run_gitea 1 0 verify
+check "d03 verify, local :3000 down, public up: passes (control)" '[ "$RC" -eq 0 ] && grep -q "WARN.*Local :3000" <<<"$OUT"'
+
+# 7. d04's copy with both answering passes.
+SH="$GITEA_SH_D04" run_gitea 1 0 verify
+check "d04 verify, local and public up: passes" '[ "$RC" -eq 0 ] && grep -q "Local :3000 OK" <<<"$OUT"'
 stop_standin
 
 if [ "$fails" -eq 0 ]; then

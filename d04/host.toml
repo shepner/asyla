@@ -1,24 +1,54 @@
-# d04: theOrg's forge host, Gitea and its registry only (asyla hub decisions/host-layout.md).
-# NOT COMPLETE: what is left of the build test host, whose role moved to test01 on 2026-10-13.
-# The production spec ([vm] on vmh01, Gitea's app and secrets, its proxy and tunnel, the runner's
-# labels) comes with step 3 of that decision, proven on test01 first. Until then `hold` makes
-# build_host.py refuse to build it. d04 is not disposable: a build or a destroy needs
-# --confirm d04 and the operator's approval of the exact action.
-hold = "the production spec is not written yet (asyla hub decisions/host-layout.md, Consequences 3)"
+# d04 build spec, read by scripts/build_host.py: theOrg's forge host, Gitea and its container
+# registry only (asyla hub decisions/host-layout.md). Gitea moves here from d03 at the cutover;
+# until then d03 serves gitea.asyla.org, and d04's copy of gitea.sh refuses `backup` (the name
+# does not resolve to d04) so it never writes over d03's NAS mirror. d04 is not disposable: a
+# build or a destroy needs --confirm d04 and the operator's approval of the exact action.
+# Proven on test01 first (test01 as [replica] of = "d04").
+hold = "missing credentials: the GitLab CI/CD variables D04_CLOUDFLARED_ENV and D04_INTERNAL_PROXY_ENV are not set; internal-access and external-access have no hosts/d04 profile yet"
 
+# Operator's values, 2026-10-15. order=10: before d03 (order=15) when vmh01 boots.
 [vm]
-node = "vmh02"
+node = "vmh01"
 vmid = 104
 sockets = 1
 cores = 4
 memory_mb = 8192
 ip = "10.0.0.63/24"
-os_disk = { storage = "local-data2", size = "32G" }
-data_disk = { storage = "local-data2", size = "16G" }   # /mnt/docker
-cloudinit_storage = "local-data2"
+os_disk = { storage = "local-data1", size = "32G" }
+data_disk = { storage = "local-data1", size = "128G" }   # /mnt/docker: Gitea's data and registry
+cloudinit_storage = "local-data2"                       # as d03 on vmh01
+startup = "order=10"                                    # set at create, checked by verify
 
 [setup]
 steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "bashrc.sh"]   # build/setup/, sent by the build
 
+# The proxy's and the tunnel's, as d03's. Gitea's own secrets are inside its restored data (app.ini).
+[[secret]]
+var = "D04_CLOUDFLARED_ENV"
+path = "/mnt/docker/cloudflared/.env"
+owner = "docker:docker"
+mode = "600"
+[[secret]]
+var = "D04_INTERNAL_PROXY_ENV"
+path = "/mnt/docker/internal-proxy/.env"
+owner = "docker:docker"
+mode = "600"
+
+# Restored from $DOCKER_D1/Gitea/mirror, d03's backup: build d04 at the cutover, after d03's Gitea
+# is stopped and its last backup is taken, or d04 starts from an older copy.
+[[app]]
+name = "gitea"
+verify = ["verify"]   # d04's copy: a local :3000 healthz failure fails verify
+
+[[external]]
+name = "internal-access"
+repo = "~/local/asyla/projects/internal-access"
+run = ["scripts/deploy-host.sh {host}", "scripts/fleet.sh --host {host} restore up verify"]
+[[external]]
+name = "external-access"
+repo = "~/local/asyla/projects/external-access"
+run = ["scripts/deploy-host.sh {host}", "scripts/fleet.sh --host {host} up verify"]
+
 [runner]
-enabled = false
+enabled = true
+labels = ["theorg", "prod", "d04"]   # docker/gitea-runner/gitea-runner.sh reads them from here
