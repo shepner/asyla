@@ -160,7 +160,10 @@ do_rsync_mirror_restore() {
         return 1
       }
     fi
-    chmod "$root_mode" "$dest" 2>/dev/null || sudo -n chmod "$root_mode" "$dest" || {
+    # Five digits: GNU chmod keeps a directory's setgid bit for a shorter mode (755 on 2755 stays
+    # 2755), and rsync gave $dest the mirror directory's mode.
+    local mode5="0000$root_mode"; mode5="${mode5: -5}"
+    chmod "$mode5" "$dest" 2>/dev/null || sudo -n chmod "$mode5" "$dest" || {
       echo "[ERROR] could not set the mode of $dest to $root_mode" >&2
       return 1
     }

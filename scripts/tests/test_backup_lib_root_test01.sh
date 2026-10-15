@@ -50,13 +50,23 @@ is "backup: status is OK" "$(head -c2 "$MIRROR/.backup-status")" "OK"
 is "second backup: .backup-root survives --delete" "$(cat "$MIRROR/.backup-root" 2>/dev/null)" "2775 $(id -u) 1000"
 
 # As the NAS does: the mirror directory has its own mode and group.
-chmod 755 "$MIRROR"; chgrp "$(id -g)" "$MIRROR"
+# 00755: GNU chmod 755 keeps a directory's setgid bit (2775 becomes 2755).
+chmod 00755 "$MIRROR"; chgrp "$(id -g)" "$MIRROR"
 OUT="$D/restored"
 ( do_rsync_mirror_restore "$MIRROR" "$OUT" ) >/dev/null 2>&1
 is "restore: exit 0" "$?" "0"
 is "restore: top directory is 2775, group 1000 again" "$(stat -c '%a %g' "$OUT")" "2775 1000"
 is "restore: the data is back" "$(cat "$OUT/sub/file" 2>/dev/null)" "data"
 is "restore: .backup-root is not copied into the app's data" "$([ -e "$OUT/.backup-root" ] && echo there || echo absent)" "absent"
+
+# A source without setgid and a setgid mirror directory: the restore clears the bit.
+SRC3="$D/app3"; MIRROR3="$D/nas/app3/mirror"; OUT3="$D/restored3"
+mkdir -p "$SRC3"; echo data > "$SRC3/file"; chmod 00755 "$SRC3"
+( do_rsync_mirror_backup "$SRC3" "$MIRROR3" ) >/dev/null 2>&1
+chmod 2775 "$MIRROR3"
+( do_rsync_mirror_restore "$MIRROR3" "$OUT3" ) >/dev/null 2>&1
+is "setgid mirror: restore exit 0" "$?" "0"
+is "setgid mirror: top directory is 755, no setgid" "$(stat -c '%a' "$OUT3")" "755"
 
 # A mirror from before .backup-root: restores as before, and says which mode it left.
 rm "$MIRROR/.backup-root"
