@@ -67,7 +67,7 @@ name = "gitea"
 verify = ["verify"]
 [[app]]
 name = "breeding-research"
-start = ["build", "up"]
+start = ["up"]   # pulls BREEDING_RESEARCH_IMAGE from Gitea's registry (.env: PULL=1; gap G7)
 verify = ["verify"]
 [[app]]
 name = "tc-datalogger"
