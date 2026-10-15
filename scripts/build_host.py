@@ -1325,8 +1325,8 @@ def verify(spec: dict) -> int:
         for label, ok, detail in egress_checks(spec, containers=r.stdout.split()):
             check(label, ok, detail)
         if spec["replica"].get("gitea_config"):
-            lines, bad = gitea_config_read(spec)
-            check("gitea_config in the restored app.ini", not bad and bool(lines), "; ".join(bad or lines))
+            cfg_lines, cfg_bad = gitea_config_read(spec)   # not `bad`: that is verify's own count
+            check("gitea_config in the restored app.ini", not cfg_bad and bool(cfg_lines), "; ".join(cfg_bad or cfg_lines))
     else:
         try:
             check("deploy token reads GitLab", bool(check_token(host)))
