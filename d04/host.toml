@@ -50,9 +50,8 @@ name = "external-access"
 repo = "~/local/asyla/projects/external-access"
 run = ["scripts/deploy-host.sh {host}", "scripts/fleet.sh --host {host} up verify"]
 
-# Off until the cutover (operator, 2026-10-15): while GITEA_TOKEN_HOST is "d03", a runner
-# registered here would join d03's live Gitea and could take theorg/prod jobs. At the cutover
-# GITEA_TOKEN_HOST becomes "d04" and this becomes true.
+# On since the cutover (2026-10-16): GITEA_TOKEN_HOST is "d04", so the runner registers with the
+# Gitea here, which gitea.asyla.org now reaches (was off while d03 served it; operator, 2026-10-15).
 [runner]
-enabled = false
+enabled = true
 labels = ["theorg", "prod", "d04"]   # docker/gitea-runner/gitea-runner.sh reads them from here

@@ -190,7 +190,7 @@ def parse(line: str):
         return f"exit {e.code}: {err.getvalue().strip().splitlines()[-1]}"
 
 
-check("the default Gitea host is d03 until the cutover", build_host.GITEA_TOKEN_HOST == "d03")
+check("the default Gitea host is d04 since the cutover", build_host.GITEA_TOKEN_HOST == "d04")
 check("the Gitea hosts are the specs with a gitea app and no replica", build_host.gitea_hosts() == ["d03", "d04"],
       str(build_host.gitea_hosts()))
 check("the name the runners register against", build_host.GITEA_NAME == "gitea.asyla.org"
@@ -209,8 +209,8 @@ for line, needle in (("test01 build --gitea-host test01", "not a host whose spec
 got = []
 with patched(phase_gitea_runner=lambda s, ap, h: got.append(h), phase_gitlab_runner=lambda s, ap: None):
     build_host.phase_runner(SPEC, False, None)
-    build_host.phase_runner(SPEC, False, "d04")
-check("the runner phase: no --gitea-host resolves to GITEA_TOKEN_HOST, a given one is used", got == ["d03", "d04"], str(got))
+    build_host.phase_runner(SPEC, False, "d03")
+check("the runner phase: no --gitea-host resolves to GITEA_TOKEN_HOST, a given one is used", got == ["d04", "d03"], str(got))
 
 
 def serving(out: str, rc: int = 0) -> str:

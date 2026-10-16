@@ -61,7 +61,7 @@ behave in their legacy ways"); any other spec is refused if HOST/setup/ exists o
 in build/setup/.
 
 Gitea host: the host whose Gitea container makes the runner registration token
-(GITEA_TOKEN_HOST, d03 until the cutover to d04; --gitea-host HOST for one build, a host whose
+(GITEA_TOKEN_HOST, d04 since the 2026-10-16 cutover from d03; --gitea-host HOST for one build, a host whose
 spec has a gitea [[app]] and no [replica]). The runner registers against the name
 gitea.asyla.org, so the token must come from the Gitea that name reaches: before it deletes or
 registers anything, the runner phase resolves the name on the Gitea host and stops unless one
@@ -143,7 +143,7 @@ REPO = Path(__file__).resolve().parents[1]
 GITLAB_PROJECT = "asyla/asyla-hosts"
 GITLAB_API = "https://gitlab.com/api/v4"
 GITEA_API = "https://gitea.asyla.org/api/v1"
-GITEA_TOKEN_HOST = "d03"   # the default Gitea host (docstring, "Gitea host"); "d04" at the cutover
+GITEA_TOKEN_HOST = "d04"   # the default Gitea host (docstring, "Gitea host"); d04 since the 2026-10-16 cutover
 GITEA_NAME = urllib.parse.urlsplit(GITEA_API).hostname   # what runners register against
 # On the Gitea host: line 1 the name's IPv4 addresses, line 2 the host's own (gitea.sh's guard).
 GITEA_SERVING_SH = (f"getent ahostsv4 {GITEA_NAME} | awk '{{print $1}}' | sort -u | tr '\\n' ' '; echo; "
