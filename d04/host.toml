@@ -4,7 +4,6 @@
 # does not resolve to d04) so it never writes over d03's NAS mirror. d04 is not disposable: a
 # build or a destroy needs --confirm d04 and the operator's approval of the exact action.
 # Proven on test01 first (test01 as [replica] of = "d04").
-hold = "missing credentials: the GitLab CI/CD variables D04_CLOUDFLARED_ENV and D04_INTERNAL_PROXY_ENV are not set, and external-access hosts/d04 still names a placeholder tunnel"
 
 # Operator's values, 2026-10-15. order=10: before d03 (order=15) when vmh01 boots.
 [vm]
