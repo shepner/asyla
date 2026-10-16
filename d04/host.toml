@@ -4,7 +4,7 @@
 # does not resolve to d04) so it never writes over d03's NAS mirror. d04 is not disposable: a
 # build or a destroy needs --confirm d04 and the operator's approval of the exact action.
 # Proven on test01 first (test01 as [replica] of = "d04").
-hold = "missing credentials: the GitLab CI/CD variables D04_CLOUDFLARED_ENV and D04_INTERNAL_PROXY_ENV are not set; internal-access and external-access have no hosts/d04 profile yet"
+hold = "missing credentials: the GitLab CI/CD variables D04_CLOUDFLARED_ENV and D04_INTERNAL_PROXY_ENV are not set, and external-access hosts/d04 still names a placeholder tunnel"
 
 # Operator's values, 2026-10-15. order=10: before d03 (order=15) when vmh01 boots.
 [vm]
@@ -34,8 +34,10 @@ path = "/mnt/docker/internal-proxy/.env"
 owner = "docker:docker"
 mode = "600"
 
-# Restored from $DOCKER_D1/Gitea/mirror, d03's backup: build d04 at the cutover, after d03's Gitea
-# is stopped and its last backup is taken, or d04 starts from an older copy.
+# Restored from $DOCKER_D1/Gitea/mirror, d03's backup. Built twice (asyla hub
+# decisions/host-layout.md, Consequences 4 and 5): first as the DR test, from d03's last nightly,
+# with no name pointing at d04; then at the cutover with --recreate, after d03's Gitea is stopped
+# and its final backup is taken, so d04 starts from the latest copy.
 [[app]]
 name = "gitea"
 verify = ["verify"]   # d04's copy: a local :3000 healthz failure fails verify
@@ -49,6 +51,9 @@ name = "external-access"
 repo = "~/local/asyla/projects/external-access"
 run = ["scripts/deploy-host.sh {host}", "scripts/fleet.sh --host {host} up verify"]
 
+# Off until the cutover (operator, 2026-10-15): while GITEA_TOKEN_HOST is "d03", a runner
+# registered here would join d03's live Gitea and could take theorg/prod jobs. At the cutover
+# GITEA_TOKEN_HOST becomes "d04" and this becomes true.
 [runner]
-enabled = true
+enabled = false
 labels = ["theorg", "prod", "d04"]   # docker/gitea-runner/gitea-runner.sh reads them from here
