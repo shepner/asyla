@@ -29,7 +29,7 @@ build_host.subprocess.run = _no_contact
 build_host.urllib.request.urlopen = _no_contact
 
 DEFAULTS = {"args": [], "apply": False, "start": None, "only": None, "recreate": False, "confirm": None,
-            "node": None}
+            "node": None, "gitea_host": None}
 
 
 def parse(line: str) -> dict | str:
@@ -366,7 +366,8 @@ results = [
                  if build_host.tomllib.loads(p.read_text()).get("vm", {}).get("disposable")) == ["test01"]),
     check("test01 is VMID 901 at 10.0.0.69", (lambda vm: (vm["vmid"], vm["ip"]) == (901, "10.0.0.69/24"))(
         build_host.load_spec("test01")["vm"])),
-    check("d04 is on hold until its production spec exists", bool(build_host.load_spec("d04").get("hold"))),
+    check("d04's production spec: no hold, not disposable",
+          (lambda d: not d.get("hold") and not d["vm"].get("disposable"))(build_host.load_spec("d04"))),
     # Guests are reached as docker@HOST with the build's key; a node target is passed through.
     check("ssh to a guest names the user and the key",
           build_host.ssh_argv("test01")[-3:] == ["-i", str(build_host.SSH_KEY), "docker@test01"]),

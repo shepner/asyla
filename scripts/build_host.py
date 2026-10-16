@@ -7,7 +7,7 @@ from nothing but GitLab (this repo, its CI/CD variables), the NAS backups and th
 Usage:
   build_host.py HOST plan                      # read-only: spec, live VM, gaps
   build_host.py HOST build [--apply] [--from PHASE] [--only PHASE] [--recreate [--confirm HOST]]
-                           [--node NODE]
+                           [--node NODE] [--gitea-host HOST]
   build_host.py HOST verify                    # read-only
   build_host.py HOST token [--apply]           # deploy token file alone, then a GitLab read check
   build_host.py HOST scripts-check             # read-only: ~/scripts vs GitLab master, file by file
@@ -26,13 +26,16 @@ Build phases, in order (each is safe to re-run):
   setup      build/setup/<step> for each [setup].steps, as root; then, for a spec with
              [host_maintenance], build/setup/host_maintenance_keys.sh (below)
   restore    `<app>.sh restore` for each app whose data is empty (from its NAS mirror), then the
-             secrets under /mnt/docker/ (a restore refuses a non-empty data dir)
+             secrets under /mnt/docker/. An app that refuses because its data dir holds data is
+             skipped (a re-run); any other failure (no backup, a backup not "OK", rsync) stops
+             the build before any app starts (exit 1): an app must never start on empty data
   apps       each app's start commands (default: up), in spec order, except the apps marked
              after_external = true
   external   other repos' deploy commands from the workstation; `manual` entries are listed
   late       the apps marked after_external = true: those that need this host's proxy or tunnel
              up before they start (an app that pulls its images through the proxy)
-  runner     Gitea runner: delete this host's stale entry, install, register, up; then each
+  runner     Gitea runner: check that the Gitea host serves gitea.asyla.org (below), delete this
+             host's stale entry, install, register (token from the Gitea host), up; then each
              [gitlab_runner] runner: delete GitLab's entries with its description (HOST-NAME),
              create a new one (POST /user/runners, untagged jobs off), register it on the host
              (build/gitlab-runner/gitlab-runner.sh; the token over SSH stdin, into gitlab-runner's
@@ -56,6 +59,14 @@ key, /etc/gitlab-runner/config.toml and the unit. The legacy hosts d01 to d03 (L
 keep HOST/setup/ and their old phases until each is replaced (operator: "Let the legacy servers
 behave in their legacy ways"); any other spec is refused if HOST/setup/ exists or a step is not
 in build/setup/.
+
+Gitea host: the host whose Gitea container makes the runner registration token
+(GITEA_TOKEN_HOST, d03 until the cutover to d04; --gitea-host HOST for one build, a host whose
+spec has a gitea [[app]] and no [replica]). The runner registers against the name
+gitea.asyla.org, so the token must come from the Gitea that name reaches: before it deletes or
+registers anything, the runner phase resolves the name on the Gitea host and stops unless one
+address is that host's own (the rule of d04's gitea.sh backup guard). A wrong value, a flip made
+before the name moves or forgotten after it, stops there.
 
 Start order: an optional [vm].startup (Proxmox's form, "order=N[,up=S][,down=S]") is set when the
 VM is created and checked by verify.
@@ -132,7 +143,15 @@ REPO = Path(__file__).resolve().parents[1]
 GITLAB_PROJECT = "asyla/asyla-hosts"
 GITLAB_API = "https://gitlab.com/api/v4"
 GITEA_API = "https://gitea.asyla.org/api/v1"
-GITEA_TOKEN_HOST = "d03"
+GITEA_TOKEN_HOST = "d03"   # the default Gitea host (docstring, "Gitea host"); "d04" at the cutover
+GITEA_NAME = urllib.parse.urlsplit(GITEA_API).hostname   # what runners register against
+# On the Gitea host: line 1 the name's IPv4 addresses, line 2 the host's own (gitea.sh's guard).
+GITEA_SERVING_SH = (f"getent ahostsv4 {GITEA_NAME} | awk '{{print $1}}' | sort -u | tr '\\n' ' '; echo; "
+                    "hostname -I")
+# docker/backup_lib.sh do_rsync_mirror_restore's refusal of a data dir that holds data: the one
+# restore failure a build re-run expects. restore_command() turns it into RESTORE_SKIPPED.
+RESTORE_NOT_EMPTY = "is not empty; refusing to restore over it"
+RESTORE_SKIPPED = 3
 LEGACY_HOSTS = ("d01", "d02", "d03")   # HOST/setup/ on the host, run from ~/scripts (the old way)
 BUILD_SETUP = "build/setup"
 BUILD_GITLAB_RUNNER = "build/gitlab-runner"
@@ -893,14 +912,29 @@ def phase_restore(spec: dict, apply: bool) -> None:
         if not app_has(spec, name, "restore"):
             print(f"restore {name}: GAP - {name}.sh has no restore")
             continue
-        print(f"restore {name} (skipped by the app when its data dir is not empty)")
+        print(f"restore {name} (skipped when its data dir is not empty; any other failure stops the build)")
         if apply:
-            r = ssh(host, f"{app_script(spec['apps_tree'], name)} restore", check=False, stream=True, timeout=7200)
-            if r.returncode != 0:
-                print(f"  restore {name}: exit {r.returncode} (data present, or no complete backup); continuing")
+            r = ssh(host, restore_command(app_script(spec['apps_tree'], name)), check=False, stream=True, timeout=7200)
+            if r.returncode == RESTORE_SKIPPED:
+                print(f"  restore {name}: skipped, its data dir is not empty (data present: a re-run)")
+            elif r.returncode != 0:
+                raise Fail(f"restore {name}: exit {r.returncode} (no backup, a backup not OK, or the copy failed; "
+                           f"its output is above); stopped before any app starts")
     print(f"secrets under {DATA_ROOT} (after the data, so a restore finds its data dir empty):")
     if secrets_cmd(spec, "install", apply, [], data=True):
         raise Fail("a secret is missing in GitLab")
+
+
+def restore_command(script: str) -> str:
+    """`SCRIPT restore` on the host, its output shown as it comes and kept in a temp file: exits
+    RESTORE_SKIPPED when the restore refused only because the data dir is not empty (its output
+    holds RESTORE_NOT_EMPTY), else the restore's own status, a RESTORE_SKIPPED of its own made 1
+    so that nothing else can pass for a skip."""
+    inner = (f'L=$(mktemp) || exit 1; {script} restore 2>&1 | tee "$L"; rc=${{PIPESTATUS[0]}}; '
+             f'[ "$rc" -ne {RESTORE_SKIPPED} ] || rc=1; '
+             f'if [ "$rc" -ne 0 ] && grep -qF {shlex.quote(RESTORE_NOT_EMPTY)} "$L"; then rc={RESTORE_SKIPPED}; fi; '
+             f'rm -f "$L"; exit "$rc"')
+    return f"bash -c {shlex.quote(inner)}"
 
 
 def apps_in(spec: dict, late: bool) -> list[dict]:
@@ -1179,12 +1213,38 @@ def phase_gitlab_runner(spec: dict, apply: bool) -> None:
     print(f"GitLab runners online: {', '.join(created)}")
 
 
-def phase_runner(spec: dict, apply: bool) -> None:
-    phase_gitea_runner(spec, apply)
+def phase_runner(spec: dict, apply: bool, gitea_host: str | None = None) -> None:
+    phase_gitea_runner(spec, apply, gitea_host or GITEA_TOKEN_HOST)
     phase_gitlab_runner(spec, apply)
 
 
-def phase_gitea_runner(spec: dict, apply: bool) -> None:
+def gitea_hosts() -> list[str]:
+    """The hosts that may serve Gitea: a spec with a gitea [[app]] and no [replica] (files only)."""
+    out = []
+    for p in sorted(REPO.glob("*/host.toml")):
+        s = tomllib.loads(p.read_text())
+        if not s.get("replica") and any(a.get("name") == "gitea" for a in s.get("app", [])):
+            out.append(p.parent.name)
+    return out
+
+
+def require_serving_gitea(gitea_host: str) -> None:
+    """Stop unless GITEA_NAME, resolved on GITEA_HOST, is one of that host's own addresses: the
+    runner registers against the name, so a token from another Gitea (d04 before the cutover, d03
+    after it) would not register, and the build would have deleted the runner's entry first.
+    Read-only. The same rule as d04's gitea.sh backup guard (require_serving_host)."""
+    r = ssh(gitea_host, GITEA_SERVING_SH, check=False, timeout=60)
+    lines = (r.stdout.splitlines() + ["", ""])[:2]
+    names, mine = lines[0].split(), lines[1].split()
+    if r.returncode != 0 or not names or not set(names) & set(mine):
+        raise Fail(f"Gitea host {gitea_host}: {GITEA_NAME} resolves there to {' '.join(names) or 'nothing'}, not to "
+                   f"{gitea_host} ({' '.join(mine) or 'no address'}; exit {r.returncode}); its runner token would "
+                   f"not register against {GITEA_NAME}. The Gitea host is the one the name points at "
+                   f"(GITEA_TOKEN_HOST, or --gitea-host)")
+    print(f"Gitea host {gitea_host} serves {GITEA_NAME} ({' '.join(sorted(set(names) & set(mine)))})")
+
+
+def phase_gitea_runner(spec: dict, apply: bool, gitea_host: str = GITEA_TOKEN_HOST) -> None:
     host = spec["host"]
     if not spec.get("runner", {}).get("enabled"):
         print("Gitea runner disabled in spec")
@@ -1208,12 +1268,13 @@ def phase_gitea_runner(spec: dict, apply: bool) -> None:
         if apply:
             runner("install up")
         return
+    require_serving_gitea(gitea_host)
     delete_runner_entry(host, apply)
-    print(f"{script} install, register (instance token from {GITEA_TOKEN_HOST}, stdin only), up")
+    print(f"{script} install, register (instance token from {gitea_host}, stdin only), up")
     if not apply:
         return
     runner("install")
-    r = ssh(GITEA_TOKEN_HOST, "docker exec -u git gitea gitea actions generate-runner-token", timeout=120)
+    r = ssh(gitea_host, "docker exec -u git gitea gitea actions generate-runner-token", timeout=120)
     token = r.stdout.strip().splitlines()[-1] if r.stdout.strip() else ""
     if not token:
         raise Fail("no registration token from Gitea")
@@ -1455,11 +1516,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--recreate", action="store_true")
     ap.add_argument("--confirm")
     ap.add_argument("--node", choices=NODES, help="create the VM on this node (a disposable spec only)")
+    ap.add_argument("--gitea-host", help=f"the host whose Gitea makes the runner registration token "
+                                         f"(default {GITEA_TOKEN_HOST}); it must serve {GITEA_NAME}")
     # Intermixed: plain parse_args() fills `args` before the first option and then refuses a VAR
     # after it, so `secrets push --apply VAR` (the documented order) was a usage error.
     a = ap.parse_intermixed_args(argv)
     if a.args and a.action != "secrets":
         ap.error(f"{a.action} takes no further arguments: {' '.join(a.args)}")
+    if a.gitea_host is not None:
+        if a.action != "build":
+            ap.error(f"--gitea-host is for build (its runner phase), not {a.action}")
+        if a.gitea_host not in gitea_hosts():
+            ap.error(f"--gitea-host {a.gitea_host}: not a host whose spec has a gitea [[app]] and no "
+                     f"[replica] ({', '.join(gitea_hosts())})")
     return a
 
 
@@ -1543,7 +1612,7 @@ def main() -> int:
             elif p == "late":
                 phase_apps(spec, a.apply, late=True)
             elif p == "runner":
-                phase_runner(spec, a.apply)
+                phase_runner(spec, a.apply, a.gitea_host)
             elif p == "verify" and a.apply:
                 if verify(spec):
                     raise Fail("verify failed")
