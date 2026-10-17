@@ -66,7 +66,8 @@ sed -i -e "s|^TARGET_HOME=\"/home/\$TARGET_USER\"\$|TARGET_HOME=\"$H\"|" \
        -e "s|^DEPLOY_ENV=\"/etc/asyla/asyla-hosts.env\"\$|DEPLOY_ENV=\"$D/deploy.env\"|" "$U"
 left=$(grep -v '^[[:space:]]*#' "$U" | grep -nE '/home/|/etc/asyla' || true)
 [ -z "$left" ] || { echo "the updater copy still names a real path: $left" >&2; exit 2; }
-printf 'ASYLA_HOSTS_DEPLOY_USER=test\nASYLA_HOSTS_DEPLOY_TOKEN=unused-file-clone\n' > "$D/deploy.env"
+# The updater only needs the file to be readable: a file:// clone asks no credential helper.
+echo '# no deploy credential: the test clones over file://' > "$D/deploy.env"
 chmod 600 "$D/deploy.env"
 mkdir -p "$D/bin"
 printf '#!/bin/sh\necho d03\n' > "$D/bin/hostname"
