@@ -226,6 +226,23 @@ def ini_read_case() -> bool:
                  str((lines, bad, lines2, bad2)))
 
 
+def replica_verify_apps_case() -> bool:
+    """verify's app lines for a replica: an app with start = [] (d03's ms-procedural-backup and
+    ms-chronicle-backup run no container) is not checked as running (the 2026-10-17 d03 proof
+    failed on it); a started app is, from the source's tree. restore = false: no restore line."""
+    src = ('[[app]]\nname = "a"\nrestore = false\n[[app]]\nname = "b"\nstart = []\nrestore = false\nverify = ["verify"]\n')
+    spec = temp_specs({"d07": VM + src, "x": VM + '[replica]\nof = "d07"\n'})("x")
+    seen, lines = [], []
+
+    def fake(t, c):
+        seen.append(c)
+        return Done(0, json.dumps([{"Status": "running(1)", "ConfigFiles": "/home/docker/scripts/d07/apps/a/compose.yml"}]))
+    _, out = with_ssh(fake, lambda: build_host.verify_apps(spec, lambda label, ok, detail="": lines.append((label, ok))))
+    return check("replica verify: a start = [] app is not checked as running; a started one is",
+                 lines == [("app a running", True)] and len(seen) == 1 and "d07/apps/a" in seen[0]
+                 and "app b: nothing started" in out, str((lines, seen, out)))
+
+
 def preflight(name: str, spec: dict, gitlab: dict, on_host: dict, up: set, want: str | None) -> bool:
     """preflight_secrets(spec, apply=True) with GitLab and the hosts replaced by dicts:
     gitlab {var: value}, on_host {(host, path): value}, up = the hosts that answer ssh.
@@ -570,6 +587,7 @@ results = [
     egress_case(),
     egress_probe_case(),
     ini_read_case(),
+    replica_verify_apps_case(),
     wrapper_case("wrapper: the command runs in the unpacked bundle", 'ls -R "$B"', 0, "x.sh"),
     wrapper_case("wrapper: a failing command's status comes back and the folder is removed", 'bash "$B/build/setup/x.sh"; exit 3', 3, "hi"),
     bundle_case(),

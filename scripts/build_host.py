@@ -93,7 +93,8 @@ boots) and checks that the host and each image cannot reach the internet; then
 goes into the restored app.ini with Gitea's own environment-to-ini, and each key is read back.
 Any failure stops the build before an app starts. So a replica has no [runner] and no
 [gitlab_runner] (both need the internet; refused). verify, for a replica, never runs the
-source's app verify (it curls the source's public URLs): it waits for each [replica.verify] URL
+source's app verify (it curls the source's public URLs): it checks that each app runs (not one
+with start = [], which runs no container), waits for each [replica.verify] URL
 ("http://{ip}:PORT/..."), checks the egress block from the host and each running container in
 place of the deploy token, and reads gitea_config back.
 
@@ -1463,6 +1464,35 @@ def verify_host_maintenance(spec: dict, check) -> None:
     check(label, kh.splitlines() == want, f"{len(kh.splitlines())} line(s) vs {len(want)} wanted{detail}")
 
 
+def verify_apps(spec: dict, check) -> None:
+    """verify's lines for each [[app]]: its own verify, else running; for a replica, running only
+    (never the source's verify: it curls the source's public URLs), and nothing for an app with
+    start = [] (no container: the apps phase starts nothing, 2026-10-17 d03 proof); then restore."""
+    host = spec["host"]
+    for a in spec.get("app", []):
+        name = a["name"]
+        if not starts_apps(spec):
+            pass   # not started: nothing to verify
+        elif spec.get("replica") and not a.get("start", ["up"]):
+            print(f"  app {name}: nothing started (start = []), so no container to check")
+        elif spec.get("replica"):
+            # Never the source's verify: it curls the source's public URLs. Running, then [replica].verify.
+            r = ssh(host, f"cd ~/scripts/{spec['apps_tree']}/apps/{name} && docker compose ls --format json", check=False)
+            running = [p for p in json.loads(r.stdout or "[]") if "running" in p.get("Status", "")
+                       and f"/apps/{name}/" in p.get("ConfigFiles", "")]
+            check(f"app {name} running", bool(running))
+        elif a.get("verify"):
+            r = ssh(host, f"{app_script(spec['apps_tree'], name)} {' '.join(a['verify'])}", check=False)
+            check(f"app {name}", r.returncode == 0, (r.stdout + r.stderr).strip().splitlines()[-1] if (r.stdout + r.stderr).strip() else "")
+        else:
+            r = ssh(host, f"cd ~/scripts/{spec['apps_tree']}/apps/{name} && docker compose ls --format json", check=False)
+            running = [p for p in json.loads(r.stdout or "[]") if "running" in p.get("Status", "")
+                       and f"/apps/{name}/" in p.get("ConfigFiles", "")]
+            check(f"app {name} running", bool(running))
+        if a.get("restore") is not False:
+            check(f"app {name} restore", *restore_check(spec, name))
+
+
 def verify(spec: dict) -> int:
     host, bad = spec["host"], 0
 
@@ -1534,26 +1564,7 @@ def verify(spec: dict) -> int:
         check("no app container running (start_apps = false)", r.returncode == 0 and not names, " ".join(names))
         r = ssh(host, f"sudo du -sh {DATA_ROOT}* 2>/dev/null", check=False)
         print("  data: " + "; ".join(" ".join(l.split()[::-1]) for l in r.stdout.splitlines()))
-    for a in spec.get("app", []):
-        name = a["name"]
-        if not starts_apps(spec):
-            pass   # not started: nothing to verify
-        elif spec.get("replica"):
-            # Never the source's verify: it curls the source's public URLs. Running, then [replica].verify.
-            r = ssh(host, f"cd ~/scripts/{spec['apps_tree']}/apps/{name} && docker compose ls --format json", check=False)
-            running = [p for p in json.loads(r.stdout or "[]") if "running" in p.get("Status", "")
-                       and f"/apps/{name}/" in p.get("ConfigFiles", "")]
-            check(f"app {name} running", bool(running))
-        elif a.get("verify"):
-            r = ssh(host, f"{app_script(spec['apps_tree'], name)} {' '.join(a['verify'])}", check=False)
-            check(f"app {name}", r.returncode == 0, (r.stdout + r.stderr).strip().splitlines()[-1] if (r.stdout + r.stderr).strip() else "")
-        else:
-            r = ssh(host, f"cd ~/scripts/{spec['apps_tree']}/apps/{name} && docker compose ls --format json", check=False)
-            running = [p for p in json.loads(r.stdout or "[]") if "running" in p.get("Status", "")
-                       and f"/apps/{name}/" in p.get("ConfigFiles", "")]
-            check(f"app {name} running", bool(running))
-        if a.get("restore") is not False:
-            check(f"app {name} restore", *restore_check(spec, name))
+    verify_apps(spec, check)
     for u in spec.get("replica", {}).get("verify", []) if starts_apps(spec) else []:
         url = u.format(ip=ip_only(spec))
         r = ssh(host, f"for i in $(seq 60); do curl -sf -o /dev/null -m 5 {shlex.quote(url)} && exit 0; sleep 2; done; "
