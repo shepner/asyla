@@ -140,6 +140,10 @@ check("register options: docker as on d03, one job at a time",
       build_host.gl_register_args(build_host.gitlab_runners(t)[0])
       == ["--url", "https://gitlab.com", "--executor", "docker", "--limit", "1",
           "--docker-image", "python:3.12-alpine", "--docker-pull-policy", "if-not-present"])
+check("d03: the group runner pulls always (operator, 2026-10-17), host-maintenance if-not-present",
+      [a[a.index("--docker-pull-policy") + 1] for a in
+           (build_host.gl_register_args(r) for r in build_host.gitlab_runners(build_host.load_spec("d03")))]
+      == ["always", "if-not-present"])
 check("scopes map to type-filtered API paths",
       [build_host.gl_scope(x) for x in ("group:asyla", "project:asyla/host-maintenance")]
       == [("group", "/groups/asyla"), ("project", "/projects/asyla%2Fhost-maintenance")])
@@ -149,7 +153,7 @@ check("scopes map to type-filtered API paths",
 
 class FakeGitLab:
     """GitLab's runner API as the build uses it. Runners: id -> dict(description, scope, status,
-    tag_list, run_untagged). Records every call."""
+    tag_list, run_untagged, access_level). Records every call."""
 
     def __init__(self, runners: dict[int, dict]):
         self.runners, self.calls, self.next_id = runners, [], 900
@@ -175,7 +179,8 @@ class FakeGitLab:
             self.next_id += 1
             scope = "group:asyla" if body["runner_type"] == "group_type" else "project:asyla/host-maintenance"
             self.runners[self.next_id] = {"description": body["description"], "scope": scope, "status": "never_contacted",
-                                          "tag_list": body["tag_list"].split(","), "run_untagged": body["run_untagged"]}
+                                          "tag_list": body["tag_list"].split(","), "run_untagged": body["run_untagged"],
+                                          "access_level": body.get("access_level", "not_protected")}
             return 201, {"id": self.next_id, "token": FAKE_TOKEN, "token_expires_at": None}
         return 404, {}
 
@@ -183,11 +188,12 @@ class FakeGitLab:
 def others() -> dict[int, dict]:
     """The production runners that must never be touched, plus one with a look-alike description."""
     return {53360564: {"description": "d03 group", "scope": "group:asyla", "status": "online",
-                       "tag_list": ["d03"], "run_untagged": False},
+                       "tag_list": ["d03"], "run_untagged": False, "access_level": "ref_protected"},
             56843179: {"description": "host-maintenance-d03", "scope": "project:asyla/host-maintenance",
-                       "status": "online", "tag_list": ["maint"], "run_untagged": False},
+                       "status": "online", "tag_list": ["maint"], "run_untagged": False,
+                       "access_level": "ref_protected"},
             70: {"description": "test01-build-old", "scope": "group:asyla", "status": "online",
-                 "tag_list": ["x"], "run_untagged": False}}
+                 "tag_list": ["x"], "run_untagged": False, "access_level": "not_protected"}}
 
 
 def with_fakes(gl: FakeGitLab, fn, ssh_out: str = ""):
@@ -237,9 +243,11 @@ check("apply: completes", res is None, str(res))
 check("apply: only the stale entry with the same description is deleted", deletes == ["/runners/80"], str(deletes))
 check("apply: the production runners and a look-alike are untouched",
       all(i in gl.runners for i in (53360564, 56843179, 70)))
-check("apply: POST /user/runners as a group runner, tag build-test, untagged off",
+check("apply: POST /user/runners as a group runner, tag build-test, untagged off, ref_protected",
       posts == [{"runner_type": "group_type", "group_id": 11, "description": "test01-build",
-                 "tag_list": "build-test", "run_untagged": False}], str(posts))
+                 "tag_list": "build-test", "run_untagged": False, "access_level": "ref_protected"}], str(posts))
+check("apply: the new runner is ref_protected in GitLab",
+      [r["access_level"] for r in gl.runners.values() if r["description"] == "test01-build"] == ["ref_protected"])
 check("apply: every listing is type-filtered",
       all("?type=" in p for m, p, _ in gl.calls if m == "GET" and "/runners?" in p)
       and any("/runners?" in p for _, p, _ in gl.calls))
@@ -312,14 +320,20 @@ def fails_on(lines: list[str], needle: str) -> bool:
 
 
 ok_runner = {81: {"description": "test01-build", "scope": "group:asyla", "status": "online",
-                  "tag_list": ["build-test"], "run_untagged": False}}
+                  "tag_list": ["build-test"], "run_untagged": False, "access_level": "ref_protected"}}
 lines = verify_lines({**others(), **ok_runner})
-check("verify: online with the spec's tags, host config right: three OK lines",
-      len(lines) == 3 and all(l.startswith("[OK]") for l in lines), str(lines))
+check("verify: online with the spec's tags, ref_protected, host config right: four OK lines",
+      len(lines) == 4 and all(l.startswith("[OK]") for l in lines), str(lines))
 check("verify: an extra tag fails",
       fails_on(verify_lines({**others(), 81: {**ok_runner[81], "tag_list": ["build-test", "d03"]}}), "tags are the spec's"))
 check("verify: untagged jobs on fails",
       fails_on(verify_lines({**others(), 81: {**ok_runner[81], "run_untagged": True}}), "untagged jobs off"))
+check("verify: access level not_protected fails",
+      fails_on(verify_lines({**others(), 81: {**ok_runner[81], "access_level": "not_protected"}}),
+               "access level ref_protected"))
+check("verify: no access level in the detail fails",
+      fails_on(verify_lines({**others(), 81: {k: v for k, v in ok_runner[81].items() if k != "access_level"}}),
+               "access level ref_protected"))
 check("verify: offline fails", fails_on(verify_lines({**others(), 81: {**ok_runner[81], "status": "offline"}}), "online"))
 check("verify: no entry fails", fails_on(verify_lines(others()), "no entry"))
 check("verify: two entries fail", fails_on(verify_lines({**others(), **ok_runner, 82: dict(ok_runner[81])}), "online"))

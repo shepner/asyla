@@ -117,7 +117,7 @@ enabled = true
 # `gitlab-runner list` and config.toml's non-secret keys on d03). GitLab descriptions become
 # d03-group and d03-host-maintenance; the old entries "d03 group" (53360564) and
 # "host-maintenance-d03" (56843179) are not matched by them and are deleted separately.
-# Live, both are ref_protected; the build creates runners with the default access level.
+# Live, both are ref_protected; the build creates its runners ref_protected too (operator, 2026-10-17).
 [[gitlab_runner.runners]]
 name = "group"              # live "d03 group"; pihole's DNS pipeline needs tags d03 + homelab
 scope = "group:asyla"
@@ -125,7 +125,8 @@ tags = ["d03", "homelab", "asyla-ci", "theorg-ci"]
 executor = "docker"
 image = "python:3.12-slim"
 volumes = ["/var/run/docker.sock:/var/run/docker.sock"]   # live; "/cache" is added by register
-# pull_policy: live config.toml sets none (operator question); the spec default is if-not-present.
+pull_policy = "always"      # live config.toml sets none, so the docker executor's default, always;
+                            # set explicitly (operator, 2026-10-17): the spec default is if-not-present
 
 [[gitlab_runner.runners]]
 name = "host-maintenance"   # live "host-maintenance-d03": the scheduled maintenance jobs

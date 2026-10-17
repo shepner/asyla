@@ -37,7 +37,7 @@ Build phases, in order (each is safe to re-run):
   runner     Gitea runner: check that the Gitea host serves gitea.asyla.org (below), delete this
              host's stale entry, install, register (token from the Gitea host), up; then each
              [gitlab_runner] runner: delete GitLab's entries with its description (HOST-NAME),
-             create a new one (POST /user/runners, untagged jobs off), register it on the host
+             create a new one (POST /user/runners, untagged jobs off, ref_protected), register it on the host
              (build/gitlab-runner/gitlab-runner.sh; the token over SSH stdin, into gitlab-runner's
              environment), concurrent = the number of runners, wait until online
   verify     mounts, every app's verify (or running containers), runners online with the spec's
@@ -161,6 +161,7 @@ GL_RUNNER_SCOPE = re.compile(r"(group|project):[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)
 GL_RUNNER_TAG = re.compile(r"[A-Za-z0-9_.:-]+")
 GL_EXECUTORS = ("docker", "shell")
 GL_PULL_POLICIES = ("always", "if-not-present", "never")
+GL_ACCESS_LEVEL = "ref_protected"  # build-registered runners take protected refs only, as the live ones (operator, 2026-10-17)
 HM_SCRIPT = "host_maintenance_keys.sh"   # build/setup/, run by the setup phase for [host_maintenance]
 HM_MARK = "asyla-build:host-maintenance"  # the end of its authorized_keys line (the script's MARK)
 HM_PIN = re.compile(r"[A-Za-z0-9.:-]+ ssh-ed25519 [A-Za-z0-9+/]+={0,2}")
@@ -1146,10 +1147,11 @@ def delete_gitlab_runner_entries(spec: dict, apply: bool) -> None:
 
 
 def create_gitlab_runner(r: dict) -> tuple[int, str]:
-    """POST /user/runners for one spec runner: (id, its authentication token). Untagged jobs off."""
+    """POST /user/runners for one spec runner: (id, its authentication token). Untagged jobs off,
+    access_level GL_ACCESS_LEVEL (https://docs.gitlab.com/api/users/#create-a-runner-linked-to-a-user)."""
     kind, _ = gl_scope(r["scope"])
     body = {"runner_type": f"{kind}_type", f"{kind}_id": gl_scope_id(r["scope"]), "description": r["description"],
-            "tag_list": ",".join(r["tags"]), "run_untagged": False}
+            "tag_list": ",".join(r["tags"]), "run_untagged": False, "access_level": GL_ACCESS_LEVEL}
     code, b = gitlab("POST", "/user/runners", body)
     if code != 201 or not isinstance(b, dict) or not b.get("token") or not isinstance(b.get("id"), int):
         raise Fail(f"create GitLab runner {r['description']} in {r['scope']}: HTTP {code}")   # never the body
@@ -1292,7 +1294,7 @@ def phase_gitea_runner(spec: dict, apply: bool, gitea_host: str = GITEA_TOKEN_HO
 
 def verify_gitlab_runners(spec: dict, check) -> None:
     """verify's GitLab runner lines: each spec runner has one entry, online, with exactly the
-    spec's tags and untagged jobs off; the host's gitlab-runner is active with the spec's
+    spec's tags, untagged jobs off and access level GL_ACCESS_LEVEL; the host's gitlab-runner is active with the spec's
     runners only and concurrent = their number."""
     host = spec["host"]
     gl = gitlab_runners(spec)
@@ -1307,6 +1309,8 @@ def verify_gitlab_runners(spec: dict, check) -> None:
             check(f"GitLab runner {r['description']} tags are the spec's, untagged jobs off",
                   have == sorted(r["tags"]) and d.get("run_untagged") is False,
                   f"{have} vs {sorted(r['tags'])}, run_untagged {d.get('run_untagged')}")
+            check(f"GitLab runner {r['description']} access level {GL_ACCESS_LEVEL}",
+                  d.get("access_level") == GL_ACCESS_LEVEL, f"access_level {d.get('access_level')}")
     if gl:
         # The names and concurrent only: config.toml's token lines are never read here.
         r = ssh(host, "systemctl is-active gitlab-runner; sudo grep -E '^concurrent = |^  name = ' "
