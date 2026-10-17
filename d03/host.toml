@@ -61,10 +61,27 @@ path = "/home/docker/.docker/config.json"
 owner = "docker:docker"
 mode = "600"
 [[secret]]
-var = "D03_HOST_MAINTENANCE_SSH_KEY"     # host-maintenance jobs' key into d01-d03
+var = "D03_HOST_MAINTENANCE_SSH_KEY"     # host-maintenance jobs' key into d01-d04
 path = "/home/docker/.config/host-maintenance/ssh/id_ed25519"
 owner = "docker:docker"
 mode = "600"
+
+# host-maintenance's key set, the interim one (operator, 2026-10-17: the cutover does not wait for
+# each host maintaining itself; asyla backlog 2026-10-17-hosts-host-maintenance-each-host-...): the
+# jobs run on this host's runner (host-maintenance below, /maint-ssh) and `ssh docker@ADDRESS` by
+# the addresses of asyla/host-maintenance config/maintenance.toml. Pins: d01, d02, d04's ed25519
+# host keys (ssh-keyscan -t ed25519 from the workstation, 2026-10-17, equal to its known_hosts);
+# the build scans each from here and fails on another key. d03 itself: its new host key, read on
+# the host by the setup phase (self_address), as no spec can pin it before the build.
+[host_maintenance]
+identity = "/home/docker/.config/host-maintenance/ssh/id_ed25519"
+user = "docker"
+known_hosts = [
+  "10.0.0.60 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEWInJu/I6E2DxkusPBWL2c4gY4OBKVyvhuYz4VOfkrv",
+  "10.0.0.61 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPbeDGfZcftzPaZaKINRYpCqTWWPB8e5rgJQsoEVBvz8",
+  "10.0.0.63 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMPnOQj7p8zI/CwT75iHiFw0ECXg6prI0ZKZ7WDshnLE",
+]
+self_address = "10.0.0.62"
 
 # d04 first: the runner registers with Gitea on d04 (GITEA_TOKEN_HOST), and breeding-research and
 # tc-datalogger pull their images from gitea.asyla.org on d04, so d04 must be up before d03 is
@@ -96,14 +113,6 @@ run = ["scripts/deploy-host.sh {host}", "scripts/fleet.sh --host {host} restore 
 name = "external-access"
 repo = "~/local/asyla/projects/external-access"
 run = ["scripts/deploy-host.sh {host}", "scripts/fleet.sh --host {host} up verify"]
-# host-maintenance's key set: no [host_maintenance] yet (operator question). Its known_hosts pins
-# would be the live d03's file (d01-d04: 10.0.0.60-63, read 2026-10-17), but the jobs manage d03
-# itself and a rebuilt d03 has a new host key for 10.0.0.62, which no spec can pin before the
-# build (the setup phase would fail its own scan). The key ([[secret]] above) is installed.
-[[external]]
-name = "host-maintenance key set"
-repo = "~/local/asyla/projects/host-maintenance"
-manual = "known_hosts (d01-d04, the rebuilt d03's new key) and docker's authorized_keys line: pending the operator's [host_maintenance] decision"
 [[external]]
 name = "theorg-mini-deadman"
 repo = "~/local/theOrg"
