@@ -107,11 +107,16 @@ host-maintenance key set (gap G11): a host that carries asyla/host-maintenance's
 [host_maintenance] identity = "PATH" (the private key: the path of one [[secret]], mode 600, not
 under /mnt/docker/), user = "NAME" (whose ~/.ssh/authorized_keys gets the public key: the host
 is one the jobs manage) and known_hosts = ["ADDRESS ssh-ed25519 KEY", ...] (the managed hosts'
-keys, pinned). The setup phase runs build/setup/host_maintenance_keys.sh: IDENTITY.pub from
-`ssh-keygen -y`, known_hosts beside the key from the pins, the authorized_keys line (marked
-HM_MARK, once), modes 0700/0600/0644 with the secret's owner; then it scans each pinned address
-from the host and fails on a host that does not answer or offers another key. verify checks the
-.pub, the modes, the authorized_keys line and known_hosts against the spec.
+keys, pinned), and optionally self_address = "ADDRESS" (this host's own [vm] ip, never also
+pinned) when the jobs manage the runner's own host: a rebuilt host has a new host key, which no
+spec can pin in advance (d03, operator 2026-10-17: the interim key set). The setup phase runs
+build/setup/host_maintenance_keys.sh: IDENTITY.pub from `ssh-keygen -y`, known_hosts beside the
+key from the pins, then, with self_address, the host's own ed25519 key (read on the host from
+HM_HOST_KEY) as "ADDRESS ssh-ed25519 KEY", the authorized_keys line (marked HM_MARK, once), modes
+0700/0600/0644 with the secret's owner; then it scans each known_hosts address (its own too) from
+the host and fails on a host that does not answer or offers another key. verify checks the .pub,
+the modes, the authorized_keys line and known_hosts against the spec (the pins, then the own key
+as the host's HM_HOST_KEY reads at verify).
 
 Nothing here prints a secret (SEC): tokens and secret files move over SSH stdin or HTTPS bodies.
 Credentials come from the environment only (no credential file is read): GITLAB_TOKEN,
@@ -168,6 +173,7 @@ HM_MARK = "asyla-build:host-maintenance"  # the end of its authorized_keys line 
 HM_PIN = re.compile(r"[A-Za-z0-9.:-]+ ssh-ed25519 [A-Za-z0-9+/]+={0,2}")
 HM_PATH = re.compile(r"/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)+")
 HM_NAME = re.compile(r"[a-z_][a-z0-9_-]*")
+HM_HOST_KEY = "/etc/ssh/ssh_host_ed25519_key.pub"   # the host's own key, pinned at [host_maintenance].self_address
 GL_ONLINE_WAIT = 180           # seconds the runner phase waits for a new GitLab runner to be online
 NODES = ("vmh01", "vmh02")
 # Proxmox's lowest guest id (inference from its tooling, not checked in its docs): load_spec
@@ -474,15 +480,16 @@ def check_gitlab_runner_spec(path: Path, spec: dict) -> None:
 
 
 def check_host_maintenance_spec(path: Path, spec: dict) -> None:
-    """[host_maintenance] identity, user, known_hosts (module docstring), or no table at all.
-    Checked after a replica's secrets are merged: the identity is one of the host's [[secret]]s."""
+    """[host_maintenance] identity, user, known_hosts, optionally self_address (module docstring),
+    or no table at all. Checked after a replica's secrets are merged: the identity is one of the
+    host's [[secret]]s."""
     hm = spec.get("host_maintenance")
     if hm is None:
         return
     where = f"{path}: [host_maintenance]"
     want = {"identity", "user", "known_hosts"}
-    if not isinstance(hm, dict) or set(hm) != want:
-        raise Fail(f"{where} must hold identity, user and known_hosts, and nothing else")
+    if not isinstance(hm, dict) or not want <= set(hm) <= want | {"self_address"}:
+        raise Fail(f"{where} must hold identity, user and known_hosts, optionally self_address, and nothing else")
     ident = hm["identity"]
     if not isinstance(ident, str) or not HM_PATH.fullmatch(ident) or ".." in ident.split("/"):
         raise Fail(f"{where}: identity must be an absolute path, not {ident!r}")
@@ -504,6 +511,13 @@ def check_host_maintenance_spec(path: Path, spec: dict) -> None:
     addrs = [p.split()[0] for p in pins]
     if len(set(addrs)) != len(addrs):
         raise Fail(f"{where}: known_hosts pins an address twice")
+    if "self_address" in hm:
+        own = hm["self_address"]
+        if own != ip_only(spec):
+            raise Fail(f"{where}: self_address must be this host's own [vm] ip {ip_only(spec)}, not {own!r}")
+        if own in addrs:
+            raise Fail(f"{where}: self_address {own} is also pinned in known_hosts; the host's own key "
+                       "is read on the host at build time, never pinned")
 
 
 def hm_owner(spec: dict) -> str:
@@ -766,8 +780,9 @@ def phase_setup(spec: dict, apply: bool) -> None:
     hm = spec.get("host_maintenance")
     if hm:
         print(f"setup: {HM_SCRIPT} ({BUILD_SETUP}/, sent from GitLab master): {hm['identity']}.pub, "
-              f"known_hosts from {len(hm['known_hosts'])} pin(s) (each checked by ssh-keyscan from {host}), "
-              f"{hm['user']}'s authorized_keys")
+              f"known_hosts from {len(hm['known_hosts'])} pin(s)"
+              + (f" and {host}'s own key ({HM_HOST_KEY}) as {hm['self_address']}" if hm.get("self_address") else "")
+              + f" (each checked by ssh-keyscan from {host}), {hm['user']}'s authorized_keys")
         if apply:
             build_step(host, HM_SCRIPT)
 
@@ -1402,7 +1417,8 @@ def verify_gitlab_runners(spec: dict, check) -> None:
 def verify_host_maintenance(spec: dict, check) -> None:
     """verify's lines for [host_maintenance]: the .pub is the key's public half, the key set's
     modes and owner, the user's authorized_keys holds the key once (marked), known_hosts is the
-    spec's pinned list. The host prints public keys and file modes only, never the private key."""
+    spec's pinned list, then, with self_address, the host's own key as its HM_HOST_KEY reads now.
+    The host prints public keys and file modes only, never the private key."""
     hm = spec.get("host_maintenance")
     if not hm:
         return
@@ -1414,7 +1430,9 @@ def verify_host_maintenance(spec: dict, check) -> None:
              "echo \"stat $(stat -c '%a %U:%G' \"$f\" 2>/dev/null || echo missing)\"; done; "
              "if [ -n \"$B\" ]; then A=\"$H/.ssh/authorized_keys\"; "
              f"echo \"auth $(grep -cF \" $B\" \"$A\" 2>/dev/null) $(grep -F \" $B\" \"$A\" 2>/dev/null | grep -cF {q(' ' + HM_MARK)})\"; "
-             "else echo 'auth - -'; fi; echo '--- known_hosts'; cat \"$D/known_hosts\" 2>/dev/null")
+             "else echo 'auth - -'; fi; "
+             f"echo \"hostkey $(cut -d' ' -f1,2 {q(HM_HOST_KEY)} 2>/dev/null)\"; "
+             "echo '--- known_hosts'; cat \"$D/known_hosts\" 2>/dev/null")
     r = ssh(spec["host"], f"sudo bash -c {q(facts)}", check=False)
     head, _, kh = r.stdout.partition("--- known_hosts\n")
     lines = head.splitlines()
@@ -1431,8 +1449,18 @@ def verify_host_maintenance(spec: dict, check) -> None:
     auth = next((l.split()[1:] for l in lines if l.startswith("auth ")), [])
     check(f"{hm['user']}'s authorized_keys holds the host-maintenance key once, marked",
           auth == ["1", "1"], f"{auth[0] if auth else '-'} line(s), {auth[1] if len(auth) > 1 else '-'} marked")
-    check("host-maintenance known_hosts is the spec's pinned list",
-          kh.splitlines() == hm["known_hosts"], f"{len(kh.splitlines())} line(s) vs {len(hm['known_hosts'])} pinned")
+    want = list(hm["known_hosts"])
+    label = "host-maintenance known_hosts is the spec's pinned list"
+    detail = ""
+    if hm.get("self_address"):
+        own = next((l[8:].split() for l in lines if l.startswith("hostkey ")), [])
+        label += f", then this host's own key as {hm['self_address']}"
+        if own[:1] == ["ssh-ed25519"] and len(own) == 2:
+            want.append(f"{hm['self_address']} {' '.join(own)}")
+        else:
+            want.append("")   # never equal: known_hosts holds no empty line
+            detail = f"; no ed25519 key in {HM_HOST_KEY}"
+    check(label, kh.splitlines() == want, f"{len(kh.splitlines())} line(s) vs {len(want)} wanted{detail}")
 
 
 def verify(spec: dict) -> int:
@@ -1580,7 +1608,9 @@ def plan(spec: dict) -> int:
     hm = spec.get("host_maintenance")
     if hm:
         print(f"  host-maintenance key set: {hm['identity']} (+ .pub, known_hosts: "
-              f"{', '.join(p.split()[0] for p in hm['known_hosts'])}), authorized for {hm['user']}")
+              f"{', '.join(p.split()[0] for p in hm['known_hosts'])}"
+              + (f"; own key as {hm['self_address']}, read on the host" if hm.get("self_address") else "")
+              + f"), authorized for {hm['user']}")
     return 0
 
 

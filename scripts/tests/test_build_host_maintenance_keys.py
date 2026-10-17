@@ -2,7 +2,8 @@
 """Offline test of the host-maintenance key set of a host spec (gap G11): [host_maintenance] in
 load_spec(), the setup phase's call of build/setup/host_maintenance_keys.sh, that script run by
 local bash against a temporary home (a fake ssh-keyscan on PATH), and verify's lines, whose host
-command runs by local bash against the same folder (fake getent and GNU-style stat on PATH).
+command runs by local bash against the same folder (fake getent and GNU-style stat on PATH). The
+optional self_address (the host's own key, read on the host) with its own host key file.
 
     python3 scripts/tests/test_build_host_maintenance_keys.py
 
@@ -111,6 +112,12 @@ spec_refused("an address pinned twice", sec + table(pins=[PIN_A, PIN_A]), "twice
 spec_refused("an unknown key in the table", sec + table(extra='hosts = ["d01"]\n'), "nothing else")
 spec_refused("no user", sec + table().replace('user = "docker"\n', ""), "nothing else")
 spec_refused("a bad secret owner", ENTRY.format(path=IDENT, owner="docker", mode="600") + table(), "USER:GROUP")
+SELF = 'self_address = "10.0.0.250"\n'   # VM's ip
+s_self = spec_ok("self_address, the host's own [vm] ip, not pinned", sec + table(extra=SELF))
+spec_refused("self_address also pinned", sec + table(pins=[PIN_A, "10.0.0.250 ssh-ed25519 " + "C" * 68], extra=SELF),
+             "also pinned")
+spec_refused("self_address another host's ip", sec + table(extra='self_address = "10.0.0.62"\n'), "own [vm] ip")
+spec_refused("self_address not a string", sec + table(extra="self_address = 1\n"), "own [vm] ip")
 
 def test01_spec() -> dict:
     """test01's spec. While test01 rehearses a production host ([replica], e.g. gap G1), the hello
@@ -166,6 +173,26 @@ calls, out = setup_calls(s, True)
 check("setup: no [setup] steps, the key set step alone", [c[1] for c in calls] == [build_host.HM_SCRIPT], str(calls))
 calls, out = setup_calls(load(sec), True)
 check("setup: no [host_maintenance], no key set step", calls == [], str(calls))
+calls, out = setup_calls(s_self, False)
+check("setup dry run with self_address: names the own key and its address",
+      not calls and "own key (/etc/ssh/ssh_host_ed25519_key.pub) as 10.0.0.250" in out, out)
+
+
+def plan_text(sp: dict) -> str:
+    out = io.StringIO()
+    real, build_host.find_vm = build_host.find_vm, lambda vmid: None
+    try:
+        with contextlib.redirect_stdout(out):
+            build_host.plan(sp)
+    finally:
+        build_host.find_vm = real
+    return out.getvalue()
+
+
+check("plan: the key set line names the pins and the own key's address",
+      "known_hosts: 10.0.0.60, 10.0.0.61; own key as 10.0.0.250, read on the host)" in plan_text(s_self), plan_text(s_self))
+check("plan: without self_address, the pins only",
+      "known_hosts: 10.0.0.60, 10.0.0.61), authorized for docker" in plan_text(s), plan_text(s))
 check("the script is in build/setup/, outside what the updaters install (HOST/, docker/)",
       (build_host.REPO / build_host.BUILD_SETUP / build_host.HM_SCRIPT).is_file())
 
@@ -219,9 +246,9 @@ ENV = {**os.environ, "PATH": f"{work / 'bin'}:{os.environ['PATH']}", "FAKE_SCAN"
        "HOST_SPEC": str(spec_path), "HOST_MAINTENANCE_HOME": str(home)}
 
 
-def write_spec(pinned: list[str]) -> dict:
+def write_spec(pinned: list[str], extra: str = "") -> dict:
     text = (ENTRY.format(path=ident, owner=f"{ME}:{MYGROUP}", mode="600")
-            + table(identity=str(ident), user=ME, pins=pinned))
+            + table(identity=str(ident), user=ME, pins=pinned, extra=extra))
     spec_path.write_text(VM + text)
     sp = load(text)
     sp["host"] = "d09"
@@ -336,6 +363,53 @@ auth.write_text(first)
 check("verify: known_hosts other than the pins fails", fails_on(verify_lines(write_spec(pins[:2])), "pinned list"))
 spec = write_spec(pins)
 check("verify: back in order, all OK", all(l.startswith("[OK]") for l in verify_lines(spec)))
+
+
+# ---------------------------------------------------------------- self_address: the host's own key
+
+hostkey = keygen("ssh_host_ed25519_key", "root@d09")
+hostkey_pub = hostkey.parent / (hostkey.name + ".pub")
+ENV["HOST_MAINTENANCE_HOST_KEY"] = str(hostkey_pub)
+build_host.HM_HOST_KEY = str(hostkey_pub)   # verify's host command reads it here
+self_line = "10.0.0.250 " + " ".join(pub_of(hostkey).split()[:2])
+spec_self = write_spec(pins, SELF)
+rc, out = run_script(pins + [self_line])
+check("script with self_address: exit 0", rc == 0, out)
+check("script with self_address: known_hosts is the pins, then the own key at the address",
+      (keydir / "known_hosts").read_text() == "".join(p + "\n" for p in pins + [self_line]),
+      (keydir / "known_hosts").read_text())
+check("script with self_address: the own key is scanned too", out.count("host key matches its pin") == 4
+      and "then this host's own as 10.0.0.250" in out, out)
+v = verify_lines(spec_self)
+check("verify with self_address: four OK lines, the last names the own key",
+      len(v) == 4 and all(l.startswith("[OK]") for l in v) and "own key as 10.0.0.250" in v[-1], "\n".join(v))
+check("verify with self_address: a spec without it fails on the extra line",
+      fails_on(verify_lines(spec), "pinned list"))
+(keydir / "known_hosts").write_text("".join(p + "\n" for p in pins))
+check("verify with self_address: known_hosts without the own key fails", fails_on(verify_lines(spec_self), "own key"))
+rc, out = run_script(pins + [self_line])
+saved = hostkey_pub.read_text()
+hostkey_pub.write_text(pub_of(keygen("rebuilt", "root@d09")) + "\n")
+check("verify with self_address: a host key other than known_hosts' line fails", fails_on(verify_lines(spec_self), "own key"))
+hostkey_pub.unlink()
+check("verify with self_address: no host key file fails, named",
+      fails_on(verify_lines(spec_self), "no ed25519 key in"))
+rc, out = run_script(pins + [self_line])
+check("script with self_address: no host key file fails", rc == 1 and "does not read" in out, out)
+hostkey_pub.write_text("ssh-rsa " + "A" * 68 + " root@d09\n")
+rc, out = run_script(pins + [self_line])
+check("script with self_address: a host key file of another type fails", rc == 1 and "not an ed25519 public key" in out, out)
+hostkey_pub.write_text(saved)
+rc, out = run_script(pins)
+check("script with self_address: the own address not answering fails", rc == 1 and "10.0.0.250: no ed25519 host key" in out, out)
+spec_path.write_text(VM + ENTRY.format(path=ident, owner=f"{ME}:{MYGROUP}", mode="600")
+                     + table(identity=str(ident), user=ME, pins=pins + [self_line], extra=SELF))
+rc, out = run_script(pins + [self_line])
+check("script: a self_address that is also pinned is refused", rc == 1 and "self_address must be" in out, out)
+spec = write_spec(pins)
+rc, out = run_script(pins)
+check("script without self_address again: known_hosts the pins only",
+      rc == 0 and (keydir / "known_hosts").read_text() == "".join(p + "\n" for p in pins), out)
 
 
 # ---------------------------------------------------------------- the pins checked against the scan
