@@ -44,7 +44,8 @@ user = "docker"
 known_hosts = [
   "10.0.0.60 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEWInJu/I6E2DxkusPBWL2c4gY4OBKVyvhuYz4VOfkrv",
   "10.0.0.61 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPbeDGfZcftzPaZaKINRYpCqTWWPB8e5rgJQsoEVBvz8",
-  "10.0.0.62 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKLcHH61N2/2rTyKaIFbN1/UkNVik4suQSISbhhGgU9S",
+  # 10.0.0.62: the rebuilt d03 (VM 113, cutover 2026-10-17); VM 103's key was ...bhhGgU9S.
+  "10.0.0.62 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEWBYkIF2Vt24oPKu01VJPEExr3WzbsWyMjahtuYpaak",
 ]
 self_address = "10.0.0.69"
 
