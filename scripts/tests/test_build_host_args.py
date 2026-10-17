@@ -28,7 +28,7 @@ REAL_RUN = build_host.subprocess.run   # the wrapper cases run bash and git loca
 build_host.subprocess.run = _no_contact
 build_host.urllib.request.urlopen = _no_contact
 
-DEFAULTS = {"args": [], "apply": False, "start": None, "only": None, "recreate": False, "confirm": None,
+DEFAULTS = {"args": [], "apply": False, "keys": False, "start": None, "only": None, "recreate": False, "confirm": None,
             "node": None, "gitea_host": None}
 
 
@@ -217,6 +217,43 @@ def preflight(name: str, spec: dict, gitlab: dict, on_host: dict, up: set, want:
     return good
 
 
+def keys_case() -> bool:
+    """secrets check --keys with GitLab and the host replaced by dicts (harmless values): per key
+    only its state, never a value; a non-dotenv or missing secret keeps its one line."""
+    spec = {"host": "d09", "secret": [{"var": "V_ENV", "path": "/x/.env"}, {"var": "V_ENV2", "path": "/x/b.env"},
+                                      {"var": "V_PEM", "path": "/x/k.pem"}, {"var": "V_GONE", "path": "/x/c.env"}]}
+    gl = {"V_ENV": "# a comment\nA=valueone\nB=valuetwo\nC=valuethree\n",
+          "V_ENV2": "A=valueone\nB=valuetwo\n", "V_PEM": "not a dotenv line\n"}
+    host = {"/x/.env": "A=valueone\n\nB=valuechanged\nD=valuefour\n", "/x/b.env": "B=valuetwo\n# moved\nA=valueone\n",
+            "/x/k.pem": "not a dotenv line either\n", "/x/c.env": "A=valueone\n"}
+    real = build_host.gitlab_secret, build_host.host_secret
+    build_host.gitlab_secret = gl.get
+    build_host.host_secret = lambda h, path: host.get(path)
+    out = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out):
+            rc = build_host.secrets_cmd(spec, "check", False, [], keys=True)
+            plain = io.StringIO()
+            with contextlib.redirect_stdout(plain):
+                build_host.secrets_cmd(spec, "check", False, [])
+    finally:
+        build_host.gitlab_secret, build_host.host_secret = real
+    text = out.getvalue()
+    rows = [l.split() for l in text.splitlines() if l.startswith("    ")]
+    leaked = [v for v in ("valueone", "valuetwo", "valuethree", "valuechanged", "valuefour", "dotenv", "either")
+              if v in text]
+    return check("secrets check --keys: per key its state only, no value; other secrets keep their line",
+                 rc == 1 and not leaked
+                 and rows == [["A", "same"], ["B", "DIFFERS"], ["C", "only", "in", "GitLab"], ["D", "only", "on", "host"],
+                              ["A", "same"], ["B", "same"],
+                              ["every", "key", "the", "same:", "the", "files", "differ", "only", "in", "comments,", "blank",
+                               "lines,", "order", "or", "spacing"]]
+                 and len([l for l in text.splitlines() if l.startswith("  V_")]) == 4
+                 and "MISSING in GitLab" in text and "V_PEM" in text
+                 and not any(l.startswith("    ") for l in plain.getvalue().splitlines()),
+                 f"rc {rc}, leaked {leaked}\n{text}")
+
+
 def documented(name: str, text: str) -> bool:
     good = text in build_host.__doc__
     print(f"{'ok  ' if good else 'FAIL'}  {name}: {text!r} in the Usage block")
@@ -285,6 +322,19 @@ def bundle_case() -> bool:
 results = [
     # The secrets line, with --apply before and after the VAR names.
     documented("usage", "build_host.py HOST secrets check|push|install [--apply] [VAR ...]"),
+    documented("usage --keys", "build_host.py HOST secrets check --keys [VAR ...]"),
+    same("secrets check --keys, one VAR",
+         {"host": "d03", "action": "secrets", "args": ["check", "VAR_A"], "keys": True},
+         "d03 secrets check --keys VAR_A",
+         "d03 secrets check VAR_A --keys",
+         "--keys d03 secrets check VAR_A"),
+    refused("--keys with secrets push", "d03 secrets push --keys VAR_A", "--keys is for secrets check only"),
+    refused("--keys with another action", "d03 plan --keys", "--keys is for secrets check only"),
+    keys_case(),
+    check("dotenv parse: comments, blanks, export; any other line is not dotenv",
+          build_host.dotenv_keys("# c\n\nexport A=1\nB=two\n") == {"A": "1", "B": "two"}
+          and build_host.dotenv_keys("A=1\nnot a line\n") is None and build_host.dotenv_keys("# only\n") is None
+          and build_host.dotenv_keys(None) is None),
     same("secrets push, one VAR, applied",
          {"host": "d03", "action": "secrets", "args": ["push", "VAR_A"], "apply": True},
          "d03 secrets push --apply VAR_A",          # the documented order (refused before the fix)

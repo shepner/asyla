@@ -12,6 +12,7 @@ Usage:
   build_host.py HOST token [--apply]           # deploy token file alone, then a GitLab read check
   build_host.py HOST scripts-check             # read-only: ~/scripts vs GitLab master, file by file
   build_host.py HOST secrets check|push|install [--apply] [VAR ...]
+  build_host.py HOST secrets check --keys [VAR ...]          # read-only: per key of a dotenv secret, its state only
   build_host.py HOST secrets copy [--apply] VAR FROM_VAR   # VAR created in GitLab from FROM_VAR's value
   build_host.py HOST destroy --apply [--confirm HOST]
 
@@ -785,12 +786,42 @@ def digest(v: str | None) -> str:
     return hashlib.sha256(v.encode()).hexdigest()[:12] if v is not None else "-"
 
 
+DOTENV_LINE = re.compile(r"(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)")
+
+
+def dotenv_keys(v: str | None) -> dict[str, str] | None:
+    """A secret's KEY=VALUE lines (blank lines and # comments ignored; a repeated key, its last
+    value), or None when it is missing, holds no such line, or holds any other line."""
+    if v is None:
+        return None
+    keys = {}
+    for line in v.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        m = DOTENV_LINE.fullmatch(line)
+        if not m:
+            return None
+        keys[m.group(1)] = m.group(2)
+    return keys or None
+
+
+def key_states(g: dict[str, str], h: dict[str, str]) -> list[tuple[str, str]]:
+    """(key, state) per key of either side, sorted: same, DIFFERS, only in GitLab, only on host.
+    The state only: never a value, a length or a per-key digest."""
+    return [(k, "only on host" if k not in g else "only in GitLab" if k not in h
+             else "same" if g[k] == h[k] else "DIFFERS") for k in sorted(set(g) | set(h))]
+
+
 def in_app_data(s: dict) -> bool:
     return s["path"].startswith(DATA_ROOT)
 
 
-def secrets_cmd(spec: dict, action: str, apply: bool, only: list[str], data: bool | None = None) -> int:
-    """data: None = every secret, False = those outside DATA_ROOT, True = those under it."""
+def secrets_cmd(spec: dict, action: str, apply: bool, only: list[str], data: bool | None = None,
+                keys: bool = False) -> int:
+    """data: None = every secret, False = those outside DATA_ROOT, True = those under it.
+    keys (check only): under the line of a secret whose GitLab and host values both parse as
+    dotenv, each key's state (key_states); never a value."""
     host, bad = spec["host"], 0
     unknown = sorted(set(only) - {s["var"] for s in spec.get("secret", [])})
     if unknown:     # a mistyped VAR used to match nothing and exit 0
@@ -804,6 +835,13 @@ def secrets_cmd(spec: dict, action: str, apply: bool, only: list[str], data: boo
             state = secret_state(g, h)
             bad += state != "in sync"
             print(f"  {key:44} {state:18} gitlab {digest(g)} host {digest(h)}  {path}")
+            gk, hk = (dotenv_keys(g), dotenv_keys(h)) if keys else (None, None)
+            if gk is not None and hk is not None:
+                rows = key_states(gk, hk)
+                for k, st in rows:
+                    print(f"    {k:42} {st}")
+                if state == "DIFFERS" and all(st == "same" for _, st in rows):
+                    print("    every key the same: the files differ only in comments, blank lines, order or spacing")
         elif action == "push":
             h = host_secret(host, path)
             if h is None:
@@ -1546,6 +1584,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("args", nargs="*", help="for the secrets action: check, push or install, then optional VAR "
                                             "names; or copy VAR FROM_VAR")
     ap.add_argument("--apply", action="store_true")
+    ap.add_argument("--keys", action="store_true", help="for secrets check: per key of a dotenv secret, "
+                                                        "same, DIFFERS, only in GitLab or only on host")
     ap.add_argument("--from", dest="start", choices=PHASES)
     ap.add_argument("--only", choices=PHASES)
     ap.add_argument("--recreate", action="store_true")
@@ -1558,6 +1598,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     a = ap.parse_intermixed_args(argv)
     if a.args and a.action != "secrets":
         ap.error(f"{a.action} takes no further arguments: {' '.join(a.args)}")
+    if a.keys and (a.action != "secrets" or a.args[:1] != ["check"]):
+        ap.error("--keys is for secrets check only")
     if a.gitea_host is not None:
         if a.action != "build":
             ap.error(f"--gitea-host is for build (its runner phase), not {a.action}")
@@ -1601,7 +1643,7 @@ def main() -> int:
                 return secret_copy(spec, a.args[1], a.args[2], a.apply)
             if not a.args or a.args[0] not in ("check", "push", "install"):
                 raise Fail("secrets needs check|push|install, or copy VAR FROM_VAR")
-            return secrets_cmd(spec, a.args[0], a.apply, a.args[1:])
+            return secrets_cmd(spec, a.args[0], a.apply, a.args[1:], keys=a.keys)
         if a.action == "destroy":
             live = find_vm(spec["vm"]["vmid"])
             if not live:
