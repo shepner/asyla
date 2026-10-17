@@ -96,17 +96,42 @@ run = ["scripts/deploy-host.sh {host}", "scripts/fleet.sh --host {host} restore 
 name = "external-access"
 repo = "~/local/asyla/projects/external-access"
 run = ["scripts/deploy-host.sh {host}", "scripts/fleet.sh --host {host} up verify"]
+# host-maintenance's key set: no [host_maintenance] yet (operator question). Its known_hosts pins
+# would be the live d03's file (d01-d04: 10.0.0.60-63, read 2026-10-17), but the jobs manage d03
+# itself and a rebuilt d03 has a new host key for 10.0.0.62, which no spec can pin before the
+# build (the setup phase would fail its own scan). The key ([[secret]] above) is installed.
 [[external]]
-name = "host-maintenance runner"
+name = "host-maintenance key set"
 repo = "~/local/asyla/projects/host-maintenance"
-manual = "setup/setup-runner-d03.sh with a new project runner token (delete the old host-maintenance-d03 runner in GitLab first)"
+manual = "known_hosts (d01-d04, the rebuilt d03's new key) and docker's authorized_keys line: pending the operator's [host_maintenance] decision"
 [[external]]
 name = "theorg-mini-deadman"
 repo = "~/local/theOrg"
 manual = ".cursor/helpers/runtime-watchdog/install-d03-deadman.sh (theOrg-owned; needs /etc/theorg-deadman/gitea.env)"
-[[external]]
-name = "GitLab runner 'd03 group' (proxmox-guest-factory CI)"
-manual = "pending the factory review (asyla backlog)"
 
 [runner]
 enabled = true
+
+# GitLab runners (build/gitlab-runner/gitlab-runner.sh, run by the build's runner phase), as the
+# live d03 runs them (2026-10-17, read-only: GitLab API listed with type=group_type/project_type,
+# `gitlab-runner list` and config.toml's non-secret keys on d03). GitLab descriptions become
+# d03-group and d03-host-maintenance; the old entries "d03 group" (53360564) and
+# "host-maintenance-d03" (56843179) are not matched by them and are deleted separately.
+# Live, both are ref_protected; the build creates runners with the default access level.
+[[gitlab_runner.runners]]
+name = "group"              # live "d03 group"; pihole's DNS pipeline needs tags d03 + homelab
+scope = "group:asyla"
+tags = ["d03", "homelab", "asyla-ci", "theorg-ci"]
+executor = "docker"
+image = "python:3.12-slim"
+volumes = ["/var/run/docker.sock:/var/run/docker.sock"]   # live; "/cache" is added by register
+# pull_policy: live config.toml sets none (operator question); the spec default is if-not-present.
+
+[[gitlab_runner.runners]]
+name = "host-maintenance"   # live "host-maintenance-d03": the scheduled maintenance jobs
+scope = "project:asyla/host-maintenance"
+tags = ["host-maintenance"]
+executor = "docker"
+image = "python:3.12-alpine"
+volumes = ["/home/docker/.config/host-maintenance/ssh:/maint-ssh:ro"]   # live; "/cache" is added by register
+pull_policy = "if-not-present"

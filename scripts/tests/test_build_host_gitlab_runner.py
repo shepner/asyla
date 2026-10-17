@@ -129,9 +129,13 @@ t = test01_spec()
 check("test01: one group runner on asyla, tag build-test only",
       [(r["description"], r["scope"], r["tags"]) for r in build_host.gitlab_runners(t)]
       == [("test01-build", "group:asyla", ["build-test"])])
-check("no legacy or production spec has a GitLab runner yet (each needs approval first)",
-      not any(build_host.gitlab_runners(build_host.load_spec(h)) for h in ("d01", "d02", "d03")
+check("no legacy spec has a GitLab runner (each needs approval first)",
+      not any(build_host.gitlab_runners(build_host.load_spec(h)) for h in ("d01", "d02")
               if (build_host.REPO / h / "host.toml").is_file()))
+check("d03: the live d03's two runners (2026-10-17), tags as live",
+      [(r["description"], r["scope"], r["tags"]) for r in build_host.gitlab_runners(build_host.load_spec("d03"))]
+      == [("d03-group", "group:asyla", ["d03", "homelab", "asyla-ci", "theorg-ci"]),
+          ("d03-host-maintenance", "project:asyla/host-maintenance", ["host-maintenance"])])
 check("register options: docker as on d03, one job at a time",
       build_host.gl_register_args(build_host.gitlab_runners(t)[0])
       == ["--url", "https://gitlab.com", "--executor", "docker", "--limit", "1",
