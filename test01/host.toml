@@ -26,11 +26,6 @@ steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "bashrc.sh"]   # build/setup/
 [replica]
 of = "d03"
 start_apps = true
-# The pre-flight of 2026-10-17T01:58Z found D03_TC_DATALOGGER_ENV differing between GitLab and the
-# live d03 (by hash; for the operator to settle): it is excluded, and tc-datalogger with it, since
-# its compose needs that .env (TC_IMAGE_TAG). The other three apps of d03's spec run here.
-apps = ["breeding-research", "ms-procedural-backup", "ms-chronicle-backup"]
-exclude_secrets = ["D03_TC_DATALOGGER_ENV"]
-# Local URL of the app that serves HTTP (d03/apps/breeding-research/compose.yml: host :8080);
-# ms-procedural-backup and ms-chronicle-backup run no container.
-verify = ["http://{ip}:8080/healthz"]
+# Local URLs of the apps that serve HTTP (d03/apps/*/compose.yml: breeding-research host :8080,
+# tc-datalogger's dashboard host :8081); ms-procedural-backup and ms-chronicle-backup run no container.
+verify = ["http://{ip}:8080/healthz", "http://{ip}:8081/login"]
