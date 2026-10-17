@@ -33,6 +33,7 @@ Build phases, in order (each is safe to re-run):
   apps       each app's start commands (default: up), in spec order, except the apps marked
              after_external = true
   external   other repos' deploy commands from the workstation; `manual` entries are listed
+             (verify runs an entry's `check` on the host, else notes a manual entry, never FAIL)
   late       the apps marked after_external = true: those that need this host's proxy or tunnel
              up before they start (an app that pulls its images through the proxy)
   runner     Gitea runner: check that the Gitea host serves gitea.asyla.org (below), delete this
@@ -375,6 +376,9 @@ def load_spec(host: str, node: str | None = None) -> dict:
         spec["apps_tree"] = src
         if spec.get("external"):
             raise Fail(f"{path}: a replica has no [[external]] (it must not answer for {src}'s names)")
+    for e in spec.get("external", []):
+        if "check" in e and not (isinstance(e["check"], str) and e["check"].strip()):
+            raise Fail(f"{path}: [[external]] {e.get('name')!r}: check must be a shell command")
     for s in spec.get("secret", []):
         if not s.get("var", "").replace("_", "").isalnum():
             raise Fail(f"{path}: bad secret var {s.get('var')!r}")
@@ -1464,6 +1468,20 @@ def verify_host_maintenance(spec: dict, check) -> None:
     check(label, kh.splitlines() == want, f"{len(kh.splitlines())} line(s) vs {len(want)} wanted{detail}")
 
 
+def verify_externals(spec: dict, check) -> None:
+    """verify's lines for [[external]]: an entry with `check` runs it on the host (exit 0 is OK);
+    a `manual` entry without one is a note, not a FAIL: verify cannot see whether it was done,
+    and a line that always fails hid real failures (d03 cutover, 2026-10-17). A run-only entry
+    is proven by its own `run` commands' verify."""
+    for e in spec.get("external", []):
+        if e.get("check"):
+            r = ssh(spec["host"], e["check"], check=False)
+            check(f"external {e['name']}: {e['check']}", r.returncode == 0,
+                  "" if r.returncode == 0 else f"exit {r.returncode}")
+        elif e.get("manual"):
+            print(f"  [NOTE] external {e['name']}: manual step, not checked - {e['manual']}")
+
+
 def verify_apps(spec: dict, check) -> None:
     """verify's lines for each [[app]]: its own verify, else running; for a replica, running only
     (never the source's verify: it curls the source's public URLs), and nothing for an app with
@@ -1581,9 +1599,7 @@ def verify(spec: dict) -> int:
             check("Gitea runner labels are the spec's", have == sorted(want), f"{have} vs {sorted(want)}")
     verify_gitlab_runners(spec, check)
     verify_host_maintenance(spec, check)
-    for e in spec.get("external", []):
-        if e.get("manual"):
-            check(f"external {e['name']}", False, "manual step, not automated yet")
+    verify_externals(spec, check)
     return 1 if bad else 0
 
 

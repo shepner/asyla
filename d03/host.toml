@@ -117,6 +117,8 @@ run = ["scripts/deploy-host.sh {host}", "scripts/fleet.sh --host {host} up verif
 name = "theorg-mini-deadman"
 repo = "~/local/theOrg"
 manual = ".cursor/helpers/runtime-watchdog/install-d03-deadman.sh (theOrg-owned; needs /etc/theorg-deadman/gitea.env)"
+# verify runs this on d03: the installer's timer is active and its secret is in place.
+check = "systemctl is-active --quiet theorg-mini-deadman.timer && sudo test -s /etc/theorg-deadman/gitea.env"
 
 [runner]
 enabled = true
