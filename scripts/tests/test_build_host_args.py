@@ -393,6 +393,16 @@ results = [
           lambda: temp_specs({"x": VM + 'startup = "order=1; reboot"\n'})("x")),
     fails("startup that is not a string is refused", "[vm].startup must be",
           lambda: temp_specs({"x": VM + 'startup = 15\n'})("x")),
+    # [vm].vmid: a placeholder 0 (d03's spec before the operator chose 113) must never build.
+    fails("vmid 0 (a placeholder) is refused", "[vm].vmid must be a whole number >= 100, not 0",
+          lambda: temp_specs({"x": VM.replace("vmid = 999", "vmid = 0")})("x")),
+    fails("vmid below 100 is refused", "[vm].vmid must be", lambda: temp_specs({"x": VM.replace("vmid = 999", "vmid = 99")})("x")),
+    fails("vmid as a string is refused", "[vm].vmid must be",
+          lambda: temp_specs({"x": VM.replace("vmid = 999", 'vmid = "113"')})("x")),
+    fails("vmid as a boolean is refused", "[vm].vmid must be",
+          lambda: temp_specs({"x": VM.replace("vmid = 999", "vmid = true")})("x")),
+    check("vmid 100 is accepted", temp_specs({"x": VM.replace("vmid = 999", "vmid = 100")})("x")["vm"]["vmid"] == 100),
+    check("d03 is VMID 113, never 103 (VM 103 is the way back)", build_host.load_spec("d03")["vm"]["vmid"] == 113),
     # The pre-flight: host files against GitLab before a build that may replace the host.
     check("secret states", [build_host.secret_state(g, h) for g, h in (("a", "a"), ("a", "b"), (None, "b"), ("a", None), (None, None))]
           == ["in sync", "DIFFERS", "MISSING in GitLab", "MISSING on host", "MISSING everywhere"]),

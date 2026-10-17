@@ -168,6 +168,9 @@ HM_PATH = re.compile(r"/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)+")
 HM_NAME = re.compile(r"[a-z_][a-z0-9_-]*")
 GL_ONLINE_WAIT = 180           # seconds the runner phase waits for a new GitLab runner to be online
 NODES = ("vmh01", "vmh02")
+# Proxmox's lowest guest id (inference from its tooling, not checked in its docs): load_spec
+# refuses a lower [vm].vmid, so a placeholder 0 can never build.
+MIN_VMID = 100
 IMAGE = "/mnt/nas/data1/iso/template/iso/debian-13-generic-amd64.qcow2"
 GATEWAY = "10.0.0.1"
 NAMESERVERS = "10.0.0.10 10.0.0.11"
@@ -310,6 +313,8 @@ def load_spec(host: str, node: str | None = None) -> dict:
     for k in ("node", "vmid", "sockets", "cores", "memory_mb", "ip", "os_disk", "cloudinit_storage"):
         if k not in vm:
             raise Fail(f"{path}: [vm].{k} missing")
+    if not isinstance(vm["vmid"], int) or isinstance(vm["vmid"], bool) or vm["vmid"] < MIN_VMID:
+        raise Fail(f"{path}: [vm].vmid must be a whole number >= {MIN_VMID}, not {vm['vmid']!r}")
     if vm["node"] not in NODES:
         raise Fail(f"{path}: node {vm['node']} not in {NODES}")
     if node and node != vm["node"]:
