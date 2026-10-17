@@ -30,7 +30,8 @@ mode = "600"
 # key is a throwaway one, made for a test01 build and deleted after it (asyla backlog, G11 proof):
 # it authorizes docker@test01 only, never d01 to d03. The pins are d01 to d03's ed25519 host keys
 # (ssh-keyscan -t ed25519 from the workstation, 2026-10-15, equal to its known_hosts); the build
-# scans each address from test01 and fails on another key.
+# scans each address from test01 and fails on another key. self_address: test01's own new host
+# key, read on test01 by the setup phase, as the rebuilt d03 pins its own (d03/host.toml).
 [[secret]]
 var = "TEST01_HOST_MAINTENANCE_SSH_KEY"
 path = "/home/docker/.config/host-maintenance/ssh/id_ed25519"
@@ -45,6 +46,7 @@ known_hosts = [
   "10.0.0.61 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPbeDGfZcftzPaZaKINRYpCqTWWPB8e5rgJQsoEVBvz8",
   "10.0.0.62 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKLcHH61N2/2rTyKaIFbN1/UkNVik4suQSISbhhGgU9S",
 ]
+self_address = "10.0.0.69"
 
 [[app]]
 name = "hello"

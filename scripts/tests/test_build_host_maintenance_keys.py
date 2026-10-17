@@ -144,6 +144,8 @@ check("test01: the identity is TEST01_HOST_MAINTENANCE_SSH_KEY's path, user dock
       [x["var"] for x in t["secret"] if x["path"] == hm.get("identity")] == ["TEST01_HOST_MAINTENANCE_SSH_KEY"]
       and hm.get("user") == "docker"
       and [p.split()[0] for p in hm.get("known_hosts", [])] == ["10.0.0.60", "10.0.0.61", "10.0.0.62"])
+check("test01: its own key at its address 10.0.0.69 (self_address; the hello spec of 226904e has none)",
+      bool(build_host.load_spec("test01").get("replica")) or hm.get("self_address") == "10.0.0.69", str(hm))
 check("no legacy spec has [host_maintenance] (d01, d02)",
       not any(build_host.load_spec(h).get("host_maintenance") for h in build_host.LEGACY_HOSTS
               if (build_host.REPO / h / "host.toml").is_file()))
