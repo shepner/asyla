@@ -149,6 +149,55 @@ for rc in (1, 255):
           f.startswith(f"restore {APP}: exit {rc}") and "stopped before any app starts" in f and not sec, f)
 
 
+def restore_grep(grep_rc: int, apply: bool) -> tuple[str, list, str, bool]:
+    """phase_restore with the host's grep for the restore switch exiting GREP_RC (2: no script):
+    (Fail text or "", secrets calls, output, whether the restore itself ran)."""
+    calls, secrets = [], []
+
+    def ssh(t, c, **kw):
+        calls.append(c)
+        return Done(grep_rc) if c.startswith("grep ") else Done(0)
+
+    def secrets_cmd(*a, **kw):
+        secrets.append(a)
+        return 0
+    failed = ""
+    with patched(ssh=ssh, secrets_cmd=secrets_cmd) as out:
+        try:
+            build_host.phase_restore(SPEC, apply)
+        except build_host.Fail as e:
+            failed = str(e)
+    return failed, secrets, out.getvalue(), any(c.startswith("bash -c ") for c in calls)
+
+
+f, sec, out, ran = restore_grep(2, True)
+check("restore phase: a script not installed stops it (apply), before the restore and the data secrets",
+      f == f"restore {APP}: {APP}.sh not installed yet; stopped before any app starts" and not sec and not ran, f)
+f, sec, out, ran = restore_grep(2, False)
+check("restore phase: a script not installed is named in a dry run, nothing runs",
+      f == "" and f"restore {APP}: {APP}.sh not installed yet" in out and "GAP" not in out and not ran, f or out)
+f, sec, out, ran = restore_grep(255, True)
+check("restore phase: a host that cannot be read stops it (apply), never taken for no restore",
+      f.startswith(f"restore {APP}: {APP}.sh on test01 cannot be read (exit 255)") and not sec and not ran, f)
+f, sec, out, ran = restore_grep(1, True)
+check("restore phase: a script without restore is a GAP, then the data secrets",
+      f == "" and f"restore {APP}: GAP - {APP}.sh has no restore" in out and len(sec) == 1 and not ran, f or out)
+
+
+def verify_restore(grep_rc: int) -> tuple[bool, str]:
+    with patched(ssh=lambda t, c, **kw: Done(grep_rc)):
+        return build_host.restore_check(SPEC, APP)
+
+
+check("verify: restore present passes", verify_restore(0) == (True, ""), str(verify_restore(0)))
+check("verify: no restore switch fails as before", verify_restore(1) == (False, "no restore switch"),
+      str(verify_restore(1)))
+check("verify: a script not installed fails with that reason",
+      verify_restore(2) == (False, f"{APP}.sh not installed yet"), str(verify_restore(2)))
+check("verify: an unreadable host fails with the exit",
+      verify_restore(255) == (False, f"{APP}.sh on test01 cannot be read (exit 255)"), str(verify_restore(255)))
+
+
 def build_from_restore(rc: int) -> tuple[int, list[str], str]:
     """main() for `test01 build --from restore --apply` with the restore exiting RC and every later
     phase a recorder: (exit, the later phases that ran, stderr)."""

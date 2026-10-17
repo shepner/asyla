@@ -902,10 +902,30 @@ def secret_copy(spec: dict, var: str, src: str, apply: bool) -> int:
 
 # ---------------------------------------------------------------- apps, external, runner
 
+class NotInstalled(Fail):
+    """An app's script is not on the host (yet)."""
+
+
 def app_has(spec: dict, app: str, switch: str) -> bool:
+    """Whether the host's APP.sh has SWITCH. grep exits 1 for no match and 2 when it cannot read
+    the file: a missing script raises NotInstalled, any other status (ssh's 255) Fail, so neither
+    passes for "no such switch"."""
     r = ssh(spec["host"], f"grep -qE '^[[:space:]]+([a-z_|-]+\\|)?{switch}(\\|[a-z_|-]+)?\\)' "
                           f"{app_script(spec['apps_tree'], app)}", check=False)
-    return r.returncode == 0
+    if r.returncode in (0, 1):
+        return r.returncode == 0
+    if r.returncode == 2:
+        raise NotInstalled(f"{app}.sh not installed yet")
+    raise Fail(f"{app}.sh on {spec['host']} cannot be read (exit {r.returncode})")
+
+
+def restore_check(spec: dict, app: str) -> tuple[bool, str]:
+    """verify's restore line for one app: (passes, detail). A missing script fails with its reason."""
+    try:
+        has = app_has(spec, app, "restore")
+    except Fail as e:
+        return False, str(e)
+    return has, "" if has else "no restore switch"
 
 
 def phase_restore(spec: dict, apply: bool) -> None:
@@ -915,7 +935,14 @@ def phase_restore(spec: dict, apply: bool) -> None:
         if a.get("restore") is False:
             print(f"restore {name}: not applicable (spec)")
             continue
-        if not app_has(spec, name, "restore"):
+        try:
+            has = app_has(spec, name, "restore")
+        except Fail as e:   # the script missing or unreadable: never a restore skipped
+            if apply:
+                raise Fail(f"restore {name}: {e}; stopped before any app starts")
+            print(f"restore {name}: {e}")
+            continue
+        if not has:
             print(f"restore {name}: GAP - {name}.sh has no restore")
             continue
         print(f"restore {name} (skipped when its data dir is not empty; any other failure stops the build)")
@@ -1450,8 +1477,7 @@ def verify(spec: dict) -> int:
                        and f"/apps/{name}/" in p.get("ConfigFiles", "")]
             check(f"app {name} running", bool(running))
         if a.get("restore") is not False:
-            has = app_has(spec, name, "restore")
-            check(f"app {name} restore", has, "" if has else "no restore switch")
+            check(f"app {name} restore", *restore_check(spec, name))
     for u in spec.get("replica", {}).get("verify", []) if starts_apps(spec) else []:
         url = u.format(ip=ip_only(spec))
         r = ssh(host, f"for i in $(seq 60); do curl -sf -o /dev/null -m 5 {shlex.quote(url)} && exit 0; sleep 2; done; "
