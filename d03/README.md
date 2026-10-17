@@ -12,16 +12,16 @@ This is for a Debian Linux VM on Proxmox which will run Docker containers.
 - **Purpose**: Docker host for containerized applications
 - **OS**: Debian 13 (Trixie) - Current stable release
 
-**Applications:** See [apps/README.md](apps/README.md) for the current app list and which repo owns each one. This repo owns `gitea`, `breeding-research`, `tc-datalogger`, `ms-procedural-backup` and `ms-chronicle-backup` (agent-commons was retired 2026-10-08: replaced by ms-procedural on the Mac Mini); the edge stack is deployed separately from `asyla/projects/`.
+**Applications:** See [apps/README.md](apps/README.md) for the current app list and which repo owns each one. This repo owns `breeding-research`, `tc-datalogger`, `ms-procedural-backup` and `ms-chronicle-backup` (agent-commons was retired 2026-10-08: replaced by ms-procedural on the Mac Mini; Gitea moved to d04 on 2026-10-16); the edge stack is deployed separately from `asyla/projects/`.
 
 **Internet access:** Applications on d03 are exposed via **Cloudflare Tunnel** (no port forwarding required), terminated by `external-access` with `internal-access` (Caddy) fronting split-DNS on ports 80/443. Both are deployed from their own repos under `asyla/projects/` via `scripts/deploy-host.sh d03`. [docs/cloudflare-tunnel.md](docs/cloudflare-tunnel.md) describes the superseded `cloudflared` / `internal-proxy` layout and is kept for historical reference only.
 
 ## VM Specifications
 
-- **VMID**: 103
-- **CPU**: 6 cores, 2 sockets
-- **Memory**: 25GB
-- **Storage**: 64GB (qcow2 format)
+The build spec is [host.toml](host.toml) (`[vm]`): the rebuilt d03 has 1 socket, 6 cores, 8 GiB,
+a 32G OS disk and a 32G data disk (`/mnt/docker`) on vmh01 `local-data2`, under a new VMID. VM 103,
+the old d03, is kept stopped as the way back.
+
 - **Network**: vmbr1 bridge, VLAN 100
 
 ## Prerequisites

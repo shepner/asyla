@@ -26,13 +26,15 @@ non-interactive `ssh d03 '<app>.sh backup'`. Force it by hand with `MAINT_FOREGR
 
 ## Owned by this repo
 
+Gitea is not on d03: it moved to d04 on 2026-10-16 (`d04/apps/gitea/`). Its old data stays in
+the old d03 (VM 103, `/mnt/docker/Gitea`) as the rollback copy.
+
 Deployed by `update_scripts.sh`, which mirrors `d03/` into `~/scripts/d03/`: files this repo no longer
 has are deleted on the host unless a repo `.gitignore` matches them (`*.env` secrets, and the folders in
 `apps/.gitignore`).
 
 | App | Script | Notes |
 |-----|--------|-------|
-| **gitea** | `~/scripts/d03/apps/gitea/gitea.sh` | Git server, internal only (gitea.asyla.org via internal-access). `USER_UID`/`USER_GID` are both 1003 to match the migrated data volume |
 | **ms-procedural-backup** | `~/scripts/d03/apps/ms-procedural-backup/ms-procedural-backup.sh` | Nightly pull of ms-procedural's corpus (Mac Mini) into the NAS mirror; backup-only, no containers. agent-commons, which used to run here, was retired 2026-10-08 (theOrg plan ms-procedural-rename.plan.md); its data is archived in `/mnt/nas/data1/docker/agent-commons/mirror` |
 | **ms-chronicle-backup** | `~/scripts/d03/apps/ms-chronicle-backup/ms-chronicle-backup.sh` | Nightly pull of ms-chronicle's newest verified backup snapshot (Mac Mini) into `/mnt/nas/data1/docker/ms-chronicle/mirror`; backup-only, no containers, writes only inside that directory. It runs once host-maintenance's `config/maintenance.toml` lists it; needs `.env` (the backup token, delivered by memory-system `deliver-backup-token.sh`) and the mirror directory, which it does not create |
 | **breeding-research** | `~/scripts/d03/apps/breeding-research/breeding-research.sh` | Scraper + API; needs `.env` |
@@ -61,7 +63,6 @@ YAML schema the current generator does not accept.
 The proxy needs every app network to exist first, so start the apps before the edge. `agent_commons_net` is kept although agent-commons is retired: internal-access and external-access still join it, until the edge drops it.
 
 ```bash
-~/scripts/d03/apps/gitea/gitea.sh up
 ~/scripts/d03/apps/breeding-research/breeding-research.sh up
 ~/scripts/d03/apps/tc-datalogger/tc-datalogger.sh up
 ~/scripts/d03/apps/internal-access/internal-access.sh up

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Offline test of the backup guard in d03/apps/gitea/gitea.sh and d04/apps/gitea/gitea.sh:
+# Offline test of the backup guard in d04/apps/gitea/gitea.sh (d03's copy left with Gitea's move):
 # `backup` and `_backup` refuse (exit 1, [ERROR]) unless gitea.asyla.org resolves to one of this
 # host's addresses; restore, verify and up never check. Touches no host and no NAS: `getent`,
 # `hostname` and `docker` are stubs on PATH, and each run uses a copy of gitea.sh whose do_backup,
@@ -41,7 +41,7 @@ chmod +x "$T/bin/getent" "$T/bin/hostname" "$T/bin/docker"
 
 # A copy of each gitea.sh with the work stubbed, defined just before the dispatcher so they
 # replace the real ones (and backup_lib's restore).
-for h in d03 d04; do
+for h in d04; do
   mkdir -p "$T/$h"
   awk '/^run_cmd\(\) \{/ {
          print "do_backup() { echo \"STUB do_backup ran\"; }"
@@ -74,7 +74,7 @@ check() {  # check <name> <condition as a string>
 }
 
 OWN="10.0.0.62 172.17.0.1 172.18.0.1"
-for h in d03 d04; do
+for h in d04; do
   for sw in backup _backup; do
     # 1. The name resolves to one of this host's addresses: the backup runs.
     run_gitea "$h" "10.0.0.62" "$OWN" "$sw"

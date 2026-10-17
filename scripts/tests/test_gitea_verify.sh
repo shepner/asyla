@@ -1,6 +1,6 @@
 #!/bin/bash
-# Offline test of `gitea.sh verify` and `gitea.sh restart verify` (d03/apps/gitea/gitea.sh), and of
-# d04's copy, where a local :3000 failure fails verify (cases 5 and 6).
+# Offline test of `gitea.sh verify` and `gitea.sh restart verify` (d04/apps/gitea/gitea.sh, the one
+# copy since Gitea left d03 on 2026-10-16), where a local :3000 failure fails verify (case 5).
 # Touches no host and no real Gitea: `docker` is a stub on PATH, and Gitea is a stand-in HTTP
 # server on a free local port that starts answering a few seconds after the stub's `up`, as the
 # real container does. Needs bash, curl and python3. Run from anywhere:
@@ -12,8 +12,8 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-GITEA_SH="$REPO/d03/apps/gitea/gitea.sh"
-GITEA_SH_D04="$REPO/d04/apps/gitea/gitea.sh"
+GITEA_SH="$REPO/d04/apps/gitea/gitea.sh"
+GITEA_SH_D04="$GITEA_SH"
 T="$(mktemp -d)"
 trap 'stop_standin; rm -rf "$T"' EXIT
 
@@ -59,7 +59,7 @@ stop_standin() {
 }
 
 # run_gitea <wait seconds> <standin delay> <switch ...>: sets RC, OUT and TOOK. SH and LOCAL_PORT
-# pick the copy under test and its local port (default: d03's, the stand-in's port).
+# pick the copy under test and its local port (default: d04's, the stand-in's port).
 run_gitea() {
   local wait_s="$1" delay="$2" t0=$SECONDS
   shift 2
@@ -104,18 +104,14 @@ run_gitea 4 never restart verify
 check "restart verify, Gitea never answers" '[ "$RC" -ne 0 ] && [ "$TOOK" -ge 4 ] && [ "$TOOK" -le 15 ] && grep -q "check failed" <<<"$OUT"'
 stop_standin
 
-# 5. d04's copy: the public URL answers (as d03's Gitea does until the cutover) but local :3000
-#    does not. verify must fail.
+# 5. The public URL answers (as another host's Gitea could) but local :3000 does not. verify must
+#    fail. (Its control, d03's copy passing in this state, left with that copy.)
 run_gitea 0 0 up
 sleep 1
 SH="$GITEA_SH_D04" LOCAL_PORT="$DEAD_PORT" run_gitea 1 0 verify
 check "d04 verify, local :3000 down, public up: fails" '[ "$RC" -eq 1 ] && grep -q "Local :3000 check failed" <<<"$OUT"'
 
-# 6. Control: d03's copy in the same state passes with a warning, so case 5 tests d04's change.
-LOCAL_PORT="$DEAD_PORT" run_gitea 1 0 verify
-check "d03 verify, local :3000 down, public up: passes (control)" '[ "$RC" -eq 0 ] && grep -q "WARN.*Local :3000" <<<"$OUT"'
-
-# 7. d04's copy with both answering passes.
+# 6. d04's copy with both answering passes.
 SH="$GITEA_SH_D04" run_gitea 1 0 verify
 check "d04 verify, local and public up: passes" '[ "$RC" -eq 0 ] && grep -q "Local :3000 OK" <<<"$OUT"'
 stop_standin

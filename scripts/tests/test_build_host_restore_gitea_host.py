@@ -191,7 +191,7 @@ def parse(line: str):
 
 
 check("the default Gitea host is d04 since the cutover", build_host.GITEA_TOKEN_HOST == "d04")
-check("the Gitea hosts are the specs with a gitea app and no replica", build_host.gitea_hosts() == ["d03", "d04"],
+check("the Gitea hosts are the specs with a gitea app and no replica", build_host.gitea_hosts() == ["d04"],
       str(build_host.gitea_hosts()))
 check("the name the runners register against", build_host.GITEA_NAME == "gitea.asyla.org"
       and f'GITEA_INSTANCE_URL="https://{build_host.GITEA_NAME}"'

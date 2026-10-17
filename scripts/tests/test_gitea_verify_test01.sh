@@ -1,7 +1,7 @@
 #!/bin/bash
 # Real-container test of `gitea.sh up|restart verify`, on test01 only (the disposable build host).
-# It starts the same Gitea image as d03 from this checkout's gitea.sh and compose.yml, on an
-# EMPTY data directory in a temp dir: never d03's restored data under /mnt/docker/Gitea, so no
+# It starts the same Gitea image as d04 from this checkout's d04 gitea.sh and compose.yml, on an
+# EMPTY data directory in a temp dir: never a restored Gitea under /mnt/docker/Gitea, so no
 # repository, user, mirror or mail exists in it. It then checks that `up verify` and
 # `restart verify` pass in one call and that verify fails once Gitea is down, and removes the
 # container, the network and the temp dir. The offline twin is test_gitea_verify.sh.
@@ -14,7 +14,7 @@ set -uo pipefail
 
 if [ "${1:-}" != "--on-host" ]; then
   REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-  COPYFILE_DISABLE=1 tar -C "$REPO" -cf - d03/apps/gitea/gitea.sh d03/apps/gitea/compose.yml \
+  COPYFILE_DISABLE=1 tar -C "$REPO" -cf - d04/apps/gitea/gitea.sh d04/apps/gitea/compose.yml \
       docker/common.env docker/backup_lib.sh scripts/tests/test_gitea_verify_test01.sh |
     ssh -o BatchMode=yes -o ConnectTimeout=10 -i ~/.ssh/docker_rsa docker@test01 '
       set -e
@@ -40,7 +40,7 @@ ln -s "$D" "$D/home/scripts"
 sed -i "s|^DOCKER_DL=.*|DOCKER_DL=$D/data|" "$D/docker/common.env"
 grep -q "^DOCKER_DL=$D/data\$" "$D/docker/common.env" || { echo "could not repoint DOCKER_DL" >&2; exit 2; }
 
-GITEA_SH="$D/d03/apps/gitea/gitea.sh"
+GITEA_SH="$D/d04/apps/gitea/gitea.sh"
 # compose.yml once mounted /etc/timezone, which Debian 13 does not have: Docker then created it as
 # an empty directory on the host. A case below fails if that comes back; the cleanup still
 # removes a directory this run made.
