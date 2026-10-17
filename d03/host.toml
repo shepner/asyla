@@ -6,7 +6,7 @@
 # order=15: after d04 (order=10) when vmh01 boots.
 [vm]
 node = "vmh01"
-vmid = 0                   # VMID: the operator's choice, set before merge; never 103 (VM 103 is kept stopped as the way back)
+vmid = 113                 # operator, 2026-10-17; never 103 (VM 103 is kept stopped as the way back)
 sockets = 1
 cores = 6                  # operator: as the old d03
 memory_mb = 8192
