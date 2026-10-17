@@ -4,9 +4,9 @@
 # replica of the new d03 spec (no Gitea; build/setup/, not d03/setup/), restoring breeding-research
 # and tc-datalogger from d03's NAS mirrors and starting them, with no way to write outward
 # (scripts/build_host.py docstring, Replica). No [runner], [gitlab_runner] or [[external]]: a
-# replica reaches nothing off the LAN and must not answer for d03's names. Every D03_* secret is
-# included, so the pre-flight compares each with the live d03. This commit is reverted after the
-# proof, which brings back the hello test.
+# replica reaches nothing off the LAN and must not answer for d03's names. Every D03_* secret but
+# the host-maintenance key is included, so the pre-flight compares each with the live d03. This
+# commit is reverted after the proof, which brings back the hello test.
 [vm]
 node = "vmh01"             # the default; either node may carry it: build_host.py test01 build --node vmh02
 vmid = 901                 # a block of its own, away from the Docker hosts (101 up)
@@ -24,9 +24,16 @@ startup = "order=90"       # after every production VM when a node boots; set at
 steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "bashrc.sh"]   # build/setup/, sent by the build
 
 # host-maintenance's key set, test01's own (the replica keeps it; d03's [host_maintenance] is not
-# taken): the identity is the path of d03's merged D03_HOST_MAINTENANCE_SSH_KEY [[secret]], so the
-# pre-flight compares that variable with the live d03's key. It authorizes docker@test01 only; d01,
-# d02 and d04 accept it only from d03's address (from=). self_address is test01's own, never d03's.
+# taken), with its own throwaway key TEST01_HOST_MAINTENANCE_SSH_KEY: build/setup/
+# host_maintenance_keys.sh reads test01/host.toml alone, so the identity must be one of test01's own
+# [[secret]]s, and d03's D03_HOST_MAINTENANCE_SSH_KEY (same path) is excluded from the replica.
+# self_address is test01's own address, never d03's.
+[[secret]]
+var = "TEST01_HOST_MAINTENANCE_SSH_KEY"
+path = "/home/docker/.config/host-maintenance/ssh/id_ed25519"
+owner = "docker:docker"
+mode = "600"
+
 [host_maintenance]
 identity = "/home/docker/.config/host-maintenance/ssh/id_ed25519"
 user = "docker"
@@ -40,6 +47,7 @@ self_address = "10.0.0.69"
 [replica]
 of = "d03"
 start_apps = true
+exclude_secrets = ["D03_HOST_MAINTENANCE_SSH_KEY"]   # test01's own key set above
 # Local URL of breeding-research (d03/apps/*/compose.yml: host :8080). tc-datalogger's dashboard
 # (:8081) needs BigQuery, which the replica's egress block refuses; ms-procedural-backup and
 # ms-chronicle-backup run no container.
