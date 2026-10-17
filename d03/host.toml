@@ -16,9 +16,7 @@ data_disk = { storage = "local-data2", size = "32G" }   # /mnt/docker
 cloudinit_storage = "local-data2"
 startup = "order=15"       # set at create, checked by verify
 
-# build/setup/, as d04 and test01. d03 is still in build_host.py's LEGACY_HOSTS, whose setup runs
-# ~/scripts/d03/setup/<step> (no bashrc.sh there): d03 leaves that list and d03/setup/ goes before
-# d03 is built (a build-path change, proven on test01 first).
+# build/setup/, as d04 and test01: d03 left build_host.py's LEGACY_HOSTS and has no setup/ of its own.
 [setup]
 steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "bashrc.sh"]   # no SMB media mount on d03 (live, 2026-10-07)
 
