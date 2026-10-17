@@ -190,9 +190,19 @@ REPLICA_EGRESS = "replica_egress.sh"   # build/setup/, run by the apps phase of 
 REPLICA_EGRESS_UNIT = "asyla-replica-egress.service"
 REPLICA_EGRESS_TABLE = "inet asyla_replica_egress"
 EGRESS_PROBES = ("https://gitlab.com", "https://github.com")   # a replica must reach neither
-# curl, else wget; 99: neither exists (no proof). $0 is the URL.
+# curl, else wget, else python3 (d03's app images have only python3: the 2026-10-17 d03 proof);
+# 99: none exists, or python3 failed otherwise than on the network (no proof). $0 is the URL.
+# python3 as curl without -f: an HTTP error status is an answer, so the URL was reached (exit 0).
+EGRESS_PROBE_PY = ("import sys\n"
+                   "try:\n"
+                   "    import urllib.request\n"
+                   "    urllib.request.urlopen(sys.argv[1], timeout=5)\n"
+                   "except Exception as e:\n"
+                   "    sys.exit(0 if type(e).__name__ == 'HTTPError' else 1 if isinstance(e, OSError) else 99)\n")
 EGRESS_PROBE_SH = ('if command -v curl >/dev/null 2>&1; then curl -s -o /dev/null -m 5 "$0"; '
-                   'elif command -v wget >/dev/null 2>&1; then wget -q -T 5 -O /dev/null "$0"; else exit 99; fi')
+                   'elif command -v wget >/dev/null 2>&1; then wget -q -T 5 -O /dev/null "$0"; '
+                   f'elif command -v python3 >/dev/null 2>&1; then python3 -c "{EGRESS_PROBE_PY}" "$0"; '
+                   'else exit 99; fi')
 INI_SECTION = re.compile(r"[a-z][a-z0-9_]*(\.[a-z0-9_]+)*")
 INI_KEY = re.compile(r"[A-Z][A-Z0-9_]*")
 INI_VALUE = re.compile(r"[A-Za-z0-9._:/,@-]*")
@@ -1037,7 +1047,7 @@ def replica_images(spec: dict, apply: bool) -> list[str]:
 def egress_checks(spec: dict, images: list[str] = (), containers: list[str] = ()) -> list[tuple[str, bool, str]]:
     """(label, ok, detail) for the replica's egress block: the table and its unit, then no probe
     URL from the host, from a container of each image, or from inside each running container.
-    A probe that cannot run (no curl or wget: 99; docker's own errors: 125 to 127) is no proof."""
+    A probe that cannot run (no curl, wget or python3: 99; docker's own errors: 125 to 127) is no proof."""
     host, out = spec["host"], []
     r = ssh(host, f"sudo nft list table {REPLICA_EGRESS_TABLE} >/dev/null && systemctl is-enabled {REPLICA_EGRESS_UNIT}",
             check=False)

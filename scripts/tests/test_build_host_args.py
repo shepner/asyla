@@ -170,6 +170,42 @@ def egress_case() -> bool:
                  good and good2 and good3 and good4, str((res, res2, res3, res4)))
 
 
+def egress_probe_case() -> bool:
+    """EGRESS_PROBE_SH run here, on loopback only, with a PATH that holds python3 alone (d03's app
+    images have no curl or wget, 2026-10-17) or nothing: a refused port is exit 1 (blocked), an
+    HTTP 404 is an answer (exit 0, reached, as curl without -f), and no tool at all is 99."""
+    import http.server
+    import os
+    import socket
+    import tempfile
+    import threading
+
+    class NotFound(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_error(404)
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), NotFound)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    closed = s.getsockname()[1]
+    s.close()
+    with tempfile.TemporaryDirectory() as only_py, tempfile.TemporaryDirectory() as empty:
+        os.symlink(sys.executable, os.path.join(only_py, "python3"))
+
+        def probe(bindir: str, url: str) -> int:
+            return REAL_RUN(["/bin/sh", "-c", build_host.EGRESS_PROBE_SH, url], env={"PATH": bindir},
+                            capture_output=True, timeout=30).returncode
+        rcs = (probe(only_py, f"http://127.0.0.1:{closed}/"), probe(only_py, f"http://127.0.0.1:{srv.server_port}/"),
+               probe(empty, "http://127.0.0.1:9/"))
+    srv.shutdown()
+    return check("egress probe with python3 only: refused is 1, an HTTP 404 is 0 (reached), no tool is 99",
+                 rcs == (1, 0, 99), str(rcs))
+
+
 def ini_read_case() -> bool:
     spec = temp_specs({"d07": VM + GITEA_APP, "x": VM + REP_GITEA + GC
                        + '[replica.gitea_config.webhook]\nALLOWED_HOST_LIST = "w.invalid"\n'})("x")
@@ -532,6 +568,7 @@ results = [
               == {"webhook-delivery-disabled.invalid"})),
     replica_guard_dry(),
     egress_case(),
+    egress_probe_case(),
     ini_read_case(),
     wrapper_case("wrapper: the command runs in the unpacked bundle", 'ls -R "$B"', 0, "x.sh"),
     wrapper_case("wrapper: a failing command's status comes back and the folder is removed", 'bash "$B/build/setup/x.sh"; exit 3', 3, "hi"),
