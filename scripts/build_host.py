@@ -583,6 +583,12 @@ def phase_vm(spec: dict, apply: bool, recreate: bool, confirm: str | None) -> No
         f"--net0 virtio,bridge={BRIDGE},firewall=1,tag={VLAN} --onboot 1 "
         f"--agent 1,fstrim_cloned_disks=1" + (f" --startup {vm['startup']}" if vm.get("startup") else ""),
         f"{q} --scsi0 {d['storage']}:0,import-from={IMAGE},discard=on,ssd=1",
+        # import-from skips the image's zero blocks (qemu zeroinit: lvmthin claims sparseinit), but the
+        # nodes' thin pools do not zero new chunks, so those blocks keep a deleted volume's bytes; on
+        # 2026-10-17 they broke test01's GPT and it never found its root. Rewrite with the zeros
+        # (-S 0: fully allocated) and stop unless the disk now reads as the image.
+        f"V=$(qm config {vmid} | sed -n 's/^scsi0: \\([^,]*\\),.*/\\1/p') && P=$(pvesm path \"$V\") && "
+        f"qemu-img convert -n -S 0 -f qcow2 -O raw {IMAGE} \"$P\" && qemu-img compare -f qcow2 -F raw {IMAGE} \"$P\"",
         f"qm resize {vmid} scsi0 {d['size']}",
         f"{q} --scsi1 {vm['cloudinit_storage']}:cloudinit",
         f"{q} --boot order=scsi0",
