@@ -64,6 +64,8 @@ tags
 !**/setup_smb_credentials.sh
 # Exception: the secret scan's list of false positives (names where a finding is, never a value)
 !/.secret-scan-allow.toml
+# Exception: ticketing's Docker credential helper (a script that reads the environment; it holds no value)
+!/d06/apps/ticketing/docker-credential-ticketing-env
 *password*
 *.key
 *.pem

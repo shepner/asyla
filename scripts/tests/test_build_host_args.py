@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -109,7 +110,7 @@ def temp_specs(specs: dict[str, str]):
 
 VM = ('[vm]\nnode = "vmh01"\nvmid = 999\nsockets = 1\ncores = 1\nmemory_mb = 1024\nip = "10.0.0.250/24"\n'
       'os_disk = { storage = "local-data2", size = "8G" }\ncloudinit_storage = "local-data2"\n')
-SECRET = '[[secret]]\nvar = "{var}"\npath = "/home/docker/{var}.env"\n'
+SPEC_FILE_ENTRY = '[[secret]]\nvar = "{var}"\npath = "/home/docker/{var}.env"\n'
 
 
 APPS = '[[app]]\nname = "a"\n[[app]]\nname = "b"\n[[app]]\nname = "c"\n'
@@ -168,6 +169,150 @@ def egress_case() -> bool:
     good4 = [ok for _, ok, _ in res4] == [False, True, True]
     return check("egress checks: blocked passes; a reachable URL, a missing curl or wget, or no table fails",
                  good and good2 and good3 and good4, str((res, res2, res3, res4)))
+
+
+def egress_no_shell_case() -> bool:
+    """An image with no shell (vikunja's, exit 127) passes only beside another image that proves
+    the default bridge; a running container with no shell is probed by the host's curl in its
+    network namespace (nsenter), and a probe whose tooling fails (99) is no proof."""
+    spec = temp_specs({"d07": VM + GITEA_APP, "x": VM + REP_GITEA})("x")
+
+    def fake(rcs):
+        def f(t, c):
+            for needle, rc in rcs:
+                if needle in c:
+                    return Done(rc)
+            return Done(28)
+        return f
+    base = [("nft list", 0)]
+    res, _ = with_ssh(fake(base + [("docker run --rm --entrypoint sh vik", 127), ("docker run", 28)]),
+                      lambda: build_host.egress_checks(spec, ["vik:1", "py:1"]))
+    good = [ok for _, ok, _ in res] == [True, True, True, True, True] and "proved by py:1" in res[-1][2]
+    res2, _ = with_ssh(fake(base + [("docker run", 127)]), lambda: build_host.egress_checks(spec, ["vik:1"]))
+    good2 = [ok for _, ok, _ in res2] == [True, True, True, False]
+    seen = []
+
+    def ns(rc):
+        def f(t, c):
+            seen.append(c)
+            return Done(0 if "nft list" in c else 127 if "docker exec" in c else rc if "nsenter" in c else 28)
+        return f
+    res3, _ = with_ssh(ns(7), lambda: build_host.egress_checks(spec, containers=["ticketing-vikunja-1"]))
+    good3 = res3[-1][1] and "network namespace" in res3[-1][0] and any("nsenter" in c for c in seen)
+    res4, _ = with_ssh(ns(99), lambda: build_host.egress_checks(spec, containers=["ticketing-vikunja-1"]))
+    res5, _ = with_ssh(ns(0), lambda: build_host.egress_checks(spec, containers=["ticketing-vikunja-1"]))
+    return check("egress, no shell: an image passes beside a proving one, alone fails; a container goes "
+                 "through nsenter, blocked passes, reached or no tooling fails",
+                 good and good2 and good3 and not res4[-1][1] and not res5[-1][1], str((res, res2, res3, res4, res5)))
+
+
+def replica_images_own_case() -> bool:
+    """An app whose script has an `images` switch lists its own images (its env, login and replica
+    overlay); one without keeps the bare compose listing."""
+    spec = temp_specs({"d07": VM + GITEA_APP, "x": VM + REP_GITEA})("x")
+    calls = []
+
+    def fake(has):
+        def f(t, c):
+            calls.append(c)
+            if c.startswith("grep -qE"):
+                return Done(0 if has else 1)
+            return Done(0, "own:1\n" if c.endswith(" images") else "compose:1\n")
+        return f
+    own, _ = with_ssh(fake(True), lambda: build_host.replica_images(spec, True))
+    own_cmd = [c for c in calls if c.endswith(" images")]
+    calls.clear()
+    bare, _ = with_ssh(fake(False), lambda: build_host.replica_images(spec, True))
+    return check("replica images: the app's own `images` switch when it has one, else compose config",
+                 own == ["own:1"] and own_cmd == ["~/scripts/d07/apps/gitea/gitea.sh images"]
+                 and bare == ["compose:1"] and not any(c.endswith(" images") for c in calls), str((own, own_cmd, bare)))
+
+
+ENV_APP = ('[[app]]\nname = "tk"\npull_token_env = "PULL_X"\nstart_env = ["START_A", "START_B"]\n')
+ENV_NAMES = ["PULL_X", "START_A", "START_B"]
+
+
+def app_env_cases() -> list[bool]:
+    """[[app]] pull_token_env and start_env: validated names; values from build_host's environment go
+    over SSH stdin only (never in the command), to images before restore, to the start commands, and
+    start_env never on a replica."""
+    out = [
+        fails("app env: pull_token_env must be a variable name", "pull_token_env must be",
+              lambda: temp_specs({"x": VM + '[[app]]\nname = "a"\npull_token_env = "a b"\n'})("x")),
+        fails("app env: start_env must be a list of names", "start_env must be",
+              lambda: temp_specs({"x": VM + '[[app]]\nname = "a"\nstart_env = "A"\n'})("x")),
+        fails("app env: start_env names are distinct", "start_env must be",
+              lambda: temp_specs({"x": VM + '[[app]]\nname = "a"\nstart_env = ["A", "A"]\n'})("x")),
+        fails("app env: start_env cannot also carry the pull token's name", "which pull_token_env sets",
+              lambda: temp_specs({"x": VM + '[[app]]\nname = "a"\npull_token_env = "P"\nstart_env = ["A_REGISTRY_PULL_TOKEN"]\n'})("x")),
+        check("app env: the pull token's name on the host", build_host.pull_env_name("my-app") == "MY_APP_REGISTRY_PULL_TOKEN"),
+    ]
+    cmd, stdin = build_host.env_command([("VA", "one"), ("VB", "two words")], 'printf "%s|%s" "$VA" "$VB"')
+    r = REAL_RUN(["bash", "-c", cmd], input=stdin, capture_output=True, text=True)   # locally only
+    out.append(check("app env: env_command reads each value from stdin into its name; only names in the command",
+                     r.stdout == "one|two words" and "one" not in cmd and "two" not in cmd and stdin == "one\ntwo words\n",
+                     repr((cmd, r.stdout, r.stderr))))
+    out.append(check("app env: nothing to send leaves the command alone", build_host.env_command([], "x up") == ("x up", None)))
+
+    values = {n: f"stand-in-{i}" for i, n in enumerate(ENV_NAMES)}
+    calls = []
+
+    def fake(t, c, **kw):
+        calls.append((c, kw.get("stdin")))
+        return Done(0, "img:1\n")
+
+    def run_with(env: dict, call):
+        saved = {n: os.environ.pop(n) for n in ENV_NAMES if n in os.environ}
+        os.environ.update(env)
+        real_ssh, real_sec = build_host.ssh, build_host.secrets_cmd
+        build_host.ssh, build_host.secrets_cmd = fake, (lambda *a, **kw: 0)
+        calls.clear()
+        try:
+            with contextlib.redirect_stdout(io.StringIO()) as buf:
+                try:
+                    call()
+                    got = ""
+                except build_host.Fail as e:
+                    got = str(e)
+            return got, buf.getvalue()
+        finally:
+            build_host.ssh, build_host.secrets_cmd = real_ssh, real_sec
+            for n in ENV_NAMES:
+                os.environ.pop(n, None)
+            os.environ.update(saved)
+
+    prod = temp_specs({"x": VM + ENV_APP})("x")
+    err, printed = run_with(values, lambda: build_host.phase_apps(prod, True))
+    up = [(c, i) for c, i in calls if c.endswith("tk.sh up'")]
+    out.append(check("app env: up gets the pull token and start_env over stdin, by name in the command only",
+                     not err and len(up) == 1 and up[0][1] == "stand-in-0\nstand-in-1\nstand-in-2\n"
+                     and "TK_REGISTRY_PULL_TOKEN START_A START_B" in up[0][0]
+                     and not any(v in up[0][0] or v in printed for v in values.values()), repr((err, calls))))
+    err, printed = run_with({"PULL_X": "stand-in-0", "START_A": "stand-in-1"}, lambda: build_host.phase_apps(prod, True))
+    out.append(check("app env: an unset start_env name stops the start, naming it", "START_B is not in the environment" in err
+                     and not calls and "stand-in" not in err + printed, err))
+    err, printed = run_with(values, lambda: build_host.phase_restore(prod, True))
+    order = [sw for c, _ in calls for sw in ("images", "restore") if f"tk.sh {sw}" in c]
+    images = [i for c, i in calls if "tk.sh images" in c]
+    out.append(check("app env: before its restore, `images` runs with the pull token alone over stdin",
+                     not err and order == ["images", "restore"]
+                     and images == ["stand-in-0\n"], repr((err, order, images))))
+    rep_spec = temp_specs({"d07": VM + ENV_APP, "x": VM + '[replica]\nof = "d07"\n'})("x")
+    err, printed = run_with({"PULL_X": "stand-in-0"}, lambda: build_host.phase_apps(rep_spec, True, late=True))
+    calls.clear()
+    real_guard = build_host.replica_guard
+    build_host.replica_guard = lambda spec, apply: None
+    try:
+        err, printed = run_with({"PULL_X": "stand-in-0"}, lambda: build_host.phase_apps(rep_spec, True))
+    finally:
+        build_host.replica_guard = real_guard
+    up = [(c, i) for c, i in calls if c.endswith("tk.sh up'")]
+    out.append(check("app env: on a replica start_env is neither read nor sent; the pull token still is",
+                     not err and len(up) == 1 and up[0][1] == "stand-in-0\n" and "START_A" not in up[0][0], repr((err, calls))))
+    err, printed = run_with({}, lambda: build_host.replica_images(rep_spec, True))
+    out.append(check("app env: a replica's image pull without the pull token fails, naming it",
+                     "PULL_X is not in the environment" in err, err))
+    return out
 
 
 def egress_probe_case() -> bool:
@@ -471,6 +616,24 @@ results = [
         build_host.load_spec("test01")["vm"])),
     check("d04's production spec: no hold, not disposable",
           (lambda d: not d.get("hold") and not d["vm"].get("disposable"))(build_host.load_spec("d04"))),
+    check("d06's production spec: the operator's values (2026-10-18), not disposable, no docker label",
+          (lambda d: (d["vm"]["node"], d["vm"]["vmid"], d["vm"]["ip"], d["vm"]["cores"], d["vm"]["memory_mb"],
+                      d["vm"]["os_disk"], d["vm"]["data_disk"], bool(d["vm"].get("disposable")),
+                      "docker" in d["runner"]["labels"])
+           == ("vmh01", 106, "10.0.0.65/24", 8, 16384, {"storage": "local-data2", "size": "64G"},
+               {"storage": "local-data2", "size": "64G"}, False, False))(build_host.load_spec("d06"))),
+    check("d06 runs ticketing, verified by its own verify; its values come at use, none is a file on the host",
+          (lambda d: [(a["name"], a.get("verify"), a.get("pull_token_env"), a.get("start_env")) for a in d["app"]]
+           == [("ticketing", ["verify"], "THEORG_REGISTRY_PULL_TOKEN",
+                ["TICKETING_DEPLOY_DEX_CLIENT_SECRET", "TICKETING_MCP_DEX_CLIENT_SECRET"])]
+           and {x["var"]: x["path"] for x in d["secret"]} == {
+               "D06_INTERNAL_PROXY_ENV": "/mnt/docker/internal-proxy/.env"}
+           and [e["name"] for e in d["external"]] == ["internal-access"])(build_host.load_spec("d06"))),
+    # Two specs never claim one VM or one address.
+    check("every spec has its own VMID and address",
+          (lambda vms: len({v["vmid"] for v in vms}) == len(vms) and len({v["ip"] for v in vms}) == len(vms))(
+              [build_host.tomllib.loads(p.read_text())["vm"] for p in build_host.REPO.glob("*/host.toml")
+               if "vm" in build_host.tomllib.loads(p.read_text())])),
     # Guests are reached as docker@HOST with the build's key; a node target is passed through.
     check("ssh to a guest names the user and the key",
           build_host.ssh_argv("test01")[-3:] == ["-i", str(build_host.SSH_KEY), "docker@test01"]),
@@ -511,21 +674,21 @@ results = [
           == ["in sync", "DIFFERS", "MISSING in GitLab", "MISSING on host", "MISSING everywhere"]),
     check("pre-flight, dry: reaches no host and no GitLab",
           build_host.preflight_secrets(build_host.load_spec("d03"), False) is None),
-    preflight("in sync", temp_specs({"x": VM + SECRET.format(var="A")})("x"),
+    preflight("in sync", temp_specs({"x": VM + SPEC_FILE_ENTRY.format(var="A")})("x"),
               {"A": "s3cret-one"}, {("x", "/home/docker/A.env"): "s3cret-one"}, {"x"}, None),
-    preflight("the host's file differs", temp_specs({"x": VM + SECRET.format(var="A")})("x"),
+    preflight("the host's file differs", temp_specs({"x": VM + SPEC_FILE_ENTRY.format(var="A")})("x"),
               {"A": "s3cret-one"}, {("x", "/home/docker/A.env"): "s3cret-two"}, {"x"}, "pre-flight: A:"),
-    preflight("on the host only", temp_specs({"x": VM + SECRET.format(var="A")})("x"),
+    preflight("on the host only", temp_specs({"x": VM + SPEC_FILE_ENTRY.format(var="A")})("x"),
               {}, {("x", "/home/docker/A.env"): "s3cret-two"}, {"x"}, "pre-flight: A:"),
-    preflight("in GitLab only (the build installs it)", temp_specs({"x": VM + SECRET.format(var="A")})("x"),
+    preflight("in GitLab only (the build installs it)", temp_specs({"x": VM + SPEC_FILE_ENTRY.format(var="A")})("x"),
               {"A": "s3cret-one"}, {}, {"x"}, None),
-    preflight("the host does not answer (a first build)", temp_specs({"x": VM + SECRET.format(var="A")})("x"),
+    preflight("the host does not answer (a first build)", temp_specs({"x": VM + SPEC_FILE_ENTRY.format(var="A")})("x"),
               {"A": "s3cret-one"}, {}, set(), None),
     preflight("a replica: the source's files are read on the source",
-              temp_specs({"d07": VM + SECRET.format(var="A"), "x": VM + '[replica]\nof = "d07"\n' + SECRET.format(var="B")})("x"),
+              temp_specs({"d07": VM + SPEC_FILE_ENTRY.format(var="A"), "x": VM + '[replica]\nof = "d07"\n' + SPEC_FILE_ENTRY.format(var="B")})("x"),
               {"A": "s3cret-one", "B": "s3cret-b"}, {("d07", "/home/docker/A.env"): "s3cret-two"}, {"d07"}, "pre-flight: A:"),
     preflight("a replica whose source does not answer",
-              temp_specs({"d07": VM + SECRET.format(var="A"), "x": VM + '[replica]\nof = "d07"\n'})("x"),
+              temp_specs({"d07": VM + SPEC_FILE_ENTRY.format(var="A"), "x": VM + '[replica]\nof = "d07"\n'})("x"),
               {"A": "s3cret-one"}, {}, {"x"}, "d07 does not answer"),
     # Build files (one set in build/setup/; the legacy hosts keep HOST/setup/).
     check("the legacy hosts", build_host.LEGACY_HOSTS == ("d02",)),
@@ -568,6 +731,11 @@ results = [
           lambda: temp_specs({"d07": VM + GITEA_APP, "x": VM + REP_GITEA + '[replica.gitea_config.webhook]\nALLOWED_HOST_LIST = "a;b"\n'})("x")),
     fails("replica verify: a public URL is refused", "local URLs",
           lambda: temp_specs({"d07": VM + GITEA_APP, "x": VM + REP_GITEA + 'verify = ["https://gitea.example.org/"]\n'})("x")),
+    check("replica verify: a host-local 127.0.0.1 URL is accepted",
+          temp_specs({"d07": VM + GITEA_APP, "x": VM + REP_GITEA + 'verify = ["http://127.0.0.1:3456/api/v1/info"]\n'})("x")
+          ["replica"]["verify"] == ["http://127.0.0.1:3456/api/v1/info"]),
+    fails("replica verify: another host's address is refused", "local URLs",
+          lambda: temp_specs({"d07": VM + GITEA_APP, "x": VM + REP_GITEA + 'verify = ["http://10.0.0.9:3456/"]\n'})("x")),
     fails("replica verify: another placeholder is refused", "local URLs",
           lambda: temp_specs({"d07": VM + GITEA_APP, "x": VM + REP_GITEA + 'verify = ["http://{ip}:3000/{x}"]\n'})("x")),
     check("environment-to-ini names: a dotted section is _0x2E_",
@@ -587,6 +755,9 @@ results = [
               == {"webhook-delivery-disabled.invalid"})),
     replica_guard_dry(),
     egress_case(),
+    egress_no_shell_case(),
+    replica_images_own_case(),
+    *app_env_cases(),
     egress_probe_case(),
     ini_read_case(),
     replica_verify_apps_case(),

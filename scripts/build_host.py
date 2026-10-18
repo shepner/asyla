@@ -80,6 +80,20 @@ spec's. Hold: a spec with a top-level hold = "reason" is not built or destroyed.
 Guests are reached as docker@HOST with ~/.ssh/docker_rsa, the user and key the vm phase gives
 them, so a host needs no entry in the workstation's ssh config.
 
+App environment (no secret on the host or in a file, asyla SEC-5): an [[app]] may name values
+that build_host.py takes from its own environment (the credentials capability puts them there)
+and sends over SSH stdin, so they exist only in that one command's process environment on the
+host, never in a command line, a file or this output; an unset one fails, naming it.
+  pull_token_env = "NAME"  a registry pull token, handed to the app script as
+                           <APP>_REGISTRY_PULL_TOKEN (APP upper-cased, "-" as "_"): for `APP.sh
+                           images` before its restore (restore pulls nothing itself), in a
+                           replica's image pull, and for its start commands (missing images)
+  start_env = ["NAME"...]  values only the start commands (apps and late phases) get, under their
+                           own names; never on a replica (it runs no vault parts), where they are
+                           neither read nor sent
+d06's ticketing: pull_token_env = "THEORG_REGISTRY_PULL_TOKEN", start_env = its two Dex client
+values (d06/apps/ticketing/README.md).
+
 Replica: a spec with [replica] of = "dNN" (test01 as a d03 replica) takes the source spec's
 [[secret]] and [[app]] lists (minus exclude_secrets) and runs the apps from ~/scripts/dNN/ (its
 updater installs that tree too). Its own [vm] and [setup] apply, and the source's [[external]]
@@ -87,7 +101,7 @@ never do: a replica must not answer for the source's hostnames. With start_apps 
 phase starts nothing and verify checks that no container runs. [replica] keys: of, start_apps,
 exclude_secrets, apps (names: only these of the source's apps), gitea_config, verify.
 A replica writes nothing outward: before any app starts, the apps phase pulls the started apps'
-missing images, then applies build/setup/replica_egress.sh (nftables: the host reaches the LAN
+missing images (an app script with an `images` switch pulls and lists its own), then applies build/setup/replica_egress.sh (nftables: the host reaches the LAN
 and its containers only, containers reach nothing off the host; a oneshot unit keeps it across
 boots) and checks that the host and each image cannot reach the internet; then
 [replica.gitea_config] (a table per app.ini section, e.g. "cron.update_mirrors" = {ENABLED = false})
@@ -96,8 +110,9 @@ Any failure stops the build before an app starts. So a replica has no [runner] a
 [gitlab_runner] (both need the internet; refused). verify, for a replica, never runs the
 source's app verify (it curls the source's public URLs): it checks that each app runs (not one
 with start = [], which runs no container), waits for each [replica.verify] URL
-("http://{ip}:PORT/..."), checks the egress block from the host and each running container in
-place of the deploy token, and reads gitea_config back.
+("http://{ip}:PORT/..." or "http://127.0.0.1:PORT/...", curled on the host), checks the egress block from the host and each running container (one with no shell
+by the host's curl in its network namespace) in place of the deploy token, and reads
+gitea_config back.
 
 GitLab runners: [gitlab_runner] runners = [{name, scope = "group:PATH" | "project:GROUP/PROJECT",
 tags, executor = "docker" | "shell", and for docker image, volumes, pull_policy}]. A rebuild
@@ -211,9 +226,17 @@ EGRESS_PROBE_SH = ('if command -v curl >/dev/null 2>&1; then curl -s -o /dev/nul
                    'elif command -v wget >/dev/null 2>&1; then wget -q -T 5 -O /dev/null "$0"; '
                    f'elif command -v python3 >/dev/null 2>&1; then python3 -c "{EGRESS_PROBE_PY}" "$0"; '
                    'else exit 99; fi')
+# docker run/exec's exit when the image has no `sh` (vikunja's image: one static binary).
+NO_SHELL = 127
+# A running container with no shell: the host's curl in that container's network namespace. Every
+# step that cannot run is 99 (no proof), so a failure of the tooling never reads as "blocked".
+NSENTER_PROBE = ('pid=$(docker inspect -f "{{{{.State.Pid}}}}" {c}) || exit 99; [ "$pid" -gt 0 ] 2>/dev/null || exit 99; '
+                 'sudo -n nsenter -t "$pid" -n true || exit 99; command -v curl >/dev/null || exit 99; '
+                 'sudo -n nsenter -t "$pid" -n curl -s -o /dev/null -m 5 {url}')
 INI_SECTION = re.compile(r"[a-z][a-z0-9_]*(\.[a-z0-9_]+)*")
 INI_KEY = re.compile(r"[A-Z][A-Z0-9_]*")
 INI_VALUE = re.compile(r"[A-Za-z0-9._:/,@-]*")
+ENV_NAME = re.compile(r"[A-Z_][A-Z0-9_]*")   # [[app]] pull_token_env, start_env
 # d03's gitea compose mounts ${DOCKER_DL}/Gitea/data at /data.
 GITEA_INI = "/data/gitea/conf/app.ini"
 GITEA_INI_HOST = "/mnt/docker/Gitea/data/gitea/conf/app.ini"
@@ -382,6 +405,8 @@ def load_spec(host: str, node: str | None = None) -> dict:
     for s in spec.get("secret", []):
         if not s.get("var", "").replace("_", "").isalnum():
             raise Fail(f"{path}: bad secret var {s.get('var')!r}")
+    for a in spec.get("app", []):
+        check_app_env(path, a)
     check_host_maintenance_spec(path, spec)
     if host not in LEGACY_HOSTS:
         own = REPO / host / "setup"
@@ -406,6 +431,61 @@ def replica_apps(path: Path, rep: dict, src: str, apps: list[dict]) -> list[dict
     return [a for a in apps if a["name"] in names]
 
 
+def check_app_env(path: Path, a: dict) -> None:
+    """[[app]] pull_token_env (one environment variable name) and start_env (a list of them)."""
+    name = a.get("name", "?")
+    p = a.get("pull_token_env")
+    if p is not None and not (isinstance(p, str) and ENV_NAME.fullmatch(p)):
+        raise Fail(f"{path}: [[app]] {name!r}: pull_token_env must be an environment variable name "
+                   f"({ENV_NAME.pattern}), not {p!r}")
+    se = a.get("start_env", [])
+    if not isinstance(se, list) or not all(isinstance(n, str) and ENV_NAME.fullmatch(n) for n in se) \
+            or len(set(se)) != len(se):
+        raise Fail(f"{path}: [[app]] {name!r}: start_env must be a list of distinct environment variable "
+                   f"names ({ENV_NAME.pattern})")
+    if p is not None and pull_env_name(name) in se:
+        raise Fail(f"{path}: [[app]] {name!r}: start_env names {pull_env_name(name)}, which pull_token_env sets")
+
+
+def pull_env_name(app: str) -> str:
+    """The name an app script reads its registry pull token from (pull_token_env)."""
+    return f"{app.upper().replace('-', '_')}_REGISTRY_PULL_TOKEN"
+
+
+def from_env(name: str, why: str) -> str:
+    """A value from build_host.py's own environment, for SSH stdin only; never printed."""
+    v = os.environ.get(name, "")
+    if not v:
+        raise Fail(f"{name} is not in the environment ({why}); run build_host.py through the credentials "
+                   f"capability with {name} among its names")
+    if "\n" in v or "\r" in v:
+        raise Fail(f"{name} holds a line break ({why}); not sent")
+    return v
+
+
+def app_env(spec: dict, a: dict, start: bool) -> list[tuple[str, str]]:
+    """(name on the host, value) pairs one app command gets over SSH stdin: the pull token, and for a
+    start command on a host that is not a replica, start_env (docstring, App environment)."""
+    pairs = []
+    if a.get("pull_token_env"):
+        pairs.append((pull_env_name(a["name"]),
+                      from_env(a["pull_token_env"], f"[[app]] {a['name']} pull_token_env")))
+    if start and not spec.get("replica"):
+        pairs += [(n, from_env(n, f"[[app]] {a['name']} start_env")) for n in a.get("start_env", [])]
+    return pairs
+
+
+def env_command(pairs: list[tuple[str, str]], command: str) -> tuple[str, str | None]:
+    """COMMAND run on the host with each pair's value read from stdin into its name and exported:
+    (the command, its stdin). Only names are in the command line; no pairs: COMMAND unchanged."""
+    if not pairs:
+        return command, None
+    names = [n for n, _ in pairs]
+    reads = " && ".join(f"IFS= read -r {n}" for n in names)
+    inner = f"{reads} && export {' '.join(names)} && {command}"
+    return f"bash -c {shlex.quote(inner)}", "".join(v + "\n" for _, v in pairs)
+
+
 def check_replica_config(path: Path, rep: dict, apps: list[dict]) -> None:
     """[replica.gitea_config] (app.ini section -> {KEY = value}) and [replica].verify (local URLs)."""
     gc = rep.get("gitea_config", {})
@@ -426,9 +506,10 @@ def check_replica_config(path: Path, rep: dict, apps: list[dict]) -> None:
                 raise Fail(f"{path}: [replica.gitea_config.{sec}] {k}: value must be true/false, a number "
                            f"or plain text ({INI_VALUE.pattern})")
     urls = rep.get("verify", [])
-    if not isinstance(urls, list) or not all(isinstance(u, str) and u.startswith("http://{ip}:")
+    if not isinstance(urls, list) or not all(isinstance(u, str) and u.startswith(("http://{ip}:", "http://127.0.0.1:"))
                                              and "{" not in u.replace("{ip}", "") and " " not in u for u in urls):
-        raise Fail(f"{path}: [replica].verify must be a list of local URLs \"http://{{ip}}:PORT/...\"")
+        raise Fail(f"{path}: [replica].verify must be a list of local URLs \"http://{{ip}}:PORT/...\" "
+                   f"or \"http://127.0.0.1:PORT/...\"")
 
 
 def ini_value(v) -> str:
@@ -1020,6 +1101,14 @@ def phase_restore(spec: dict, apply: bool) -> None:
             print(f"restore {name}: GAP - {name}.sh has no restore")
             continue
         print(f"restore {name} (skipped when its data dir is not empty; any other failure stops the build)")
+        if a.get("pull_token_env"):
+            print(f"  first `{name}.sh images` with {a['pull_token_env']} over SSH stdin (missing images pulled)")
+        if apply and a.get("pull_token_env"):
+            cmd, stdin = env_command(app_env(spec, a, start=False),
+                                     f"{app_script(spec['apps_tree'], name)} images >/dev/null")
+            r = ssh(host, cmd, stdin=stdin, check=False, stream=True, timeout=1800)
+            if r.returncode != 0:
+                raise Fail(f"restore {name}: pulling its images failed (exit {r.returncode}); stopped before any app starts")
         if apply:
             r = ssh(host, restore_command(app_script(spec['apps_tree'], name)), check=False, stream=True, timeout=7200)
             if r.returncode == RESTORE_SKIPPED:
@@ -1062,10 +1151,18 @@ def replica_images(spec: dict, apply: bool) -> list[str]:
         if not apply:
             continue
         d = f"~/scripts/{spec['apps_tree']}/apps/{a['name']}"
-        r = ssh(spec["host"], f"set -e; cd {d}; [ -f compose.yml ] || exit 0; {COMPOSE_ENV}; "
-                              "imgs=$(docker compose -f compose.yml config --images); for i in $imgs; do "
-                              "docker image inspect \"$i\" >/dev/null 2>&1 || docker pull -q \"$i\" >/dev/null; "
-                              "echo \"$i\"; done", timeout=1800)
+        try:
+            own = app_has(spec, a["name"], "images")
+        except NotInstalled:
+            own = False
+        if own:   # the app's own list (d06's ticketing): its pull token over stdin, its replica mode
+            cmd, stdin = env_command(app_env(spec, a, start=False), f"{app_script(spec['apps_tree'], a['name'])} images")
+            r = ssh(spec["host"], cmd, stdin=stdin, timeout=1800)
+        else:
+            r = ssh(spec["host"], f"set -e; cd {d}; [ -f compose.yml ] || exit 0; {COMPOSE_ENV}; "
+                                  "imgs=$(docker compose -f compose.yml config --images); for i in $imgs; do "
+                                  "docker image inspect \"$i\" >/dev/null 2>&1 || docker pull -q \"$i\" >/dev/null; "
+                                  "echo \"$i\"; done", timeout=1800)
         images += [i for i in r.stdout.split() if i not in images]
     return images
 
@@ -1083,13 +1180,29 @@ def egress_checks(spec: dict, images: list[str] = (), containers: list[str] = ()
         r = ssh(host, f"curl -s -o /dev/null -m 5 {url}", check=False)
         out.append((f"{host} cannot reach {url}", r.returncode not in (0, 127), f"curl exit {r.returncode}"))
     probe = shlex.quote(EGRESS_PROBE_SH)
+    proved, no_shell = None, []   # proved: an image whose probe ran and was blocked on the default bridge
     for img in images:
         r = ssh(host, f"docker run --rm --entrypoint sh {shlex.quote(img)} -c {probe} {EGRESS_PROBES[0]}", check=False)
-        out.append((f"a container of {img} cannot reach {EGRESS_PROBES[0]}", r.returncode not in (0, 99, 125, 126, 127),
-                    f"exit {r.returncode}"))
+        if r.returncode == NO_SHELL:
+            no_shell.append(img)
+            continue
+        ok = r.returncode not in (0, 99, 125, 126, 127)
+        proved = proved or (img if ok else None)
+        out.append((f"a container of {img} cannot reach {EGRESS_PROBES[0]}", ok, f"exit {r.returncode}"))
+    # An image with no shell (vikunja's) cannot run the probe. `docker run --rm IMG` puts every
+    # image on the same default bridge, so another image's blocked probe is that path's proof; with
+    # none, there is no proof. Its running containers are probed from the host at verify (below).
+    for img in no_shell:
+        out.append((f"a container of {img} cannot reach {EGRESS_PROBES[0]}", proved is not None,
+                    f"no shell in the image; the default bridge proved by {proved}" if proved
+                    else "no shell in the image and no other image proves the default bridge"))
     for c in containers:
         r = ssh(host, f"docker exec {shlex.quote(c)} sh -c {probe} {EGRESS_PROBES[1]}", check=False)
-        out.append((f"container {c} cannot reach {EGRESS_PROBES[1]}", r.returncode not in (0, 99, 125, 126, 127),
+        how = ""
+        if r.returncode in (126, NO_SHELL):   # no shell inside: the host's curl in its network namespace
+            r = ssh(host, NSENTER_PROBE.format(c=shlex.quote(c), url=EGRESS_PROBES[1]), check=False)
+            how = " (no shell: the host's curl in its network namespace)"
+        out.append((f"container {c} cannot reach {EGRESS_PROBES[1]}{how}", r.returncode not in (0, 99, 125, 126, 127),
                     f"exit {r.returncode}"))
     return out
 
@@ -1168,9 +1281,12 @@ def phase_apps(spec: dict, apply: bool, late: bool = False) -> None:
         if not cmds:
             print(f"start {a['name']}: nothing to start (spec)")
             continue
-        print(f"start {a['name']}: {' '.join(cmds)}")
+        sent = ([a["pull_token_env"]] if a.get("pull_token_env") else []) \
+            + ([] if spec.get("replica") else a.get("start_env", []))
+        print(f"start {a['name']}: {' '.join(cmds)}" + (f" (over SSH stdin: {', '.join(sent)})" if sent else ""))
         if apply:
-            ssh(host, f"{app_script(spec['apps_tree'], a['name'])} {' '.join(cmds)}", stream=True, timeout=3600)
+            cmd, stdin = env_command(app_env(spec, a, start=True), f"{app_script(spec['apps_tree'], a['name'])} {' '.join(cmds)}")
+            ssh(host, cmd, stdin=stdin, stream=True, timeout=3600)
 
 
 def phase_external(spec: dict, apply: bool) -> int:

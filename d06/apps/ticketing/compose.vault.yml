@@ -1,0 +1,83 @@
+# The vault-backed parts of ticketing, added to compose.yml by ticketing.sh on d06 only, never on a
+# replica: a replica's containers reach nothing off the host, and `configure` there would mint a
+# token in the replica's Vikunja and store it over production's.
+# From theOrg ticketing DEPLOY.md and deploy/compose.example.yml at main 041215a (the #19 merge).
+# The two Dex client values are not in any file: the workstation resolves them from OpenBao at
+# deploy and hands them to ticketing.sh in its process environment (asyla hub, the d06 item).
+# Empty defaults, so that backup and restore on d06, which use neither, still interpolate;
+# ticketing.sh refuses up, restart and configure without both.
+x-vault: &vault
+  OPENBAO_ADDR: https://vault.asyla.org
+
+# The deploy role, read-write on ticketing's paths: the one-shot configure only.
+x-deploy-vault: &deploy-vault
+  <<: *vault
+  VAULT_DEX_CLIENT_ID: svc-ticketing-deploy-a
+  VAULT_DEX_CLIENT_SECRET: ${TICKETING_DEPLOY_DEX_CLIENT_SECRET:-}
+  VAULT_JWT_ROLE: svc-ticketing-deploy
+  JWT_SECRET_FILE: /secrets/vikunja-jwt-secret
+
+# The read-only role: the long-running vikunja-jwt and vikunja-mcp.
+x-mcp-vault: &mcp-vault
+  <<: *vault
+  VAULT_DEX_CLIENT_ID: svc-ticketing-mcp-a
+  VAULT_DEX_CLIENT_SECRET: ${TICKETING_MCP_DEX_CLIENT_SECRET:-}
+  VAULT_JWT_ROLE: svc-ticketing-mcp
+
+services:
+  vikunja:
+    environment:
+      VIKUNJA_SERVICE_JWTSECRET_FILE: /secrets/vikunja-jwt-secret
+    volumes:
+      - vikunja-jwt:/secrets:ro
+    depends_on:
+      vikunja-jwt:
+        condition: service_healthy
+
+  # Reads Vikunja's JWT signing value from the vault into the in-memory volume and stays up (a
+  # tmpfs volume is emptied when its last container exits). Read-only role; `configure
+  # jwt-secret` generates the value in the vault.
+  vikunja-jwt:
+    image: gitea.asyla.org/theorg/ticketing-configure:${TICKETING_TAG:?}
+    command: ["jwt-secret", "--hold"]
+    environment:
+      <<: *mcp-vault
+      JWT_SECRET_FILE: /secrets/vikunja-jwt-secret
+    volumes:
+      - vikunja-jwt:/secrets
+    healthcheck:
+      test: ["CMD", "test", "-s", "/secrets/vikunja-jwt-secret"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    networks: [ticketing_net]
+
+  vikunja-mcp:
+    environment:
+      <<: *mcp-vault
+
+  configure:
+    image: gitea.asyla.org/theorg/ticketing-configure:${TICKETING_TAG:?}
+    profiles: ["ops"]
+    restart: "no"
+    environment:
+      <<: *deploy-vault
+      VIKUNJA_URL: http://vikunja:3456
+      VIKUNJA_DATABASE_TYPE: sqlite
+      VIKUNJA_DATABASE_PATH: /db/vikunja.db
+      VIKUNJA_FILES_BASEPATH: /db/files
+      VIKUNJA_SERVICE_PUBLICURL: https://vikunja.asyla.org/
+    volumes:
+      - ${TICKETING_ROOT:?}/db:/db
+      - vikunja-jwt:/secrets
+    networks: [ticketing_net]
+
+volumes:
+  # In memory only: never on the data disk.
+  vikunja-jwt:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=64k,mode=0700"
