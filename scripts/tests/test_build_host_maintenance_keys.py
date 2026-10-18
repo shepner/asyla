@@ -158,7 +158,9 @@ check("d03: the interim key set: D03_HOST_MAINTENANCE_SSH_KEY's path, user docke
       and [p.split()[0] for p in d03_hm.get("known_hosts", [])] == ["10.0.0.60", "10.0.0.61", "10.0.0.63"]
       and d03_hm.get("self_address") == "10.0.0.62"
       and not any(e.get("name") == "host-maintenance key set" for e in d03.get("external", [])), str(d03_hm))
-check("d03 and test01 pin d01 and d02 alike", d03_hm.get("known_hosts", [])[:2] == hm.get("known_hosts", [])[:2])
+# test01's own spec, a replica included (it keeps test01's key set): the hello spec of 226904e pins old keys.
+check("d03 and test01 pin d01 and d02 alike", d03_hm.get("known_hosts", [])[:2]
+      == build_host.load_spec("test01").get("host_maintenance", {}).get("known_hosts", [])[:2])
 
 
 # ---------------------------------------------------------------- the setup phase
