@@ -1,0 +1,95 @@
+# theOrg's ticketing on d06: Vikunja and vikunja-mcp, moved from the Mac Mini (asyla hub backlog,
+# the d06 item). Written by asyla from theOrg ticketing DEPLOY.md and deploy/compose.example.yml at
+# main 041215a, the #19 merge (fresh host). This file is what any host runs, a replica included:
+# nothing in it reaches the vault. compose.vault.yml adds the vault-backed parts on d06 only
+# (ticketing.sh). Changes from the example, each asyla's choice:
+# - the network is named ticketing_net, so internal-access hosts/d06 can join it;
+# - only vikunja is published, on 127.0.0.1 (verify and the build's replica check run on the
+#   host); internal-access reaches both services over ticketing_net.
+# Run with ticketing.sh (it sets TICKETING_ROOT and TICKETING_TAG and keeps the start order).
+# Images: one theOrg commit sha for every ticketing image (TICKETING_TAG in ticketing.sh).
+name: ticketing
+
+services:
+  vikunja:
+    image: vikunja/vikunja:2.2.2@sha256:a96c20c0997bae4a445bf717002328524c5449c2b64391032c671ff4e1d8b2fa
+    user: "0:0"
+    ports:
+      # Host-local only: verify and the build's replica check curl it on the host.
+      - "127.0.0.1:3456:3456"
+    environment:
+      VIKUNJA_SERVICE_PUBLICURL: https://vikunja.asyla.org/
+      VIKUNJA_DATABASE_TYPE: sqlite
+      VIKUNJA_DATABASE_PATH: /db/vikunja.db
+      VIKUNJA_FILES_BASEPATH: /db/files
+      VIKUNJA_SERVICE_ENABLEREGISTRATION: "false"
+      VIKUNJA_RATELIMIT_ENABLED: "false"
+      VIKUNJA_CORS_ENABLE: "true"
+      VIKUNJA_CORS_ORIGINS: https://vikunja.asyla.org
+    volumes:
+      - ${TICKETING_ROOT:?}/db:/db
+    restart: unless-stopped
+    networks: [ticketing_net]
+
+  vikunja-mcp:
+    image: gitea.asyla.org/theorg/ticketing-vikunja-mcp:${TICKETING_TAG:?}
+    # Not published: callers use vikunja-mcp.asyla.org (internal-access, over ticketing_net);
+    # bearer-guarded (401 without one).
+    environment:
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "8766"
+      VIKUNJA_URL: http://vikunja:3456
+      VIKUNJA_PROJECT_ID: "1"
+      VIKUNJA_MCP_AUTH_REQUIRED: "true"
+      EVENT_QUEUE_DB: /data/events.db
+    volumes:
+      - ${TICKETING_ROOT:?}/mcp-data:/data
+    depends_on: [vikunja]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8766/metrics', timeout=5)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    networks: [ticketing_net]
+
+  # One current copy of /db in /backup (staging on the data disk); ticketing.sh backup mirrors it
+  # to the NAS. No network, no secret.
+  backup:
+    image: gitea.asyla.org/theorg/ticketing-backup:${TICKETING_TAG:?}
+    profiles: ["ops"]
+    network_mode: none
+    restart: "no"
+    volumes:
+      - ${TICKETING_ROOT:?}/db:/data
+      - ${TICKETING_ROOT:?}/backup:/backup
+
+  # Optional: started by ticketing.sh only when its environment sets LOKI_ADDRESS and
+  # CHRONICLE_VECTOR_ADDRESS (e.g. ~/scripts/docker/common.env). Without it chronicle episodes from ticketing are lost.
+  vector:
+    image: gitea.asyla.org/theorg/ticketing-vector:${TICKETING_TAG:?}
+    profiles: ["vector"]
+    # vector-http.toml excludes its own logs by this name (DEPLOY.md gap 7).
+    container_name: ticketing-vector-1
+    user: root
+    environment:
+      VECTOR_LOG: info
+      LOKI_ADDRESS: ${LOKI_ADDRESS:-}
+      CHRONICLE_VECTOR_ADDRESS: ${CHRONICLE_VECTOR_ADDRESS:-}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${TICKETING_ROOT:?}/vector:/var/lib/vector
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:9598/metrics >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    networks: [ticketing_net]
+
+networks:
+  ticketing_net:
+    name: ticketing_net
+    driver: bridge

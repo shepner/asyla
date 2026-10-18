@@ -1,0 +1,56 @@
+# d06 build spec, read by scripts/build_host.py: theOrg's memory and applications host (asyla hub
+# decisions/host-layout.md). First tenant: theOrg's ticketing (Vikunja, vikunja-mcp), moved from
+# the Mac Mini (asyla hub backlog, the d06 item); the other six stacks follow when theOrg moves
+# them. Built as every other Docker host (host-layout decision 6). d06 is not disposable: a build
+# or a destroy needs --confirm d06 and the operator's approval of the exact action.
+# Not built yet. The ticketing [[app]] and the internal-access [[external]]
+# (hosts/d06: vikunja, vikunja-mcp) are from theOrg ticketing DEPLOY.md at main 041215a (the #19
+# merge) and its images of that sha; the path is proven on test01 as [replica] of = "d06"
+# (ASY-HST-6).
+# No external-access: every name here is LAN-only, so d06 has no tunnel (yet).
+
+# Operator's values, 2026-10-18. order=20: after d04 (10) and d03 (15) when vmh01 boots.
+[vm]
+node = "vmh01"
+vmid = 106
+sockets = 1
+cores = 8
+memory_mb = 16384
+ip = "10.0.0.65/24"
+os_disk = { storage = "local-data2", size = "64G" }
+data_disk = { storage = "local-data2", size = "64G" }   # /mnt/docker: theOrg's stacks' data
+cloudinit_storage = "local-data2"
+startup = "order=20"                                    # set at create, checked by verify
+
+[setup]
+steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "bashrc.sh"]   # build/setup/, sent by the build
+
+# The proxy's, as d04's. Ticketing keeps nothing on the host: its values come at use (its [[app]]).
+[[secret]]
+var = "D06_INTERNAL_PROXY_ENV"
+path = "/mnt/docker/internal-proxy/.env"
+owner = "docker:docker"
+mode = "600"
+
+# Restored from $DOCKER_D1/Ticketing/mirror (theOrg's backup image's copy, mirrored nightly by
+# the host that serves vikunja.asyla.org). At the cutover the Mini's final copy is put there first.
+# Values the workstation resolves from OpenBao and sends over SSH stdin at use (build_host.py, App
+# environment): the theorg-registry pull token for the image pulls (before restore, and for up),
+# and the two Dex client values (identity-platform#25) for the start commands only.
+[[app]]
+name = "ticketing"
+verify = ["verify"]
+pull_token_env = "THEORG_REGISTRY_PULL_TOKEN"
+start_env = ["TICKETING_DEPLOY_DEX_CLIENT_SECRET", "TICKETING_MCP_DEX_CLIENT_SECRET"]
+
+[[external]]
+name = "internal-access"
+repo = "~/local/asyla/projects/internal-access"
+run = ["scripts/deploy-host.sh {host}", "scripts/fleet.sh --host {host} restore up verify"]
+
+# Labels as d04's (host-layout decision 3): environment and host, no `docker` and no `asyla`, so
+# it never takes the Mini's [theorg, docker] jobs. asyla deploys ticketing here itself (theOrg's
+# deploy.yml does not target d06).
+[runner]
+enabled = true
+labels = ["theorg", "prod", "d06"]   # docker/gitea-runner/gitea-runner.sh reads them from here
