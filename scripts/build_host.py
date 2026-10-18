@@ -9,7 +9,8 @@ Usage:
   build_host.py HOST build [--apply] [--from PHASE] [--only PHASE] [--recreate [--confirm HOST]]
                            [--node NODE] [--gitea-host HOST]
   build_host.py HOST verify                    # read-only
-  build_host.py HOST token [--apply]           # deploy token file alone, then a GitLab read check
+  build_host.py HOST token [--apply]           # TOKEN_FILE_HOSTS: deploy token file, then a GitLab read check;
+                                               # others: remove any old file, then a read check (token on stdin)
   build_host.py HOST scripts-check             # read-only: ~/scripts vs GitLab master, file by file
   build_host.py HOST secrets check|push|install [--apply] [VAR ...]
   build_host.py HOST secrets check --keys [VAR ...]          # read-only: per key of a dotenv secret, its state only
@@ -19,8 +20,10 @@ Usage:
 Build phases, in order (each is safe to re-run):
   vm         create the VM from HOST/host.toml (skipped when it exists; --recreate destroys it
              first: allowed freely only for a spec with disposable = true, else needs --confirm HOST)
-  bootstrap  deploy token to /etc/asyla/asyla-hosts.env, then the host's update_scripts.sh
-             (from GitLab master, the same file the host will keep running)
+  bootstrap  the host's update_scripts.sh from GitLab master (the file the host will keep running),
+             with the deploy token on its stdin; no token file is written, and an old one is
+             removed. TOKEN_FILE_HOSTS (d01-d03, whose updaters still read it) get the file
+             /etc/asyla/asyla-hosts.env first, as before.
   disk       data disk -> /mnt/docker (build/setup/data_disk.sh; never formats a disk with data)
   secrets    every [[secret]] from GitLab CI/CD variables to its path, except those under
              /mnt/docker/ (app data), which restore installs after the data is back
@@ -208,6 +211,10 @@ SSH_KEY_PUB = Path.home() / ".ssh/docker_rsa.pub"
 SSH_KEY = SSH_KEY_PUB.with_suffix("")
 GUEST_USER = "docker"
 DEPLOY_ENV = "/etc/asyla/asyla-hosts.env"
+# Hosts whose update_scripts.sh still reads DEPLOY_ENV (asyla hub backlog: the d01-d03 deploy token
+# file). Every other host keeps no token: its updater takes the credential on stdin, from
+# host-maintenance's scripts task (the job token) or the bootstrap (the deploy token).
+TOKEN_FILE_HOSTS = ("d01", "d02", "d03")
 DATA_ROOT = "/mnt/docker/"
 PHASES = ("vm", "bootstrap", "disk", "secrets", "setup", "restore", "apps", "external", "late", "runner", "verify")
 STARTUP_FORM = re.compile(r"order=\d+(,up=\d+)?(,down=\d+)?")
@@ -776,7 +783,7 @@ def master_file(relpath: str) -> str:
     return run(["git", "-C", str(REPO), "show", f"origin/master:{relpath}"]).stdout
 
 
-# The same credential helper update_scripts.sh uses: reads DEPLOY_ENV, never puts the token in argv.
+# The credential helper of TOKEN_FILE_HOSTS' update_scripts.sh: reads DEPLOY_ENV, never puts the token in argv.
 GIT_DEPLOY_AUTH = ("GIT_TERMINAL_PROMPT=0 GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0= "
                    "GIT_CONFIG_KEY_1=credential.helper GIT_CONFIG_VALUE_1='!f() { test \"$1\" = get || return 0; "
                    f". {DEPLOY_ENV}; echo username=$ASYLA_HOSTS_DEPLOY_USER; echo password=$ASYLA_HOSTS_DEPLOY_TOKEN; }}; f'")
@@ -793,6 +800,41 @@ def install_token(host: str, apply: bool) -> None:
               f"sudo chown root:root {DEPLOY_ENV}.tmp && sudo chmod 600 {DEPLOY_ENV}.tmp && "
               f"sudo mv {DEPLOY_ENV}.tmp {DEPLOY_ENV}", stdin=body)
     check_token(host)
+
+
+def deploy_credential() -> str:
+    """The deploy token as update_scripts.sh reads it from stdin (git credential lines)."""
+    return f"username={need('ASYLA_HOSTS_DEPLOY_USER')}\npassword={need('ASYLA_HOSTS_DEPLOY_TOKEN')}\n"
+
+
+# update_scripts.sh's credential block in short: the two lines from stdin into this shell's
+# environment, and a helper that echoes them (single-quoted: expanded when git calls it).
+GIT_STDIN_AUTH = ("IFS= read -r u; IFS= read -r p; export U=\"${u#username=}\" P=\"${p#password=}\"; "
+                  "export GIT_TERMINAL_PROMPT=0 GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0= "
+                  "GIT_CONFIG_KEY_1=credential.helper; "
+                  "export GIT_CONFIG_VALUE_1='!f() { test \"$1\" = get || return 0; echo \"username=$U\"; echo \"password=$P\"; }; f'")
+
+
+def check_stdin_read(host: str) -> str:
+    """The master SHA the host reads from GitLab with the deploy token handed on stdin (Fail if it cannot)."""
+    r = ssh(host, f"bash -c {shlex.quote(GIT_STDIN_AUTH + f'; git ls-remote https://gitlab.com/{GITLAB_PROJECT}.git refs/heads/master')}",
+            stdin=deploy_credential(), check=False)
+    sha = r.stdout.split()[0] if r.returncode == 0 and r.stdout.split() else ""
+    if not sha:
+        raise Fail(f"{host}: cannot read GitLab with the deploy token on stdin (exit {r.returncode})")
+    print(f"{host}: reads GitLab master {sha[:12]} with the deploy token on stdin (none stored)")
+    return sha
+
+
+def remove_token_file(host: str, apply: bool) -> None:
+    """A host outside TOKEN_FILE_HOSTS keeps no deploy token: remove DEPLOY_ENV if an old build left it."""
+    print(f"remove {DEPLOY_ENV} on {host} if present (no token file outside {', '.join(TOKEN_FILE_HOSTS)})")
+    if apply:
+        ssh(host, f"sudo rm -f {DEPLOY_ENV} && ! sudo test -e {DEPLOY_ENV}")
+
+
+def token_file_absent(host: str) -> bool:
+    return ssh(host, f"sudo test -e {DEPLOY_ENV}", check=False).returncode == 1
 
 
 def check_token(host: str) -> str:
@@ -838,14 +880,24 @@ def scripts_drift(spec: dict) -> tuple[str, list[str]]:
 
 def phase_bootstrap(spec: dict, apply: bool) -> None:
     host = spec["host"]
-    install_token(host, apply)
-    print(f"then {host}/update_scripts.sh from GitLab master")
+    if host in TOKEN_FILE_HOSTS:
+        install_token(host, apply)
+        print(f"then {host}/update_scripts.sh from GitLab master")
+    else:
+        remove_token_file(host, apply)
+        print(f"then {host}/update_scripts.sh from GitLab master, the deploy token on its stdin (no file)")
     script = master_file(f"{host}/update_scripts.sh")
     if not apply:
         return
     ssh(host, "sudo apt-get install -y -qq git curl rsync >/dev/null", timeout=900)
-    ssh(host, "cat > /tmp/update_scripts.sh && sudo bash /tmp/update_scripts.sh; rc=$?; rm -f /tmp/update_scripts.sh; exit $rc",
-        stdin=script, stream=True)
+    if host in TOKEN_FILE_HOSTS:
+        ssh(host, "cat > /tmp/update_scripts.sh && sudo bash /tmp/update_scripts.sh; rc=$?; rm -f /tmp/update_scripts.sh; exit $rc",
+            stdin=script, stream=True)
+        return
+    # The script goes in the command (base64, no secret in it), so stdin carries only the credential.
+    b64 = base64.b64encode(script.encode()).decode()
+    ssh(host, f"echo {b64} | base64 -d > /tmp/update_scripts.sh && sudo bash /tmp/update_scripts.sh; rc=$?; "
+              "rm -f /tmp/update_scripts.sh; exit $rc", stdin=deploy_credential(), stream=True)
 
 
 def bundle(paths: list[str], ref: str = "origin/master") -> str:
@@ -1713,11 +1765,13 @@ def verify(spec: dict) -> int:
         if spec["replica"].get("gitea_config"):
             cfg_lines, cfg_bad = gitea_config_read(spec)   # not `bad`: that is verify's own count
             check("gitea_config in the restored app.ini", not cfg_bad and bool(cfg_lines), "; ".join(cfg_bad or cfg_lines))
-    else:
+    elif host in TOKEN_FILE_HOSTS:
         try:
             check("deploy token reads GitLab", bool(check_token(host)))
         except Fail as e:
             check("deploy token reads GitLab", False, str(e))
+    else:
+        check("no deploy token file on the host", token_file_absent(host), DEPLOY_ENV)
     sha, drift = scripts_drift(spec)
     check(f"~/scripts matches GitLab master {sha[:12]}", not drift,
           f"{len(drift)} differ: {', '.join(drift[:5])}" if drift else "")
@@ -1859,6 +1913,12 @@ def main() -> int:
                 print(f"  {d}")
             return 1 if drift else 0
         if a.action == "token":
+            if a.host not in TOKEN_FILE_HOSTS:
+                remove_token_file(a.host, a.apply)
+                check_stdin_read(a.host)
+                if a.apply and not token_file_absent(a.host):
+                    raise Fail(f"{a.host}: {DEPLOY_ENV} still present")
+                return 0
             if a.apply:
                 install_token(a.host, True)
             else:

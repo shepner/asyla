@@ -3,9 +3,12 @@
 # Uses sparse git checkout to get only needed files, then mirrors them into
 # ~/scripts/<host>/ and ~/scripts/docker/.
 #
-# Source: private GitLab asyla/asyla-hosts, read with the deploy token in /etc/asyla/asyla-hosts.env
-# (root, 0600; ASYLA_HOSTS_DEPLOY_USER / ASYLA_HOSTS_DEPLOY_TOKEN). git gets it from a credential
-# helper that reads that file, so the token is never in argv, a URL or a git config.
+# Source: private GitLab asyla/asyla-hosts. The read credential comes on stdin, as the lines
+# "username=..." and "password=...": host-maintenance's scripts task hands its GitLab job token
+# (user gitlab-ci-token, valid only while that job runs), build_host.py's bootstrap the deploy
+# token. Nothing is stored on the host: git gets the credential from a helper that echoes this
+# process's environment, so the token is never in argv, a URL, a git config or a file. With no
+# credential on stdin (a terminal, /dev/null) it refuses before anything changes.
 #
 # Mirror rule: a path under ~/scripts/<host>/ or ~/scripts/docker/ is deleted
 # unless the repo tracks it or one of the repo's .gitignore files matches it.
@@ -19,7 +22,7 @@
 #
 # Build files: setup/ and host.toml are removed from every installed tree after the copy.
 #
-# Usage: update_scripts.sh [--dry-run]
+# Usage: CREDENTIAL | update_scripts.sh [--dry-run]
 #   --dry-run  list what would be deleted and what is preserved; change nothing
 
 set -euo pipefail
@@ -45,7 +48,7 @@ DRY_RUN=false
 for arg in "$@"; do
     case "$arg" in
         --dry-run|-n) DRY_RUN=true ;;
-        -h|--help) sed -n '2,14p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,17p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) log_error "Unknown argument: $arg"; exit 1 ;;
     esac
 done
@@ -55,7 +58,6 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 REPO_URL="${ASYLA_HOSTS_REPO_URL:-https://gitlab.com/asyla/asyla-hosts.git}"
-DEPLOY_ENV="/etc/asyla/asyla-hosts.env"
 HOSTNAME=$(hostname -s)
 TARGET_USER="docker"
 TARGET_HOME="/home/$TARGET_USER"
@@ -66,18 +68,34 @@ trap 'cd /; rm -rf "$TMPDIR_ROOT"' EXIT
 
 log_info "Updating scripts from repository..."
 
-if [ ! -r "$DEPLOY_ENV" ]; then
-    log_error "$DEPLOY_ENV is missing: it holds the read-only deploy token (installed by the host build)"
+# >>> credential (scripts/tests/test_update_scripts_stdin_auth.py runs this block alone)
+# The read credential from stdin (header). read -t: an open pipe that never ends cannot hang the run.
+ASYLA_HOSTS_GIT_USER="" ASYLA_HOSTS_GIT_TOKEN=""
+if [ ! -t 0 ]; then
+    while IFS= read -r -t 30 cred_line || [ -n "$cred_line" ]; do
+        case "$cred_line" in
+            username=*) ASYLA_HOSTS_GIT_USER="${cred_line#username=}" ;;
+            password=*) ASYLA_HOSTS_GIT_TOKEN="${cred_line#password=}" ;;
+        esac
+    done
+    unset cred_line
+fi
+if [ -z "$ASYLA_HOSTS_GIT_USER" ] || [ -z "$ASYLA_HOSTS_GIT_TOKEN" ]; then
+    log_error "No GitLab read credential on stdin (username= and password= lines): this host stores none; host-maintenance's scripts task and build_host.py bootstrap hand one over"
     exit 1
 fi
+export ASYLA_HOSTS_GIT_USER ASYLA_HOSTS_GIT_TOKEN
 
-log_info "Cloning repository (sparse checkout) from $REPO_URL..."
 # Every git call below (the clone and the checkouts' lazy blob fetches) resets inherited
-# credential helpers, then answers from DEPLOY_ENV.
+# credential helpers, then answers from the two variables above (single quotes: the helper
+# expands them when git calls it, so the value is in no command line).
 export GIT_TERMINAL_PROMPT=0 GIT_CONFIG_COUNT=2
 export GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0=
 export GIT_CONFIG_KEY_1=credential.helper
-export GIT_CONFIG_VALUE_1="!f() { test \"\$1\" = get || return 0; . $DEPLOY_ENV; echo username=\$ASYLA_HOSTS_DEPLOY_USER; echo password=\$ASYLA_HOSTS_DEPLOY_TOKEN; }; f"
+export GIT_CONFIG_VALUE_1='!f() { test "$1" = get || return 0; echo "username=$ASYLA_HOSTS_GIT_USER"; echo "password=$ASYLA_HOSTS_GIT_TOKEN"; }; f'
+# <<< credential
+
+log_info "Cloning repository (sparse checkout) from $REPO_URL..."
 git clone -q --depth 1 --no-checkout --filter=blob:none "$REPO_URL" "$WORKDIR"
 
 cd "$WORKDIR"

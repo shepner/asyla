@@ -43,9 +43,11 @@ POLL_MAX=7200
 
 log_info "Starting comprehensive system maintenance (host: $HOST)..."
 
-# Step 1: Update scripts from repository
+# Step 1: Update scripts from repository. update_scripts.sh takes its GitLab credential on stdin
+# (this host stores none), so a run from a terminal keeps the scripts it has and goes on;
+# host-maintenance's nightly scripts task updates them.
 log_info "Step 1: Updating scripts from repository..."
-"$HOME_DIR/update_scripts.sh"
+"$HOME_DIR/update_scripts.sh" || log_warn "Step 1: scripts not updated (no GitLab credential on stdin); continuing with the installed ones"
 
 # Step 1.5: Mount the SMB media share if this host declares one.
 # Unlike d01/d02, this host does not use /mnt/nas/data1/media (its storage is the two NFS
