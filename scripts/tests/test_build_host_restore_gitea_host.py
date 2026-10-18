@@ -162,9 +162,10 @@ def restore_timeouts(spec: dict) -> list:
     return got
 
 
+NO_LIMIT = {**SPEC, "app": [{k: v for k, v in a.items() if k != "restore_timeout"} for a in SPEC["app"]]}
 check("restore phase: an app's restore gets RESTORE_TIMEOUT (7200 s) by default",
-      restore_timeouts(SPEC) == [build_host.RESTORE_TIMEOUT] * len(SPEC["app"]) and build_host.RESTORE_TIMEOUT == 7200,
-      str(restore_timeouts(SPEC)))
+      restore_timeouts(NO_LIMIT) == [build_host.RESTORE_TIMEOUT] * len(SPEC["app"]) and build_host.RESTORE_TIMEOUT == 7200,
+      str(restore_timeouts(NO_LIMIT)))
 check("restore phase: [[app]] restore_timeout is the restore's SSH timeout",
       restore_timeouts({**SPEC, "app": [{**SPEC["app"][0], "restore_timeout": 14400}]}) == [14400],
       str(restore_timeouts({**SPEC, "app": [{**SPEC["app"][0], "restore_timeout": 14400}]})))
