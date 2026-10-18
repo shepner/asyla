@@ -1,27 +1,30 @@
 # test01: the build test host (asyla hub decisions/host-layout.md, decision 4). Created and
-# destroyed as testing needs (operator pre-approved for test01 only, 2026-10-13).
-# The d06 verified restore (asyla backlog 2026-10-17-hosts-d06-build-it-and-move-theorg-s-ticketing-
-# vikunja-onto-it-the): test01 as a d06 replica restoring ticketing from d06's NAS mirror
-# ($DOCKER_D1/Ticketing/mirror, mounted read-only on a replica; no seed, so ticketing.sh restore
-# reads the mirror) and starting Vikunja only (compose.yml: no vault, no vikunja-mcp sign-in;
-# operator 2026-10-18: "thats fine"). No [runner],
-# [gitlab_runner] or [[external]]: a replica reaches nothing off the LAN and must not answer for
-# d06's names. This commit is reverted after the proof, which brings back the hello test.
+# destroyed as testing needs (operator pre-approved for test01 only, 2026-10-13). Its runners
+# carry only the label or tag build-test, so they never take a real job.
+# The hello test (test01/apps/hello). To rehearse a production host instead, add
+# [replica] of = "dNN" (scripts/build_host.py docstring; the d03 replica of 2026-10-09 is in git
+# history under d04/, 4decdd6..fad6650).
 [vm]
 node = "vmh01"             # the default; either node may carry it: build_host.py test01 build --node vmh02
 vmid = 901                 # a block of its own, away from the Docker hosts (101 up)
 sockets = 1
-cores = 8                  # as d06 (d06/host.toml)
-memory_mb = 16384          # as d06
+cores = 4
+memory_mb = 8192
 ip = "10.0.0.69/24"
-os_disk = { storage = "local-data2", size = "64G" }     # as d06; local-data2 exists on both nodes
-data_disk = { storage = "local-data2", size = "64G" }   # /mnt/docker: as d06
+os_disk = { storage = "local-data2", size = "32G" }     # local-data2 exists on both nodes
+data_disk = { storage = "local-data2", size = "16G" }   # /mnt/docker
 cloudinit_storage = "local-data2"
 disposable = true          # build_host.py may destroy and recreate it without --confirm
 startup = "order=90"       # after every production VM when a node boots; set at create, checked by verify
 
 [setup]
 steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "bashrc.sh"]   # build/setup/, sent by the build
+
+[[secret]]
+var = "TEST01_HELLO_ENV"
+path = "/home/docker/scripts/test01/apps/hello/.env"
+owner = "docker:asyla"
+mode = "600"
 
 # host-maintenance's key set (gap G11; build/setup/host_maintenance_keys.sh, setup phase). The
 # key is a throwaway one, made for a test01 build and deleted after it (asyla backlog, G11 proof):
@@ -46,12 +49,31 @@ known_hosts = [
 ]
 self_address = "10.0.0.69"
 
-# The replica takes d06's ticketing app. d06 has no [[secret]], so nothing is excluded; its proxy
-# is an [[external]], which a replica never runs. The pull token comes at use from OpenBao
-# ([[app]] pull_token_env, over SSH stdin); its start_env (the Dex pair) never goes to a replica.
-# Vikunja listens on 127.0.0.1:3456 only (compose.yml), so verify runs on the host.
-[replica]
-of = "d06"
-start_apps = true
-apps = ["ticketing"]
-verify = ["http://127.0.0.1:3456/api/v1/info"]
+[[app]]
+name = "hello"
+verify = ["verify"]
+
+# Deployed onto this host by other repos, from the workstation (asyla gap G5): internal-access's
+# test profile (hosts/test01: Caddy's internal CA only, no secret). `restore` before `up`, so every
+# build proves it: a new host warns (no backup yet); a rebuild takes the NAS snapshot and Caddy
+# keeps its CA and certificate. The backup folder internal-proxy-test01 stays on the NAS.
+[[external]]
+name = "internal-access"
+repo = "~/local/asyla/projects/internal-access"
+run = ["scripts/deploy-host.sh {host}", "scripts/fleet.sh --host {host} restore up verify"]
+
+[runner]
+enabled = true
+labels = ["build-test"]    # one label no workflow uses (docker/gitea-runner/gitea-runner.sh)
+
+# GitLab runners (build/gitlab-runner/gitlab-runner.sh, run by the build's runner phase); one
+# [[gitlab_runner.runners]] table each. GitLab description test01-build; tag build-test only, and
+# untagged jobs off, so it never takes a job.
+[[gitlab_runner.runners]]
+name = "build"
+scope = "group:asyla"
+tags = ["build-test"]
+executor = "docker"
+image = "python:3.12-alpine"
+volumes = []
+pull_policy = "if-not-present"
