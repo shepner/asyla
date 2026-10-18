@@ -1,0 +1,39 @@
+# ns02 build spec, read by scripts/build_host.py: the second Pi-hole name server (DNS only; ns01 is
+# the other and also serves the LAN's DHCP). Built as every other Docker host (asyla hub
+# decisions/host-layout.md decision 6) and replaced, never patched: a new VMID at the same address,
+# restored from its NAS mirror, the old VM kept stopped as the way back (asyla hub backlog, the
+# ns01/ns02 item; the d01 cutover pattern). ns02 is not disposable: a build or a destroy needs
+# --confirm ns02 and the operator's approval of the exact action.
+# DRAFT, not built: the [vm] values are proposed and wait for the operator's (the live VM 301 is
+# 1x4 cores, 16384 MB, one 64G disk on local-data1, its cloud-init disk on the NAS). Pi-hole peaks
+# at 222 MiB and 0.3% CPU there (2026-10-18 survey).
+# The hosts file and 03-lan-dns.conf stay on the NAS by design (operator, 2026-10-18): Pi-hole reads
+# them there (apps/pihole/), so nfs.sh is a must and verify checks the file is there.
+[vm]
+node = "vmh02"
+vmid = 311                                              # the new ns02; VM 301 is the way back
+sockets = 1
+cores = 2
+memory_mb = 4096
+ip = "10.0.0.11/24"
+os_disk = { storage = "local-data2", size = "32G" }
+data_disk = { storage = "local-data2", size = "16G" }   # /mnt/docker: pihole-ns02 (90M today)
+cloudinit_storage = "local-data2"                       # off the NAS (the live one is on nas-data1-vm)
+startup = "order=11,up=180"                             # live: order=11; up=180 lets DNS answer before the next VM starts
+
+# dns_port.sh frees port 53 for Pi-hole (host network): no resolved stub listener, no host dnsmasq.
+[setup]
+steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "bashrc.sh", "dns_port.sh"]   # build/setup/, sent by the build
+
+# No [[secret]]: ns02 keeps no secret on disk.
+
+# Restored from $DOCKER_D1/pihole-ns02/mirror (pihole.sh backup, nightly once host-maintenance
+# carries ns02). The first mirror needs a seed: a run of the new `pihole.sh backup` on the live
+# ns02 (an action on production: the operator's approval) or the 2026-10-18 tgz.
+[[app]]
+name = "pihole"
+verify = ["verify"]
+
+# No Gitea runner: a name server runs no CI jobs.
+[runner]
+enabled = false

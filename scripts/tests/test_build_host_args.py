@@ -638,6 +638,14 @@ results = [
            and d.get("secret", []) == []
            and [(e["name"], e.get("env")) for e in d["external"]] == [("internal-access", ["D06_CF_API_TOKEN"])])(
                build_host.load_spec("d06"))),
+    # ns02 in the new form (draft): build/setup/ steps with dns_port.sh, no secret, pihole verified by its own verify.
+    check("ns02's draft spec: VM 311 on vmh02 at 10.0.0.11, not disposable, port 53 freed, no secret, no runner",
+          (lambda n: (n["vm"]["node"], n["vm"]["vmid"], n["vm"]["ip"], bool(n["vm"].get("disposable")),
+                      n["setup"]["steps"][-1], n.get("secret", []), bool(n.get("runner", {}).get("enabled")))
+           == ("vmh02", 311, "10.0.0.11/24", False, "dns_port.sh", [], False))(build_host.load_spec("ns02"))),
+    check("ns02 runs pihole, verified by its own verify, restored from its mirror",
+          [(a["name"], a.get("verify"), a.get("restore", True)) for a in build_host.load_spec("ns02")["app"]]
+          == [("pihole", ["verify"], True)]),
     # Two specs never claim one VM or one address.
     check("every spec has its own VMID and address",
           (lambda vms: len({v["vmid"] for v in vms}) == len(vms) and len({v["ip"] for v in vms}) == len(vms))(

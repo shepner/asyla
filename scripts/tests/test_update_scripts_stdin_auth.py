@@ -3,7 +3,7 @@
 
     python3 scripts/tests/test_update_scripts_stdin_auth.py
 
-The operator's rule: no secret in any file. d04, d06 and test01's update_scripts.sh take their
+The operator's rule: no secret in any file. d04, d06, ns02 and test01's update_scripts.sh take their
 GitLab read credential on stdin ("username=" and "password=" lines: host-maintenance's job token,
 or the bootstrap's deploy token) and keep none; build_host.py's bootstrap hands the deploy token
 that way and removes an old /etc/asyla/asyla-hosts.env; verify checks the file is absent.
@@ -65,7 +65,7 @@ def run_block(host: str, stdin: str) -> subprocess.CompletedProcess:
 
 def updater_cases() -> None:
     hosts = stdin_hosts()
-    check("the stdin hosts are d04, d06 and test01", hosts == ["d04", "d06", "test01"], str(hosts))
+    check("the stdin hosts are d04, d06, ns02 and test01", hosts == ["d04", "d06", "ns02", "test01"], str(hosts))
     for host in hosts:
         text = (REPO / host / "update_scripts.sh").read_text()
         code = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
