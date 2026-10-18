@@ -4,6 +4,7 @@
 #   check    confirm app.env and secrets are in place (mode 600) before starting
 #   build    build breeding-program:local from ${APP_ROOT}/src (shipped by push-source.sh)
 #   up|down|restart|logs|verify|backup
+#   restore  rebuilt host: the NAS mirror (app.env, secrets/, src/) back to an empty APP_ROOT
 # Switches can be combined (e.g. build restart verify). Loads ~/scripts/docker/common.env.
 
 set -euo pipefail
@@ -171,11 +172,13 @@ run_cmd() {
     restart) run_compose down; do_up ;;
     verify) do_verify ;;
     backup) do_backup ;;
+    # Rebuilt host only: refuses unless APP_ROOT is empty and the mirror's last backup is OK.
+    restore) do_rsync_mirror_restore "$BACKUP_DIR" "$APP_ROOT" ;;
     logs) run_compose logs -f ;;
   esac
 }
 
-USAGE="init|check|build|rebuild|up|down|restart|verify|backup|logs"
+USAGE="init|check|build|rebuild|up|down|restart|verify|backup|restore|logs"
 if [ $# -eq 0 ]; then
   echo "Usage: $0 $USAGE" >&2
   exit 1

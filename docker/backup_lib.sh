@@ -43,7 +43,7 @@
 #   archive is written as .partial and renamed only when tar succeeds, so a
 #   failed run leaves nothing that looks complete and prunes nothing.
 #
-# Restore: do_rsync_mirror_restore <mirror_dir> <app_root> (see its comment).
+# Restore: do_rsync_mirror_restore <mirror_dir> <app_root> [-- <extra rsync args>...] (see its comment).
 #
 # Plus run_detached_if_interactive, which the d03 scripts use to decide whether
 # `backup` / `update` detach into screen (see its comment below).
@@ -115,8 +115,10 @@ do_rsync_mirror_backup() {
   echo "[INFO] Backup complete: $dest"
 }
 
-# do_rsync_mirror_restore <mirror_dir> <app_root> — the inverse of do_rsync_mirror_backup, for a
-# rebuilt host (asyla decisions/host-build-and-recovery.md). Stop the app first.
+# do_rsync_mirror_restore <mirror_dir> <app_root> [-- <extra rsync args>...] — the inverse of
+# do_rsync_mirror_backup, for a rebuilt host (asyla decisions/host-build-and-recovery.md). Stop the app first.
+#   Extra args after a literal "--" go to rsync as the backup's do (typically --exclude=...: files the
+#   mirror keeps that the app does not need back, e.g. Duplicati's pre-upgrade database copies).
 #   Refuses unless <mirror_dir>/.backup-status starts with "OK" (an interrupted or failed backup is
 #   not restored). Refuses if <app_root> already holds files, unless RESTORE_FORCE=1, so it never
 #   overwrites live data by accident. Takes the same lock as the backup of that mirror.
@@ -126,6 +128,9 @@ do_rsync_mirror_backup() {
 #   restores as it always did, with a warning naming the mode it left.
 do_rsync_mirror_restore() {
   local src="$1" dest="$2" status
+  shift 2
+  if [ "${1:-}" = "--" ]; then shift; fi
+  local extra_rsync_args=("$@")
   if [ ! -f "$src/.backup-status" ]; then
     echo "[ERROR] No backup at $src (no .backup-status)" >&2
     return 1
@@ -142,7 +147,8 @@ do_rsync_mirror_restore() {
   _backup_lock "$src" || return 1
   mkdir -p "$dest"
   echo "[INFO] restore $src/ -> $dest/ (backup: $status)"
-  rsync -aH --delete --stats --human-readable --exclude=/.backup-status --exclude=/.backup-root "$src/" "$dest/" || {
+  rsync -aH --delete --stats --human-readable --exclude=/.backup-status --exclude=/.backup-root \
+    "${extra_rsync_args[@]}" "$src/" "$dest/" || {
     echo "[ERROR] rsync restore of $src failed; $dest is incomplete" >&2
     return 1
   }

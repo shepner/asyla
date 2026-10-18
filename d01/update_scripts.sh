@@ -13,6 +13,12 @@
 # and app folders that other repos deploy onto this host (d01/apps/.gitignore:
 # internal-access/, external-access/ from asyla/projects/*/scripts/deploy-host.sh).
 #
+# Replica: when <host>/host.toml has [replica] of = "dNN" (test01 as a d03 replica; d01 is none), the source
+# host's tree is checked out, pruned and installed too, as ~/scripts/dNN/, so its app scripts run
+# from the same paths as on the source. Only this host's update*.sh are installed in ~.
+#
+# Build files: setup/ and host.toml are removed from every installed tree after the copy.
+#
 # Usage: update_scripts.sh [--dry-run]
 #   --dry-run  list what would be deleted and what is preserved; change nothing
 
@@ -102,6 +108,20 @@ checkout_tree() {
 log_info "Checking out host-specific scripts ($HOSTNAME)..."
 checkout_tree "$HOSTNAME"
 
+# The replica source (if any), from the spec just checked out; a bad value stops the run.
+REPLICA_OF=""
+if [ -f "$HOSTNAME/host.toml" ]; then
+    REPLICA_OF=$(python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb")).get("replica", {}).get("of", ""))' "$HOSTNAME/host.toml")
+fi
+if [ -n "$REPLICA_OF" ]; then
+    if ! [[ "$REPLICA_OF" =~ ^d0[0-9]$ ]] || [ "$REPLICA_OF" = "$HOSTNAME" ]; then
+        log_error "$HOSTNAME/host.toml: [replica] of = '$REPLICA_OF' is not another dNN host"
+        exit 1
+    fi
+    log_info "Checking out replica source scripts ($REPLICA_OF)..."
+    checkout_tree "$REPLICA_OF"
+fi
+
 log_info "Checking out docker scripts..."
 checkout_tree docker
 
@@ -162,6 +182,7 @@ prune_tree() {
 log_info "Pruning files no longer in the repository..."
 mkdir -p "$TARGET_SCRIPTS"
 prune_tree "$HOSTNAME"
+[ -z "$REPLICA_OF" ] || prune_tree "$REPLICA_OF"
 prune_tree docker
 
 if $DRY_RUN; then
@@ -185,6 +206,10 @@ if [ -d "$WORKDIR/$HOSTNAME" ]; then
     done
 fi
 
+if [ -n "$REPLICA_OF" ] && [ -d "$WORKDIR/$REPLICA_OF" ]; then
+    cp -r "$WORKDIR/$REPLICA_OF" "$TARGET_SCRIPTS/"
+fi
+
 # Install the shared docker/ tree (common.env, common.sh, backup_all.sh, etc.).
 if [ -d "$WORKDIR/docker" ]; then
     cp -r "$WORKDIR/docker" "$TARGET_SCRIPTS/"
@@ -196,21 +221,15 @@ fi
 find "$TARGET_SCRIPTS" -name "*.sh" -exec chmod 744 {} \;
 chmod 744 "$TARGET_HOME"/update.sh "$TARGET_HOME"/update_scripts.sh "$TARGET_HOME"/update_all.sh 2>/dev/null || true
 
-if [ -f "$TARGET_SCRIPTS/$HOSTNAME/setup/setup_manual.sh" ]; then
-    ln -sf "$TARGET_SCRIPTS/$HOSTNAME/setup/setup_manual.sh" "$TARGET_HOME/setup_manual.sh"
-    chown -h "$TARGET_USER:" "$TARGET_HOME/setup_manual.sh" 2>/dev/null || true
-fi
+# Build files do not stay on this host (asyla hub, the rules gap "build new and cut over"): the
+# build sends build/setup/ and host.toml when it needs them (scripts/build_host.py). Remove each
+# installed tree's setup/ and host.toml; a replica source's tree carries both in the repo. Also
+# docker/setup/, the legacy hosts' copy of the base build scripts (d01 to d03 keep it).
+for tree in "$HOSTNAME" $REPLICA_OF; do
+    [ -d "$TARGET_SCRIPTS/$tree" ] || continue
+    rm -rf -- "${TARGET_SCRIPTS:?}/${tree:?}/setup" "${TARGET_SCRIPTS:?}/${tree:?}/host.toml"
+done
+rm -rf -- "${TARGET_SCRIPTS:?}/docker/setup"
+rm -f -- "${TARGET_HOME:?}/setup_manual.sh"
 
-if [ -f "$TARGET_SCRIPTS/$HOSTNAME/setup/docker_bashrc_additions.sh" ]; then
-    BASHRC="$TARGET_HOME/.bashrc"
-    touch "$BASHRC"
-    if ! grep -q 'docker_bashrc_additions.sh' "$BASHRC" 2>/dev/null; then
-        echo "" >> "$BASHRC"
-        echo "# History search (Up/Down by prefix) and completion - asyla d01" >> "$BASHRC"
-        echo '[ -f "$HOME/scripts/d01/setup/docker_bashrc_additions.sh" ] && . "$HOME/scripts/d01/setup/docker_bashrc_additions.sh"' >> "$BASHRC"
-        log_info "Added history-search and completion to $BASHRC"
-    fi
-    chown "$TARGET_USER:" "$BASHRC" 2>/dev/null || true
-fi
-
-log_info "Scripts updated successfully! Setup scripts are in $TARGET_SCRIPTS/$HOSTNAME/setup/"
+log_info "Scripts updated successfully (no build files kept: setup/, host.toml and docker/setup/ are the build's)"

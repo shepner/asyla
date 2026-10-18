@@ -1,19 +1,26 @@
 # d01 build spec, read by scripts/build_host.py (asyla hub decisions/host-build-and-recovery.md).
-# VM values match `qm config 101` on vmh02, 2026-10-07. Secrets: paths only; values live in GitLab
-# CI/CD variables of asyla/asyla-hosts (scripts/build_host.py secrets).
+# The new d01 (asyla backlog 2026-10-17-hosts-d01-replace-with-a-new-vm-built-by-build-host-py):
+# a new VM, built new and cut over as d03 was on 2026-10-17. [vm] is the operator's approved spec of
+# 2026-10-17 (sized from d01's measured load), not `qm config 101`. VM 101 (the old d01) is kept,
+# stopped, as the way back, so this spec must never name VMID 101. Secrets: paths only; values live
+# in GitLab CI/CD variables of asyla/asyla-hosts (scripts/build_host.py secrets).
 [vm]
 node = "vmh02"
-vmid = 101
-sockets = 2
-cores = 6
-memory_mb = 65536
+vmid = 111                 # operator, 2026-10-17; never 101 (VM 101 is kept stopped as the way back)
+sockets = 1
+cores = 8                  # d01's year CPU peak was 8.4 vCPU of 12 (vmh02 RRD, 2026-10-17)
+memory_mb = 16384          # containers' working set 2.1G; the rest is cache for Duplicati's 17.8G database
 ip = "10.0.0.60/24"
-os_disk = { storage = "local-data2", size = "128G" }
-data_disk = { storage = "local-data2", size = "128G" }   # /mnt/docker
+os_disk = { storage = "local-data2", size = "64G" }
+data_disk = { storage = "local-data2", size = "64G" }   # /mnt/docker: about 30G restored (Duplicati 21G)
 cloudinit_storage = "local-data2"
+startup = "order=20,up=180"   # as VM 101: after ns02 (11), before d02 (25) when vmh02 boots
 
+# build/setup/, as d03, d04 and test01: d01 left build_host.py's LEGACY_HOSTS and has no setup/ of
+# its own. smb.sh mounts the NAS media share (//10.0.0.24/media) with D01_SMBCREDENTIALS, which the
+# secrets phase installs before setup.
 [setup]
-steps = ["systemConfig.sh", "nfs.sh", "smb.sh", "docker.sh"]
+steps = ["systemConfig.sh", "nfs.sh", "smb.sh", "docker.sh", "bashrc.sh"]
 
 [[secret]]
 var = "D01_SMBCREDENTIALS"
@@ -36,7 +43,10 @@ path = "/mnt/docker/internal-proxy/.env"
 owner = "docker:asyla"
 mode = "600"
 
-# Apps in start order. restore: the app has `<app>.sh restore` (NAS mirror -> APP_ROOT).
+# Apps in start order. Each restores from its NAS mirror (`<app>.sh restore`, backup_lib.sh
+# do_rsync_mirror_restore); media restores one mirror per service (media-<service>/mirror), and
+# duplicati leaves its pre-upgrade database copies out (operator, 2026-10-17). booksonic, heimdall
+# and jupyter are not here: archived to the NAS on 2026-10-18 (heimdall dropped), operator's D4.
 [[app]]
 name = "media"
 [[app]]
@@ -47,10 +57,10 @@ name = "duplicati"
 name = "homebridge"
 [[app]]
 name = "breeding-program"
-start = ["build", "up"]
+start = ["build", "up"]    # builds breeding-program:local from the restored src/ (push-source.sh ships it)
 verify = ["verify"]
 [[app]]
-name = "cloudflared"
+name = "cloudflared"       # d01's own tunnel (token mode, container cloudflared-d01), as it runs live
 
 # Deployed onto this host by other repos, from the workstation.
 [[external]]

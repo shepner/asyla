@@ -110,6 +110,8 @@ run_cmd() {
   local cmd="$1"
   case "$cmd" in
     backup)  do_backup ;;
+    # Rebuilt host only: refuses unless DATA_DIR is empty and the mirror's last backup is OK.
+    restore) do_rsync_mirror_restore "$BACKUP_DIR" "$DATA_DIR" ;;
     update)  do_update ;;
     up)
       prepare
@@ -142,6 +144,7 @@ if [ $# -eq 0 ]; then
   echo "  Switches can be combined, e.g. down backup up" >&2
   echo "" >&2
   echo "  backup   - rsync mirror of $DATA_DIR to $BACKUP_DIR (history: nas01 ZFS snapshots)" >&2
+  echo "  restore  - rebuilt host: $BACKUP_DIR back to an empty $DATA_DIR" >&2
   echo "  update   - Pull latest images (no restart); use up/restart to start" >&2
   echo "  refresh  - Pull latest images + start (inline)" >&2
   echo "  up       - Start containers only" >&2
@@ -160,9 +163,9 @@ fi
 
 for cmd in "$@"; do
   case "$cmd" in
-    backup|update|up|down|restart|refresh|logs) ;;
+    backup|restore|update|up|down|restart|refresh|logs) ;;
     *)
-      echo "Usage: $0 backup|up|down|restart|logs|refresh|update [ ... ]" >&2
+      echo "Usage: $0 backup|restore|up|down|restart|logs|refresh|update [ ... ]" >&2
       exit 1
       ;;
   esac

@@ -78,6 +78,30 @@ do_backup() {
   return $rc
 }
 
+# Rebuilt host only: each service's mirror back to its empty config dir (do_rsync_mirror_restore
+# refuses a dir that holds data, or a backup that is not OK). All or nothing: when every config dir
+# holds data it is a re-run, and the refusal is the library's own (the build skips it); when only some
+# do, an earlier restore stopped part way, and that is an error for a person to look at, never a skip.
+do_restore() {
+  local service dest with_data="" empty=""
+  for service in "${MEDIA_SERVICES[@]}"; do
+    dest="${DOCKER_DL}/${service}/config"
+    if [ -d "$dest" ] && [ -n "$(ls -A "$dest" 2>/dev/null)" ]; then
+      with_data="$with_data $service"
+    else
+      empty="$empty $service"
+    fi
+  done
+  if [ -n "$with_data" ] && [ -n "$empty" ]; then
+    echo "[ERROR] media: config dirs hold data for${with_data} but not for${empty} (a restore stopped part way?); restore those by hand" >&2
+    return 1
+  fi
+  for service in "${MEDIA_SERVICES[@]}"; do
+    echo "[INFO] === $service ==="
+    do_rsync_mirror_restore "${DOCKER_D1}/media-${service}/mirror" "${DOCKER_DL}/${service}/config" || return $?
+  done
+}
+
 do_update() {
   echo "[INFO] Pulling latest images (not starting app; use up or restart to start)"
   run_compose pull
@@ -87,6 +111,7 @@ run_cmd() {
   local cmd="$1"
   case "$cmd" in
     backup)  do_backup ;;
+    restore) do_restore ;;
     update)  do_update ;;
     up)
       echo "[INFO] Creating app dirs if needed"
@@ -123,6 +148,7 @@ if [ $# -eq 0 ]; then
   echo "" >&2
   echo "  backup   - Per-service rsync mirrors of config dirs at \$DOCKER_D1/media-<service>/mirror" >&2
   echo "             (history: nas01 ZFS snapshots)" >&2
+  echo "  restore  - rebuilt host: each media-<service>/mirror back to an empty <service>/config" >&2
   echo "  update   - Pull latest images (no restart); use up/restart to start" >&2
   echo "  refresh  - Pull latest images + start (inline)" >&2
   echo "  up       - Start containers only" >&2
@@ -139,9 +165,9 @@ fi
 
 for cmd in "$@"; do
   case "$cmd" in
-    backup|update|up|down|logs|refresh|restart) ;;
+    backup|restore|update|up|down|logs|refresh|restart) ;;
     *)
-      echo "Usage: $0 backup|up|down|logs|refresh|update|restart [ ... ]" >&2
+      echo "Usage: $0 backup|restore|up|down|logs|refresh|update|restart [ ... ]" >&2
       exit 1
       ;;
   esac

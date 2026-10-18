@@ -528,7 +528,7 @@ results = [
               temp_specs({"d07": VM + SECRET.format(var="A"), "x": VM + '[replica]\nof = "d07"\n'})("x"),
               {"A": "s3cret-one"}, {}, {"x"}, "d07 does not answer"),
     # Build files (one set in build/setup/; the legacy hosts keep HOST/setup/).
-    check("the legacy hosts", build_host.LEGACY_HOSTS == ("d01", "d02")),
+    check("the legacy hosts", build_host.LEGACY_HOSTS == ("d02",)),
     spec_dir_case("a new host with its steps in build/setup/", "d09", False, ["a.sh"], ["a.sh"], None),
     spec_dir_case("a new host with a setup/ of its own is refused", "d09", True, ["a.sh"], ["a.sh"], "no build scripts of its own"),
     spec_dir_case("a step not in build/setup/ is refused", "d09", False, ["a.sh", "b.sh"], ["a.sh"], "not in build/setup/"),

@@ -68,6 +68,23 @@ chmod 2775 "$MIRROR3"
 is "setgid mirror: restore exit 0" "$?" "0"
 is "setgid mirror: top directory is 755, no setgid" "$(stat -c '%a' "$OUT3")" "755"
 
+# Extra rsync args after "--" (d01's duplicati: its pre-upgrade copies "backup <job> <stamp>.sqlite"
+# stay in the mirror and are left out of the restore; a name with spaces, anchored at the root).
+SRC4="$D/app4"; MIRROR4="$D/nas/app4/mirror"; OUT4="$D/restored4"
+mkdir -p "$SRC4/config/sub"
+echo live > "$SRC4/config/ABC.sqlite"; echo copy > "$SRC4/config/backup ABC 20260521.sqlite"
+echo nested > "$SRC4/config/sub/backup ABC 20260521.sqlite"
+( do_rsync_mirror_backup "$SRC4" "$MIRROR4" ) >/dev/null 2>&1
+( do_rsync_mirror_restore "$MIRROR4" "$OUT4" -- '--exclude=/config/backup *.sqlite' ) >/dev/null 2>&1
+is "extra args: restore exit 0" "$?" "0"
+is "extra args: the live database is back" "$(cat "$OUT4/config/ABC.sqlite" 2>/dev/null)" "live"
+is "extra args: the excluded copy is left out" "$([ -e "$OUT4/config/backup ABC 20260521.sqlite" ] && echo there || echo absent)" "absent"
+is "extra args: the anchor keeps a deeper file of that name" "$(cat "$OUT4/config/sub/backup ABC 20260521.sqlite" 2>/dev/null)" "nested"
+is "extra args: the mirror still holds the copy" "$(cat "$MIRROR4/config/backup ABC 20260521.sqlite" 2>/dev/null)" "copy"
+OUT5="$D/restored5"
+( do_rsync_mirror_restore "$MIRROR4" "$OUT5" ) >/dev/null 2>&1
+is "no extra args: everything is back" "$(cat "$OUT5/config/backup ABC 20260521.sqlite" 2>/dev/null)" "copy"
+
 # A mirror from before .backup-root: restores as before, and says which mode it left.
 rm "$MIRROR/.backup-root"
 OUT2="$D/restored-old"
