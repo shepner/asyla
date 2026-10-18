@@ -1,37 +1,32 @@
 # test01: the build test host (asyla hub decisions/host-layout.md, decision 4). Created and
-# destroyed as testing needs (operator pre-approved for test01 only, 2026-10-13). Its runners
-# carry only the label or tag build-test, so they never take a real job.
-# The hello test (test01/apps/hello). To rehearse a production host instead, add
-# [replica] of = "dNN" (scripts/build_host.py docstring; the d03 replica of 2026-10-09 is in git
-# history under d04/, 4decdd6..fad6650).
+# destroyed as testing needs (operator pre-approved for test01 only, 2026-10-13).
+# The d01 proof (asyla backlog 2026-10-17-hosts-d01-replace-with-a-new-vm-built-by-build-host-py):
+# test01 built the way the new d01 would be, as a d01 replica of the new d01 spec (build/setup/, not
+# d01/setup/), restoring media, calibre and duplicati from d01's NAS mirrors and starting them, with
+# no way to write outward (scripts/build_host.py docstring, Replica). No [runner], [gitlab_runner]
+# or [[external]]: a replica reaches nothing off the LAN and must not answer for d01's names. No
+# smb.sh: the NAS media share is d01's own mount, and smb.sh refuses a replica. This commit is
+# reverted after the proof, which brings back the hello test.
 [vm]
 node = "vmh01"             # the default; either node may carry it: build_host.py test01 build --node vmh02
 vmid = 901                 # a block of its own, away from the Docker hosts (101 up)
 sockets = 1
-cores = 4
-memory_mb = 8192
+cores = 8                  # as the new d01 (d01/host.toml)
+memory_mb = 16384          # as the new d01
 ip = "10.0.0.69/24"
-os_disk = { storage = "local-data2", size = "32G" }     # local-data2 exists on both nodes
-data_disk = { storage = "local-data2", size = "16G" }   # /mnt/docker
+os_disk = { storage = "local-data2", size = "64G" }     # as the new d01; local-data2 exists on both nodes
+data_disk = { storage = "local-data2", size = "64G" }   # /mnt/docker: as the new d01
 cloudinit_storage = "local-data2"
 disposable = true          # build_host.py may destroy and recreate it without --confirm
 startup = "order=90"       # after every production VM when a node boots; set at create, checked by verify
 
 [setup]
-steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "bashrc.sh"]   # build/setup/, sent by the build
+steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "bashrc.sh"]   # build/setup/, sent by the build; no smb.sh
 
-[[secret]]
-var = "TEST01_HELLO_ENV"
-path = "/home/docker/scripts/test01/apps/hello/.env"
-owner = "docker:asyla"
-mode = "600"
-
-# host-maintenance's key set (gap G11; build/setup/host_maintenance_keys.sh, setup phase). The
-# key is a throwaway one, made for a test01 build and deleted after it (asyla backlog, G11 proof):
-# it authorizes docker@test01 only, never d01 to d03. The pins are d01 to d03's ed25519 host keys
-# (ssh-keyscan -t ed25519 from the workstation, 2026-10-15, equal to its known_hosts); the build
-# scans each address from test01 and fails on another key. self_address: test01's own new host
-# key, read on test01 by the setup phase, as the rebuilt d03 pins its own (d03/host.toml).
+# host-maintenance's key set, test01's own (the replica keeps it; d01 has no [host_maintenance] of
+# its own to take), with its own throwaway key TEST01_HOST_MAINTENANCE_SSH_KEY: build/setup/
+# host_maintenance_keys.sh reads test01/host.toml alone, so the identity must be one of test01's own
+# [[secret]]s. self_address is test01's own address, never d01's.
 [[secret]]
 var = "TEST01_HOST_MAINTENANCE_SSH_KEY"
 path = "/home/docker/.config/host-maintenance/ssh/id_ed25519"
@@ -49,31 +44,15 @@ known_hosts = [
 ]
 self_address = "10.0.0.69"
 
-[[app]]
-name = "hello"
-verify = ["verify"]
-
-# Deployed onto this host by other repos, from the workstation (asyla gap G5): internal-access's
-# test profile (hosts/test01: Caddy's internal CA only, no secret). `restore` before `up`, so every
-# build proves it: a new host warns (no backup yet); a rebuild takes the NAS snapshot and Caddy
-# keeps its CA and certificate. The backup folder internal-proxy-test01 stays on the NAS.
-[[external]]
-name = "internal-access"
-repo = "~/local/asyla/projects/internal-access"
-run = ["scripts/deploy-host.sh {host}", "scripts/fleet.sh --host {host} restore up verify"]
-
-[runner]
-enabled = true
-labels = ["build-test"]    # one label no workflow uses (docker/gitea-runner/gitea-runner.sh)
-
-# GitLab runners (build/gitlab-runner/gitlab-runner.sh, run by the build's runner phase); one
-# [[gitlab_runner.runners]] table each. GitLab description test01-build; tag build-test only, and
-# untagged jobs off, so it never takes a job.
-[[gitlab_runner.runners]]
-name = "build"
-scope = "group:asyla"
-tags = ["build-test"]
-executor = "docker"
-image = "python:3.12-alpine"
-volumes = []
-pull_policy = "if-not-present"
+# Only three of d01's six apps run on the replica; the proof restores and builds the other three by
+# hand (asyla backlog item above, "Next, in order", step 4):
+# - homebridge advertises a HomeKit bridge on the LAN, so a second one would clash with d01's;
+# - cloudflared would join d01's tunnel and take its traffic, so D01_CLOUDFLARED_ENV is excluded;
+# - breeding-program loads every kennel from BigQuery when it starts, and its build needs the
+#   internet (base image, packages); the replica's egress block stops both.
+# No verify list: none of the three publishes a web port.
+[replica]
+of = "d01"
+start_apps = true
+apps = ["media", "calibre", "duplicati"]
+exclude_secrets = ["D01_CLOUDFLARED_ENV"]   # the tunnel token; see cloudflared above
