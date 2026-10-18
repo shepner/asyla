@@ -33,7 +33,10 @@ Build phases, in order (each is safe to re-run):
   apps       each app's start commands (default: up), in spec order, except the apps marked
              after_external = true
   external   other repos' deploy commands from the workstation; `manual` entries are listed
-             (verify runs an entry's `check` on the host, else notes a manual entry, never FAIL)
+             (verify runs an entry's `check` on the host, else notes a manual entry, never FAIL).
+             An entry's env = ["NAME"...] names values its commands take from build_host.py's
+             environment (they inherit it): d06's proxy key, which internal-access's fleet.sh
+             sends over SSH stdin (no .env on d06)
   late       the apps marked after_external = true: those that need this host's proxy or tunnel
              up before they start (an app that pulls its images through the proxy)
   runner     Gitea runner: check that the Gitea host serves gitea.asyla.org (below), delete this
@@ -402,6 +405,11 @@ def load_spec(host: str, node: str | None = None) -> dict:
     for e in spec.get("external", []):
         if "check" in e and not (isinstance(e["check"], str) and e["check"].strip()):
             raise Fail(f"{path}: [[external]] {e.get('name')!r}: check must be a shell command")
+        en = e.get("env", [])
+        if not isinstance(en, list) or not all(isinstance(n, str) and ENV_NAME.fullmatch(n) for n in en) \
+                or len(set(en)) != len(en):
+            raise Fail(f"{path}: [[external]] {e.get('name')!r}: env must be a list of distinct environment "
+                       f"variable names ({ENV_NAME.pattern})")
     for s in spec.get("secret", []):
         if not s.get("var", "").replace("_", "").isalnum():
             raise Fail(f"{path}: bad secret var {s.get('var')!r}")
@@ -461,6 +469,37 @@ def from_env(name: str, why: str) -> str:
     if "\n" in v or "\r" in v:
         raise Fail(f"{name} holds a line break ({why}); not sent")
     return v
+
+
+def env_needed(spec: dict, phases: list[str]) -> list[tuple[str, str]]:
+    """(name, what needs it) for each value the given phases take from build_host.py's environment:
+    apps' pull_token_env (restore, apps, late) and start_env (apps, late; never on a replica), and
+    [[external]] env (external)."""
+    need = []
+    for a in spec.get("app", []):
+        if a.get("pull_token_env") and {"restore", "apps", "late"} & set(phases):
+            need.append((a["pull_token_env"], f"[[app]] {a['name']} pull_token_env"))
+        if not spec.get("replica") and {"apps", "late"} & set(phases):
+            need += [(n, f"[[app]] {a['name']} start_env") for n in a.get("start_env", [])]
+    if "external" in phases:
+        for e in spec.get("external", []):
+            need += [(n, f"[[external]] {e['name']} env") for n in e.get("env", [])]
+    return need
+
+
+def preflight_env(spec: dict, phases: list[str], apply: bool) -> None:
+    """Before any phase: each value the phases will take from the environment is set (names only,
+    never a value), so a build does not stop half-way for a missing one. Dry run: listed only."""
+    need = env_needed(spec, phases)
+    if not need:
+        return
+    missing = [n for n, _ in need if not os.environ.get(n)]
+    print(f"pre-flight: {len(need)} value(s) from the environment")
+    for n, why in need:
+        print(f"  {n:44} {'set' if os.environ.get(n) else 'MISSING'}  ({why})")
+    if missing and apply:
+        raise Fail(f"not in the environment: {', '.join(dict.fromkeys(missing))}; run build_host.py through "
+                   f"the credentials capability with those names")
 
 
 def app_env(spec: dict, a: dict, start: bool) -> list[tuple[str, str]]:
@@ -1297,6 +1336,10 @@ def phase_external(spec: dict, apply: bool) -> int:
             gaps += 1
             continue
         repo = Path(os.path.expanduser(e["repo"]))
+        for n in e.get("env", []) if apply else []:
+            from_env(n, f"[[external]] {e['name']} env")   # set, one line; its commands inherit it
+        if e.get("env"):
+            print(f"external {e['name']}: from the environment: {', '.join(e['env'])}")
         for c in e["run"]:
             c = c.format(host=host)
             print(f"external {e['name']}: (cd {repo} && {c})")
@@ -1852,9 +1895,11 @@ def main() -> int:
         if not a.apply:
             print("DRY RUN (no --apply): showing what each phase would do")
         gaps = 0
-        if "vm" in phases:
+        if "vm" in phases or env_needed(spec, phases):
             step("pre-flight")
+        if "vm" in phases:
             preflight_secrets(spec, a.apply)
+        preflight_env(spec, phases, a.apply)
         for p in phases:
             step(p)
             if p == "vm":

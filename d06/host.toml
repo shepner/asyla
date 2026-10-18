@@ -25,12 +25,9 @@ startup = "order=20"                                    # set at create, checked
 [setup]
 steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "bashrc.sh"]   # build/setup/, sent by the build
 
-# The proxy's, as d04's. Ticketing keeps nothing on the host: its values come at use (its [[app]]).
-[[secret]]
-var = "D06_INTERNAL_PROXY_ENV"
-path = "/mnt/docker/internal-proxy/.env"
-owner = "docker:docker"
-mode = "600"
+# No [[secret]]: d06 keeps no secret on disk (the operator's rule, 2026-10-18). Ticketing's values
+# and the proxy's Cloudflare key are resolved from OpenBao on the workstation at use (its [[app]],
+# the internal-access [[external]] env).
 
 # Restored from $DOCKER_D1/Ticketing/mirror (theOrg's backup image's copy, mirrored nightly by
 # the host that serves vikunja.asyla.org). At the cutover the Mini's final copy is put there first.
@@ -47,6 +44,9 @@ start_env = ["TICKETING_DEPLOY_DEX_CLIENT_SECRET", "TICKETING_MCP_DEX_CLIENT_SEC
 name = "internal-access"
 repo = "~/local/asyla/projects/internal-access"
 run = ["scripts/deploy-host.sh {host}", "scripts/fleet.sh --host {host} restore up verify"]
+# Caddy's Let's Encrypt DNS-01 key (operator: "OpenBao, at deploy"); fleet.sh sends it over SSH
+# stdin as CF_API_TOKEN (internal-access hosts/d06/host.conf TLS_DNS_FROM_WORKSTATION).
+env = ["D06_CF_API_TOKEN"]
 
 # Labels as d04's (host-layout decision 3): environment and host, no `docker` and no `asyla`, so
 # it never takes the Mini's [theorg, docker] jobs. asyla deploys ticketing here itself (theOrg's

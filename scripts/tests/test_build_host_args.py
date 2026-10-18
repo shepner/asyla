@@ -626,9 +626,9 @@ results = [
           (lambda d: [(a["name"], a.get("verify"), a.get("pull_token_env"), a.get("start_env")) for a in d["app"]]
            == [("ticketing", ["verify"], "THEORG_REGISTRY_PULL_TOKEN",
                 ["TICKETING_DEPLOY_DEX_CLIENT_SECRET", "TICKETING_MCP_DEX_CLIENT_SECRET"])]
-           and {x["var"]: x["path"] for x in d["secret"]} == {
-               "D06_INTERNAL_PROXY_ENV": "/mnt/docker/internal-proxy/.env"}
-           and [e["name"] for e in d["external"]] == ["internal-access"])(build_host.load_spec("d06"))),
+           and d.get("secret", []) == []
+           and [(e["name"], e.get("env")) for e in d["external"]] == [("internal-access", ["D06_CF_API_TOKEN"])])(
+               build_host.load_spec("d06"))),
     # Two specs never claim one VM or one address.
     check("every spec has its own VMID and address",
           (lambda vms: len({v["vmid"] for v in vms}) == len(vms) and len({v["ip"] for v in vms}) == len(vms))(

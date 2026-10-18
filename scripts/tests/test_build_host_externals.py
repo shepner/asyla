@@ -7,6 +7,8 @@ cutover's two verify FAILs, 2026-10-17).
 1. verify_externals(): an entry with `check` runs it on the host and is OK on exit 0, FAIL
    otherwise; a `manual` entry without one is a note, never a FAIL; a run-only entry prints
    nothing. load_spec() refuses a `check` that is not a shell command; d03's dead-man entry has one.
+   An entry's env (d06's proxy key): load_spec checks the names, the pre-flight checks they are set
+   before any phase (names only), and the external phase refuses one unset.
 2. Every host that is not in LEGACY_HOSTS and has an update_scripts.sh runs test01's updater: its
    lines, comments aside, are test01's, so the build files (build_only_paths) are removed after
    the copy. d03's own updater copied the whole tree, so its verify failed "no build files on the
@@ -104,6 +106,68 @@ check("load_spec takes a manual external with a check", load(EXT + f'check = "{C
 for bad in ('check = ""\n', 'check = "  "\n', "check = 1\n", 'check = ["a"]\n'):
     msg = load(EXT + bad)
     check(f"load_spec refuses {bad.strip()}", "check must be a shell command" in msg, msg)
+
+# An external's env: distinct variable names; the pre-flight checks them before any phase (names
+# only), and the external phase refuses one that is unset.
+RUNX = '[[external]]\nname = "proxy"\nrepo = "~/y"\nrun = ["true"]\n'
+check("load_spec takes an external env list", load(RUNX + 'env = ["D09_CF_API_TOKEN"]\n') == "ok")
+for bad in ('env = "D09_X"\n', 'env = ["lower"]\n', 'env = ["A", "A"]\n'):
+    msg = load(RUNX + bad)
+    check(f"load_spec refuses {bad.strip()}", "env must be a list of distinct" in msg, msg)
+
+spec = {"host": "d09", "app": [{"name": "t", "pull_token_env": "P_TOK", "start_env": ["S_ONE"]}],
+        "external": [{"name": "proxy", "repo": "~/y", "run": ["true"], "env": ["E_KEY"]}]}
+names = lambda phases, s=spec: [n for n, _ in build_host.env_needed(s, phases)]
+check("a full build needs the pull token, start_env and the external's env",
+      names(list(build_host.PHASES)) == ["P_TOK", "S_ONE", "E_KEY"], str(names(list(build_host.PHASES))))
+check("--only setup needs none", names(["setup"]) == [])
+check("--only external needs only the external's", names(["external"]) == ["E_KEY"])
+check("a replica's apps need no start_env", names(["apps"], {**spec, "replica": {"of": "d06"}}) == ["P_TOK"])
+
+
+def preflight(env: dict, apply: bool) -> str:
+    """preflight_env() for a full build of SPEC with ENV as the environment: printed output, or the Fail."""
+    real = dict(build_host.os.environ)
+    build_host.os.environ.clear()
+    build_host.os.environ.update(env)
+    out = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out):
+            build_host.preflight_env(spec, list(build_host.PHASES), apply)
+        return out.getvalue()
+    except build_host.Fail as e:
+        return "FAIL " + str(e)
+    finally:
+        build_host.os.environ.clear()
+        build_host.os.environ.update(real)
+
+
+VAL = "stand-in"
+out = preflight({"P_TOK": VAL, "S_ONE": VAL}, True)
+check("the pre-flight stops an applied build that lacks one, naming it",
+      out.startswith("FAIL") and "E_KEY" in out and VAL not in out, out)
+out = preflight({"P_TOK": VAL, "S_ONE": VAL, "E_KEY": VAL}, True)
+check("the pre-flight passes with all set and prints no value", "MISSING" not in out and VAL not in out, out)
+out = preflight({}, False)
+check("a dry run lists what is missing and does not stop", "MISSING" in out and not out.startswith("FAIL"), out)
+
+real_env = dict(build_host.os.environ)
+build_host.os.environ.pop("E_KEY", None)
+try:
+    with contextlib.redirect_stdout(io.StringIO()):
+        build_host.phase_external(spec, True)
+    msg = "ran"
+except build_host.Fail as e:
+    msg = str(e)
+finally:
+    build_host.os.environ.clear()
+    build_host.os.environ.update(real_env)
+check("the external phase refuses an unset env value before running anything",
+      "E_KEY is not in the environment" in msg, msg)
+
+d06 = build_host.load_spec("d06")
+check("d06's proxy takes D06_CF_API_TOKEN at use and d06 keeps no secret file",
+      [e.get("env") for e in d06["external"]] == [["D06_CF_API_TOKEN"]] and not d06.get("secret"), str(d06.get("secret")))
 
 d03 = build_host.load_spec("d03")
 dm = next((e for e in d03.get("external", []) if e["name"] == "theorg-mini-deadman"), {})
