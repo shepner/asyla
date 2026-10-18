@@ -1,7 +1,7 @@
 #!/bin/bash
 # SMB/CIFS mount of the NAS media share at /mnt/nas/data1/media (d01: sonarr, radarr, calibre and
-# duplicati's source). Ported from d01/setup/smb.sh for the build (asyla-hosts build/setup/), with
-# three changes: the credentials file is the host's [[secret]] (D01_SMBCREDENTIALS, installed by the
+# duplicati's source; d02: Plex's library). Ported from d01/setup/smb.sh for the build (asyla-hosts build/setup/), with
+# three changes: the credentials file is the host's [[secret]] (D01_ or D02_SMBCREDENTIALS, installed by the
 # build's secrets phase before setup), never an empty template made here; a share that does not
 # mount fails this step (an app started on an empty /mnt/nas/data1/media sees an empty library, and
 # duplicati would back up an empty source); and no sudoers fragment (only the manual
@@ -43,7 +43,7 @@ if [ -z "$DOCKER_HOME" ]; then
 fi
 CREDENTIALS_FILE="$DOCKER_HOME/.smbcredentials"
 if [ ! -s "$CREDENTIALS_FILE" ]; then
-    log_error "No credentials at $CREDENTIALS_FILE: the build's secrets phase installs it (D01_SMBCREDENTIALS)"
+    log_error "No credentials at $CREDENTIALS_FILE: the build's secrets phase installs it (the host's DNN_SMBCREDENTIALS)"
     exit 1
 fi
 

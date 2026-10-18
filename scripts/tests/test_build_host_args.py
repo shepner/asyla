@@ -459,7 +459,7 @@ def documented(name: str, text: str) -> bool:
 
 
 def spec_dir_case(name: str, host: str, setup_dir: bool, steps: list[str], build_steps: list[str],
-                  needle: str | None) -> bool:
+                  needle: str | None, legacy: tuple[str, ...] | None = None) -> bool:
     """load_spec() on a throwaway repo with HOST/host.toml, maybe HOST/setup/, and build/setup/ files."""
     import tempfile
     d = Path(tempfile.mkdtemp(prefix="build-host-tree-"))
@@ -472,13 +472,16 @@ def spec_dir_case(name: str, host: str, setup_dir: bool, steps: list[str], build
     for s in build_steps:
         (d / "build" / "setup" / s).write_text("#!/bin/bash\n")
     real, build_host.REPO = build_host.REPO, d
+    real_legacy = build_host.LEGACY_HOSTS
+    if legacy is not None:
+        build_host.LEGACY_HOSTS = legacy
     try:
         build_host.load_spec(host)
         got = None
     except build_host.Fail as e:
         got = str(e)
     finally:
-        build_host.REPO = real
+        build_host.REPO, build_host.LEGACY_HOSTS = real, real_legacy
     good = got is None if needle is None else (got is not None and needle in got)
     print(f"{'ok  ' if good else 'FAIL'}  {name}{'' if good else f': {got!r}'}")
     return good
@@ -691,11 +694,13 @@ results = [
               temp_specs({"d07": VM + SPEC_FILE_ENTRY.format(var="A"), "x": VM + '[replica]\nof = "d07"\n'})("x"),
               {"A": "s3cret-one"}, {}, {"x"}, "d07 does not answer"),
     # Build files (one set in build/setup/; the legacy hosts keep HOST/setup/).
-    check("the legacy hosts", build_host.LEGACY_HOSTS == ("d02",)),
+    check("the legacy hosts: none (d02, the last, left for its rebuild)", build_host.LEGACY_HOSTS == ()),
     spec_dir_case("a new host with its steps in build/setup/", "d09", False, ["a.sh"], ["a.sh"], None),
     spec_dir_case("a new host with a setup/ of its own is refused", "d09", True, ["a.sh"], ["a.sh"], "no build scripts of its own"),
     spec_dir_case("a step not in build/setup/ is refused", "d09", False, ["a.sh", "b.sh"], ["a.sh"], "not in build/setup/"),
-    spec_dir_case("a legacy host keeps its setup/", "d02", True, ["a.sh"], [], None),
+    spec_dir_case("a legacy host keeps its setup/", "d09", True, ["a.sh"], [], None, legacy=("d09",)),
+    check("d02's spec loads (its steps are in build/setup/, no setup/ of its own)", build_host.load_spec("d02")["host"] == "d02"),
+    check("d02 is VMID 112, never 102 (VM 102 is the way back)", build_host.load_spec("d02")["vm"]["vmid"] == 112),
     check("test01's spec loads (its steps are in build/setup/)", build_host.load_spec("test01")["host"] == "test01"),
     check("test01's build-only paths", build_host.build_only_paths(build_host.load_spec("test01"))
           == [p for t in sorted({"test01", build_host.load_spec("test01")["apps_tree"]}) for p in (f"{t}/setup", f"{t}/host.toml")]

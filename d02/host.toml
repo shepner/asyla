@@ -1,18 +1,26 @@
 # d02 build spec, read by scripts/build_host.py (asyla hub decisions/host-build-and-recovery.md).
-# VM values match `qm config 102` on vmh02, 2026-10-07.
+# The new d02 (asyla backlog 2026-10-18-hosts-d02-replace-with-a-new-vm-built-by-build-host-py-build-new-c):
+# a new VM, built new and cut over as d03 (2026-10-17) and d01 (2026-10-18) were. [vm] is sized from
+# d02's measured load (read-only, 2026-10-18), not `qm config 102`. VM 102 (the old d02) is kept,
+# stopped, as the way back, so this spec must never name VMID 102. Secrets: paths only; values live
+# in GitLab CI/CD variables of asyla/asyla-hosts (scripts/build_host.py secrets).
 [vm]
 node = "vmh02"
-vmid = 102
-sockets = 2
-cores = 6
-memory_mb = 32768
+vmid = 112                 # 102 + 10, as d01 (111) and d03 (113); never 102 (VM 102 is kept stopped as the way back)
+sockets = 1
+cores = 12                 # as VM 102 (2x6); its year CPU peak was 10.9 vCPU of 12 (Plex transcodes, vmh02 RRD)
+memory_mb = 16384          # Plex's working set 0.3G; the rest is cache (13.5G of file cache in use)
 ip = "10.0.0.61/24"
 os_disk = { storage = "local-data2", size = "64G" }
-data_disk = { storage = "local-data2", size = "512G" }   # /mnt/docker
+data_disk = { storage = "local-data1", size = "512G" }  # /mnt/docker: Plex's 291G; local-data1 (ns02 only) keeps local-data2 clear of 84%
 cloudinit_storage = "local-data2"
+startup = "order=25,up=180"   # as VM 102: after d01 (20) when vmh02 boots
 
+# build/setup/, as d01, d03, d04 and test01: d02 left build_host.py's LEGACY_HOSTS (the last host in
+# it) and has no setup/ of its own. smb.sh mounts the NAS media share (//10.0.0.24/media), which Plex
+# reads at /data, with D02_SMBCREDENTIALS, which the secrets phase installs before setup.
 [setup]
-steps = ["systemConfig.sh", "nfs.sh", "smb.sh", "docker.sh"]
+steps = ["systemConfig.sh", "nfs.sh", "smb.sh", "docker.sh", "bashrc.sh"]
 
 [[secret]]
 var = "D02_SMBCREDENTIALS"
@@ -20,8 +28,11 @@ path = "/home/docker/.smbcredentials"
 owner = "docker:docker"
 mode = "600"
 
+# Plex restores from its NAS mirror (`plex.sh restore`, backup_lib.sh do_rsync_mirror_restore); the
+# mirror holds no Cache/, Codecs/, Logs/ or the other dirs the backup excludes (they rebuild).
 [[app]]
 name = "plex"
+verify = ["verify"]        # Plex answers on 32400 with the restored server's identity
 
 [runner]
 enabled = true

@@ -63,10 +63,10 @@ docker/gitea-runner/) inside the SSH command, unpack it into a mktemp folder tha
 and run from there with HOST_SPEC set; nothing of the build stays on the host, and verify checks
 that. GitLab runners the same way: build/gitlab-runner/ is sent, never kept (the updaters install
 only HOST/ and docker/), and the host keeps only the gitlab-runner package, its apt source and
-key, /etc/gitlab-runner/config.toml and the unit. The legacy host d02 (LEGACY_HOSTS;
-d03 left it for its rebuild, 2026-10-17, and d01 for its own) keeps HOST/setup/ and its old phases until it is
-replaced (operator: "Let the legacy servers behave in their legacy ways"); any other spec is
-refused if HOST/setup/ exists or a step is not in build/setup/.
+key, /etc/gitlab-runner/config.toml and the unit. LEGACY_HOSTS is empty: d03 (2026-10-17), d01
+and d02 (2026-10-18) each left it for their rebuilds. A host in it would keep HOST/setup/ and its
+old phases until replaced (operator: "Let the legacy servers behave in their legacy ways"); any
+other spec is refused if HOST/setup/ exists or a step is not in build/setup/.
 
 Gitea host: the host whose Gitea container makes the runner registration token
 (GITEA_TOKEN_HOST, d04 since the 2026-10-16 cutover from d03; --gitea-host HOST for one build, a host whose
@@ -181,7 +181,7 @@ GITEA_SERVING_SH = (f"getent ahostsv4 {GITEA_NAME} | awk '{{print $1}}' | sort -
 # restore failure a build re-run expects. restore_command() turns it into RESTORE_SKIPPED.
 RESTORE_NOT_EMPTY = "is not empty; refusing to restore over it"
 RESTORE_SKIPPED = 3
-LEGACY_HOSTS = ("d02",)   # HOST/setup/ on the host, run from ~/scripts (the old way); d03 and d01 left it for their rebuilds
+LEGACY_HOSTS: tuple[str, ...] = ()   # HOST/setup/ on the host, run from ~/scripts (the old way); d03, d01, d02 left it for their rebuilds
 BUILD_SETUP = "build/setup"
 BUILD_GITLAB_RUNNER = "build/gitlab-runner"
 GITLAB_URL = "https://gitlab.com"

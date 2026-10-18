@@ -16,6 +16,8 @@ Optional `.env` in `/mnt/docker/plex/`: `PLEX_CLAIM`, `DOCKER_MODS`, `VERSION` (
 ~/scripts/d02/apps/plex/plex.sh restart  # down then up
 ~/scripts/d02/apps/plex/plex.sh refresh  # pull latest images and start
 ~/scripts/d02/apps/plex/plex.sh backup   # rsync mirror to the NAS (see below)
+~/scripts/d02/apps/plex/plex.sh restore  # copy the mirror back to an empty /mnt/docker/plex (a rebuild)
+~/scripts/d02/apps/plex/plex.sh verify   # Plex answers on 32400 as the restored server
 ~/scripts/d02/apps/plex/plex.sh logs
 ```
 
@@ -23,7 +25,7 @@ Switches can be combined, e.g. `down backup up` for an offline (guaranteed-clean
 
 ## Backups
 
-`backup` rsyncs `${DOCKER_DL}/plex/` to **one mirror** at `${DOCKER_D1}/plex/mirror/` (`do_rsync_mirror_backup` in `docker/backup_lib.sh`). It keeps no extra copies: day-by-day history is nas01's periodic ZFS snapshot of `data1/docker` (daily at 00:00, kept 2 weeks, replicated to `backup/data1/docker`). Cron runs it daily at 04:00 through `docker/backup_all.sh`.
+`backup` rsyncs `${DOCKER_DL}/plex/` to **one mirror** at `${DOCKER_D1}/plex/mirror/` (`do_rsync_mirror_backup` in `docker/backup_lib.sh`). It keeps no extra copies: day-by-day history is nas01's periodic ZFS snapshot of `data1/docker` (daily at 00:00, kept 2 weeks, replicated to `backup/data1/docker`). host-maintenance runs it daily at 00:00 Chicago (asyla/host-maintenance `setup/schedules.py`); the old VM 102 also ran it from cron at 04:00 through `docker/backup_all.sh`.
 
 - A daily run only rewrites files that changed. It still has to check all ~826k entries, but lookups over NFS are sub-millisecond.
 - `mirror/.backup-status` reads `OK <time>` after a successful run and `IN PROGRESS since <time>` while one runs (or if it died). A ZFS snapshot showing `IN PROGRESS` caught a partial copy; use the day before.
@@ -46,7 +48,8 @@ Until 2026-09-16 this used `do_rsync_snapshot_backup` (a full `--link-dest` tree
 
 Stop Plex first (`plex.sh down`), then `plex.sh up` afterwards.
 
-- **Latest backup:** on d02,
+- **Latest backup, onto an empty `/mnt/docker/plex`** (a rebuilt host; `build_host.py` does this): `plex.sh restore`.
+- **Latest backup, over existing data:** on d02,
   `rsync -aH --delete /mnt/nas/data1/docker/plex/mirror/plexmediaserver/ /mnt/docker/plex/plexmediaserver/`
 - **An earlier day:** snapshots live at `/mnt/data1/docker/.zfs/snapshot/auto-YYYY-MM-DD_00-00/plex/mirror/` on nas01. d02 can list snapshot names over NFS but cannot read inside them, and some files (e.g. `Preferences.xml`) are owner-only, so copy as **root on nas01** (TrueNAS shell) into a scratch dir under the export:
   `cp -a /mnt/data1/docker/.zfs/snapshot/auto-YYYY-MM-DD_00-00/plex/mirror /mnt/data1/docker/plex/restore-YYYY-MM-DD`
