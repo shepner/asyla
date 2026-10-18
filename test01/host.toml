@@ -46,8 +46,9 @@ self_address = "10.0.0.69"
 # Plex is restored but never started: with network_mode host it would announce a second server with
 # d02's identity (the restored Preferences.xml) on the LAN (GDM), which the egress block lets through.
 # start_apps = false: the apps phase starts nothing and verify checks that no container runs.
-# D02_SMBCREDENTIALS is installed (pre-flight compares it with live d02) and unused: no smb.sh.
+# D02_SMBCREDENTIALS is excluded: unused here (no smb.sh), and the proof does not wait on its store.
 [replica]
 of = "d02"
 start_apps = false
 apps = ["plex"]
+exclude_secrets = ["D02_SMBCREDENTIALS"]   # unused here (no smb.sh), so the proof does not wait on that secret's store
