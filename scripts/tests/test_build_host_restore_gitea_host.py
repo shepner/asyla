@@ -303,7 +303,9 @@ def gitea_runner(gitea_host: str, answers: dict[str, str]) -> tuple[str, list[st
     failed = ""
     with patched(ssh=ssh, build_run=build_run, delete_runner_entry=lambda h, ap: acts.append(f"delete entry {h}")):
         try:
-            build_host.phase_gitea_runner(SPEC, True, gitea_host)
+            # test01 with its runner on, whatever its spec holds today (a replica proof has none)
+            build_host.phase_gitea_runner({**SPEC, "runner": {"enabled": True, "labels": ["build-test"]}},
+                                          True, gitea_host)
         except build_host.Fail as e:
             failed = str(e)
     return failed, acts

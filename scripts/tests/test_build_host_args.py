@@ -576,7 +576,9 @@ results = [
     check("app.ini values: booleans as Gitea writes them",
           [build_host.ini_value(v) for v in (False, True, 3, "a.invalid")] == ["false", "true", "3", "a.invalid"]),
     check("test01 as the G1 replica: Gitea only, no secret, the outbound tasks off",
-          not build_host.load_spec("test01").get("replica") or (
+          # only while test01 is the G1 (Gitea) replica: a replica of another host, such as a
+          # d01 or d03 proof, has no gitea_config and is not this case
+          not build_host.load_spec("test01").get("replica", {}).get("gitea_config") or (
               [a["name"] for a in build_host.load_spec("test01")["app"]] == ["gitea"]
               and build_host.load_spec("test01")["secret"] == []
               and all(build_host.load_spec("test01")["replica"]["gitea_config"][s]["ENABLED"] is False
