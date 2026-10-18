@@ -42,7 +42,7 @@ mode = "600"
 identity = "/home/docker/.config/host-maintenance/ssh/id_ed25519"
 user = "docker"
 known_hosts = [
-  "10.0.0.60 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEWInJu/I6E2DxkusPBWL2c4gY4OBKVyvhuYz4VOfkrv",
+  "10.0.0.60 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDklyJ5JfOrunGhBVq3B00PFofICXisn2NryUP5yvA5D",
   "10.0.0.61 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPbeDGfZcftzPaZaKINRYpCqTWWPB8e5rgJQsoEVBvz8",
   # 10.0.0.62: the rebuilt d03 (VM 113, cutover 2026-10-17); VM 103's key was ...bhhGgU9S.
   "10.0.0.62 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEWBYkIF2Vt24oPKu01VJPEExr3WzbsWyMjahtuYpaak",

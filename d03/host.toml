@@ -77,7 +77,7 @@ mode = "600"
 identity = "/home/docker/.config/host-maintenance/ssh/id_ed25519"
 user = "docker"
 known_hosts = [
-  "10.0.0.60 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEWInJu/I6E2DxkusPBWL2c4gY4OBKVyvhuYz4VOfkrv",
+  "10.0.0.60 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDklyJ5JfOrunGhBVq3B00PFofICXisn2NryUP5yvA5D",
   "10.0.0.61 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPbeDGfZcftzPaZaKINRYpCqTWWPB8e5rgJQsoEVBvz8",
   "10.0.0.63 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMPnOQj7p8zI/CwT75iHiFw0ECXg6prI0ZKZ7WDshnLE",
 ]
