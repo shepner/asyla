@@ -471,6 +471,17 @@ results = [
         build_host.load_spec("test01")["vm"])),
     check("d04's production spec: no hold, not disposable",
           (lambda d: not d.get("hold") and not d["vm"].get("disposable"))(build_host.load_spec("d04"))),
+    check("d06's production spec: the operator's values (2026-10-18), not disposable, no docker label",
+          (lambda d: (d["vm"]["node"], d["vm"]["vmid"], d["vm"]["ip"], d["vm"]["cores"], d["vm"]["memory_mb"],
+                      d["vm"]["os_disk"], d["vm"]["data_disk"], bool(d["vm"].get("disposable")),
+                      "docker" in d["runner"]["labels"])
+           == ("vmh01", 106, "10.0.0.65/24", 8, 16384, {"storage": "local-data2", "size": "64G"},
+               {"storage": "local-data2", "size": "64G"}, False, False))(build_host.load_spec("d06"))),
+    # Two specs never claim one VM or one address.
+    check("every spec has its own VMID and address",
+          (lambda vms: len({v["vmid"] for v in vms}) == len(vms) and len({v["ip"] for v in vms}) == len(vms))(
+              [build_host.tomllib.loads(p.read_text())["vm"] for p in build_host.REPO.glob("*/host.toml")
+               if "vm" in build_host.tomllib.loads(p.read_text())])),
     # Guests are reached as docker@HOST with the build's key; a node target is passed through.
     check("ssh to a guest names the user and the key",
           build_host.ssh_argv("test01")[-3:] == ["-i", str(build_host.SSH_KEY), "docker@test01"]),

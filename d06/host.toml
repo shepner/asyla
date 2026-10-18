@@ -1,0 +1,31 @@
+# d06 build spec, read by scripts/build_host.py: theOrg's memory and applications host (asyla hub
+# decisions/host-layout.md). First tenant: theOrg's ticketing (Vikunja, vikunja-mcp), moved from
+# the Mac Mini (asyla hub backlog, the d06 item); the other six stacks follow when theOrg moves
+# them. Built as every other Docker host (host-layout decision 6). d06 is not disposable: a build
+# or a destroy needs --confirm d06 and the operator's approval of the exact action.
+# Not built yet. The ticketing [[app]], its [[secret]]s and the internal-access [[external]]
+# (hosts/d06: vikunja, vikunja-mcp) are added when theOrg's ticketing DEPLOY.md and image tags
+# are ready; then the path is proven on test01 as [replica] of = "d06" (ASY-HST-6).
+
+# Operator's values, 2026-10-18. order=20: after d04 (10) and d03 (15) when vmh01 boots.
+[vm]
+node = "vmh01"
+vmid = 106
+sockets = 1
+cores = 8
+memory_mb = 16384
+ip = "10.0.0.65/24"
+os_disk = { storage = "local-data2", size = "64G" }
+data_disk = { storage = "local-data2", size = "64G" }   # /mnt/docker: theOrg's stacks' data
+cloudinit_storage = "local-data2"
+startup = "order=20"                                    # set at create, checked by verify
+
+[setup]
+steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "bashrc.sh"]   # build/setup/, sent by the build
+
+# Labels as d04's (host-layout decision 3): environment and host, no `docker` and no `asyla`, so
+# it never takes the Mini's [theorg, docker] jobs. asyla deploys ticketing here itself (theOrg's
+# deploy.yml does not target d06).
+[runner]
+enabled = true
+labels = ["theorg", "prod", "d06"]   # docker/gitea-runner/gitea-runner.sh reads them from here
