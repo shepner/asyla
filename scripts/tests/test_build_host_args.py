@@ -246,6 +246,12 @@ def app_env_cases() -> list[bool]:
         fails("app env: start_env cannot also carry the pull token's name", "which pull_token_env sets",
               lambda: temp_specs({"x": VM + '[[app]]\nname = "a"\npull_token_env = "P"\nstart_env = ["A_REGISTRY_PULL_TOKEN"]\n'})("x")),
         check("app env: the pull token's name on the host", build_host.pull_env_name("my-app") == "MY_APP_REGISTRY_PULL_TOKEN"),
+        fails("app restore_timeout: a string is refused", "restore_timeout must be",
+              lambda: temp_specs({"x": VM + '[[app]]\nname = "a"\nrestore_timeout = "2h"\n'})("x")),
+        fails("app restore_timeout: 0 is refused", "restore_timeout must be",
+              lambda: temp_specs({"x": VM + '[[app]]\nname = "a"\nrestore_timeout = 0\n'})("x")),
+        check("app restore_timeout: seconds load",
+              temp_specs({"x": VM + '[[app]]\nname = "a"\nrestore_timeout = 14400\n'})("x")["app"][0]["restore_timeout"] == 14400),
     ]
     cmd, stdin = build_host.env_command([("VA", "one"), ("VB", "two words")], 'printf "%s|%s" "$VA" "$VB"')
     r = REAL_RUN(["bash", "-c", cmd], input=stdin, capture_output=True, text=True)   # locally only

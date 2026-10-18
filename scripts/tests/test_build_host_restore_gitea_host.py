@@ -149,6 +149,27 @@ for rc in (1, 255):
           f.startswith(f"restore {APP}: exit {rc}") and "stopped before any app starts" in f and not sec, f)
 
 
+def restore_timeouts(spec: dict) -> list:
+    """The timeout each app's restore command got from phase_restore(--apply)."""
+    got = []
+
+    def ssh(t, c, **kw):
+        if c.startswith("bash -c "):
+            got.append(kw.get("timeout"))
+        return Done(0)
+    with patched(ssh=ssh, secrets_cmd=lambda *a, **kw: 0):
+        build_host.phase_restore(spec, True)
+    return got
+
+
+check("restore phase: an app's restore gets RESTORE_TIMEOUT (7200 s) by default",
+      restore_timeouts(SPEC) == [build_host.RESTORE_TIMEOUT] * len(SPEC["app"]) and build_host.RESTORE_TIMEOUT == 7200,
+      str(restore_timeouts(SPEC)))
+check("restore phase: [[app]] restore_timeout is the restore's SSH timeout",
+      restore_timeouts({**SPEC, "app": [{**SPEC["app"][0], "restore_timeout": 14400}]}) == [14400],
+      str(restore_timeouts({**SPEC, "app": [{**SPEC["app"][0], "restore_timeout": 14400}]})))
+
+
 def restore_grep(grep_rc: int, apply: bool) -> tuple[str, list, str, bool]:
     """phase_restore with the host's grep for the restore switch exiting GREP_RC (2: no script):
     (Fail text or "", secrets calls, output, whether the restore itself ran)."""

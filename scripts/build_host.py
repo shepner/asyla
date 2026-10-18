@@ -32,7 +32,9 @@ Build phases, in order (each is safe to re-run):
   restore    `<app>.sh restore` for each app whose data is empty (from its NAS mirror), then the
              secrets under /mnt/docker/. An app that refuses because its data dir holds data is
              skipped (a re-run); any other failure (no backup, a backup not "OK", rsync) stops
-             the build before any app starts (exit 1): an app must never start on empty data
+             the build before any app starts (exit 1): an app must never start on empty data.
+             Each restore may take RESTORE_TIMEOUT (7200 s), or its [[app]] restore_timeout =
+             SECONDS (d02's Plex: 291G from its mirror)
   apps       each app's start commands (default: up), in spec order, except the apps marked
              after_external = true
   external   other repos' deploy commands from the workstation; `manual` entries are listed
@@ -181,6 +183,7 @@ GITEA_SERVING_SH = (f"getent ahostsv4 {GITEA_NAME} | awk '{{print $1}}' | sort -
 # restore failure a build re-run expects. restore_command() turns it into RESTORE_SKIPPED.
 RESTORE_NOT_EMPTY = "is not empty; refusing to restore over it"
 RESTORE_SKIPPED = 3
+RESTORE_TIMEOUT = 7200   # seconds for one app's restore over SSH; [[app]] restore_timeout overrides it
 LEGACY_HOSTS: tuple[str, ...] = ()   # HOST/setup/ on the host, run from ~/scripts (the old way); d03, d01, d02 left it for their rebuilds
 BUILD_SETUP = "build/setup"
 BUILD_GITLAB_RUNNER = "build/gitlab-runner"
@@ -447,7 +450,8 @@ def replica_apps(path: Path, rep: dict, src: str, apps: list[dict]) -> list[dict
 
 
 def check_app_env(path: Path, a: dict) -> None:
-    """[[app]] pull_token_env (one environment variable name) and start_env (a list of them)."""
+    """[[app]] pull_token_env (one environment variable name), start_env (a list of them) and
+    restore_timeout (seconds, above 0)."""
     name = a.get("name", "?")
     p = a.get("pull_token_env")
     if p is not None and not (isinstance(p, str) and ENV_NAME.fullmatch(p)):
@@ -460,6 +464,9 @@ def check_app_env(path: Path, a: dict) -> None:
                    f"names ({ENV_NAME.pattern})")
     if p is not None and pull_env_name(name) in se:
         raise Fail(f"{path}: [[app]] {name!r}: start_env names {pull_env_name(name)}, which pull_token_env sets")
+    rt = a.get("restore_timeout", RESTORE_TIMEOUT)
+    if isinstance(rt, bool) or not isinstance(rt, int) or rt <= 0:
+        raise Fail(f"{path}: [[app]] {name!r}: restore_timeout must be a whole number of seconds above 0, not {rt!r}")
 
 
 def pull_env_name(app: str) -> str:
@@ -1191,7 +1198,9 @@ def phase_restore(spec: dict, apply: bool) -> None:
         if not has:
             print(f"restore {name}: GAP - {name}.sh has no restore")
             continue
-        print(f"restore {name} (skipped when its data dir is not empty; any other failure stops the build)")
+        limit = a.get("restore_timeout", RESTORE_TIMEOUT)
+        print(f"restore {name} (skipped when its data dir is not empty; any other failure stops the build; "
+              f"at most {limit} s)")
         if a.get("pull_token_env"):
             print(f"  first `{name}.sh images` with {a['pull_token_env']} over SSH stdin (missing images pulled)")
         if apply and a.get("pull_token_env"):
@@ -1201,7 +1210,7 @@ def phase_restore(spec: dict, apply: bool) -> None:
             if r.returncode != 0:
                 raise Fail(f"restore {name}: pulling its images failed (exit {r.returncode}); stopped before any app starts")
         if apply:
-            r = ssh(host, restore_command(app_script(spec['apps_tree'], name)), check=False, stream=True, timeout=7200)
+            r = ssh(host, restore_command(app_script(spec['apps_tree'], name)), check=False, stream=True, timeout=limit)
             if r.returncode == RESTORE_SKIPPED:
                 print(f"  restore {name}: skipped, its data dir is not empty (data present: a re-run)")
             elif r.returncode != 0:

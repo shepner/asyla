@@ -33,6 +33,7 @@ mode = "600"
 [[app]]
 name = "plex"
 verify = ["verify"]        # Plex answers on 32400 with the restored server's identity
+restore_timeout = 14400    # 291G from the mirror (Metadata/ is many small files); the default 7200 s may not do. The test01 proof times it
 
 [runner]
 enabled = true
