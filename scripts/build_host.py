@@ -107,7 +107,7 @@ Replica: a spec with [replica] of = "dNN" (test01 as a d03 replica) takes the so
 updater installs that tree too). Its own [vm] and [setup] apply, and the source's [[external]]
 never do: a replica must not answer for the source's hostnames. With start_apps = false the apps
 phase starts nothing and verify checks that no container runs. [replica] keys: of, start_apps,
-exclude_secrets, apps (names: only these of the source's apps), gitea_config, verify.
+exclude_secrets, apps (names: only these of the source's apps), gitea_config, verify, app_verify.
 A replica writes nothing outward: before any app starts, the apps phase pulls the started apps'
 missing images (an app script with an `images` switch pulls and lists its own), then applies build/setup/replica_egress.sh (nftables: the host reaches the LAN
 and its containers only, containers reach nothing off the host; a oneshot unit keeps it across
@@ -120,7 +120,10 @@ source's app verify (it curls the source's public URLs): it checks that each app
 with start = [], which runs no container), waits for each [replica.verify] URL
 ("http://{ip}:PORT/..." or "http://127.0.0.1:PORT/...", curled on the host), checks the egress block from the host and each running container (one with no shell
 by the host's curl in its network namespace) in place of the deploy token, and reads
-gitea_config back.
+gitea_config back. [replica].app_verify names the apps whose own verify knows a replica (checks
+local answers only and refuses nothing a replica lacks: ns02's pihole, which resolves names
+on the host and checks DHCP is off); for those, verify runs the app's own verify switches
+instead of only checking that it runs.
 
 GitLab runners: [gitlab_runner] runners = [{name, scope = "group:PATH" | "project:GROUP/PROJECT",
 tags, executor = "docker" | "shell", and for docker image, volumes, pull_policy}]. A rebuild
@@ -221,7 +224,7 @@ TOKEN_FILE_HOSTS = ("d01", "d02", "d03")
 DATA_ROOT = "/mnt/docker/"
 PHASES = ("vm", "bootstrap", "disk", "secrets", "setup", "restore", "apps", "external", "late", "runner", "verify")
 STARTUP_FORM = re.compile(r"order=\d+(,up=\d+)?(,down=\d+)?")
-REPLICA_KEYS = ("of", "start_apps", "exclude_secrets", "apps", "gitea_config", "verify")
+REPLICA_KEYS = ("of", "start_apps", "exclude_secrets", "apps", "gitea_config", "verify", "app_verify")
 REPLICA_EGRESS = "replica_egress.sh"   # build/setup/, run by the apps phase of a replica
 REPLICA_EGRESS_UNIT = "asyla-replica-egress.service"
 REPLICA_EGRESS_TABLE = "inet asyla_replica_egress"
@@ -558,6 +561,13 @@ def check_replica_config(path: Path, rep: dict, apps: list[dict]) -> None:
             if not isinstance(v, str) or not INI_VALUE.fullmatch(v):
                 raise Fail(f"{path}: [replica.gitea_config.{sec}] {k}: value must be true/false, a number "
                            f"or plain text ({INI_VALUE.pattern})")
+    av = rep.get("app_verify", [])
+    with_verify = {a["name"] for a in apps if a.get("verify")}
+    if not isinstance(av, list) or not all(isinstance(n, str) for n in av):
+        raise Fail(f"{path}: [replica].app_verify must be a list of app names")
+    if set(av) - with_verify:
+        raise Fail(f"{path}: [replica].app_verify names apps that are not in the replica or have no "
+                   f"verify: {sorted(set(av) - with_verify)}")
     urls = rep.get("verify", [])
     if not isinstance(urls, list) or not all(isinstance(u, str) and u.startswith(("http://{ip}:", "http://127.0.0.1:"))
                                              and "{" not in u.replace("{ip}", "") and " " not in u for u in urls):
@@ -1719,6 +1729,10 @@ def verify_apps(spec: dict, check) -> None:
             pass   # not started: nothing to verify
         elif spec.get("replica") and not a.get("start", ["up"]):
             print(f"  app {name}: nothing started (start = []), so no container to check")
+        elif spec.get("replica") and name in spec["replica"].get("app_verify", []):
+            # An app whose verify knows a replica (local checks only): its own verify, as on the source.
+            r = ssh(host, f"{app_script(spec['apps_tree'], name)} {' '.join(a['verify'])}", check=False)
+            check(f"app {name} (replica)", r.returncode == 0, (r.stdout + r.stderr).strip().splitlines()[-1] if (r.stdout + r.stderr).strip() else "")
         elif spec.get("replica"):
             # Never the source's verify: it curls the source's public URLs. Running, then [replica].verify.
             r = ssh(host, f"cd ~/scripts/{spec['apps_tree']}/apps/{name} && docker compose ls --format json", check=False)

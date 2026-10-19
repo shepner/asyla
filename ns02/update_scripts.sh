@@ -132,8 +132,8 @@ if [ -f "$HOSTNAME/host.toml" ]; then
     REPLICA_OF=$(python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb")).get("replica", {}).get("of", ""))' "$HOSTNAME/host.toml")
 fi
 if [ -n "$REPLICA_OF" ]; then
-    if ! [[ "$REPLICA_OF" =~ ^d0[0-9]$ ]] || [ "$REPLICA_OF" = "$HOSTNAME" ]; then
-        log_error "$HOSTNAME/host.toml: [replica] of = '$REPLICA_OF' is not another dNN host"
+    if ! [[ "$REPLICA_OF" =~ ^(d0[0-9]|ns0[12])$ ]] || [ "$REPLICA_OF" = "$HOSTNAME" ]; then
+        log_error "$HOSTNAME/host.toml: [replica] of = '$REPLICA_OF' is not another dNN or ns0N host"
         exit 1
     fi
     log_info "Checking out replica source scripts ($REPLICA_OF)..."

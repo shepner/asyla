@@ -394,6 +394,35 @@ def replica_verify_apps_case() -> bool:
                  and "app b: nothing started" in out, str((lines, seen, out)))
 
 
+def replica_app_verify_cases() -> list[bool]:
+    """[replica].app_verify (a test01 replica of ns02): the named app's own verify runs, from the
+    source's tree; an app not named is still only checked as running; a name that is not in the
+    replica or has no verify is refused at load."""
+    src = ('[[app]]\nname = "pihole"\nrestore = false\nverify = ["verify"]\n'
+           '[[app]]\nname = "a"\nrestore = false\nverify = ["verify"]\n')
+    spec = temp_specs({"ns02": VM + src, "x": VM + '[replica]\nof = "ns02"\napp_verify = ["pihole"]\n'})("x")
+    seen, lines = [], []
+
+    def fake(t, c):
+        seen.append(c)
+        if c.endswith(" verify"):
+            return Done(0, "[OK] pihole: replica")
+        return Done(0, json.dumps([{"Status": "running(1)", "ConfigFiles": "/home/docker/scripts/ns02/apps/a/compose.yml"}]))
+    with_ssh(fake, lambda: build_host.verify_apps(spec, lambda label, ok, detail="": lines.append((label, ok))))
+    out = [check("replica app_verify: the named app's own verify from the source's tree; the other only running",
+                 lines == [("app pihole (replica)", True), ("app a running", True)]
+                 and seen[0].endswith("ns02/apps/pihole/pihole.sh verify") and "ns02/apps/a" in seen[1],
+                 str((lines, seen)))]
+    out.append(fails("replica app_verify: an app not in the replica is refused", "not in the replica or have no verify",
+                     lambda: temp_specs({"ns02": VM + src, "x": VM + '[replica]\nof = "ns02"\napps = ["a"]\napp_verify = ["pihole"]\n'})("x")))
+    out.append(fails("replica app_verify: an app with no verify is refused", "have no verify",
+                     lambda: temp_specs({"ns02": VM + '[[app]]\nname = "pihole"\n',
+                                         "x": VM + '[replica]\nof = "ns02"\napp_verify = ["pihole"]\n'})("x")))
+    out.append(fails("replica app_verify: not a list is refused", "must be a list of app names",
+                     lambda: temp_specs({"ns02": VM + src, "x": VM + '[replica]\nof = "ns02"\napp_verify = "pihole"\n'})("x")))
+    return out
+
+
 def preflight(name: str, spec: dict, gitlab: dict, on_host: dict, up: set, want: str | None) -> bool:
     """preflight_secrets(spec, apply=True) with GitLab and the hosts replaced by dicts:
     gitlab {var: value}, on_host {(host, path): value}, up = the hosts that answer ssh.
@@ -780,6 +809,7 @@ results = [
     egress_probe_case(),
     ini_read_case(),
     replica_verify_apps_case(),
+    *replica_app_verify_cases(),
     wrapper_case("wrapper: the command runs in the unpacked bundle", 'ls -R "$B"', 0, "x.sh"),
     wrapper_case("wrapper: a failing command's status comes back and the folder is removed", 'bash "$B/build/setup/x.sh"; exit 3', 3, "hi"),
     bundle_case(),
