@@ -221,8 +221,9 @@ do_verify() {
   for d in $(allowlist_domains); do
     printf '%s\n' "$allowed" | grep -qxF "$d" || fail "allowlist: $d is not an enabled exact allow"
   done
-  # A warning, not a failure: a new or restored host has none until pihole.sh password runs.
-  password_is_set || echo "[WARN] pihole: no admin password set (pihole.sh password)" >&2
+  # A warning, not a failure: a new or restored host has none until pihole.sh password runs. On
+  # stdout, before the [OK] line: build_host.py's verify line shows stdout, and stderr arrives apart.
+  password_is_set || echo "[WARN] pihole: no admin password set (pihole.sh password)"
   [ "$bad" -eq 0 ] || return 1
   echo "[OK] pihole: $APP $st; NAS hosts file mounted; CNAME and hosts-file answers$([ "$THIS_HOST" = "$TREE_HOST" ] && echo ", outside answer"); dhcp.active $dhcp; wpad; allowlist"
 }

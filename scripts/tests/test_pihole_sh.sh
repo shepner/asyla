@@ -78,11 +78,11 @@ EOF
 chmod +x "$T/bin/"*
 printf 'alias.example.org host-a.example.org\nalias.example.org 192.0.2.10\nhost-a.example.org 192.0.2.10\nwpad 255.255.255.255\n' > "$T/answers"
 
-run() {   # run HOST SWITCH...: output in $OUT, docker calls in $T/log, status returned; stdin: $STDIN
+run() {   # run HOST SWITCH...: output in $OUT, docker calls in $T/log, status returned; stdin: $STDIN; RUN_ERR=/dev/null: stdout only
   : > "$T/log"
   OUT="$(printf '%s' "${STDIN:-}" | env HOME="$T/home" PATH="$T/bin:$PATH" STUB_LOG="$T/log" STUB_HOST="$1" STUB_MOUNTED="${STUB_MOUNTED-$T/d2}" \
     STUB_HOSTS_IN="${STUB_HOSTS_IN:-$T/d2/pihole/hosts}" STUB_ANSWERS="$T/answers" STUB_DL="$T/dl" BACKUP_LOCK_DIR="$T" \
-    PIHOLE_VERIFY_WAIT_S=0 bash "$APP/pihole.sh" "${@:2}" 2>&1)"
+    PIHOLE_VERIFY_WAIT_S=0 bash "$APP/pihole.sh" "${@:2}" 2>"${RUN_ERR:-/dev/stdout}")"
 }
 
 # The DHCP guard: true on ns01 only, whatever common.env or the caller's environment says.
@@ -225,6 +225,10 @@ STDIN="wrong"$'\n' STUB_PW_OK="$PWV" run ns02 password; rc=$?
 printf 'x\n' > "$D/etc-pihole/pihole.toml"
 run ns02 verify; rc=$?
 [ "$rc" -eq 0 ] && echo "$OUT" | grep -q 'WARN.*no admin password set' && ok "verify with no password: a warning, not a failure" || bad "verify no pw" "rc=$rc; $OUT"
+RUN_ERR=/dev/null run ns02 verify; rc=$?
+[ "$rc" -eq 0 ] && [ "$(echo "$OUT" | grep -n '^\[WARN\] pihole: no admin password set' | cut -d: -f1)" = 1 ] \
+  && [ "$(echo "$OUT" | grep -n '^\[OK\] pihole: ' | cut -d: -f1)" = 2 ] \
+  && ok "verify with no password: the warning on stdout, just before the [OK] line" || bad "verify no pw stdout" "rc=$rc; $OUT"
 
 # build_host.py finds the restore and verify switches (its app_has pattern).
 for sw in restore verify backup; do
