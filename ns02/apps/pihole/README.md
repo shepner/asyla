@@ -30,7 +30,8 @@ other name server and also the LAN's DHCP server; this copy never serves DHCP (b
   any host but ns02, so a replica never writes ns02's mirror
 - `pihole.sh restore`: from the mirror into an empty data dir (stop the app first); refuses over data
 - `pihole.sh verify`: the container healthy, the NAS hosts file mounted, a CNAME and a hosts-file
-  name answering, an outside name answering (not on a replica), `dhcp.active` as the host should have
+  name answering, the host's own name answering its address (not 0.0.0.0), an outside name answering
+  (not on a replica), `dhcp.active` as the host should have
   it, `wpad`, the allowlist; warns when no admin password is set
 - `pihole.sh password`: set the admin password from stdin (below)
 - `pihole.sh update` (pull only) / `refresh` (pull, then up)
@@ -70,6 +71,9 @@ argument (`/opt/pihole/utils.sh` in the image, 2026.05.0).
 
 - `FTLCONF_dns_hosts=255.255.255.255 wpad`: no client auto-discovers a web proxy (WPAD hijack).
   Every other local name is the NAS hosts file.
+- `FTLCONF_dns_reply_host_force4=false`: the host's own name answers the address the query arrived
+  on. On 2026-10-19 a restore carried an old `pihole.toml` with it true and no IPv4, and the name
+  answered 0.0.0.0; pinned, a restore cannot carry it again.
 - `allowlist`: exact domains allowed although the adlist blocks them. `up` adds each with
   `pihole allow` (a no-op when present); `verify` checks them. Entries added by hand stay.
 

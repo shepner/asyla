@@ -25,6 +25,7 @@ PASSWORD_FILE="$SCRIPT_DIR/compose.admin-login.yml"
 ALLOWLIST="$SCRIPT_DIR/allowlist"
 TREE_HOST="ns02"                 # the host this tree is for; anywhere else it runs as a replica
 APP="pihole-ns02"
+SELF_FQDN="$TREE_HOST.asyla.org"  # compose.yml's hostname: Pi-hole answers it itself (dns.reply.host)
 SCREEN_APP="$APP"                # run_detached_if_interactive's session name
 
 if [ -f "$HOME/scripts/docker/common.env" ]; then
@@ -181,11 +182,12 @@ do_update() {
 }
 
 # verify: the container healthy, the NAS hosts file mounted as its /etc/hosts, local answers (one
-# CNAME from Pi-hole's own config, one hosts-file name with its address), an outside name (not on a
-# replica: its egress is blocked), and dhcp.active as this host should have it. Names and records
+# CNAME from Pi-hole's own config, one hosts-file name with its address, its own name with this
+# host's address, not 0.0.0.0), an outside name (not on a replica:
+# its egress is blocked), and dhcp.active as this host should have it. Names and records
 # are never printed (the hosts file is a map of the network).
 do_verify() {
-  local bad=0 alias line ip name ans dhcp d allowed
+  local bad=0 alias line ip name ans self dhcp d allowed
   fail() { echo "[FAIL] pihole: $1" >&2; bad=1; }
   ask() { docker exec "$APP" dig +short +time=2 +tries=1 "$1" @127.0.0.1 2>/dev/null; }
   wait_started || { echo "[FAIL] pihole: container $APP is '$st'" >&2; return 1; }
@@ -208,6 +210,15 @@ do_verify() {
   elif ! ask "$name" | grep -qxF "$ip"; then
     fail "a hosts-file name does not answer with its address"
   fi
+  # Asked at this host's LAN address, Pi-hole answers its own name with that address; with
+  # dns.reply.host.force4 true and no IPv4 it answers 0.0.0.0 (a restored pihole.toml, 2026-10-19).
+  self=$(ip -4 -o route get 10.0.0.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' || true)
+  if [ -z "$self" ]; then
+    fail "no IPv4 source address on this host to ask $SELF_FQDN at"
+  else
+    ans=$(docker exec "$APP" dig +short +time=2 +tries=1 "$SELF_FQDN" @"$self" 2>/dev/null || true)
+    [ "$ans" = "$self" ] || fail "$SELF_FQDN answers '${ans//$'\n'/ }', not this host's address $self (dns.reply.host.force4?)"
+  fi
   if [ "$THIS_HOST" = "$TREE_HOST" ]; then
     [ -n "$(ask example.com)" ] || fail "an outside name (example.com) gets no answer"
   else
@@ -225,7 +236,7 @@ do_verify() {
   # stdout, before the [OK] line: build_host.py's verify line shows stdout, and stderr arrives apart.
   password_is_set || echo "[WARN] pihole: no admin password set (pihole.sh password)"
   [ "$bad" -eq 0 ] || return 1
-  echo "[OK] pihole: $APP $st; NAS hosts file mounted; CNAME and hosts-file answers$([ "$THIS_HOST" = "$TREE_HOST" ] && echo ", outside answer"); dhcp.active $dhcp; wpad; allowlist"
+  echo "[OK] pihole: $APP $st; NAS hosts file mounted; CNAME, hosts-file and own-name answers$([ "$THIS_HOST" = "$TREE_HOST" ] && echo ", outside answer"); dhcp.active $dhcp; wpad; allowlist"
 }
 
 [ $# -gt 0 ] || { echo "Usage: $0 up|down|restart|backup|restore|verify|password|update|refresh|logs ..." >&2; exit 1; }

@@ -1,7 +1,7 @@
 #!/bin/bash
 # ns02/apps/pihole/pihole.sh and ns01/apps/pihole/pihole.sh against stubs (docker, hostname,
-# mountpoint, sudo, ss): the DHCP guard, the NAS hosts-file refusal, the backup filter and host guard,
-# restore, verify's checks (ns01: the udp/67 listener), the admin password (stdin only; the value
+# mountpoint, sudo, ss, ip): the DHCP guard, the NAS hosts-file refusal, the backup filter and host guard,
+# restore, verify's checks (its own name not 0.0.0.0; ns01: the udp/67 listener), the force4 pin, the admin password (stdin only; the value
 # never in a docker argument) and the allowlist; ns01's copy against ns02's (only DHCP may differ).
 # Nothing here reaches a host, the NAS or a registry.
 # Run: bash scripts/tests/test_pihole_sh.sh [ns02|ns01]   (no argument: both trees)
@@ -79,6 +79,13 @@ echo "UNCONN 0 0 0.0.0.0:53 0.0.0.0:*"
 [ -n "${STUB_SS67:-}" ] && echo "UNCONN 0 0 0.0.0.0:67 0.0.0.0:*"
 exit 0
 EOF
+# ip -4 -o route get: this host's source address STUB_SRC (none when STUB_SRC is set empty).
+cat > "$T/bin/ip" <<'EOF'
+#!/bin/bash
+src="${STUB_SRC-198.51.100.53}"
+[ -n "$src" ] || { echo "RTNETLINK answers: Network is unreachable" >&2; exit 2; }
+echo "10.0.0.1 via 198.51.100.1 dev eth0 src $src uid 1000 \\    cache "
+EOF
 cat > "$T/bin/hostname" <<'EOF'
 #!/bin/bash
 echo "$STUB_HOST"
@@ -94,7 +101,8 @@ cat > "$T/bin/sudo" <<'EOF'
 "$@"
 EOF
 chmod +x "$T/bin/"*
-printf 'alias.example.org host-a.example.org\nalias.example.org 192.0.2.10\nhost-a.example.org 192.0.2.10\nwpad 255.255.255.255\n' > "$T/answers"
+SELF="$TREE.asyla.org 198.51.100.53"                       # its own name, at this host's address
+printf 'alias.example.org host-a.example.org\nalias.example.org 192.0.2.10\nhost-a.example.org 192.0.2.10\nwpad 255.255.255.255\n%s\n' "$SELF" > "$T/answers"
 
 # run HOST SWITCH...: output in $OUT, docker calls in $T/log, status returned; stdin: $STDIN; RUN_ERR=/dev/null:
 # stdout only. A consistent world unless a case says otherwise: on ns01, dhcp.active true and udp/67 listening.
@@ -169,6 +177,8 @@ fi
 run $TREE verify; rc=$?
 [ "$rc" -eq 0 ] && echo "$OUT" | grep -q "^\[OK\] pihole: .*outside answer; dhcp.active $DHCP_ON" && grep -q 'dig .* example.com' "$T/log" \
   && ok "verify on $TREE: healthy, hosts file, CNAME, hosts-file name, outside name, DHCP $DHCP_ON" || bad "verify $TREE" "rc=$rc; $OUT"
+echo "$OUT" | grep -q '^\[OK\] .*own-name answers' && grep -q "dig +short +time=2 +tries=1 $TREE.asyla.org @198.51.100.53 " "$T/log" \
+  && ok "verify asks $TREE.asyla.org at this host's address" || bad "verify self ask" "$OUT; $(grep dig "$T/log")"
 ! echo "$OUT" | grep -q 'host-a\|192.0.2' && ok "verify prints no name or address from the hosts file" || bad "verify leaks" "$OUT"
 run test01 verify; rc=$?
 [ "$rc" -eq 0 ] && echo "$OUT" | grep -q 'outside names not checked' && ! grep -q 'example.com' "$T/log" \
@@ -223,16 +233,41 @@ STUB_STATE="running unhealthy" run $TREE verify; rc=$?
 STUB_ALLOWED="trace.svc.ui.com" run $TREE verify; rc=$?
 [ "$rc" -ne 0 ] && echo "$OUT" | grep -q 'allowlist: metrics.icloud.com is not an enabled exact allow' \
   && ok "verify with an allowlist domain missing: FAIL" || bad "verify allowlist" "rc=$rc; $OUT"
-printf 'alias.example.org host-a.example.org\nhost-a.example.org 192.0.2.10\n' > "$T/answers.nowpad"
+printf 'alias.example.org host-a.example.org\nhost-a.example.org 192.0.2.10\n%s\n' "$SELF" > "$T/answers.nowpad"
 cp "$T/answers" "$T/answers.keep"; cp "$T/answers.nowpad" "$T/answers"
 run $TREE verify; rc=$?
 [ "$rc" -ne 0 ] && echo "$OUT" | grep -q 'wpad does not answer' && ok "verify with no wpad record: FAIL" || bad "verify wpad" "rc=$rc; $OUT"
 cp "$T/answers.keep" "$T/answers"
-printf 'alias.example.org host-a.example.org\nhost-a.example.org 192.0.2.77\nwpad 255.255.255.255\n' > "$T/answers"
+printf 'alias.example.org host-a.example.org\nhost-a.example.org 192.0.2.77\nwpad 255.255.255.255\n%s\n' "$SELF" > "$T/answers"
 run $TREE verify; rc=$?
 [ "$rc" -ne 0 ] && echo "$OUT" | grep -q 'hosts-file name does not answer with its address' \
   && ok "verify with a hosts-file name answering another address: FAIL" || bad "verify hosts answer" "rc=$rc; $OUT"
 cp "$T/answers.keep" "$T/answers"
+# ns01, 2026-10-19: a restored pihole.toml with dns.reply.host.force4 true and no IPv4.
+sed "s/^$TREE.asyla.org .*/$TREE.asyla.org 0.0.0.0/" "$T/answers.keep" > "$T/answers"
+run $TREE verify; rc=$?
+[ "$rc" -ne 0 ] && echo "$OUT" | grep -q "$TREE.asyla.org answers '0.0.0.0', not this host's address 198.51.100.53" \
+  && ok "verify with its own name answering 0.0.0.0: FAIL" || bad "verify self 0.0.0.0" "rc=$rc; $OUT"
+run test01 verify; rc=$?
+[ "$rc" -ne 0 ] && echo "$OUT" | grep -q "answers '0.0.0.0'" && ok "verify on a replica with its own name answering 0.0.0.0: FAIL" \
+  || bad "verify replica self 0.0.0.0" "rc=$rc; $OUT"
+grep -v "^$TREE.asyla.org " "$T/answers.keep" > "$T/answers"
+run $TREE verify; rc=$?
+[ "$rc" -ne 0 ] && echo "$OUT" | grep -q "$TREE.asyla.org answers '', not this host's address" \
+  && ok "verify with no answer for its own name: FAIL" || bad "verify self none" "rc=$rc; $OUT"
+cp "$T/answers.keep" "$T/answers"
+STUB_SRC="" run $TREE verify; rc=$?
+[ "$rc" -ne 0 ] && echo "$OUT" | grep -q "no IPv4 source address on this host" \
+  && ok "verify with no IPv4 route: FAIL" || bad "verify no route" "rc=$rc; $OUT"
+grep -qxF -- '      - FTLCONF_dns_reply_host_force4=false' "$REPO/$TREE/apps/pihole/compose.yml" \
+  && ok "compose pins dns.reply.host.force4 false (a restored pihole.toml cannot turn it on)" || bad "compose force4 pin"
+if docker compose version >/dev/null 2>&1 && [ "$(command -v docker)" != "$T/bin/docker" ]; then
+  got=$(docker compose -f "$REPO/$TREE/apps/pihole/compose.yml" config --format json 2>/dev/null \
+        | python3 -c 'import json,sys; print(json.load(sys.stdin)["services"]["pihole"]["environment"]["FTLCONF_dns_reply_host_force4"])' 2>/dev/null)
+  [ "$got" = false ] && ok "docker compose config: FTLCONF_dns_reply_host_force4 is false" || bad "compose config force4" "[$got]"
+else
+  echo "skip docker compose config of force4 (no docker compose here)"
+fi
 
 # The admin password. compose.yml never sets it (set that way it is read-only and an empty value
 # removes it at every start); compose.admin-login.yml passes it from pihole.sh's environment.

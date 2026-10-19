@@ -38,6 +38,10 @@ services:
       # ns01's one local record, kept on both (operator, 2026-10-19): wpad answers 255.255.255.255, so
       # no client auto-discovers a web proxy (WPAD hijack). Every other local name is the NAS hosts file.
       - FTLCONF_dns_hosts=255.255.255.255 wpad
+      # The host's own name (compose's hostname) answers the address the query arrived on. Pinned,
+      # not left to pihole.toml: on 2026-10-19 a restore carried an old pihole.toml with force4 true
+      # and no IPv4, and the host's own name answered 0.0.0.0 (verify checks the self-answer).
+      - FTLCONF_dns_reply_host_force4=false
       - FTLCONF_misc_etc_dnsmasq_d=true
       - FTLCONF_database_busytimeout=60000
       # IPv4 upstreams only: the hosts have no IPv6 (IPv6 upstreams log "Network unreachable").
