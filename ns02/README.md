@@ -9,9 +9,9 @@ base build scripts in `build/setup/`, and nothing of the build stays on the host
 replacement: a new VMID at the same address, restored from the NAS mirror, the old VM kept stopped
 as the way back.
 
-**Draft (2026-10-18), not built.** The live ns02 is VM 301, built by the old `ns02/build.sh` and
+**Not built yet (2026-10-18).** The live ns02 is VM 301, built by the old `ns02/build.sh` and
 `ns02/setup/` (removed here; see git history). It pulls nothing from GitLab, so this tree reaches
-no running host. The `[vm]` values in `host.toml` wait for the operator's.
+no running host. The `[vm]` values in `host.toml` are the operator's (2026-10-18).
 
 ## Layout
 

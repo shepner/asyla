@@ -639,7 +639,7 @@ results = [
            and [(e["name"], e.get("env")) for e in d["external"]] == [("internal-access", ["D06_CF_API_TOKEN"])])(
                build_host.load_spec("d06"))),
     # ns02 in the new form (draft): build/setup/ steps with dns_port.sh, no secret, pihole verified by its own verify.
-    check("ns02's draft spec: VM 311 on vmh02 at 10.0.0.11, not disposable, port 53 freed, no secret, no runner",
+    check("ns02's spec: the operator's values (2026-10-18), VM 311 on vmh02 at 10.0.0.11, not disposable, port 53 freed, no secret, no runner",
           (lambda n: (n["vm"]["node"], n["vm"]["vmid"], n["vm"]["ip"], bool(n["vm"].get("disposable")),
                       n["setup"]["steps"][-1], n.get("secret", []), bool(n.get("runner", {}).get("enabled")))
            == ("vmh02", 311, "10.0.0.11/24", False, "dns_port.sh", [], False))(build_host.load_spec("ns02"))),
