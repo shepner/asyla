@@ -65,7 +65,7 @@ def run_block(host: str, stdin: str) -> subprocess.CompletedProcess:
 
 def updater_cases() -> None:
     hosts = stdin_hosts()
-    check("the stdin hosts are d04, d06, ns02 and test01", hosts == ["d04", "d06", "ns02", "test01"], str(hosts))
+    check("the stdin hosts are d04, d06, ns01, ns02 and test01", hosts == ["d04", "d06", "ns01", "ns02", "test01"], str(hosts))
     for host in hosts:
         text = (REPO / host / "update_scripts.sh").read_text()
         code = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
