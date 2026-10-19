@@ -4,9 +4,10 @@
 # restored from its NAS mirror, the old VM kept stopped as the way back (asyla hub backlog, the
 # ns01/ns02 item; the d01 cutover pattern). ns02 is not disposable: a build or a destroy needs
 # --confirm ns02 and the operator's approval of the exact action.
-# Not built yet. The [vm] values are the operator's, 2026-10-18 ("use the ones you had specified").
-# The live VM 301 is 1x4 cores, 16384 MB, one 64G disk on local-data1, its cloud-init disk on the
-# NAS; Pi-hole peaks at 222 MiB and 0.3% CPU there (2026-10-18 survey).
+# Built 2026-10-19 as VM 311 (asyla hub runbooks/ns02-migration-cutover.md). The [vm] values are
+# the operator's, 2026-10-18 ("use the ones you had specified"). The old VM 301 was 1x4 cores,
+# 16384 MB, one 64G disk on local-data1, its cloud-init disk on the NAS; Pi-hole peaked at 222 MiB
+# and 0.3% CPU there (2026-10-18 survey).
 # The hosts file and 03-lan-dns.conf stay on the NAS by design (operator, 2026-10-18): Pi-hole reads
 # them there (apps/pihole/), so nfs.sh is a must and verify checks the file is there.
 [vm]
@@ -27,9 +28,8 @@ steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "bashrc.sh", "dns_port.sh"]  
 
 # No [[secret]]: ns02 keeps no secret on disk.
 
-# Restored from $DOCKER_D1/pihole-ns02/mirror (pihole.sh backup, nightly once host-maintenance
-# carries ns02). The first mirror needs a seed: a run of the new `pihole.sh backup` on the live
-# ns02 (an action on production: the operator's approval) or the 2026-10-18 tgz.
+# Restored from $DOCKER_D1/pihole-ns02/mirror (pihole.sh backup, nightly by asyla/host-maintenance;
+# seeded 2026-10-19 and taken last by the cutover's freeze).
 [[app]]
 name = "pihole"
 verify = ["verify"]
