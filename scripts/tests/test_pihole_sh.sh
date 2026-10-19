@@ -1,6 +1,7 @@
 #!/bin/bash
 # ns02/apps/pihole/pihole.sh against stubs (docker, hostname, mountpoint, sudo): the DHCP guard, the
-# NAS hosts-file refusal, the backup filter and host guard, restore, and verify's checks. Nothing
+# NAS hosts-file refusal, the backup filter and host guard, restore, verify's checks, the admin
+# password (stdin only; the value never in a docker argument) and the allowlist. Nothing
 # here reaches a host, the NAS or a registry. Run: bash scripts/tests/test_pihole_sh.sh
 set -uo pipefail
 
@@ -22,22 +23,34 @@ skip() { echo "skip $1 (needs bash >= 4.1, flock, GNU stat and rsync; run on a h
 APP="$T/home/scripts/ns02/apps/pihole"
 mkdir -p "$T/home/scripts/docker" "$APP" "$T/bin" "$T/dl" "$T/d1" "$T/d2/pihole"
 cp "$REPO/docker/backup_lib.sh" "$T/home/scripts/docker/"
-cp "$REPO"/ns02/apps/pihole/{pihole.sh,compose.yml} "$APP/"
-# common.env as a hostile one: it tries to turn DHCP on; pihole.sh must override it.
-printf 'DOCKER_DL=%s\nDOCKER_D1=%s\nDOCKER_D2=%s\nDOCKER_UID=1003\nDOCKER_GID=1000\nPIHOLE_DHCP_ACTIVE=true\n' \
+cp "$REPO"/ns02/apps/pihole/{pihole.sh,compose.yml,compose.admin-login.yml,allowlist} "$APP/"
+# common.env as a hostile one: it tries to turn DHCP on and to pass a password; pihole.sh must
+# override both.
+printf 'DOCKER_DL=%s\nDOCKER_D1=%s\nDOCKER_D2=%s\nDOCKER_UID=1003\nDOCKER_GID=1000\nPIHOLE_DHCP_ACTIVE=true\nexport FTLCONF_webserver_api_password=example_value\n' \
   "$T/dl" "$T/d1" "$T/d2" > "$T/home/scripts/docker/common.env"
 # The NAS hosts file and dnsmasq file (documentation addresses only).
 printf '127.0.0.1 localhost\n# lan\n192.0.2.10 host-a.example.org host-a\n192.0.2.11 host-b.example.org\n' > "$T/d2/pihole/hosts"
 printf 'domain=example.org\n' > "$T/d2/pihole/03-lan-dns.conf"
 
-# docker: logs each call with the DHCP value it was given; inspect prints STUB_STATE; exec answers
-# cat /etc/hosts (STUB_HOSTS_IN), pihole-FTL --config (STUB_CNAMES, STUB_DHCP) and dig (STUB_ANSWERS:
-# "name answer" lines; example.com answers unless STUB_NO_OUTSIDE).
+# docker: logs each call with the DHCP value it was given and whether a password is in its
+# environment (pw=set:LENGTH, never the value); inspect prints STUB_STATE; exec answers
+# cat /etc/hosts (STUB_HOSTS_IN), pihole-FTL --config (STUB_CNAMES, STUB_DHCP), the domainlist query
+# (STUB_ALLOWED), an API login (true when stdin is STUB_PW_OK) and dig (STUB_ANSWERS: "name answer"
+# lines; example.com answers unless STUB_NO_OUTSIDE). An up with a non-empty password writes a hash
+# into pihole.toml, as Pi-hole does.
 cat > "$T/bin/docker" <<'EOF'
 #!/bin/bash
-echo "docker $* [dhcp=${PIHOLE_DHCP_ACTIVE:-unset}]" | sed -E "s#-f [^ ]*/compose.yml#-f compose.yml#; s# --project-directory [^ ]*##" >> "$STUB_LOG"
+pw="${FTLCONF_webserver_api_password+set:${#FTLCONF_webserver_api_password}}"
+echo "docker $* [dhcp=${PIHOLE_DHCP_ACTIVE:-unset}] [pw=$pw]" \
+  | sed -E "s#-f [^ ]*/compose.yml#-f compose.yml#; s#-f [^ ]*/compose.admin-login.yml#-f compose.admin-login.yml#; s# --project-directory [^ ]*##" >> "$STUB_LOG"
 case "$*" in
+  compose*" up -d")
+    if [ -n "${FTLCONF_webserver_api_password:-}" ]; then
+      mkdir -p "$STUB_DL/pihole-ns02/etc-pihole"; printf '    pwhash = "$BALLOON-SHA256$stub"\n' > "$STUB_DL/pihole-ns02/etc-pihole/pihole.toml"
+    fi ;;
   inspect*) echo "${STUB_STATE:-running healthy}" ;;
+  "exec -i pihole-ns02 sh -c "*) [ "$(cat)" = "${STUB_PW_OK:-}" ] && echo true || echo false ;;
+  "exec pihole-ns02 pihole-FTL sqlite3 "*) printf '%s\n' "${STUB_ALLOWED-trace.svc.ui.com metrics.icloud.com}" | tr ' ' '\n' ;;
   "exec pihole-ns02 cat /etc/hosts") cat "${STUB_HOSTS_IN:?}" ;;
   "exec pihole-ns02 pihole-FTL --config dns.cnameRecords") echo "${STUB_CNAMES-[ alias.example.org,host-a.example.org, b.example.org,host-b.example.org ]}" ;;
   "exec pihole-ns02 pihole-FTL --config dhcp.active") echo "${STUB_DHCP:-false}" ;;
@@ -63,18 +76,18 @@ cat > "$T/bin/sudo" <<'EOF'
 "$@"
 EOF
 chmod +x "$T/bin/"*
-printf 'alias.example.org host-a.example.org\nalias.example.org 192.0.2.10\nhost-a.example.org 192.0.2.10\n' > "$T/answers"
+printf 'alias.example.org host-a.example.org\nalias.example.org 192.0.2.10\nhost-a.example.org 192.0.2.10\nwpad 255.255.255.255\n' > "$T/answers"
 
-run() {   # run HOST SWITCH...: output in $OUT, docker calls in $T/log, status returned
+run() {   # run HOST SWITCH...: output in $OUT, docker calls in $T/log, status returned; stdin: $STDIN
   : > "$T/log"
-  OUT="$(env HOME="$T/home" PATH="$T/bin:$PATH" STUB_LOG="$T/log" STUB_HOST="$1" STUB_MOUNTED="${STUB_MOUNTED-$T/d2}" \
-    STUB_HOSTS_IN="${STUB_HOSTS_IN:-$T/d2/pihole/hosts}" STUB_ANSWERS="$T/answers" BACKUP_LOCK_DIR="$T" \
-    PIHOLE_VERIFY_WAIT_S=0 bash "$APP/pihole.sh" "${@:2}" 2>&1 </dev/null)"
+  OUT="$(printf '%s' "${STDIN:-}" | env HOME="$T/home" PATH="$T/bin:$PATH" STUB_LOG="$T/log" STUB_HOST="$1" STUB_MOUNTED="${STUB_MOUNTED-$T/d2}" \
+    STUB_HOSTS_IN="${STUB_HOSTS_IN:-$T/d2/pihole/hosts}" STUB_ANSWERS="$T/answers" STUB_DL="$T/dl" BACKUP_LOCK_DIR="$T" \
+    PIHOLE_VERIFY_WAIT_S=0 bash "$APP/pihole.sh" "${@:2}" 2>&1)"
 }
 
 # The DHCP guard: true on ns01 only, whatever common.env or the caller's environment says.
 run ns02 up; rc=$?
-[ "$rc" -eq 0 ] && grep -q 'compose -p pihole-ns02 -f compose.yml up -d \[dhcp=false\]' "$T/log" \
+[ "$rc" -eq 0 ] && grep -qE 'compose -p pihole-ns02 -f compose.yml( -f compose.admin-login.yml)? up -d \[dhcp=false\]' "$T/log" \
   && ok "up on ns02: DHCP off, though common.env says true" || bad "ns02 up" "rc=$rc; $OUT; $(cat "$T/log")"
 OUT="$(PIHOLE_DHCP_ACTIVE=true; export PIHOLE_DHCP_ACTIVE; run test01 up; echo "$OUT")"
 grep -q 'up -d \[dhcp=false\]' "$T/log" && ! grep -q 'dhcp=true' "$T/log" \
@@ -110,6 +123,7 @@ run test01 backup; rc=$?
 D="$T/dl/pihole-ns02"
 printf 'x\n' > "$D/etc-pihole/pihole.toml"; printf 'g\n' > "$D/etc-pihole/gravity.db"
 printf 'q\n' > "$D/etc-pihole/pihole-FTL.db"; printf 'w\n' > "$D/etc-pihole/pihole-FTL.db-wal"
+printf 'c\n' > "$D/etc-pihole/cli_pw"; printf 'l\n' > "$D/etc-pihole/logrotate"
 mkdir -p "$D/pihole-ns02/pihole-ns02"; printf 'old\n' > "$D/pihole-ns02/pihole-ns02/stale"; printf 'n\n' > "$D/notes.txt"
 if $LIB_OK; then
   M="$T/d1/pihole-ns02/mirror"
@@ -117,7 +131,7 @@ if $LIB_OK; then
   have=$(cd "$M" 2>/dev/null && find . -type f ! -name '.backup-*' | sort | tr '\n' ' ')
   want="./etc-dnsmasq.d/03-lan-dns.conf ./etc-pihole/gravity.db ./etc-pihole/pihole.toml "
   [ "$rc" -eq 0 ] && [ "$have" = "$want" ] && grep -q '^OK' "$M/.backup-status" \
-    && ok "backup on ns02: etc-pihole (no query history) and etc-dnsmasq.d only, status OK" || bad "backup" "rc=$rc; [$have]; $OUT"
+    && ok "backup on ns02: etc-pihole (no query history, cli_pw, logrotate) and etc-dnsmasq.d only, status OK" || bad "backup" "rc=$rc; [$have]; $OUT"
   run ns02 restore; rc=$?
   [ "$rc" -ne 0 ] && echo "$OUT" | grep -q 'is not empty; refusing to restore over it' \
     && ok "restore over data: refused with the message build_host.py reads as a skip" || bad "restore over data" "rc=$rc; $OUT"
@@ -152,10 +166,65 @@ STUB_NO_OUTSIDE=1 run ns02 verify; rc=$?
 [ "$rc" -ne 0 ] && echo "$OUT" | grep -q 'outside name' && ok "verify on ns02 with no outside answer: FAIL" || bad "verify outside" "rc=$rc; $OUT"
 STUB_STATE="running unhealthy" run ns02 verify; rc=$?
 [ "$rc" -ne 0 ] && echo "$OUT" | grep -q "is 'running unhealthy'" && ok "verify with the container unhealthy: FAIL" || bad "verify unhealthy" "rc=$rc; $OUT"
-printf 'alias.example.org host-a.example.org\nhost-a.example.org 192.0.2.77\n' > "$T/answers"
+STUB_ALLOWED="trace.svc.ui.com" run ns02 verify; rc=$?
+[ "$rc" -ne 0 ] && echo "$OUT" | grep -q 'allowlist: metrics.icloud.com is not an enabled exact allow' \
+  && ok "verify with an allowlist domain missing: FAIL" || bad "verify allowlist" "rc=$rc; $OUT"
+printf 'alias.example.org host-a.example.org\nhost-a.example.org 192.0.2.10\n' > "$T/answers.nowpad"
+cp "$T/answers" "$T/answers.keep"; cp "$T/answers.nowpad" "$T/answers"
+run ns02 verify; rc=$?
+[ "$rc" -ne 0 ] && echo "$OUT" | grep -q 'wpad does not answer' && ok "verify with no wpad record: FAIL" || bad "verify wpad" "rc=$rc; $OUT"
+cp "$T/answers.keep" "$T/answers"
+printf 'alias.example.org host-a.example.org\nhost-a.example.org 192.0.2.77\nwpad 255.255.255.255\n' > "$T/answers"
 run ns02 verify; rc=$?
 [ "$rc" -ne 0 ] && echo "$OUT" | grep -q 'hosts-file name does not answer with its address' \
   && ok "verify with a hosts-file name answering another address: FAIL" || bad "verify hosts answer" "rc=$rc; $OUT"
+cp "$T/answers.keep" "$T/answers"
+
+# The admin password. compose.yml never sets it (set that way it is read-only and an empty value
+# removes it at every start); compose.admin-login.yml passes it from pihole.sh's environment.
+! grep -vE '^[[:space:]]*#' "$REPO/ns02/apps/pihole/compose.yml" | grep -q 'FTLCONF_webserver_api_password' \
+  && ok "compose.yml sets no FTLCONF_webserver_api_password" || bad "compose password line"
+if docker compose version >/dev/null 2>&1 && [ "$(command -v docker)" != "$T/bin/docker" ]; then
+  P="$REPO/ns02/apps/pihole"
+  got=$(env FTLCONF_webserver_api_password=example_value docker compose -f "$P/compose.yml" config --format json 2>/dev/null \
+        | python3 -c 'import json,sys; print("FTLCONF_webserver_api_password" in json.load(sys.stdin)["services"]["pihole"]["environment"])' 2>/dev/null)
+  got2=$(env FTLCONF_webserver_api_password=example_value docker compose -f "$P/compose.yml" -f "$P/compose.admin-login.yml" config --format json 2>/dev/null \
+        | python3 -c 'import json,sys; print(json.load(sys.stdin)["services"]["pihole"]["environment"]["FTLCONF_webserver_api_password"] == "example_value")' 2>/dev/null)
+  [ "$got" = False ] && [ "$got2" = True ] \
+    && ok "docker compose config: the password only with compose.admin-login.yml, from the environment" || bad "compose password config" "[$got] [$got2]"
+else
+  echo "skip docker compose config of the password file (no docker compose here)"
+fi
+D="$T/dl/pihole-ns02"; rm -rf "$D"
+run ns02 up; rc=$?
+[ "$rc" -eq 0 ] && grep -q 'compose.admin-login.yml up -d .* \[pw=set:0\]' "$T/log" && echo "$OUT" | grep -q 'no admin password set' \
+  && ok "up with no password hash: an empty password (no random one in the log), and a warning" || bad "up no hash" "rc=$rc; $OUT; $(cat "$T/log")"
+grep -q 'exec pihole-ns02 pihole allow -q trace.svc.ui.com metrics.icloud.com --comment' "$T/log" \
+  && ok "up adds the allowlist's domains (pihole allow)" || bad "up allowlist" "$(cat "$T/log")"
+STDIN="" run ns02 password; rc=$?
+[ "$rc" -ne 0 ] && echo "$OUT" | grep -q 'no value on stdin' && [ ! -s "$T/log" ] \
+  && ok "password with nothing on stdin: refused before any docker call" || bad "password empty" "rc=$rc; $OUT"
+PWV="example_value"
+STDIN="$PWV"$'\n' STUB_PW_OK="$PWV" run ns02 password; rc=$?
+ups=$(grep ' up -d ' "$T/log")
+[ "$rc" -eq 0 ] && echo "$OUT" | grep -q '^\[OK\] password: set' \
+  && [ "$(echo "$ups" | sed -n 1p | grep -c "compose.admin-login.yml up -d .*\[pw=set:${#PWV}\]")" = 1 ] \
+  && [ "$(echo "$ups" | sed -n 2p | grep -c -- '-f compose.yml up -d .*\[pw=\]')" = 1 ] \
+  && grep -q '^ *pwhash = "' "$D/etc-pihole/pihole.toml" \
+  && ok "password from stdin: one start with the value, then one without, and it logs in" || bad "password" "rc=$rc; $OUT; $(cat "$T/log")"
+! grep -qF "$PWV" "$T/log" && ! echo "$OUT" | grep -qF "$PWV" && ! grep -rqF "$PWV" "$T/dl" \
+  && ok "password: the value is in no docker argument, no output and no file" || bad "password leak"
+run ns02 up; rc=$?
+[ "$rc" -eq 0 ] && grep -q -- '-f compose.yml up -d .*\[pw=\]' "$T/log" && ! grep -q 'compose.admin-login.yml' "$T/log" \
+  && ! echo "$OUT" | grep -q 'no admin password' \
+  && ok "up with a hash: compose.yml only, no password in the environment (common.env's is dropped)" || bad "up hash" "rc=$rc; $OUT; $(cat "$T/log")"
+OUT="$(FTLCONF_webserver_api_password=example_user; export FTLCONF_webserver_api_password; run ns02 up; echo "$OUT")"
+grep -q '\[pw=\]' "$T/log" && ! grep -q 'pw=set' "$T/log" && ok "up with a password exported by the caller: not passed" || bad "up caller pw" "$(cat "$T/log")"
+STDIN="wrong"$'\n' STUB_PW_OK="$PWV" run ns02 password; rc=$?
+[ "$rc" -ne 0 ] && echo "$OUT" | grep -q 'does not log in' && ok "password whose value does not log in afterwards: FAIL" || bad "password no login" "rc=$rc; $OUT"
+printf 'x\n' > "$D/etc-pihole/pihole.toml"
+run ns02 verify; rc=$?
+[ "$rc" -eq 0 ] && echo "$OUT" | grep -q 'WARN.*no admin password set' && ok "verify with no password: a warning, not a failure" || bad "verify no pw" "rc=$rc; $OUT"
 
 # build_host.py finds the restore and verify switches (its app_has pattern).
 for sw in restore verify backup; do

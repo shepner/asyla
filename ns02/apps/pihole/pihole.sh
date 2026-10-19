@@ -1,5 +1,5 @@
 #!/bin/bash
-# Pi-hole DNS server on ns02. Usage: pihole.sh [switch ...]  (up|down|restart|backup|restore|verify|update|refresh|logs)
+# Pi-hole DNS server on ns02. Usage: pihole.sh [switch ...]  (up|down|restart|backup|restore|verify|password|update|refresh|logs)
 # Switches can be combined (e.g. down backup up). Loads ~/scripts/docker/common.env.
 #
 # Data: ${DOCKER_DL}/pihole-ns02/{etc-pihole,etc-dnsmasq.d}. From the NAS, by design (central,
@@ -12,11 +12,17 @@
 # DHCP guard: PIHOLE_DHCP_ACTIVE is true only when this host is ns01, whatever the environment says;
 # compose's FTLCONF_dhcp_active defaults to false. So a copy of this app (a test01 replica, a wrong
 # host) never serves DHCP, and verify checks it.
+# Admin password: `pihole.sh password` reads it from stdin (never argv) and starts the container once
+# with it in the environment (compose.admin-login.yml); Pi-hole keeps only the hash in pihole.toml, so
+# every later start, and the restore, keep it. The value lives in OpenBao; the asyla/pihole CNAME
+# pipeline needs the same value (GitLab CI variable PIHOLE_API_PASSWORD_NS02).
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="$SCRIPT_DIR/compose.yml"
+PASSWORD_FILE="$SCRIPT_DIR/compose.admin-login.yml"
+ALLOWLIST="$SCRIPT_DIR/allowlist"
 TREE_HOST="ns02"                 # the host this tree is for; anywhere else it runs as a replica
 APP="pihole-ns02"
 SCREEN_APP="$APP"                # run_detached_if_interactive's session name
@@ -26,6 +32,8 @@ if [ -f "$HOME/scripts/docker/common.env" ]; then
   . "$HOME/scripts/docker/common.env"
 fi
 . "$HOME/scripts/docker/backup_lib.sh"
+# The password reaches Pi-hole only through do_password; never from common.env or the caller.
+unset FTLCONF_webserver_api_password PIHOLE_API_PASSWORD
 
 DOCKER_DL="${DOCKER_DL:-/mnt/docker}"
 DOCKER_D1="${DOCKER_D1:-/mnt/nas/data1/docker}"
@@ -40,11 +48,41 @@ export DOCKER_DL DOCKER_D1 DOCKER_D2 LOCAL_TZ DOCKER_UID DOCKER_GID PIHOLE_DHCP_
 
 # What the mirror holds: etc-pihole/ (pihole.toml: settings, CNAMEs, reservations; gravity.db:
 # lists and groups) and etc-dnsmasq.d/, never the query history or anything else in the data dir.
+# Also not cli_pw (a credential FTL makes anew at each start) and logrotate (root-only; the image
+# writes it at each start).
 BACKUP_FILTER=(--exclude=/etc-pihole/pihole-FTL.db '--exclude=/etc-pihole/pihole-FTL.db-*'
+               --exclude=/etc-pihole/cli_pw --exclude=/etc-pihole/logrotate
                '--include=/etc-pihole/***' '--include=/etc-dnsmasq.d/***' '--exclude=*')
 
 run_compose() {
   docker compose -p "$APP" -f "$COMPOSE_FILE" --project-directory "$SCRIPT_DIR" "$@"
+}
+
+# compose.yml plus compose.admin-login.yml: FTLCONF_webserver_api_password comes from this environment.
+run_compose_password() {
+  docker compose -p "$APP" -f "$COMPOSE_FILE" -f "$PASSWORD_FILE" --project-directory "$SCRIPT_DIR" "$@"
+}
+
+# True when pihole.toml holds a password hash (Pi-hole writes pwhash = "" when there is none).
+password_is_set() {
+  local toml="$APP_ROOT/etc-pihole/pihole.toml" re='^[[:space:]]*pwhash = "[^"]'
+  grep -qE "$re" "$toml" 2>/dev/null || sudo -n grep -qE "$re" "$toml" 2>/dev/null
+}
+
+# Waits up to PIHOLE_VERIFY_WAIT_S (120 s) while the container is starting; sets st.
+wait_started() {
+  local waited=0 wait_s="${PIHOLE_VERIFY_WAIT_S:-120}"
+  while :; do
+    st=$(docker inspect -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$APP" 2>/dev/null || echo "absent")
+    [ "$st" = "running starting" ] && [ "$waited" -lt "$wait_s" ] || break
+    sleep 5; waited=$((waited + 5))
+  done
+  case "$st" in "running healthy"|"running none") return 0 ;; *) return 1 ;; esac
+}
+
+# The domains in ./allowlist, one per line (# comments).
+allowlist_domains() {
+  grep -vE '^[[:space:]]*(#|$)' "$ALLOWLIST" 2>/dev/null | tr -d ' \t' || true
 }
 
 remove_stale_container() {
@@ -71,7 +109,61 @@ do_up() {
   fi
   remove_stale_container
   echo "[INFO] Starting Pi-hole (DHCP: $PIHOLE_DHCP_ACTIVE)"
-  run_compose up -d
+  if [ "${1:-}" = --password ]; then
+    run_compose_password up -d                 # do_password: the new value is in the environment
+  elif password_is_set; then
+    run_compose up -d
+  else
+    # No hash yet (a new or restored data dir without one): an empty value keeps it that way. Without
+    # it the image would make up a random password and print it to the container log.
+    echo "[WARN] no admin password set: set one with pihole.sh password (value on stdin)"
+    FTLCONF_webserver_api_password="" run_compose_password up -d
+  fi
+  apply_allowlist
+}
+
+# Adds ./allowlist's domains as exact allows (pihole allow: a no-op for one already there).
+apply_allowlist() {
+  local domains
+  domains=$(allowlist_domains | tr '\n' ' ')
+  [ -n "${domains// /}" ] || return 0
+  if ! wait_started; then
+    echo "[WARN] allowlist not applied: container $APP is '$st'" >&2
+    return 0
+  fi
+  # shellcheck disable=SC2086
+  docker exec "$APP" pihole allow -q $domains --comment "asyla-hosts allowlist" >/dev/null \
+    && echo "[INFO] allowlist: $(allowlist_domains | grep -c .) domain(s) present" \
+    || echo "[WARN] allowlist: pihole allow failed" >&2
+}
+
+# password: the admin password (web UI and API) from stdin, never argv. Starts the container once
+# with the value in its environment (Pi-hole hashes it into pihole.toml), then again without it, and
+# checks that the value logs in. An empty value is refused (it would remove the password).
+do_password() {
+  local pw="" valid
+  if [ -t 0 ]; then
+    read -rsp "New Pi-hole admin password: " pw; echo >&2
+  else
+    IFS= read -r pw || true
+  fi
+  [ -n "$pw" ] || { echo "[ERROR] password: no value on stdin (an empty one would remove the password)" >&2; return 1; }
+  echo "[INFO] password: starting $APP once with the new value; Pi-hole keeps only its hash"
+  export FTLCONF_webserver_api_password="$pw"
+  do_up --password
+  unset FTLCONF_webserver_api_password
+  if ! wait_started || ! password_is_set; then
+    echo "[ERROR] password: $APP is '$st' and pihole.toml has $(password_is_set && echo a || echo no) password hash" >&2
+    return 1
+  fi
+  echo "[INFO] password: starting $APP again without the value, as every later start does"
+  do_up
+  wait_started || { echo "[ERROR] password: $APP is '$st' after the second start" >&2; return 1; }
+  valid=$(printf '%s\n' "$pw" | docker exec -i "$APP" sh -c \
+            'jq -Rc "{password:.}" | curl -s --data-binary @- http://127.0.0.1/api/auth | jq -r .session.valid' 2>/dev/null || true)
+  pw=""
+  [ "$valid" = true ] || { echo "[ERROR] password: the new value does not log in to the API" >&2; return 1; }
+  echo "[OK] password: set; restarts and the restore keep it (only the hash is stored)"
 }
 
 do_backup() {
@@ -93,18 +185,10 @@ do_update() {
 # replica: its egress is blocked), and dhcp.active as this host should have it. Names and records
 # are never printed (the hosts file is a map of the network).
 do_verify() {
-  local bad=0 st waited=0 wait_s="${PIHOLE_VERIFY_WAIT_S:-120}" alias line ip name ans dhcp
+  local bad=0 alias line ip name ans dhcp d allowed
   fail() { echo "[FAIL] pihole: $1" >&2; bad=1; }
   ask() { docker exec "$APP" dig +short +time=2 +tries=1 "$1" @127.0.0.1 2>/dev/null; }
-  while :; do
-    st=$(docker inspect -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$APP" 2>/dev/null || echo "absent")
-    [ "$st" = "running starting" ] && [ "$waited" -lt "$wait_s" ] || break
-    sleep 5; waited=$((waited + 5))
-  done
-  case "$st" in
-    "running healthy"|"running none") ;;
-    *) echo "[FAIL] pihole: container $APP is '$st'" >&2; return 1 ;;
-  esac
+  wait_started || { echo "[FAIL] pihole: container $APP is '$st'" >&2; return 1; }
   if ! mountpoint -q "$DOCKER_D2" || [ ! -f "$HOSTS_FILE" ]; then
     fail "the NAS hosts file $HOSTS_FILE is not there"
   elif ! docker exec "$APP" cat /etc/hosts 2>/dev/null | cmp -s - "$HOSTS_FILE"; then
@@ -131,11 +215,19 @@ do_verify() {
   fi
   dhcp=$(docker exec "$APP" pihole-FTL --config dhcp.active 2>/dev/null || true)
   [ "$dhcp" = "$PIHOLE_DHCP_ACTIVE" ] || fail "dhcp.active is '$dhcp', this host should have $PIHOLE_DHCP_ACTIVE"
+  [ "$(ask wpad)" = "255.255.255.255" ] || fail "wpad does not answer 255.255.255.255 (FTLCONF_dns_hosts)"
+  allowed=$(docker exec "$APP" pihole-FTL sqlite3 -readonly /etc/pihole/gravity.db \
+              "select domain from domainlist where type = 0 and enabled = 1" 2>/dev/null || true)
+  for d in $(allowlist_domains); do
+    printf '%s\n' "$allowed" | grep -qxF "$d" || fail "allowlist: $d is not an enabled exact allow"
+  done
+  # A warning, not a failure: a new or restored host has none until pihole.sh password runs.
+  password_is_set || echo "[WARN] pihole: no admin password set (pihole.sh password)" >&2
   [ "$bad" -eq 0 ] || return 1
-  echo "[OK] pihole: $APP $st; NAS hosts file mounted; CNAME and hosts-file answers$([ "$THIS_HOST" = "$TREE_HOST" ] && echo ", outside answer"); dhcp.active $dhcp"
+  echo "[OK] pihole: $APP $st; NAS hosts file mounted; CNAME and hosts-file answers$([ "$THIS_HOST" = "$TREE_HOST" ] && echo ", outside answer"); dhcp.active $dhcp; wpad; allowlist"
 }
 
-[ $# -gt 0 ] || { echo "Usage: $0 up|down|restart|backup|restore|verify|update|refresh|logs ..." >&2; exit 1; }
+[ $# -gt 0 ] || { echo "Usage: $0 up|down|restart|backup|restore|verify|password|update|refresh|logs ..." >&2; exit 1; }
 for sw in "$@"; do
   case "$sw" in
     up) do_up ;;
@@ -145,6 +237,7 @@ for sw in "$@"; do
     _backup) do_backup ;;
     restore) do_rsync_mirror_restore "$BACKUP_DIR" "$APP_ROOT" ;;
     verify) do_verify ;;
+    password) do_password ;;
     update) run_detached_if_interactive update do_update ;;
     _update) do_update ;;
     refresh) do_update; do_up ;;

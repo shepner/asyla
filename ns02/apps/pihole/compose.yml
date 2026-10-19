@@ -19,7 +19,9 @@ services:
       - TZ=${LOCAL_TZ:-America/Chicago}
       - PIHOLE_UID=${DOCKER_UID:-1003}
       - PIHOLE_GID=${DOCKER_GID:-1000}
-      - FTLCONF_webserver_api_password=${PIHOLE_API_PASSWORD:-}
+      # No FTLCONF_webserver_api_password here: set that way, Pi-hole makes the password read-only and
+      # an empty value removes it at every start. `pihole.sh password` sets it once (compose.admin-login.yml);
+      # Pi-hole then keeps only the hash in etc-pihole/pihole.toml, which restarts and the restore keep.
       # DHCP guard: off unless pihole.sh says this host is ns01, so no copy of this app (a test01
       # replica, a wrong host, a plain `docker compose up`) can ever be a second DHCP server.
       - FTLCONF_dhcp_active=${PIHOLE_DHCP_ACTIVE:-false}
@@ -33,6 +35,9 @@ services:
       - FTLCONF_dns_expandHosts=true
       - FTLCONF_dns_domainNeeded=true
       - FTLCONF_dns_bogusPriv=true
+      # ns01's one local record, kept on both (operator, 2026-10-19): wpad answers 255.255.255.255, so
+      # no client auto-discovers a web proxy (WPAD hijack). Every other local name is the NAS hosts file.
+      - FTLCONF_dns_hosts=255.255.255.255 wpad
       - FTLCONF_misc_etc_dnsmasq_d=true
       - FTLCONF_database_busytimeout=60000
       # IPv4 upstreams only: the hosts have no IPv6 (IPv6 upstreams log "Network unreachable").
