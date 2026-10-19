@@ -1,0 +1,39 @@
+# ns01 build spec, read by scripts/build_host.py: the first Pi-hole name server, and the LAN's DHCP
+# server (ns02 is the other name server, DNS only). Built as every other Docker host (asyla hub
+# decisions/host-layout.md decision 6) and replaced, never patched: a new VMID at the same address,
+# restored from its NAS mirror, the old VM kept stopped as the way back (asyla hub backlog, the
+# ns01/ns02 item; runbooks/ns01-migration-cutover.md). ns01 is not disposable: a build or a destroy
+# needs --confirm ns01 and the operator's approval of the exact action.
+# Not built yet (draft, 2026-10-19). The [vm] values follow ns02's (the operator's, 2026-10-18), on
+# vmh01. The live VM 300 is 1x4 cores, 16384 MB, one 64G disk on local-data1 (69% used: the query
+# history), its cloud-init disk on the NAS (nas-data1-vm), startup order=10,up=180 (2026-10-19 survey).
+# The hosts file and 03-lan-dns.conf stay on the NAS by design (operator, 2026-10-18): Pi-hole reads
+# them there (apps/pihole/), so nfs.sh is a must and verify checks the file is there.
+[vm]
+node = "vmh01"
+vmid = 310                                              # the new ns01; VM 300 is the way back
+sockets = 1
+cores = 2
+memory_mb = 4096
+ip = "10.0.0.10/24"
+os_disk = { storage = "local-data1", size = "32G" }
+data_disk = { storage = "local-data1", size = "16G" }   # /mnt/docker: pihole-ns01 (677M today, mostly query history, not carried)
+cloudinit_storage = "local-data1"                       # off the NAS (the live one is on nas-data1-vm)
+startup = "order=10,up=180"                             # live: order=10,up=180; DNS and DHCP before the next VM starts
+
+# dns_port.sh frees port 53 for Pi-hole (host network): no resolved stub listener, no host dnsmasq.
+[setup]
+steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "bashrc.sh", "dns_port.sh"]   # build/setup/, sent by the build
+
+# No [[secret]]: ns01 keeps no secret on disk.
+
+# Restored from $DOCKER_D1/pihole-ns01/mirror (pihole.sh backup, nightly once host-maintenance
+# carries ns01): settings, CNAMEs, the 13 DHCP reservations (pihole.toml) and the leases
+# (etc-pihole/dhcp.leases). The first mirror is the cutover's freeze (hub tools/ns_cutover_freeze.py).
+[[app]]
+name = "pihole"
+verify = ["verify"]
+
+# No Gitea runner: a name server runs no CI jobs.
+[runner]
+enabled = false

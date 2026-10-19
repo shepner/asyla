@@ -1,41 +1,66 @@
-# Pi-hole DNS server on ns01
-# Access via http://10.0.0.10/admin or http://pi.hole/admin
-# Run: ~/scripts/ns01/apps/pihole/pihole.sh up
-# Requires: DOCKER_DL (/mnt/docker), DOCKER_UID, DOCKER_GID, LOCAL_TZ
-# Note: pihole.sh automatically sources ~/scripts/docker/common.env if it exists.
+# Pi-hole DNS server on ns01. Run through pihole.sh (it sets DOCKER_*, LOCAL_TZ and
+# PIHOLE_DHCP_ACTIVE): ~/scripts/ns01/apps/pihole/pihole.sh up
+# Access: http://10.0.0.10/admin
+#
+# Settings are pinned here as FTLCONF_ lines, not clicked in the web UI: a setting given by
+# FTLCONF_ is read-only in the UI and the API, so the two name servers cannot drift apart again.
+# ns02's copy differs only in its name and DHCP. Data that is not a setting (CNAMEs written by the
+# asyla/pihole pipeline, domain lists, gravity) lives in etc-pihole/ and travels in the backup.
 
 services:
   pihole:
-    image: pihole/pihole:latest
+    # ns02's pinned 2026.05.0: VM 300 runs `latest` at this same digest (70a9c111..., 2026-10-19). Moved by hand, as ns02's.
+    image: pihole/pihole:2026.05.0@sha256:70a9c11171ded2eee735d88c127996da209284a329d50f5ae59c06b861d401b3
     container_name: pihole-ns01
     hostname: ns01.asyla.org
     restart: unless-stopped
     network_mode: host
     environment:
       - TZ=${LOCAL_TZ:-America/Chicago}
-      - FTLCONF_webserver_api_password=${PIHOLE_API_PASSWORD:-}
-      - FTLCONF_dns_listeningMode=all
       - PIHOLE_UID=${DOCKER_UID:-1003}
       - PIHOLE_GID=${DOCKER_GID:-1000}
+      # No FTLCONF_webserver_api_password here: set that way, Pi-hole makes the password read-only and
+      # an empty value removes it at every start. `pihole.sh password` sets it once (compose.admin-login.yml);
+      # Pi-hole then keeps only the hash in etc-pihole/pihole.toml, which restarts and the restore keep.
+      # DHCP guard: off unless pihole.sh says this host is ns01, so no copy of this app (a test01
+      # replica, a wrong host, a plain `docker compose up`) can ever be a second DHCP server.
+      - FTLCONF_dhcp_active=${PIHOLE_DHCP_ACTIVE:-false}
+      # ns01 is the LAN's DHCP server. Its settings as they were on VM 300 (2026-10-19), pinned here
+      # (runbook ns01-migration-cutover DH3); the netmask is left to Pi-hole (empty: the interface's).
+      # The reservations (dhcp.hosts) are not pinned: they stay editable in Pi-hole (operator Q5) and
+      # travel in pihole.toml. The DNS servers handed out are 03-lan-dns.conf's option 6, from the NAS.
+      - FTLCONF_dhcp_start=10.0.0.100
+      - FTLCONF_dhcp_end=10.0.0.254
+      - FTLCONF_dhcp_router=10.0.0.1
+      - FTLCONF_dhcp_leaseTime=6h
+      - FTLCONF_dhcp_ipv6=false
+      - FTLCONF_dhcp_rapidCommit=false
+      - FTLCONF_dhcp_multiDNS=false
+      - FTLCONF_dhcp_ignoreUnknownClients=false
+      - FTLCONF_dns_listeningMode=all
       - FTLCONF_dns_dnssec=true
       - FTLCONF_dns_domain_name=ns01.asyla.org
+      - FTLCONF_dns_upstreams=1.1.1.1;1.0.0.1
+      # One set for both servers (operator, 2026-10-18): bare hostnames resolve (the local domain is
+      # added to hosts-file names), and neither bare names nor reverse lookups of private addresses
+      # are sent upstream. Before this, ns02 and ns01 each had a different mix.
+      - FTLCONF_dns_expandHosts=true
+      - FTLCONF_dns_domainNeeded=true
+      - FTLCONF_dns_bogusPriv=true
+      # ns01's one local record, kept on both (operator, 2026-10-19): wpad answers 255.255.255.255, so
+      # no client auto-discovers a web proxy (WPAD hijack). Every other local name is the NAS hosts file.
+      - FTLCONF_dns_hosts=255.255.255.255 wpad
       - FTLCONF_misc_etc_dnsmasq_d=true
       - FTLCONF_database_busytimeout=60000
-      - FTLCONF_dns_upstreams=1.1.1.1;1.0.0.1
-      - DNS1=1.1.1.1
-      - DNS2=1.0.0.1
-      # - DNS3=2606:4700:4700::1111
-      # - DNS4=2606:4700:4700::1001
-      # Uncomment above if host has IPv6; otherwise FTL logs "Network unreachable"
+      # IPv4 upstreams only: the hosts have no IPv6 (IPv6 upstreams log "Network unreachable").
     volumes:
       - ${DOCKER_DL:-/mnt/docker}/pihole-ns01/etc-pihole:/etc/pihole
       - ${DOCKER_DL:-/mnt/docker}/pihole-ns01/etc-dnsmasq.d:/etc/dnsmasq.d
+      # On the NAS by design (central, snapshotted, reachable when all else is down; never in a
+      # repo). pihole.sh up refuses to start when it is missing: Docker would make a directory here.
       - ${DOCKER_D2:-/mnt/nas/data2/docker}/pihole/hosts:/etc/hosts:ro
     cap_add:
       - NET_ADMIN
       - SYS_NICE
     stop_grace_period: 45s
-    # Ports are handled by host network mode
-    # DNS: 53/tcp, 53/udp
-    # DHCP: 67/udp
-    # Web: 80/tcp, 443/tcp
+    # Host network: DNS 53/tcp+udp, DHCP 67/udp (ns01 only), web 80/tcp, 443/tcp.

@@ -1,0 +1,8 @@
+# Used by pihole.sh only, never on its own: passes FTLCONF_webserver_api_password from pihole.sh's
+# environment into one start of the container (`pihole.sh password` with the new value; `up` with an
+# empty one while no password is set, so the image does not invent a random one and print it to the
+# log). Pi-hole stores the hash in pihole.toml; the next plain start runs without this file.
+services:
+  pihole:
+    environment:
+      - FTLCONF_webserver_api_password

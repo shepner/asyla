@@ -1,0 +1,5 @@
+# Exact domains both name servers allow although the adlist blocks them; pihole.sh up adds each
+# (pihole allow: a no-op when present) and verify checks them. Entries added by hand in the web UI
+# are left alone. Kept from ns01 (operator, 2026-10-19), both first "Added from Query Log" there.
+trace.svc.ui.com
+metrics.icloud.com

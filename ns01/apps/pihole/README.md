@@ -1,54 +1,87 @@
 # Pi-hole DNS Server (ns01)
 
-Pi-hole DNS server running on ns01 (10.0.0.10). Provides DNS resolution and ad-blocking for the network.
+Pi-hole DNS server on ns01 (10.0.0.10): DNS and ad-blocking for the LAN, and the LAN's DHCP server.
+ns02 (10.0.0.11) is the other name server (DNS only); only this copy serves DHCP (below).
 
 ## Prerequisites
 
-- `~/scripts/docker/common.env` (DOCKER_DL, DOCKER_UID, DOCKER_GID, LOCAL_TZ)
-- `/mnt/docker` (iSCSI) mounted, or another path for DOCKER_DL (see Migration below)
-- `/mnt/nas/data2/docker/pihole/hosts` (NFS) available for custom hosts file
-- `/mnt/nas/data2/docker/pihole/03-lan-dns.conf` (optional) for custom dnsmasq config
+- `~/scripts/docker/common.env` (DOCKER_DL, DOCKER_D1, DOCKER_D2, DOCKER_UID, DOCKER_GID, LOCAL_TZ)
+  and `~/scripts/docker/backup_lib.sh`, installed by the updater
+- `/mnt/docker`: the host's data disk (the build's `disk` phase)
+- `/mnt/nas/data2/docker/pihole/hosts` (NFS, `nfs.sh`): the LAN hosts file. **`up` refuses to start
+  without it.** It stays on the NAS by design: central, snapshotted, reachable when everything else
+  is down, and never in a repo (it is a map of the network).
+- `/mnt/nas/data2/docker/pihole/03-lan-dns.conf` (optional): copied into `etc-dnsmasq.d` at `up`
+- Port 53 free on the host (`build/setup/dns_port.sh`, a setup step in `ns01/host.toml`)
 
 ## Layout
 
 - **Config/data:** `/mnt/docker/pihole-ns01/etc-pihole`, `/mnt/docker/pihole-ns01/etc-dnsmasq.d`
-- **Custom hosts:** `/mnt/nas/data2/docker/pihole/hosts` (read-only mount)
-- **Custom dnsmasq config:** `/mnt/nas/data2/docker/pihole/03-lan-dns.conf` (copied to container on start)
-
-## Run
-
-```bash
-~/scripts/ns01/apps/pihole/pihole.sh up
-```
-
-The script automatically sources `~/scripts/docker/common.env` if it exists.
-
-## Access
-
-- **Web UI:** http://10.0.0.10/admin or http://pi.hole/admin
-- **DNS:** 10.0.0.10:53 (TCP/UDP)
-- **DHCP:** 10.0.0.10:67 (UDP) - if enabled
+- **Hosts file:** `/mnt/nas/data2/docker/pihole/hosts`, mounted read-only as the container's `/etc/hosts`
+- **Backup:** one rsync mirror at `/mnt/nas/data1/docker/pihole-ns01/mirror` (`docker/backup_lib.sh`):
+  `etc-pihole/` and `etc-dnsmasq.d/` only, without `pihole-FTL.db` (query history). History is the
+  NAS's ZFS snapshots of that share.
 
 ## Commands
 
-- `pihole.sh up` — create dirs and start Pi-hole
-- `pihole.sh down` — stop container
-- `pihole.sh logs` — follow logs
-- `pihole.sh refresh` — pull latest images and start
-- `pihole.sh update` — pull latest images and start (same as refresh)
+- `pihole.sh up`: check the NAS hosts file, create the data dirs, copy `03-lan-dns.conf`, start
+- `pihole.sh down` / `restart`
+- `pihole.sh backup`: mirror the data to the NAS (in screen when run from a terminal); refused on
+  any host but ns01, so a replica never writes ns01's mirror
+- `pihole.sh restore`: from the mirror into an empty data dir (stop the app first); refuses over data
+- `pihole.sh verify`: the container healthy, the NAS hosts file mounted, a CNAME and a hosts-file
+  name answering, an outside name answering (not on a replica), `dhcp.active` as the host should have
+  it, `wpad`, the allowlist; warns when no admin password is set
+- `pihole.sh password`: set the admin password from stdin (below)
+- `pihole.sh update` (pull only) / `refresh` (pull, then up)
+- `pihole.sh logs`
 
 ## Configuration
 
-### API Password
+Settings are pinned in `compose.yml` as `FTLCONF_` lines. Pi-hole makes a setting given that way
+read-only in the web UI and the API, so the two name servers cannot drift apart. Change a setting
+in `compose.yml`, then `pihole.sh restart`. Data that is not a setting stays in `etc-pihole/` and
+travels in the backup: the CNAMEs (written by the asyla/pihole pipeline through the API), domain
+lists, gravity.
 
-Set `PIHOLE_API_PASSWORD` in `~/scripts/docker/common.env` or pass via environment:
+### DHCP guard
 
-```bash
-export PIHOLE_API_PASSWORD=your_password
-~/scripts/ns01/apps/pihole/pihole.sh up
-```
+`FTLCONF_dhcp_active=${PIHOLE_DHCP_ACTIVE:-false}`, and `pihole.sh` sets `PIHOLE_DHCP_ACTIVE=true`
+only when `hostname -s` is `ns01`. Pi-hole cannot run redundant DHCP, so a second DHCP server on the
+LAN (a test01 replica, a copy on the wrong host) must never happen; `verify` checks `dhcp.active`
+and that udp/67 listens on ns01 and nowhere else.
 
-If not set, Pi-hole will generate a random password (check logs).
+### DHCP (ns01)
+
+- Range `10.0.0.100`-`10.0.0.254`, router `10.0.0.1`, lease time `6h`, no IPv6, no rapid commit:
+  pinned in `compose.yml` as `FTLCONF_dhcp_*` (as on VM 300, 2026-10-19), so read-only in the UI.
+- Reservations (`dhcp.hosts`): editable in the web UI (operator, 2026-10-18); kept in
+  `etc-pihole/pihole.toml`, so they travel in the mirror.
+- Leases: `etc-pihole/dhcp.leases`, in the mirror, so a rebuilt ns01 knows the leases it gave.
+- The DNS servers a lease names (`10.0.0.10,10.0.0.11`): `03-lan-dns.conf` from the NAS.
+
+### Admin password
+
+Set once with `pihole.sh password`, the value on stdin (never argv; from OpenBao). It starts the
+container once with `FTLCONF_webserver_api_password` in its environment (`compose.admin-login.yml`),
+then again without it, and checks that the value logs in to the API. Pi-hole keeps only the hash in
+`etc-pihole/pihole.toml`, so restarts and the restore keep the password. `compose.yml` never sets
+it: given that way, Pi-hole makes it read-only, and an empty value removes it at every start. While
+no hash is set (a new data dir), `up` starts with an empty value, so the image does not make up a
+random password and print it to the container log; `up` and `verify` warn.
+
+The asyla/pihole CNAME pipeline writes through this API, so it needs the same value as GitLab CI
+variable `PIHOLE_API_PASSWORD_NS01` (ns02: `..._NS02`), or it gets 401.
+
+Pi-hole's own `pihole setpassword` is not used: it passes the value to `pihole-FTL --config` as an
+argument (`/opt/pihole/utils.sh` in the image, 2026.05.0).
+
+### Local DNS record and allowlist (both servers)
+
+- `FTLCONF_dns_hosts=255.255.255.255 wpad`: no client auto-discovers a web proxy (WPAD hijack).
+  Every other local name is the NAS hosts file.
+- `allowlist`: exact domains allowed although the adlist blocks them. `up` adds each with
+  `pihole allow` (a no-op when present); `verify` checks them. Entries added by hand stay.
 
 ### Custom DNS
 
@@ -56,7 +89,7 @@ Pi-hole uses upstream DNS servers (IPv4 only by default):
 - 1.1.1.1 (Cloudflare)
 - 1.0.0.1 (Cloudflare)
 
-IPv6 upstreams (e.g. 2606:4700:4700::1111) are not set because they produce "Network unreachable" connection errors when the network has no IPv6. To use them, add `DNS3`/`DNS4` in the compose environment and ensure the host has IPv6 connectivity.
+IPv6 upstreams (e.g. 2606:4700:4700::1111) are not set because they produce "Network unreachable" connection errors when the network has no IPv6. To use them, add them to `FTLCONF_dns_upstreams` in `compose.yml` once the host has IPv6 connectivity.
 
 ### Custom Hosts File
 
@@ -66,7 +99,7 @@ Place custom hosts entries in `/mnt/nas/data2/docker/pihole/hosts` (mounted read
 
 Place custom dnsmasq configuration in `/mnt/nas/data2/docker/pihole/03-lan-dns.conf`. This file is automatically copied to the container's `/etc/dnsmasq.d/` directory on start.
 
-### "not giving name … to the DHCP lease because the name exists in /etc/hosts"
+### "not giving name … to the DHCP lease because the name exists in /etc/hosts" (ns01, the DHCP server)
 
 That warning means the device is getting a **different** IP from DHCP (e.g. 10.0.0.243) than the IP you have for its hostname in `/etc/hosts` (e.g. 10.0.0.82). dnsmasq won't attach the hostname to the lease because it would conflict with the static hosts entry, so the device keeps its current lease and the message repeats.
 
@@ -83,29 +116,7 @@ Replace `AA:BB:CC:DD:EE:FF` with the device's MAC (from Pi-hole Admin → Local 
 
 Pi-hole uses `host` network mode to bind directly to ports 53, 67, 80, and 443 on the host. This is required for DNS and DHCP functionality.
 
-## Migration from old ns01 (Alpine)
-
-To use your existing Pi-hole data (gravity.db, etc.) on the new ns01 VM:
-
-1. **Same volume path:** The new setup uses the same paths as the old script: `DOCKER_DL/pihole-ns01/etc-pihole` and `etc-dnsmasq.d`, and `DOCKER_D2/pihole/hosts`. So if you use iSCSI (`/mnt/docker`) and reconnect the same LUN, the data may already be there.
-2. **Restore from backup:** If the new VM has empty storage, copy the old `etc-pihole` and `etc-dnsmasq.d` from the old host (or from an NFS/backup) into `/mnt/docker/pihole-ns01/` (or wherever DOCKER_DL points).
-3. **Ownership:** The container runs as PIHOLE_UID:PIHOLE_GID (default 1003:1000). Ensure the host dirs are readable/writable by that user:
-   ```bash
-   sudo chown -R 1003:1000 /mnt/docker/pihole-ns01
-   ```
-   If your `common.env` uses DOCKER_GID=1001 (asyla), the container will use 1003:1001; then use `chown -R 1003:1001 ...` instead.
-
 ## Troubleshooting
-
-### "Address in use" / "failed to create listening socket for port 53"
-
-The host must not run another DNS service on port 53. The ns01 setup disables the systemd-resolved stub listener and any host dnsmasq. If you see this error on an existing ns01 that was built before that change, run once:
-
-```bash
-sudo ~/scripts/ns01/setup/systemConfig.sh
-```
-
-Then restart Pi-hole: `pihole.sh down && pihole.sh up`.
 
 ### "Database not available" (API)
 

@@ -675,6 +675,13 @@ results = [
     check("ns02 runs pihole, verified by its own verify, restored from its mirror",
           [(a["name"], a.get("verify"), a.get("restore", True)) for a in build_host.load_spec("ns02")["app"]]
           == [("pihole", ["verify"], True)]),
+    # ns01 in the new form (draft, 2026-10-19): as ns02, on vmh01 at 10.0.0.10; its pihole serves DHCP.
+    check("ns01's spec: VM 310 on vmh01 at 10.0.0.10, ns02's sizes, not disposable, port 53 freed, no secret, no runner",
+          (lambda n: (n["vm"]["node"], n["vm"]["vmid"], n["vm"]["ip"], n["vm"]["cores"], n["vm"]["memory_mb"],
+                      bool(n["vm"].get("disposable")), n["setup"]["steps"], n.get("secret", []),
+                      bool(n.get("runner", {}).get("enabled")), [a["name"] for a in n["app"]])
+           == ("vmh01", 310, "10.0.0.10/24", 2, 4096, False, build_host.load_spec("ns02")["setup"]["steps"], [],
+               False, ["pihole"]))(build_host.load_spec("ns01"))),
     # Two specs never claim one VM or one address.
     check("every spec has its own VMID and address",
           (lambda vms: len({v["vmid"] for v in vms}) == len(vms) and len({v["ip"] for v in vms}) == len(vms))(
