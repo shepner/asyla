@@ -2,8 +2,9 @@
 # server (ns02 is the other name server, DNS only). Built as every other Docker host (asyla hub
 # decisions/host-layout.md decision 6) and replaced, never patched: a new VMID at the same address,
 # restored from its NAS mirror, the old VM kept stopped as the way back (asyla hub backlog, the
-# ns01/ns02 item; runbooks/ns01-migration-cutover.md). ns01 is not disposable: a build or a destroy
-# needs --confirm ns01 and the operator's approval of the exact action.
+# ns01/ns02 item; runbooks/ns01-migration-cutover.md). ns01 is not disposable: --recreate and destroy
+# need --confirm ns01 (build_host.py refuses both without it), and any build or destroy needs the
+# operator's approval of the exact action.
 # Not built yet (draft, 2026-10-19). The [vm] values follow ns02's (the operator's, 2026-10-18), on
 # vmh01. The live VM 300 is 1x4 cores, 16384 MB, one 64G disk on local-data1 (69% used: the query
 # history), its cloud-init disk on the NAS (nas-data1-vm), startup order=10,up=180 (2026-10-19 survey).

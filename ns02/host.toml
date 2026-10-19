@@ -2,8 +2,9 @@
 # the other and also serves the LAN's DHCP). Built as every other Docker host (asyla hub
 # decisions/host-layout.md decision 6) and replaced, never patched: a new VMID at the same address,
 # restored from its NAS mirror, the old VM kept stopped as the way back (asyla hub backlog, the
-# ns01/ns02 item; the d01 cutover pattern). ns02 is not disposable: a build or a destroy needs
-# --confirm ns02 and the operator's approval of the exact action.
+# ns01/ns02 item; the d01 cutover pattern). ns02 is not disposable: --recreate and destroy
+# need --confirm ns02 (build_host.py refuses both without it), and any build or destroy needs the
+# operator's approval of the exact action.
 # Built 2026-10-19 as VM 311 (asyla hub runbooks/ns02-migration-cutover.md). The [vm] values are
 # the operator's, 2026-10-18 ("use the ones you had specified"). The old VM 301 was 1x4 cores,
 # 16384 MB, one 64G disk on local-data1, its cloud-init disk on the NAS; Pi-hole peaked at 222 MiB
