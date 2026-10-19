@@ -5,9 +5,10 @@
 # ns01/ns02 item; runbooks/ns01-migration-cutover.md). ns01 is not disposable: --recreate and destroy
 # need --confirm ns01 (build_host.py refuses both without it), and any build or destroy needs the
 # operator's approval of the exact action.
-# Not built yet (draft, 2026-10-19). The [vm] values follow ns02's (the operator's, 2026-10-18), on
-# vmh01. The live VM 300 is 1x4 cores, 16384 MB, one 64G disk on local-data1 (69% used: the query
-# history), its cloud-init disk on the NAS (nas-data1-vm), startup order=10,up=180 (2026-10-19 survey).
+# Built 2026-10-19 as VM 310 (asyla hub runbooks/ns01-migration-cutover.md). The [vm] values follow
+# ns02's (the operator's, 2026-10-18), on vmh01. The old VM 300 was 1x4 cores, 16384 MB, one 64G disk
+# on local-data1 (69% used: the query history), its cloud-init disk on the NAS (nas-data1-vm), startup
+# order=10,up=180 (2026-10-19 survey).
 # The hosts file and 03-lan-dns.conf stay on the NAS by design (operator, 2026-10-18): Pi-hole reads
 # them there (apps/pihole/), so nfs.sh is a must and verify checks the file is there.
 [vm]
@@ -28,8 +29,8 @@ steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "bashrc.sh", "dns_port.sh"]  
 
 # No [[secret]]: ns01 keeps no secret on disk.
 
-# Restored from $DOCKER_D1/pihole-ns01/mirror (pihole.sh backup, nightly once host-maintenance
-# carries ns01): settings, CNAMEs, the 13 DHCP reservations (pihole.toml) and the leases
+# Restored from $DOCKER_D1/pihole-ns01/mirror (pihole.sh backup, nightly by asyla/host-maintenance):
+# settings, CNAMEs, the 13 DHCP reservations (pihole.toml) and the leases
 # (etc-pihole/dhcp.leases). The first mirror is the cutover's freeze (hub tools/ns_cutover_freeze.py).
 [[app]]
 name = "pihole"
