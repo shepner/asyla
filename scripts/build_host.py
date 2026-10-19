@@ -1701,7 +1701,15 @@ def verify_host_maintenance(spec: dict, check) -> None:
         else:
             want.append("")   # never equal: known_hosts holds no empty line
             detail = f"; no ed25519 key in {HM_HOST_KEY}"
-    check(label, kh.splitlines() == want, f"{len(kh.splitlines())} line(s) vs {len(want)} wanted{detail}")
+    # Any order: ssh does not care, and host-maintenance's add-host.sh appends a new host's line
+    # after the own key (d06 on d03, 2026-10-18), where a build writes the pins first.
+    have = kh.splitlines()
+    extra = sorted({l.split()[0] for l in set(have) - set(want) if l.split()})
+    missing = sorted({l.split()[0] for l in set(want) - set(have) if l.split()})
+    check(label + " (any order)", sorted(have) == sorted(want),
+          f"{len(have)} line(s) vs {len(want)} wanted{detail}"
+          + (f"; not wanted: {', '.join(extra)}" if extra else "")
+          + (f"; missing: {', '.join(missing)}" if missing else ""))
 
 
 def verify_externals(spec: dict, check) -> None:
