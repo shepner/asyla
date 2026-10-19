@@ -27,11 +27,12 @@ services:
       - FTLCONF_dns_dnssec=true
       - FTLCONF_dns_domain_name=ns02.asyla.org
       - FTLCONF_dns_upstreams=1.1.1.1;1.0.0.1
-      # ns02's values today, which are Pi-hole's defaults; ns01 has the reverse (asyla hub backlog,
-      # the ns01/ns02 item, Q6: one set for both).
-      - FTLCONF_dns_expandHosts=false
+      # One set for both servers (operator, 2026-10-18): bare hostnames resolve (the local domain is
+      # added to hosts-file names), and neither bare names nor reverse lookups of private addresses
+      # are sent upstream. Before this, ns01 and ns02 each had a different mix.
+      - FTLCONF_dns_expandHosts=true
+      - FTLCONF_dns_domainNeeded=true
       - FTLCONF_dns_bogusPriv=true
-      - FTLCONF_dns_domainNeeded=false
       - FTLCONF_misc_etc_dnsmasq_d=true
       - FTLCONF_database_busytimeout=60000
       # IPv4 upstreams only: the hosts have no IPv6 (IPv6 upstreams log "Network unreachable").
