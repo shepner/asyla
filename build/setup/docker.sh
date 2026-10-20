@@ -59,6 +59,34 @@ echo \
 log_info "Updating package lists with Docker repository..."
 apt update
 
+# Container logs: the `local` driver, which rotates (json-file, Docker's default, never does:
+# https://docs.docker.com/engine/logging/drivers/json-file/). 20m x 5 files, compressed, are the
+# driver's own defaults, written out (https://docs.docker.com/engine/logging/drivers/local/).
+# `docker logs` and a log shipper that reads through the Docker API (Vector's docker_logs) read it;
+# nothing may tail the files on disk. Operator, 2026-10-20 (asyla backlog
+# 2026-10-20-hosts-observability-through-theorg, hygiene). Written before Docker is installed, so
+# a new host's daemon starts with it. dockerd reads it only at start, and only containers created
+# after that take it: on a host that already has containers this step writes nothing and stops,
+# since applying it there restarts dockerd (operator approval per host).
+DAEMON_JSON=/etc/docker/daemon.json
+DAEMON_JSON_WANT='{
+  "log-driver": "local",
+  "log-opts": { "max-size": "20m", "max-file": "5", "compress": "true" }
+}'
+if [ "$(cat "$DAEMON_JSON" 2>/dev/null)" != "$DAEMON_JSON_WANT" ]; then
+    if command -v docker >/dev/null && [ -n "$(docker ps -aq 2>/dev/null)" ]; then
+        log_error "$DAEMON_JSON differs from this build's and the host has containers. Applying it restarts dockerd, so it is not done here: ask the operator (per host), then write it and restart docker."
+        exit 1
+    fi
+    log_info "Writing $DAEMON_JSON (log driver local, 20m x 5)..."
+    install -d -m 755 /etc/docker
+    printf '%s\n' "$DAEMON_JSON_WANT" > "$DAEMON_JSON"
+    chmod 644 "$DAEMON_JSON"
+    if systemctl is-active -q docker 2>/dev/null; then
+        systemctl restart docker
+    fi
+fi
+
 # Install Docker Engine, CLI, and containerd
 log_info "Installing Docker Engine, CLI, and containerd..."
 apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
@@ -81,6 +109,12 @@ fi
 log_info "Verifying Docker installation..."
 docker --version
 docker compose version
+driver=$(docker info --format '{{.LoggingDriver}}')
+if [ "$driver" != "local" ]; then
+    log_error "Docker's log driver is $driver, not local ($DAEMON_JSON)"
+    exit 1
+fi
+log_info "✅ Log driver: $driver"
 
 # Clean up package cache
 log_info "Cleaning up package cache..."

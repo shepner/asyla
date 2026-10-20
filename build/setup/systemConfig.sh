@@ -37,6 +37,25 @@ timedatectl set-timezone America/Chicago 2>/dev/null || {
   dpkg-reconfigure -f noninteractive tzdata 2>/dev/null || true
 }
 
+# journald: on disk, at most 1G. Left to its defaults the cap is 10% of the file system, worked out
+# when journald starts (https://www.freedesktop.org/software/systemd/man/latest/journald.conf.html):
+# 282M on hosts that last started it on their first boot, before the root disk grew, and 3.2G-4G
+# after a reboot (read on d01-ns02, 2026-10-20). At about 40M a day 1G keeps 3-4 weeks; the log
+# platform keeps the long history. Operator, 2026-10-20 (asyla backlog
+# 2026-10-20-hosts-observability-through-theorg, hygiene).
+JOURNALD_CONF=/etc/systemd/journald.conf.d/50-asyla.conf
+JOURNALD_WANT='[Journal]
+Storage=persistent
+SystemMaxUse=1G'
+if [ "$(cat "$JOURNALD_CONF" 2>/dev/null)" != "$JOURNALD_WANT" ]; then
+    log_info "Writing $JOURNALD_CONF (persistent, SystemMaxUse=1G) and restarting journald..."
+    install -d -m 755 /etc/systemd/journald.conf.d
+    printf '%s\n' "$JOURNALD_WANT" > "$JOURNALD_CONF"
+    chmod 644 "$JOURNALD_CONF"
+    install -d -m 2755 -g systemd-journal /var/log/journal
+    systemctl restart systemd-journald
+fi
+
 # Update package lists
 log_info "Updating package lists..."
 apt update
