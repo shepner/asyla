@@ -1,7 +1,13 @@
 #!/bin/bash
 # Update Docker scripts from repository
-# Uses sparse git checkout to get only needed files, then mirrors them into
+# One shallow clone (a single pack, about 4 HTTP requests), then mirrors this host's trees into
 # ~/scripts/<host>/ and ~/scripts/docker/.
+#
+# GitLab.com rate limits (Free plan from 2026-10-19, GitLab blog 2026-09-17: a burst of 100
+# requests a minute per user, 400 per top-level group): the earlier blob-less clone fetched
+# every checked-out file on its own, about 3 requests a file, 256 a run for d01; d01-d03 got
+# HTTP 429 on 2026-10-20 and 2026-10-21. The whole tree is about 1 MB, so the clone takes all
+# of it and every checkout below is local.
 #
 # Source: private GitLab asyla/asyla-hosts. The read credential comes on stdin, as the lines
 # "username=..." and "password=...": host-maintenance's scripts task hands its GitLab job token
@@ -48,7 +54,7 @@ DRY_RUN=false
 for arg in "$@"; do
     case "$arg" in
         --dry-run|-n) DRY_RUN=true ;;
-        -h|--help) sed -n '2,17p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,22p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) log_error "Unknown argument: $arg"; exit 1 ;;
     esac
 done
@@ -86,7 +92,7 @@ if [ -z "$ASYLA_HOSTS_GIT_USER" ] || [ -z "$ASYLA_HOSTS_GIT_TOKEN" ]; then
 fi
 export ASYLA_HOSTS_GIT_USER ASYLA_HOSTS_GIT_TOKEN
 
-# Every git call below (the clone and the checkouts' lazy blob fetches) resets inherited
+# Every git call below (only the clone reaches the network) resets inherited
 # credential helpers, then answers from the two variables above (single quotes: the helper
 # expands them when git calls it, so the value is in no command line).
 export GIT_TERMINAL_PROMPT=0 GIT_CONFIG_COUNT=2
@@ -95,14 +101,14 @@ export GIT_CONFIG_KEY_1=credential.helper
 export GIT_CONFIG_VALUE_1='!f() { test "$1" = get || return 0; echo "username=$ASYLA_HOSTS_GIT_USER"; echo "password=$ASYLA_HOSTS_GIT_TOKEN"; }; f'
 # <<< credential
 
-log_info "Cloning repository (sparse checkout) from $REPO_URL..."
-git clone -q --depth 1 --no-checkout --filter=blob:none "$REPO_URL" "$WORKDIR"
+log_info "Cloning repository (shallow, one pack) from $REPO_URL..."
+git clone -q --depth 1 --single-branch --branch master --no-tags --no-checkout "$REPO_URL" "$WORKDIR"
 
 cd "$WORKDIR"
 
 # checkout_tree <tree>: check out <tree> from master, or warn if master has no such directory.
 # A checkout that fails or comes out incomplete stops the run before anything is pruned: on
-# 2026-10-07 a checkout of docker/ broke partway (blobs are fetched lazily), the old
+# 2026-10-07 a checkout of docker/ broke partway (blobs were then fetched lazily), the old
 # `|| log_warn` carried on, prune_tree deleted 45 host files, and cp put back only the 14
 # written before the break.
 checkout_tree() {
