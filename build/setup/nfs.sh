@@ -119,6 +119,23 @@ if [ -n "$failed" ]; then
     exit 1
 fi
 
+# The NFS check (nfs_check/ beside this script): every minute, a statfs of each share under a 5 s
+# limit, written as textfile metrics for node exporter and as a journal line on a change. It can
+# never hang the way df does on a dead NAS (ns01, 2026-10-20). Operator, 2026-10-20 (asyla backlog
+# 2026-10-20-hosts-observability-through-theorg, hygiene).
+log_info "Installing the NFS check (asyla-nfs-check.timer, every minute)..."
+CHECK_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/nfs_check"
+install -m 755 "$CHECK_SRC/asyla-nfs-check" /usr/local/sbin/asyla-nfs-check
+install -m 644 "$CHECK_SRC/asyla-nfs-check.service" "$CHECK_SRC/asyla-nfs-check.timer" /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now asyla-nfs-check.timer
+systemctl start asyla-nfs-check.service
+if ! grep -q '^asyla_nfs_check_last_run_timestamp_seconds ' /var/lib/node_exporter/textfile_collector/asyla_nfs.prom; then
+    log_error "The NFS check ran but wrote no metrics"
+    exit 1
+fi
+log_info "✅ NFS check: $(grep -c '^asyla_nfs_mount_up{.*} 1$' /var/lib/node_exporter/textfile_collector/asyla_nfs.prom) share(s) up"
+
 # Clean up package cache
 log_info "Cleaning up package cache..."
 apt autoremove -y

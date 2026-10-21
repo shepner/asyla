@@ -1,0 +1,11 @@
+# Runs asyla-nfs-check.service every minute (build/setup/nfs.sh enables it).
+[Unit]
+Description=asyla NFS mount check, every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=60s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

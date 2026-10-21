@@ -3,7 +3,7 @@
 # does not mount must fail the setup step. It used to be a warning and exit 0, so a build ran on
 # through restore and apps with no NAS (test01, 2026-10-14).
 #
-# It runs this checkout's build/setup/nfs.sh (HOST_SPEC = test01/host.toml) with a `mount` that always refuses (and `apt`,
+# It runs this checkout's build/setup/nfs.sh (HOST_SPEC = test01/host.toml; nfs_check/ beside it) with a `mount` that always refuses (and `apt`,
 # `sleep` and `systemctl` that do nothing) first in PATH, once with /mnt/nas/data2/docker
 # unmounted (expected: exit 1, that share named, data1 not named) and once with both shares
 # mounted (expected: exit 0). It then mounts data2 again with the real mount and checks it.
@@ -17,7 +17,7 @@ set -uo pipefail
 
 if [ "${1:-}" != "--on-host" ]; then
   REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-  COPYFILE_DISABLE=1 tar -C "$REPO" -cf - build/setup/nfs.sh test01/host.toml \
+  COPYFILE_DISABLE=1 tar -C "$REPO" -cf - build/setup/nfs.sh build/setup/nfs_check test01/host.toml \
       scripts/tests/test_nfs_mount_failure_test01.sh |
     ssh -o BatchMode=yes -o ConnectTimeout=10 -i ~/.ssh/docker_rsa docker@test01 '
       set -e

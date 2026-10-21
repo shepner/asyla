@@ -11,3 +11,11 @@ services:
       - "8099:8080"
     volumes:
       - ${DOCKER_DL}/hello/www:/www:ro
+    # The same settings as the production apps' healthchecks (asyla backlog
+    # 2026-10-20-hosts-observability-through-theorg, hygiene); busybox has wget.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s

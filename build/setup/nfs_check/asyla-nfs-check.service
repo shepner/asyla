@@ -1,0 +1,11 @@
+# asyla NFS mount check (build/setup/nfs_check/asyla-nfs-check; installed by build/setup/nfs.sh).
+# Run by asyla-nfs-check.timer. The script gives up on a share after 5 s; TimeoutStartSec is the
+# backstop, and systemd kills a stat left stuck on a dead share when the unit ends.
+[Unit]
+Description=asyla NFS mount check (statfs under a 5 s limit, textfile metrics)
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/asyla-nfs-check
+TimeoutStartSec=30

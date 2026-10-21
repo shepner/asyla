@@ -1,0 +1,125 @@
+#!/bin/bash
+# asyla-nfs-check: is each NFS share in /etc/fstab mounted and answering? Run every 60 s by
+# asyla-nfs-check.timer; installed to /usr/local/sbin by build/setup/nfs.sh. Operator, 2026-10-20
+# (asyla backlog 2026-10-20-hosts-observability-through-theorg, hygiene).
+#
+# It must never hang (ns01 hung on `df` over a dead NAS, 2026-10-20), so:
+#   - "mounted" comes from /proc/self/mounts, never `mountpoint` or `df`, which stat the share;
+#   - each mounted share gets one `stat -f` (statfs, which asks the server; a plain stat can be
+#     answered from the attribute cache, nfs(5) acdirmax: inference from the man page) in the
+#     background, all at once, waited for at most LIMIT seconds; one that has not answered by then
+#     is counted down, sent SIGKILL and left (systemd kills what is left of the unit's cgroup).
+#
+# Writes, atomically (a temp file without .prom in the same folder, then mv):
+#   /var/lib/node_exporter/textfile_collector/asyla_nfs.prom
+#     asyla_nfs_mount_up{mountpoint,source}               1 answering, 0 not
+#     asyla_nfs_mount_check_seconds{mountpoint,source}    time to answer (LIMIT if none)
+#     asyla_nfs_check_last_run_timestamp_seconds
+# and a journal line when a share's state changes (state under /run, so a boot starts afresh; a
+# share found down on the first run is logged too):
+#   <4>NFS_MOUNT_DOWN mountpoint=M source=S reason=not_mounted|error|no_answer
+#   <5>NFS_MOUNT_UP mountpoint=M source=S
+# Exits 0 whatever it finds: the metrics and the journal carry the result.
+
+set -u
+
+LIMIT=5
+PROM_DIR=/var/lib/node_exporter/textfile_collector
+PROM="$PROM_DIR/asyla_nfs.prom"
+STATE_DIR=/run/asyla-nfs-check
+
+now() { date +%s.%N; }
+
+mkdir -p "$PROM_DIR" "$STATE_DIR"
+
+# NFS lines of /etc/fstab: source, mount point.
+sources=()
+mounts=()
+while read -r src mp fstype _; do
+    case "$src" in ''|'#'*) continue ;; esac
+    case "$fstype" in nfs|nfs4) sources+=("$src"); mounts+=("$mp") ;; esac
+done < /etc/fstab
+
+# Mount points with an NFS file system mounted on them (field 2 of /proc/self/mounts, type field 3).
+mounted=" $(awk '$3 == "nfs" || $3 == "nfs4" { printf "%s ", $2 }' /proc/self/mounts)"
+
+n=${#mounts[@]}
+pids=()
+up=()
+reason=()
+secs=()
+start=$(now)
+for ((i = 0; i < n; i++)); do
+    pids[i]=""
+    if [[ "$mounted" == *" ${mounts[i]} "* ]]; then
+        stat -f "${mounts[i]}" >/dev/null 2>&1 &
+        pids[i]=$!
+    else
+        up[i]=0; reason[i]=not_mounted; secs[i]=0
+    fi
+done
+
+# Wait for every stat, at most LIMIT seconds in all.
+deadline=$(awk -v s="$start" -v l="$LIMIT" 'BEGIN { printf "%.3f", s + l }')
+while :; do
+    pending=0
+    for ((i = 0; i < n; i++)); do
+        pid=${pids[i]}
+        [ -n "$pid" ] || continue
+        if kill -0 "$pid" 2>/dev/null; then
+            pending=1
+            continue
+        fi
+        wait "$pid"
+        rc=$?
+        secs[i]=$(awk -v s="$start" -v e="$(now)" 'BEGIN { printf "%.3f", e - s }')
+        if [ "$rc" -eq 0 ]; then up[i]=1; reason[i]=""; else up[i]=0; reason[i]=error; fi
+        pids[i]=""
+    done
+    [ "$pending" -eq 1 ] || break
+    if awk -v d="$deadline" -v t="$(now)" 'BEGIN { exit !(t >= d) }'; then
+        for ((i = 0; i < n; i++)); do
+            pid=${pids[i]}
+            [ -n "$pid" ] || continue
+            kill -KILL "$pid" 2>/dev/null
+            up[i]=0; reason[i]=no_answer; secs[i]=$LIMIT
+            pids[i]=""
+        done
+        break
+    fi
+    sleep 0.1
+done
+
+tmp="$PROM_DIR/asyla_nfs.tmp.$$"
+{
+    echo "# HELP asyla_nfs_mount_up 1 if the NFS share in /etc/fstab is mounted and answers statfs within ${LIMIT}s."
+    echo "# TYPE asyla_nfs_mount_up gauge"
+    for ((i = 0; i < n; i++)); do
+        echo "asyla_nfs_mount_up{mountpoint=\"${mounts[i]}\",source=\"${sources[i]}\"} ${up[i]}"
+    done
+    echo "# HELP asyla_nfs_mount_check_seconds Time the share took to answer statfs (the limit if it did not)."
+    echo "# TYPE asyla_nfs_mount_check_seconds gauge"
+    for ((i = 0; i < n; i++)); do
+        echo "asyla_nfs_mount_check_seconds{mountpoint=\"${mounts[i]}\",source=\"${sources[i]}\"} ${secs[i]}"
+    done
+    echo "# HELP asyla_nfs_check_last_run_timestamp_seconds When asyla-nfs-check last ran."
+    echo "# TYPE asyla_nfs_check_last_run_timestamp_seconds gauge"
+    echo "asyla_nfs_check_last_run_timestamp_seconds $(date +%s)"
+} > "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$PROM"
+rm -f "$tmp"
+
+# Journal lines on a change of state.
+for ((i = 0; i < n; i++)); do
+    key=$(printf '%s' "${mounts[i]}" | tr '/' '_')
+    new=$([ "${up[i]}" -eq 1 ] && echo up || echo down)
+    old=$(cat "$STATE_DIR/$key" 2>/dev/null || echo none)
+    [ "$new" = "$old" ] && continue
+    if [ "$new" = down ]; then
+        echo "<4>NFS_MOUNT_DOWN mountpoint=${mounts[i]} source=${sources[i]} reason=${reason[i]}"
+    elif [ "$old" = down ]; then
+        echo "<5>NFS_MOUNT_UP mountpoint=${mounts[i]} source=${sources[i]}"
+    fi
+    echo "$new" > "$STATE_DIR/$key"
+done
+
+exit 0
