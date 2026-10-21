@@ -12,6 +12,15 @@ services:
     image: ${TC_REGISTRY:-gitea.asyla.org/personal}/tc-datalogger-faction-crimes:${TC_IMAGE_TAG}
     container_name: tc-faction-crimes-pipeline
     restart: unless-stopped
+    # Healthcheck: asyla backlog 2026-10-20-hosts-observability-through-theorg (operator, 2026-10-20).
+    # A pipeline serves nothing: healthy while its cron log was written in the last 45 min (it
+    # runs every 15 min; tc-faction-chains hourly, so 3 h). The image has python only.
+    healthcheck:
+      test: ["CMD", "python", "-c", 'import os, sys, time; sys.exit(time.time() - os.path.getmtime("/app/logs/cron.log") > 2700)']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     environment:
       - TZ=${LOCAL_TZ:-America/Chicago}
     networks:
@@ -26,6 +35,12 @@ services:
     image: ${TC_REGISTRY:-gitea.asyla.org/personal}/tc-datalogger-faction-members:${TC_IMAGE_TAG}
     container_name: tc-faction-members-pipeline
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", 'import os, sys, time; sys.exit(time.time() - os.path.getmtime("/app/logs/cron.log") > 2700)']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     environment:
       - TZ=${LOCAL_TZ:-America/Chicago}
     volumes:
@@ -39,6 +54,12 @@ services:
     image: ${TC_REGISTRY:-gitea.asyla.org/personal}/tc-datalogger-items:${TC_IMAGE_TAG}
     container_name: tc-items-pipeline
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", 'import os, sys, time; sys.exit(time.time() - os.path.getmtime("/app/logs/cron.log") > 2700)']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     environment:
       - TZ=${LOCAL_TZ:-America/Chicago}
     volumes:
@@ -52,6 +73,12 @@ services:
     image: ${TC_REGISTRY:-gitea.asyla.org/personal}/tc-datalogger-user-events:${TC_IMAGE_TAG}
     container_name: tc-user-events-pipeline
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", 'import os, sys, time; sys.exit(time.time() - os.path.getmtime("/app/logs/cron.log") > 2700)']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     environment:
       - TZ=${LOCAL_TZ:-America/Chicago}
     volumes:
@@ -65,6 +92,12 @@ services:
     image: ${TC_REGISTRY:-gitea.asyla.org/personal}/tc-datalogger-faction-chains:${TC_IMAGE_TAG}
     container_name: tc-faction-chains-pipeline
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", 'import os, sys, time; sys.exit(time.time() - os.path.getmtime("/app/logs/cron.log") > 10800)']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     environment:
       - TZ=${LOCAL_TZ:-America/Chicago}
     volumes:
@@ -78,6 +111,12 @@ services:
     image: ${TC_REGISTRY:-gitea.asyla.org/personal}/tc-datalogger-dashboard:${TC_IMAGE_TAG}
     container_name: tc-dashboard
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8080/health", timeout=4)']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     environment:
       - TZ=${LOCAL_TZ:-America/Chicago}
       - DASHBOARD_PORT=8080

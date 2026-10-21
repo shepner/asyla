@@ -28,6 +28,14 @@ services:
       VIKUNJA_CORS_ORIGINS: https://vikunja.asyla.org
     volumes:
       - ${TICKETING_ROOT:?}/db:/db
+    # Healthcheck: asyla backlog 2026-10-20-hosts-observability-through-theorg (operator, 2026-10-20).
+    # The image has no shell; vikunja's own healthcheck subcommand.
+    healthcheck:
+      test: ["CMD", "/app/vikunja/vikunja", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     restart: unless-stopped
     networks: [ticketing_net]
 

@@ -15,6 +15,13 @@ services:
     image: lscr.io/linuxserver/sonarr:latest
     container_name: sonarr
     restart: unless-stopped
+    # Healthcheck: asyla backlog 2026-10-20-hosts-observability-through-theorg (operator, 2026-10-20).
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8989/ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     depends_on:
       - transmission
       - jackett
@@ -37,6 +44,12 @@ services:
     image: lscr.io/linuxserver/radarr:latest
     container_name: radarr
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:7878/ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     depends_on:
       - transmission
       - jackett
@@ -59,6 +72,12 @@ services:
     image: lscr.io/linuxserver/overseerr:latest
     container_name: overseerr
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:5055/api/v1/status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     depends_on:
       - sonarr
       - radarr
@@ -76,6 +95,12 @@ services:
     image: lscr.io/linuxserver/jackett:latest
     container_name: jackett
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:9117/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     depends_on:
       - transmission
     environment:
@@ -93,6 +118,12 @@ services:
     image: lscr.io/linuxserver/transmission:latest
     container_name: transmission
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:9091/transmission/web/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     environment:
       - PUID=${DOCKER_UID:-1003}
       - PGID=${DOCKER_GID:-1000}

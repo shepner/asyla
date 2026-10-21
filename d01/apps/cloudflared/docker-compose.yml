@@ -16,6 +16,17 @@ services:
     command: ["tunnel", "run", "--token", "${TUNNEL_TOKEN}"]
     environment:
       - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+      # Metrics and /ready on loopback only; `cloudflared tunnel ready` (the healthcheck) reads the
+      # same variable: exit 0 at the live address, 1 at a dead port (d01, cloudflared 2026.10.1,
+      # 2026-10-20). /ready is 200 only while the tunnel has a connection to Cloudflare.
+      - TUNNEL_METRICS=127.0.0.1:20241
+    # Healthcheck: asyla backlog 2026-10-20-hosts-observability-through-theorg (operator, 2026-10-20).
+    healthcheck:
+      test: ["CMD", "cloudflared", "tunnel", "ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     # Attach to app networks so tunnel can reach services
     networks:
       - d01_internal

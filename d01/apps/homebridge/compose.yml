@@ -12,6 +12,13 @@ services:
     image: homebridge/homebridge:latest
     container_name: homebridge
     restart: unless-stopped
+    # Healthcheck: asyla backlog 2026-10-20-hosts-observability-through-theorg (operator, 2026-10-20).
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8581/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     network_mode: host
     environment:
       - TZ=${LOCAL_TZ:-America/Chicago}
@@ -25,6 +32,13 @@ services:
     image: caddy:alpine
     container_name: homebridge-proxy
     restart: unless-stopped
+    # Through the proxy to the host's UI, so it also fails when Homebridge does.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8581/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     extra_hosts:
       - "host.docker.internal:host-gateway"
     command: ["caddy", "reverse-proxy", "--from", ":8581", "--to", "http://host.docker.internal:8581"]
@@ -36,6 +50,12 @@ services:
     image: caddy:alpine
     container_name: cameraui-proxy
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8181/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     extra_hosts:
       - "host.docker.internal:host-gateway"
     command: ["caddy", "reverse-proxy", "--from", ":8181", "--to", "http://host.docker.internal:8181"]

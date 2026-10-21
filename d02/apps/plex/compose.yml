@@ -9,6 +9,13 @@ services:
     image: lscr.io/linuxserver/plex:latest
     container_name: plex
     restart: unless-stopped
+    # Healthcheck: asyla backlog 2026-10-20-hosts-observability-through-theorg (operator, 2026-10-20).
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:32400/identity"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
     network_mode: host
     environment:
       - PUID=${DOCKER_UID:-1003}

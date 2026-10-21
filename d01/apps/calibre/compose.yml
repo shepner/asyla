@@ -15,6 +15,14 @@ services:
     image: lscr.io/linuxserver/calibre:latest
     container_name: calibre
     restart: unless-stopped
+    # Healthcheck: asyla backlog 2026-10-20-hosts-observability-through-theorg (operator, 2026-10-20).
+    # :8080 is the GUI the tunnel and internal-access serve.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
     security_opt:
       - seccomp:unconfined
     shm_size: "1gb"

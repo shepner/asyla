@@ -12,6 +12,14 @@ services:
     image: ${BREEDING_RESEARCH_IMAGE:-breeding-research:local}
     container_name: breeding-research
     restart: unless-stopped
+    # Healthcheck: asyla backlog 2026-10-20-hosts-observability-through-theorg (operator, 2026-10-20).
+    # The image has python and no curl or wget; / asks for basic auth, /healthz does not.
+    healthcheck:
+      test: ["CMD", "python", "-c", 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8080/healthz", timeout=4)']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     user: "65534:65534"
     environment:
       - TZ=${LOCAL_TZ:-America/Chicago}
