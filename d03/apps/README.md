@@ -39,6 +39,7 @@ has are deleted on the host unless a repo `.gitignore` matches them (`*.env` sec
 | **ms-chronicle-backup** | `~/scripts/d03/apps/ms-chronicle-backup/ms-chronicle-backup.sh` | Nightly pull of ms-chronicle's newest verified backup snapshot (Mac Mini) into `/mnt/nas/data1/docker/ms-chronicle/mirror`; backup-only, no containers, writes only inside that directory. It runs once host-maintenance's `config/maintenance.toml` lists it; needs `.env` (the backup token, delivered by memory-system `deliver-backup-token.sh`) and the mirror directory, which it does not create |
 | **breeding-research** | `~/scripts/d03/apps/breeding-research/breeding-research.sh` | Scraper + API; needs `.env` |
 | **tc-datalogger** | `~/scripts/d03/apps/tc-datalogger/tc-datalogger.sh` | Torn City API → BigQuery stack; needs `.env` |
+| **unifi-monitor** | `~/scripts/d03/apps/unifi-monitor/unifi-monitor.sh` | UniFi Site Manager check every 5 min (DAY, MKE) → `status.json` for host-maintenance, `unifi.prom` for Prometheus; `up` needs the key from OpenBao (build_host.py start_env); see its README |
 | **gitea-runner** | `~/scripts/d03/apps/gitea-runner/gitea-runner.sh` | Gitea Actions runner, native (systemd); jobs run on the host as `docker`. Instance-wide; labels `asyla`, `d03`, `docker`. Symlink to the shared `docker/gitea-runner/`; see its README |
 
 ## Owned elsewhere — do not add them here
