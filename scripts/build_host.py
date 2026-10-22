@@ -7,6 +7,7 @@ from nothing but GitLab (this repo, its CI/CD variables), the NAS backups and th
 Usage:
   build_host.py HOST plan                      # read-only: spec, live VM, gaps
   build_host.py HOST build [--apply] [--from PHASE] [--only PHASE] [--recreate [--confirm HOST]]
+  build_host.py HOST build --only apps|late --app NAME [--app NAME...] [--apply]   # those apps only
                            [--node NODE] [--gitea-host HOST]
   build_host.py HOST verify                    # read-only
   build_host.py HOST token [--apply]           # TOKEN_FILE_HOSTS: deploy token file, then a GitLab read check;
@@ -1905,6 +1906,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                                                         "same, DIFFERS, only in GitLab or only on host")
     ap.add_argument("--from", dest="start", choices=PHASES)
     ap.add_argument("--only", choices=PHASES)
+    ap.add_argument("--app", dest="apps", action="append", metavar="NAME",
+                    help="with --only apps or late: start only these [[app]]s (one new app on a running host)")
     ap.add_argument("--recreate", action="store_true")
     ap.add_argument("--confirm")
     ap.add_argument("--node", choices=NODES, help="create the VM on this node (a disposable spec only)")
@@ -1917,6 +1920,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ap.error(f"{a.action} takes no further arguments: {' '.join(a.args)}")
     if a.keys and (a.action != "secrets" or a.args[:1] != ["check"]):
         ap.error("--keys is for secrets check only")
+    if a.apps and (a.action != "build" or a.only not in ("apps", "late")):
+        ap.error("--app is for build --only apps or --only late")
     if a.gitea_host is not None:
         if a.action != "build":
             ap.error(f"--gitea-host is for build (its runner phase), not {a.action}")
@@ -1978,6 +1983,11 @@ def main() -> int:
                 raise Fail(f"{a.host} is not disposable: destroy needs --confirm {a.host} (and the operator's approval)")
             destroy_vm(spec, a.apply, live["node"])
             return 0
+        if a.apps:
+            unknown = sorted(set(a.apps) - {x["name"] for x in spec.get("app", [])})
+            if unknown:
+                raise Fail(f"--app {', '.join(unknown)}: not an [[app]] of {a.host}")
+            spec["app"] = [x for x in spec["app"] if x["name"] in a.apps]
         phases = list(PHASES)
         if a.only:
             phases = [a.only]
