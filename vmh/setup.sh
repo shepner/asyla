@@ -20,7 +20,8 @@
 #   crash          one sysctl set, kdump-tools (MODULES=most, crashkernel by RAM), serial console
 #                  where the board has one, netconsole to vmh03 configured after vmbr0 exists
 #   netconsole-rx  vmh03 only: UDP 6666 from vmh01/vmh02, one log per sender with receive times
-#   health         /usr/local/sbin/asyla-vmh-health (read-only), for host-maintenance's monitor
+#   health         /usr/local/sbin/asyla-vmh-health (read-only), and root's authorized_keys line that
+#                  lets host-maintenance's monitor (the d03 runner's key) run it and nothing else
 set -eu
 
 SOURCES=/etc/apt/sources.list.d
@@ -31,6 +32,10 @@ NC_DIR=/sys/kernel/config/netconsole/asyla
 NC_PORT=6666
 RX_SENDERS="vmh01=10.0.0.35 vmh02=10.0.0.36"
 CANARY=10.0.0.37                             # vmh03: netconsole receiver and version canary
+# host-maintenance's runner key on d03 (its setup/setup-runner-d03.sh; public). On a node it may run
+# the health script only, from d03 (its address, or a job container's).
+MONITOR_KEY='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIN8NNenIyQGHyq+UJRcpLsQA9OMk2c9C2+BVuPY98k7x host-maintenance@d03'
+MONITOR_OPTS='from="10.0.0.62,172.16.0.0/12",restrict,command="/usr/local/sbin/asyla-vmh-health"'
 SOAK_DAYS=${SOAK_DAYS:-7}                    # apply.sh may lower it for --plan only
 # One reservation rule for all three; the kernel picks by RAM (vmh03 15 GB: 256M, vmh01/02 125 GB: 512M).
 # kdump-tools' own default (512M-:192M) is too small once the kdump initrd carries MODULES=most.
@@ -364,9 +369,32 @@ EOF
 }
 
 # ---- health
+monitor_line() { printf '%s %s\n' "$MONITOR_OPTS" "$MONITOR_KEY"; }
+# root's authorized_keys is a link into /etc/pve/priv on Proxmox: in a cluster one file for all nodes.
+root_keys() { readlink -f /root/.ssh/authorized_keys; }
+
 part_health() {
     say "== health"
     payload HEALTH_B64 | install_file /usr/local/sbin/asyla-vmh-health 755
+    ak=$(root_keys)
+    if grep -qxF "$(monitor_line)" "$ak" 2>/dev/null; then
+        say "ok      $ak: host-maintenance key (health only)"
+    else
+        # Any other line with this key goes (written in place: the link and pmxcfs stay as they are).
+        # The nodes reach each other as root with this file: every other line must survive.
+        body=$(printf '%s\n' "$MONITOR_KEY" | awk '{ print $2 }')
+        [ ! -e "$ak" ] || [ -r "$ak" ] || die "$ak unreadable"
+        before=0 same=0
+        if [ -e "$ak" ]; then
+            before=$(grep -c . "$ak" || true); same=$(grep -cF -- "$body" "$ak" || true)
+            [ -e /root/authorized_keys.before-asyla-vmh ] || cp -p "$ak" /root/authorized_keys.before-asyla-vmh
+        fi
+        tmp=$(mktemp)
+        { if [ -e "$ak" ]; then grep -vF -- "$body" "$ak" || true; fi; monitor_line; } >"$tmp"
+        [ "$(grep -c . "$tmp")" -eq $((before - same + 1)) ] || { rm -f "$tmp"; die "$ak: rewrite would lose lines; nothing written"; }
+        cat "$tmp" >"$ak"; rm -f "$tmp"
+        say "changed $ak: host-maintenance key (health only)"
+    fi
 }
 
 # ---- check
@@ -429,6 +457,8 @@ check() {
             || flag "nft table inet asyla_netconsole missing"
     fi
     [ -x /usr/local/sbin/asyla-vmh-health ] && okay "asyla-vmh-health installed" || flag "asyla-vmh-health missing"
+    grep -qxF "$(monitor_line)" "$(root_keys)" 2>/dev/null && okay "host-maintenance key (health only)" \
+        || flag "$(root_keys) lacks the host-maintenance line (health only)"
     if [ -n "${HEALTH_B64:-}" ] && [ -x /usr/local/sbin/asyla-vmh-health ]; then
         payload HEALTH_B64 | want_file /usr/local/sbin/asyla-vmh-health
     fi
