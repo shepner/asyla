@@ -1,0 +1,38 @@
+# unifi-monitor on d03 (README.md): unifi_check.py every UNIFI_INTERVAL seconds, a fresh process each
+# time. The key is in no file: unifi-monitor.sh up refuses to start without it in its environment
+# (build_host.py start_env); the empty default lets down, logs and verify run without it.
+name: unifi-monitor
+
+services:
+  unifi-monitor:
+    image: python:3.12-alpine
+    container_name: unifi-monitor
+    restart: unless-stopped
+    user: "${UNIFI_UID:?}:${UNIFI_GID:?}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      UNIFI_SITE_MANAGER_API_KEY: ${UNIFI_SITE_MANAGER_API_KEY:-}
+      UNIFI_DATA: /data
+      UNIFI_INTERVAL: "300"
+      PYTHONDONTWRITEBYTECODE: "1"
+      TZ: UTC
+    command: ["sh", "-c", "while :; do python3 /app/unifi_check.py; sleep \"$$UNIFI_INTERVAL\"; done"]
+    volumes:
+      # The app directory, not single files: the nightly scripts task replaces files, and a file
+      # mount would keep the old one.
+      - ./:/app:ro
+      - ${UNIFI_ROOT:?}:/data
+      # Zone data for each console's local time in messages (the alpine image has none).
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
+    healthcheck:
+      # status.json rewritten within two cycles and a bit.
+      test: ["CMD", "python3", "-c", "import os,sys,time; sys.exit(time.time() - os.path.getmtime('/data/status.json') > 720)"]
+      interval: 60s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    logging:
+      driver: local
+      options: {max-size: "5m", max-file: "3"}

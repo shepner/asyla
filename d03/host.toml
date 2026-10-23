@@ -109,6 +109,14 @@ name = "ms-chronicle-backup"    # no container: nightly pull of ms-chronicle's v
 start = []
 restore = false                 # its data is a copy of the Mini's; the next backup re-pulls it
 verify = ["verify"]
+# UniFi Site Manager check every 5 min (DAY and MKE); host-maintenance's monitor reads its status.json.
+# The key is resolved from OpenBao on the workstation and sent over SSH stdin (no file on d03):
+#   credentials.py exec UNIFI_SITE_MANAGER_API_KEY -- build_host.py d03 build --only apps --app unifi-monitor
+[[app]]
+name = "unifi-monitor"
+start_env = ["UNIFI_SITE_MANAGER_API_KEY"]
+restore = false                 # its state rebuilds in one check (firmware first-seen times restart)
+verify = ["verify"]
 
 [[external]]
 name = "internal-access"

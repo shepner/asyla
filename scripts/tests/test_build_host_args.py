@@ -30,7 +30,7 @@ build_host.subprocess.run = _no_contact
 build_host.urllib.request.urlopen = _no_contact
 
 DEFAULTS = {"args": [], "apply": False, "keys": False, "start": None, "only": None, "recreate": False, "confirm": None,
-            "node": None, "gitea_host": None}
+            "node": None, "gitea_host": None, "apps": None}
 
 
 def parse(line: str) -> dict | str:
@@ -642,6 +642,18 @@ results = [
          "test01 build --recreate --apply --node vmh02",
          "--node vmh02 test01 build --apply --recreate"),
     refused("an unknown node", "test01 build --node vmh09", "invalid choice"),
+    # --app: one new app on a running host, without re-running every app's start commands.
+    documented("usage, --app", "build_host.py HOST build --only apps|late --app NAME"),
+    same("build --only apps --app", {"host": "d03", "action": "build", "only": "apps", "apply": True,
+                                     "apps": ["unifi-monitor"]},
+         "d03 build --only apps --app unifi-monitor --apply",
+         "--app unifi-monitor d03 build --apply --only apps"),
+    refused("--app without --only apps", "d03 build --app unifi-monitor", "--app is for build --only apps"),
+    refused("--app with another phase", "d03 build --only verify --app unifi-monitor", "--app is for build --only apps"),
+    refused("--app with another action", "d03 verify --app unifi-monitor", "--app is for build --only apps"),
+    check("d03's unifi-monitor: its key over SSH stdin only, no restore",
+          (lambda a: (a.get("start_env"), a.get("restore")) == (["UNIFI_SITE_MANAGER_API_KEY"], False))(
+              next(x for x in build_host.load_spec("d03")["app"] if x["name"] == "unifi-monitor"))),
     spec_case("test01 defaults to its spec's node", "test01", None, "vmh01"),
     spec_case("test01 on the other node", "test01", "vmh02", "vmh02"),
     spec_case("a production host keeps its node", "d03", "vmh02", "is not disposable", refused=True),
