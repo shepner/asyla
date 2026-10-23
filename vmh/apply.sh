@@ -11,6 +11,7 @@
 #   vmh/apply.sh kernel NODE VERSION|none [--next-boot]   pin a kernel ABI for the next boot(s)
 #   vmh/apply.sh cleanup NODE [--dry-run] old kernels (PVE's keep list), old kdump initrds, apt cache
 #   vmh/apply.sh health NODE              read-only: vmh/health.sh, as host-maintenance runs it
+#   vmh/apply.sh crashtest vmh03 [--console|--clean]   sysrq crash: does kdump save a vmcore?
 # vmh01 and vmh02 are production (asyla critical-infra, CRI-1): any mode other than survey, check,
 # health and patch --plan also needs --production, given only after the operator approved that exact
 # command.
@@ -28,7 +29,7 @@ address() {
     esac
 }
 
-usage() { sed -n '2,17p' "$0" >&2; exit 2; }
+usage() { sed -n '2,18p' "$0" >&2; exit 2; }
 
 [ $# -ge 2 ] || usage
 mode=$1; shift
@@ -69,6 +70,7 @@ case "$mode" in
                  "approval of this exact command, and add --production." >&2
             exit 3
         fi ;;
+    crashtest) [ "$node" = vmh03 ] || { echo "apply.sh: crashtest runs on vmh03 only" >&2; exit 3; } ;;
     *) usage ;;
 esac
 

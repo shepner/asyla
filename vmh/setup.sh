@@ -13,6 +13,10 @@
 #   canary-list              read-only (vmh03): "package version first-installed-epoch source
 #                            source-version" per installed package
 #   health                   read-only: the health checks (vmh/health.sh), as host-maintenance runs them
+#   crashtest [--console|--clean]   vmh03 only: a sysrq crash, to prove kdump saves a vmcore and the
+#                            node reboots by itself. --console: the crash kernel prints everything and
+#                            waits 120 s before its reboot, for someone at the screen. --clean: remove
+#                            the dumps and restore the normal crash kernel cmdline
 # Parts:
 #   repos          pve-no-subscription; pve-enterprise and ceph disabled
 #   updates        unattended-upgrades: vmh03 all origins (the canary), production Debian-Security
@@ -37,7 +41,7 @@ CANARY=10.0.0.37                             # vmh03: netconsole receiver and ve
 MONITOR_KEY='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIN8NNenIyQGHyq+UJRcpLsQA9OMk2c9C2+BVuPY98k7x host-maintenance@d03'
 MONITOR_OPTS='from="10.0.0.62,172.16.0.0/12",restrict,command="/usr/local/sbin/asyla-vmh-health"'
 SOAK_DAYS=${SOAK_DAYS:-7}                    # apply.sh may lower it for --plan only
-# One reservation rule for all three; the kernel picks by RAM (vmh03 15 GB: 256M, vmh01/02 125 GB: 512M).
+# One reservation rule for all three; the kernel picks by RAM (vmh03 15 GB: 1G, vmh01/02 125 GB: 2G).
 # kdump-tools' own default (512M-:192M) is far too small once the kdump initrd carries MODULES=most:
 # on vmh03 (2026-10-23) a sysrq crash with 256M ran the crash kernel out of memory ("System is
 # deadlocked on memory") and the node sat at the panic screen until power-cycled. The initrd is
@@ -622,6 +626,37 @@ cleanup() {
     say "kernels left: $(dpkg-query -W -f='${db:Status-Abbrev} ${Package}\n' 'proxmox-kernel-*-pve-signed' 'pve-kernel-*-pve' 2>/dev/null | awk '$1 ~ /^ii/ { sub(/^(proxmox|pve)-kernel-/, "", $2); sub(/-signed$/, "", $2); print $2 }' | sort -V | tr '\n' ' ')"
 }
 
+# ---- crash test (vmh03 only)
+crashtest() {
+    case "${1:-}" in
+        --clean)
+            for d in /var/crash/2*; do [ -d "$d" ] || continue; rm -rf "$d"; say "changed removed $d"; done
+            part_crash   # the normal crash kernel cmdline again, after --console
+            return ;;
+        ''|--console) ;;
+        *) die "crashtest [--console|--clean]" ;;
+    esac
+    [ "$ROLE" = canary ] || die "crashtest runs on vmh03 only (a production crash test is a decision step)"
+    [ "$(cat /sys/kernel/kexec_crash_loaded 2>/dev/null)" = 1 ] || die "kdump is not loaded"
+    running=$( { qm list 2>/dev/null; pct list 2>/dev/null; } | awk '$0 ~ / running / { n++ } END { print n + 0 }')
+    [ "$running" = 0 ] || die "$running guest(s) running"
+    if command -v corosync-qnetd-tool >/dev/null; then
+        clusters=$(corosync-qnetd-tool -l | grep -c '^Cluster' || true)
+        [ "$clusters" = 0 ] || die "corosync-qnetd serves $clusters cluster(s): a crash would cost them a vote"
+    fi
+    if [ "${1:-}" = --console ]; then
+        sed -i '/^[[:space:]]*#*[[:space:]]*KDUMP_CMDLINE_APPEND=/d' "$KDUMP_DEFAULTS"
+        printf 'KDUMP_CMDLINE_APPEND="%s loglevel=7"\n' "$(printf '%s' "$KDUMP_APPEND" | sed 's/panic=10/panic=120/')" \
+            >>"$KDUMP_DEFAULTS"
+        kdump-config unload >/dev/null && kdump-config load >/dev/null
+        say "changed crash kernel: loglevel=7, panic=120 (until crashtest --clean or setup crash)"
+    fi
+    kdump-config show | sed -n '/kexec command/,$p'
+    say "crash in 3 s; the node should be back within about 2 min (with --console about 4 min)"
+    sync
+    nohup sh -c 'sleep 3; echo c >/proc/sysrq-trigger' </dev/null >/dev/null 2>&1 &
+}
+
 [ "$(id -u)" = 0 ] || die "run as root"
 command -v pveversion >/dev/null || die "not a Proxmox VE host"
 
@@ -643,5 +678,6 @@ case "$mode" in
     cleanup) cleanup "$@" ;;
     canary-list) canary_list ;;
     health) payload HEALTH_B64 | sh -s -- "$@" ;;
-    *) die "unknown mode $mode: check | setup [PART...] | patch [--dry-run] | kernel VERSION|none [--next-boot] | cleanup [--dry-run] | canary-list | health" ;;
+    crashtest) crashtest "$@" ;;
+    *) die "unknown mode $mode: check | setup [PART...] | patch [--dry-run] | kernel VERSION|none [--next-boot] | cleanup [--dry-run] | canary-list | health | crashtest [--console|--clean]" ;;
 esac
