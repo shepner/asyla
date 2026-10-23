@@ -25,6 +25,8 @@ vmh/apply.sh patch vmh03 [--dry-run]      # apt upgrade, no reboot
 vmh/apply.sh kernel vmh03 VERSION --next-boot   # one trial boot; a panic (panic=10) falls back
 vmh/apply.sh kernel vmh03 VERSION|none    # pin for every boot, or remove the pin
 vmh/apply.sh cleanup vmh03 [--dry-run]    # old kernels by PVE's own keep list, apt cache
+vmh/apply.sh crashtest vmh03 [--clean]    # vmh03 only: sysrq crash; did kdump save a vmcore?
+vmh/usage.py [--node vmh01] [--window 2]  # read-only: guest load by hour of week, quietest windows
 ```
 
 ## Parts (`setup`)
