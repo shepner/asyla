@@ -18,6 +18,10 @@ An urgent finding is written only after confirm_cycles cycles in a row (the host
 monitor then mails at its first sighting). stage.json, written by `unifi-monitor.sh stage`, adds
 one urgent problem at once until it expires: the end-to-end test of the alert path.
 
+Times in messages are each console's local time (its v1/hosts timezone) with UTC beside it; a
+device restart inside the console's daily auto-update hour says so. The zone data comes from the
+host's /usr/share/zoneinfo (compose.yml); without it a time is written in UTC only.
+
 Key: UNIFI_SITE_MANAGER_API_KEY from the environment (the asyla organization's Site Manager key),
 sent as a header, never printed. Config: unifi-monitor.toml beside this file.
 """
@@ -31,6 +35,7 @@ import tomllib
 import urllib.error
 import urllib.request
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 API = "https://api.ui.com/"
 KEY_ENV = "UNIFI_SITE_MANAGER_API_KEY"
@@ -59,6 +64,27 @@ def parse(s: str | None) -> dt.datetime | None:
     except ValueError:
         return None
     return t if t.tzinfo else t.replace(tzinfo=dt.timezone.utc)
+
+
+def zone(name: str | None) -> ZoneInfo | None:
+    try:
+        return ZoneInfo(name) if name else None
+    except (ZoneInfoNotFoundError, ValueError):
+        return None
+
+
+def when(t: dt.datetime, tz: ZoneInfo | None) -> str:
+    """'2026-10-22 03:30 EDT (07:30Z)' in the console's zone; UTC only when the zone is unknown."""
+    if not tz:
+        return iso(t)
+    return f"{t.astimezone(tz):%Y-%m-%d %H:%M %Z} ({t.astimezone(dt.timezone.utc):%H:%MZ})"
+
+
+def update_hour(host: dict) -> int | None:
+    """The console's daily auto-update hour (local), from v1/hosts reportedState.autoUpdate."""
+    sched = ((host.get("reportedState") or {}).get("autoUpdate") or {}).get("schedule") or {}
+    hour = sched.get("hour")
+    return hour if sched.get("frequency") == "daily" and isinstance(hour, int) else None
 
 
 def get(rel: str, key: str) -> dict:
@@ -103,12 +129,15 @@ def evaluate(cfg: dict, hosts: list, devices: list, isp: list, state: dict, t: d
             found.append((f"console:{name}:missing", "urgent", f"UniFi {name}: console not listed in Site Manager"))
             continue
         cstate = (h.get("reportedState") or {}).get("state")
+        tz = zone((h.get("reportedState") or {}).get("timezone"))
+        upd = update_hour(h)
         connected = cstate == "connected"
         read["consoles"].append((name, connected))
         if not connected:
+            changed = parse(h.get("lastConnectionStateChange"))
             found.append((f"console:{name}:disconnected", "urgent",
                           f"UniFi {name}: console {cstate or 'unknown'} in Site Manager "
-                          f"since {h.get('lastConnectionStateChange') or '?'}"))
+                          f"since {when(changed, tz) if changed else '?'}"))
         listed = devs.get(h.get("id"), [])
         mem = known.setdefault(name, {})
         offline = 0
@@ -125,15 +154,17 @@ def evaluate(cfg: dict, hosts: list, devices: list, isp: list, state: dict, t: d
                 found.append((f"device:{name}:{mac}:offline", "urgent",
                               f"UniFi {name}: {label} is {d.get('status') or 'unknown'}"))
             if start and t - start < dt.timedelta(hours=cfg["reboot_report_hours"]):
+                planned = upd is not None and tz is not None and start.astimezone(tz).hour == upd
                 found.append((f"device:{name}:{mac}:restarted", "warn",
-                              f"UniFi {name}: {label} restarted at {iso(start)}"))
+                              f"UniFi {name}: {label} restarted at {when(start, tz)}"
+                              + (f", during its {upd:02d}:00 auto-update" if planned else "")))
             fkey = f"{name}/{mac}"
             if update:
                 first = parse(fw_seen.setdefault(fkey, iso(t)))
                 if t - first >= dt.timedelta(days=cfg["firmware_waiting_days"]):
                     found.append((f"device:{name}:{mac}:firmware", "warn",
                                   f"UniFi {name}: {label} firmware {d.get('version')} has had an update "
-                                  f"({d.get('updateAvailable') or d.get('firmwareStatus')}) waiting since {iso(first)}"))
+                                  f"({d.get('updateAvailable') or d.get('firmwareStatus')}) waiting since {when(first, tz)}"))
             else:
                 fw_seen.pop(fkey, None)
         listed_macs = {d.get("mac") or d.get("id") or d.get("name") for d in listed}
@@ -148,7 +179,7 @@ def evaluate(cfg: dict, hosts: list, devices: list, isp: list, state: dict, t: d
                               f"UniFi {name}: {m.get('name')} is no longer listed (last seen {m.get('last_seen')})"))
         summary[name] = {"state": cstate, "devices": len(listed), "offline": offline}
         if ccfg.get("wan"):
-            found += wan_findings(cfg, name, h.get("id"), isp, read, t)
+            found += wan_findings(cfg, name, h.get("id"), isp, read, t, tz)
     expires = parse(cfg.get("key_expires"))
     if expires and expires - t < dt.timedelta(days=30):
         found.append(("key:expiry", "warn", f"UniFi Site Manager API key expires {cfg['key_expires']}: "
@@ -156,7 +187,8 @@ def evaluate(cfg: dict, hosts: list, devices: list, isp: list, state: dict, t: d
     return found, read, summary
 
 
-def wan_findings(cfg: dict, name: str, host_id: str, isp: list, read: dict, t: dt.datetime) -> list:
+def wan_findings(cfg: dict, name: str, host_id: str, isp: list, read: dict, t: dt.datetime,
+                 tz: ZoneInfo | None = None) -> list:
     w = cfg["wan"]
     periods = [p for s in isp if s.get("hostId") == host_id for p in s.get("periods") or []]
     rows = sorted(((parse(p.get("metricTime")), (p.get("data") or {}).get("wan") or {}) for p in periods),
@@ -168,22 +200,22 @@ def wan_findings(cfg: dict, name: str, host_id: str, isp: list, read: dict, t: d
     read["wan"].append((name, latest_t, latest))
     found = []
     if t - latest_t > dt.timedelta(hours=w["stale_hours"]):
-        found.append((f"wan:{name}:stale", "warn", f"UniFi {name}: newest WAN figures are from {iso(latest_t)}"))
+        found.append((f"wan:{name}:stale", "warn", f"UniFi {name}: newest WAN figures are from {when(latest_t, tz)}"))
     recent = [x for at, x in rows if latest_t - at < dt.timedelta(minutes=w["window_minutes"])]
     down = sum(x.get("downtime") or 0 for x in recent)
     if down:
         found.append((f"wan:{name}:downtime", "warn",
-                      f"UniFi {name}: WAN downtime {down} in the hour to {iso(latest_t)}"))
+                      f"UniFi {name}: WAN downtime {down} in the hour to {when(latest_t, tz)}"))
     slow = [x.get("avgLatency") for x in recent if (x.get("avgLatency") or 0) > w["latency_ms"]]
     if len(slow) >= w["periods"]:
         found.append((f"wan:{name}:latency", "warn",
                       f"UniFi {name}: WAN latency above {w['latency_ms']} ms in {len(slow)} of {len(recent)} "
-                      f"5-minute periods (up to {max(slow)} ms) in the hour to {iso(latest_t)}"))
+                      f"5-minute periods (up to {max(slow)} ms) in the hour to {when(latest_t, tz)}"))
     lossy = [x.get("packetLoss") for x in recent if (x.get("packetLoss") or 0) >= w["loss"]]
     if len(lossy) >= w["periods"]:
         found.append((f"wan:{name}:loss", "warn",
                       f"UniFi {name}: WAN packet loss {w['loss']} or more in {len(lossy)} of {len(recent)} "
-                      f"5-minute periods (up to {max(lossy)}) in the hour to {iso(latest_t)}"))
+                      f"5-minute periods (up to {max(lossy)}) in the hour to {when(latest_t, tz)}"))
     return found
 
 

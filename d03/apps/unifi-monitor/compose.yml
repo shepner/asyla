@@ -24,6 +24,8 @@ services:
       # mount would keep the old one.
       - ./:/app:ro
       - ${UNIFI_ROOT:?}:/data
+      # Zone data for each console's local time in messages (the alpine image has none).
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
     healthcheck:
       # status.json rewritten within two cycles and a bit.
       test: ["CMD", "python3", "-c", "import os,sys,time; sys.exit(time.time() - os.path.getmtime('/data/status.json') > 720)"]

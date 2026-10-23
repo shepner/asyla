@@ -27,12 +27,16 @@ collects the same readings later, once it is production on d06.
   | Console not connected, or not listed in Site Manager | urgent, after 2 checks in a row |
   | Device not online | urgent, after 2 checks in a row |
   | API failing (a revoked key, api.ui.com down) | warn, urgent from the 3rd check in a row |
-  | Device restarted in the last 24 h (consoles auto-update daily at 03:00) | warn |
+  | Device restarted in the last 24 h ("during its 03:00 auto-update" when it falls in the console's update hour) | warn |
   | Firmware update waiting 7 days or more | warn |
   | Device no longer listed (warned for a day, then forgotten) | warn |
   | DAY WAN: any downtime; latency over 30 ms or loss 10+ in 3 of the hour's 5-minute periods; figures over 3 h old | warn |
   | Site Manager key within 30 days of expiry (`key_expires`) | warn |
   | A staged test alert (`stage`) | urgent, at once |
+
+  Times in messages are the console's local time with UTC beside it (DAY America/New_York, MKE
+  America/Chicago, from v1/hosts), e.g. `2026-10-22 03:30 EDT (07:30Z)`. The zone data is d03's
+  `/usr/share/zoneinfo`, mounted read-only; without it times are UTC only.
 
 - **Key:** `UNIFI_SITE_MANAGER_API_KEY`, the asyla organization's Site Manager key (made 2026-10-21
   for a year). It is in no file: `build_host.py` resolves it from OpenBao on the workstation and

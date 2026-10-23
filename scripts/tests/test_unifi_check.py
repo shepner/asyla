@@ -31,9 +31,11 @@ def z(t: dt.datetime) -> str:
     return uc.iso(t)
 
 
-def host(hid, name, state="connected"):
-    return {"id": hid, "reportedState": {"name": name, "state": state},
-            "lastConnectionStateChange": "2026-10-22T07:34:51Z"}
+def host(hid, name, state="connected", tz=None):
+    rs = {"name": name, "state": state}
+    if tz:   # as v1/hosts gives it (2026-10-23): the zone and a daily 03:00 auto-update
+        rs |= {"timezone": tz, "autoUpdate": {"schedule": {"frequency": "daily", "hour": 3, "day": 0}}}
+    return {"id": hid, "reportedState": rs, "lastConnectionStateChange": "2026-10-22T07:34:51Z"}
 
 
 def dev(mac, name, status="online", start=T - dt.timedelta(days=10), fw="upToDate", update=None):
@@ -143,6 +145,35 @@ class Findings(unittest.TestCase):
     def test_key_expiry_warns_thirty_days_before(self):
         self.assertNotIn("key:expiry", run(t=dt.datetime(2027, 9, 20, tzinfo=dt.timezone.utc))[0])
         self.assertEqual(run(t=dt.datetime(2027, 9, 22, tzinfo=dt.timezone.utc))[0]["key:expiry"][0], "warn")
+
+
+class LocalTime(unittest.TestCase):
+    ZONED = [host("h-day", "DAY", tz="America/New_York"), host("h-mke", "MKE", tz="America/Chicago")]
+
+    def restart(self, console, mac, at):
+        devs = devices(day=[dev("AA", "AP-Hall", start=at)], mke=[dev("BB", "UpstairsAP", start=at)])
+        return run(hosts=self.ZONED, devs=devs)[0][f"device:{console}:{mac}:restarted"][1]
+
+    def test_restart_in_the_consoles_auto_update_hour(self):
+        at = dt.datetime(2026, 10, 22, 7, 30, 8, tzinfo=dt.timezone.utc)   # DAY's console, 2026-10-22
+        self.assertEqual(self.restart("DAY", "AA", at), "UniFi DAY: AP-Hall (AC LR) restarted at "
+                                                        "2026-10-22 03:30 EDT (07:30Z), during its 03:00 auto-update")
+        self.assertTrue(self.restart("MKE", "BB", at).endswith("2026-10-22 02:30 CDT (07:30Z)"),
+                        "the same instant is 02:30 in Chicago: not MKE's update hour")
+        self.assertTrue(self.restart("MKE", "BB", at + dt.timedelta(hours=1)).endswith(", during its 03:00 auto-update"))
+
+    def test_disconnected_since_in_local_time(self):
+        found, *_ = run(hosts=[host("h-day", "DAY", "disconnected", tz="America/New_York"), self.ZONED[1]])
+        self.assertIn("since 2026-10-22 03:34 EDT (07:34Z)", found["console:DAY:disconnected"][1])
+
+    def test_wan_times_in_local_time(self):
+        wan = [period(T - dt.timedelta(minutes=60), down=30)] + healthy_wan()[1:]
+        found, *_ = run(hosts=self.ZONED, wan=wan)
+        self.assertIn("in the hour to 2026-10-22 15:00 EDT (19:00Z)", found["wan:DAY:downtime"][1])
+
+    def test_unknown_zone_falls_back_to_utc(self):
+        found, *_ = run(hosts=[host("h-day", "DAY", "disconnected", tz="Nowhere/Zone"), HOSTS[1]])
+        self.assertIn("since 2026-10-22T07:34:51Z", found["console:DAY:disconnected"][1])
 
 
 class Confirm(unittest.TestCase):
