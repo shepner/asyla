@@ -38,8 +38,14 @@ MONITOR_KEY='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIN8NNenIyQGHyq+UJRcpLsQA9OMk2c9
 MONITOR_OPTS='from="10.0.0.62,172.16.0.0/12",restrict,command="/usr/local/sbin/asyla-vmh-health"'
 SOAK_DAYS=${SOAK_DAYS:-7}                    # apply.sh may lower it for --plan only
 # One reservation rule for all three; the kernel picks by RAM (vmh03 15 GB: 256M, vmh01/02 125 GB: 512M).
-# kdump-tools' own default (512M-:192M) is too small once the kdump initrd carries MODULES=most.
-CRASHKERNEL=1G-4G:192M,4G-64G:256M,64G-:512M
+# kdump-tools' own default (512M-:192M) is far too small once the kdump initrd carries MODULES=most:
+# on vmh03 (2026-10-23) a sysrq crash with 256M ran the crash kernel out of memory ("System is
+# deadlocked on memory") and the node sat at the panic screen until power-cycled. The initrd is
+# ~84 MB compressed; kdump-config suggested 875M. vmh03 (15 GB) gets 1G, vmh01/vmh02 (125 GB) 2G.
+CRASHKERNEL=1G-4G:192M,4G-64G:1G,64G-:2G
+KDUMP_DEFAULTS=/etc/default/kdump-tools
+# The crash kernel's own panic must reboot, never wait at the panic screen (the 2026-10-23 hang).
+KDUMP_APPEND='reset_devices systemd.unit=kdump-tools-dump.service nr_cpus=1 irqpoll usbcore.nousb panic=10'
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'vmh setup: %s\n' "$*" >&2; exit 1; }
@@ -254,6 +260,18 @@ part_crash() {
         say "ok      $KDUMP_HOOK: KDUMP_MODULES=most"
     fi
 
+    if grep -qxF "KDUMP_CMDLINE_APPEND=\"$KDUMP_APPEND\"" "$KDUMP_DEFAULTS"; then
+        say "ok      $KDUMP_DEFAULTS: crash kernel panic=10"
+    else
+        sed -i '/^[[:space:]]*#*[[:space:]]*KDUMP_CMDLINE_APPEND=/d' "$KDUMP_DEFAULTS"
+        printf 'KDUMP_CMDLINE_APPEND="%s"\n' "$KDUMP_APPEND" >>"$KDUMP_DEFAULTS"
+        say "changed $KDUMP_DEFAULTS: crash kernel panic=10"
+        if [ "$(cat /sys/kernel/kexec_crash_loaded 2>/dev/null)" = 1 ]; then
+            kdump-config unload >/dev/null && kdump-config load >/dev/null
+            say "changed kdump reloaded"
+        fi
+    fi
+
     reset_changed
     grub_body | install_file "$GRUB_DROPIN" 644
     if changed || ! grep -qF "crashkernel=$CRASHKERNEL" /boot/grub/grub.cfg 2>/dev/null; then boot_refresh; fi
@@ -425,6 +443,8 @@ check() {
         [ "$(sysctl -n "$k")" = "$v" ] || say "FAIL    sysctl $k is $(sysctl -n "$k"), want $v"
     done | grep . && bad=1
     installed kdump-tools && okay "kdump-tools installed" || flag "kdump-tools not installed"
+    grep -qxF "KDUMP_CMDLINE_APPEND=\"$KDUMP_APPEND\"" "$KDUMP_DEFAULTS" 2>/dev/null \
+        && okay "crash kernel panic=10" || flag "$KDUMP_DEFAULTS lacks the crash kernel's panic=10"
     grep -q '^[[:space:]]*KDUMP_MODULES=most' "$KDUMP_HOOK" 2>/dev/null && okay "kdump initrd MODULES=most" \
         || flag "$KDUMP_HOOK not patched to KDUMP_MODULES=most"
     grub_body | want_file "$GRUB_DROPIN"
