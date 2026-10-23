@@ -6,11 +6,14 @@
 #   vmh/apply.sh setup NODE [PART...]     converge the node (idempotent); PARTs as in vmh/setup.sh
 #   vmh/apply.sh patch NODE [--dry-run]   apt upgrade, no reboot; on vmh01/vmh02 only what vmh03 has
 #                                         run for setup.sh's SOAK_DAYS (vmh03's list is read first)
+#   vmh/apply.sh patch NODE --plan        read-only: that verdict from the node's current lists, no
+#                                         apt-get update (VMH_SOAK_DAYS=N overrides SOAK_DAYS here only)
 #   vmh/apply.sh kernel NODE VERSION|none [--next-boot]   pin a kernel ABI for the next boot(s)
 #   vmh/apply.sh cleanup NODE [--dry-run] old kernels (PVE's keep list), old kdump initrds, apt cache
 #   vmh/apply.sh health NODE              read-only: vmh/health.sh, as host-maintenance runs it
-# vmh01 and vmh02 are production (asyla critical-infra, CRI-1): any mode other than survey, check and
-# health also needs --production, given only after the operator approved that exact command.
+# vmh01 and vmh02 are production (asyla critical-infra, CRI-1): any mode other than survey, check,
+# health and patch --plan also needs --production, given only after the operator approved that exact
+# command.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -25,7 +28,7 @@ address() {
     esac
 }
 
-usage() { sed -n '2,14p' "$0" >&2; exit 2; }
+usage() { sed -n '2,17p' "$0" >&2; exit 2; }
 
 [ $# -ge 2 ] || usage
 mode=$1; shift
@@ -52,9 +55,15 @@ fi
 
 node=$1; shift
 addr=$(address "$node")
+plan=0
+[ "$mode" = patch ] && [ "${1:-}" = --plan ] && plan=1
 case "$mode" in
     check|health) ;;
-    setup|patch|kernel|cleanup)
+    patch) [ "$plan" = 1 ] || [ "$node" = vmh03 ] || [ "$production" = 1 ] || {
+            echo "apply.sh: $node is production (CRI-1). Run 'patch' there only with the operator's" \
+                 "approval of this exact command, and add --production ('patch $node --plan' is read-only)." >&2
+            exit 3; } ;;
+    setup|kernel|cleanup)
         if [ "$node" != vmh03 ] && [ "$production" != 1 ]; then
             echo "apply.sh: $node is production (CRI-1). Run '$mode' there only with the operator's" \
                  "approval of this exact command, and add --production." >&2
@@ -68,6 +77,11 @@ b64() { base64 <"$1" | tr -d '\n'; }
 prelude="HEALTH_B64='$(b64 "$HERE/health.sh")'
 RX_B64='$(b64 "$HERE/netconsole-rx.py")'
 "
+if [ "$plan" = 1 ] && [ -n "${VMH_SOAK_DAYS:-}" ]; then
+    case "$VMH_SOAK_DAYS" in *[!0-9]*) echo "apply.sh: VMH_SOAK_DAYS is a number of days" >&2; exit 2 ;; esac
+    prelude="${prelude}SOAK_DAYS=$VMH_SOAK_DAYS
+"
+fi
 if [ "$mode" = patch ] && [ "$node" != vmh03 ]; then
     # Read-only on vmh03: which versions it runs, and since when.
     canary=$(mktemp)

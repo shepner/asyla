@@ -5,11 +5,13 @@
 # Idempotent. vmh03's own role (corosync-qnetd) stays in vmh03/setup.sh. Modes:
 #   check                    read-only: does the node match the parts below? non-zero if not
 #   setup [PART...]          converge the parts (default all, in this order), then check
-#   patch [--dry-run]        apt upgrade, no reboot. vmh03: everything. Production: only packages at
-#                            the version vmh03 has run for SOAK_DAYS (CANARY_B64); the rest is listed
+#   patch [--dry-run|--plan] apt upgrade, no reboot. vmh03: everything. Production: only packages at
+#                            the version vmh03 has run for SOAK_DAYS (CANARY_B64); the rest is listed.
+#                            --plan is read-only: no apt-get update, the lists as they are, simulation
 #   kernel VERSION|none [--next-boot]   pin a kernel ABI (e.g. 6.14.11-9-pve) for the next boots
 #   cleanup [--dry-run]      old kernels (PVE's own keep list), old kdump initrds, apt cache
-#   canary-list              read-only (vmh03): "package version first-installed-epoch" per package
+#   canary-list              read-only (vmh03): "package version first-installed-epoch source
+#                            source-version" per installed package
 #   health                   read-only: the health checks (vmh/health.sh), as host-maintenance runs them
 # Parts:
 #   repos          pve-no-subscription; pve-enterprise and ceph disabled
@@ -29,7 +31,7 @@ NC_DIR=/sys/kernel/config/netconsole/asyla
 NC_PORT=6666
 RX_SENDERS="vmh01=10.0.0.35 vmh02=10.0.0.36"
 CANARY=10.0.0.37                             # vmh03: netconsole receiver and version canary
-SOAK_DAYS=7
+SOAK_DAYS=${SOAK_DAYS:-7}                    # apply.sh may lower it for --plan only
 # One reservation rule for all three; the kernel picks by RAM (vmh03 15 GB: 256M, vmh01/02 125 GB: 512M).
 # kdump-tools' own default (512M-:192M) is too small once the kdump initrd carries MODULES=most.
 CRASHKERNEL=1G-4G:192M,4G-64G:256M,64G-:512M
@@ -435,14 +437,15 @@ check() {
 }
 
 # ---- patch
-canary_list() {   # package version first-installed-epoch, for every installed package
+canary_list() {   # package version first-installed-epoch source source-version, per installed package
     zcat -f $(ls -tr /var/log/dpkg.log*) 2>/dev/null | awk '$3 == "status" && $4 == "installed" {
         sub(/:.*/, "", $5); k = $5 " " $6
         if (!(k in first)) { cmd = "date -d \"" $1 " " $2 "\" +%s"; cmd | getline t; close(cmd); first[k] = t }
     } END { for (k in first) print k, first[k] }' >/tmp/asyla-canary-seen.$$
-    dpkg-query -W -f='${db:Status-Abbrev} ${Package} ${Version}\n' | awk -v seen=/tmp/asyla-canary-seen.$$ '
+    dpkg-query -W -f='${db:Status-Abbrev} ${Package} ${Version} ${source:Package} ${source:Version}\n' \
+        | awk -v seen=/tmp/asyla-canary-seen.$$ '
         BEGIN { while ((getline l < seen) > 0) { split(l, a, " "); t[a[1] " " a[2]] = a[3] } }
-        $1 ~ /^ii/ { k = $2 " " $3; print $2, $3, (k in t ? t[k] : 0) }'
+        $1 ~ /^ii/ { k = $2 " " $3; print $2, $3, (k in t ? t[k] : 0), $4, $5 }'
     rm -f /tmp/asyla-canary-seen.$$
 }
 
@@ -452,8 +455,15 @@ apt_upgrade() {   # apt_upgrade ARGS...: non-interactive, keep local conffiles
 }
 
 patch() {
-    dry=0; [ "${1:-}" = --dry-run ] && dry=1
-    apt-get update -q >/dev/null
+    dry=0 plan=0
+    case "${1:-}" in --dry-run) dry=1 ;; --plan) dry=1 plan=1 ;; "") ;; *) die "patch [--dry-run|--plan]" ;; esac
+    if [ "$plan" = 1 ]; then
+        # Read-only: apt-get -s takes no lock, and the lists stay as the node last fetched them.
+        newest=$(find /var/lib/apt/lists -maxdepth 1 -name '*_InRelease' -printf '%T@\n' 2>/dev/null | sort -n | tail -n1)
+        say "plan    package lists from $(date -d "@${newest%.*}" '+%Y-%m-%d %H:%M %Z' 2>/dev/null || echo unknown) (no apt-get update)"
+    else
+        apt-get update -q >/dev/null
+    fi
     if [ "$ROLE" = canary ]; then
         apt-get -s full-upgrade | awk '/^(Inst|Remv) / { print }' | tee /tmp/asyla-patch.$$ | sed 's/^/plan    /'
         say "patch: $(grep -c '^Inst' /tmp/asyla-patch.$$) to install, $(grep -c '^Remv' /tmp/asyla-patch.$$) to remove"
@@ -467,12 +477,27 @@ patch() {
         # Every package full-upgrade would install, at its candidate version. Inst lines read
         # "Inst pkg [old] (new repo [arch])", or "Inst pkg (new repo [arch])" for a new package.
         apt-get -s full-upgrade | sed -n 's/^Inst \([^ ]*\) \(\[[^]]*\] \)\{0,1\}(\([^ ]*\) .*/\1 \3/p' >"$canary.plan"
-        awk -v cutoff="$cutoff" 'NR == FNR { if ($3 <= cutoff) ok[$1 " " $2] = 1; seen[$1 " " $2] = $3; next }
-            { k = $1 " " $2; if (k in ok) print "allow", $1, $2; else if (k in seen) print "soak", $1, $2; else print "new", $1, $2 }' \
-            "$canary" "$canary.plan" >"$canary.verdict"
+        # The source package of each candidate, so a binary vmh03 does not have (libc6-dev) can go
+        # with a sibling vmh03 runs from the same source build (libc6). "pkg ver source source-ver".
+        # shellcheck disable=SC2046
+        apt-cache show $(awk '{ printf "%s=%s ", $1, $2 }' "$canary.plan") 2>/dev/null | awk '
+            /^Package: / { p = $2; v = ""; s = ""; sv = "" } /^Version: / { v = $2 }
+            /^Source: / { s = $2; if ($3 ~ /^\(/) { sv = $3; gsub(/[()]/, "", sv) } }
+            /^$/ { if (p != "") print p, v, (s == "" ? p : s), (sv == "" ? v : sv); p = "" }
+            END { if (p != "") print p, v, (s == "" ? p : s), (sv == "" ? v : sv) }' >"$canary.src"
+        # Verdict per candidate: allow (vmh03 has had this version, or a sibling of the same source
+        # version, for SOAK_DAYS), soak (it has, for less), new (it has neither).
+        awk -v cutoff="$cutoff" '
+            FILENAME == ARGV[1] { k = $1 " " $2; t[k] = $3; if ($4 != "") { s = $4 " " $5; if (!(s in st) || $3 < st[s]) st[s] = $3 }; next }
+            FILENAME == ARGV[2] { src[$1 " " $2] = $3 " " $4; next }
+            { k = $1 " " $2; how = ""
+              if (k in t) e = t[k]; else if ((k in src) && (src[k] in st)) { e = st[src[k]]; how = " (source " src[k] " on vmh03)" } else e = ""
+              if (e == "") print "new", $1, $2; else if (e <= cutoff) print "allow", $1, $2 how; else print "soak", $1, $2 how }' \
+            "$canary" "$canary.src" "$canary.plan" >"$canary.verdict"
         allow=$(awk '$1 == "allow" { printf "%s=%s ", $2, $3 }' "$canary.verdict")
-        awk '$1 == "soak" { print "held    " $2 " " $3 " (on vmh03 under '"$SOAK_DAYS"' days)" }
-             $1 == "new"  { print "held    " $2 " " $3 " (not this version on vmh03)" }' "$canary.verdict"
+        awk '$1 == "allow" { $1 = "allow  "; print }
+             $1 == "soak" { print "held    " $2 " " $3 " (on vmh03 under '"$SOAK_DAYS"' days)" }
+             $1 == "new"  { print "held    " $2 " " $3 " (neither this version nor its source on vmh03)" }' "$canary.verdict"
         say "patch: $(grep -c '^allow' "$canary.verdict") allowed, $(grep -c -v '^allow' "$canary.verdict") held"
         if [ -z "$allow" ]; then rm -f "$canary" "$canary".*; say "patch: nothing to do"; return 0; fi
         # The allowed set alone must not pull in anything held, nor remove anything.
@@ -484,7 +509,7 @@ patch() {
             | tr '\n' ' ')
         rm -f "$canary" "$canary".*
         [ -z "$extra" ] || die "the allowed set pulls in packages not soaked on vmh03: $extra"
-        [ "$dry" = 1 ] && { say "patch: dry run, nothing installed"; return 0; }
+        [ "$dry" = 1 ] && { say "patch: the allowed set installs alone and removes nothing; nothing installed (dry run)"; return 0; }
         # shellcheck disable=SC2086
         apt_upgrade install --only-upgrade $allow
     fi
