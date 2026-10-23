@@ -41,12 +41,13 @@ CANARY=10.0.0.37                             # vmh03: netconsole receiver and ve
 MONITOR_KEY='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIN8NNenIyQGHyq+UJRcpLsQA9OMk2c9C2+BVuPY98k7x host-maintenance@d03'
 MONITOR_OPTS='from="10.0.0.62,172.16.0.0/12",restrict,command="/usr/local/sbin/asyla-vmh-health"'
 SOAK_DAYS=${SOAK_DAYS:-7}                    # apply.sh may lower it for --plan only
-# One reservation rule for all three; the kernel picks by RAM (vmh03 15 GB: 1G, vmh01/02 125 GB: 2G).
-# kdump-tools' own default (512M-:192M) is far too small once the kdump initrd carries MODULES=most:
-# on vmh03 (2026-10-23) a sysrq crash with 256M ran the crash kernel out of memory ("System is
-# deadlocked on memory") and the node sat at the panic screen until power-cycled. The initrd is
-# ~84 MB compressed; kdump-config suggested 875M. vmh03 (15 GB) gets 1G, vmh01/vmh02 (125 GB) 2G.
-CRASHKERNEL=1G-4G:192M,4G-64G:1G,64G-:2G
+# One reservation rule for all three; the kernel picks by RAM (vmh03 15 GB and vmh01/vmh02 125 GB: 2G).
+# kdump-tools' own default (512M-:192M) is far too small once the kdump initrd carries MODULES=most
+# (84 MB compressed, 355 MiB unpacked): on vmh03 (2026-10-23) a sysrq crash ran the crash kernel out of
+# memory ("System is deadlocked on memory") with 256M and again with 1G, although kdump-config
+# suggested 892M. With 256M the node sat at the panic screen until power-cycled; with panic=10 below
+# it reboots by itself.
+CRASHKERNEL=1G-4G:192M,4G-:2G
 KDUMP_DEFAULTS=/etc/default/kdump-tools
 # The crash kernel's own panic must reboot, never wait at the panic screen (the 2026-10-23 hang).
 KDUMP_APPEND='reset_devices systemd.unit=kdump-tools-dump.service nr_cpus=1 irqpoll usbcore.nousb panic=10'
