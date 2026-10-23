@@ -1,0 +1,39 @@
+# unifi-backup on d03 (README.md): unifi_backup.py every UNIFI_INTERVAL seconds, a fresh process
+# each time. The key is in no file: unifi-backup.sh up refuses to start without it in its environment
+# (build_host.py start_env); the empty default lets down, logs, verify and check run without it.
+name: unifi-backup
+
+services:
+  unifi-backup:
+    image: python:3.12-alpine
+    container_name: unifi-backup
+    restart: unless-stopped
+    user: "${UNIFI_UID:?}:${UNIFI_GID:?}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      UNIFI_SITE_MANAGER_API_KEY: ${UNIFI_SITE_MANAGER_API_KEY:-}
+      UNIFI_DATA: /data
+      UNIFI_COPIES: /copies
+      UNIFI_INTERVAL: "3600"
+      PYTHONDONTWRITEBYTECODE: "1"
+      TZ: UTC
+    command: ["sh", "-c", "while :; do python3 /app/unifi_backup.py; sleep \"$$UNIFI_INTERVAL\"; done"]
+    volumes:
+      # The app directory, not single files: the nightly scripts task replaces files, and a file
+      # mount would keep the old one.
+      - ./:/app:ro
+      - ${UNIFI_ROOT:?}:/data
+      - ${UNIFI_COPIES_DIR:?}:/copies
+    healthcheck:
+      # status.json rewritten within two cycles and a bit.
+      test: ["CMD", "python3", "-c", "import os,sys,time; sys.exit(time.time() - os.path.getmtime('/data/status.json') > 7800)"]
+      interval: 300s
+      timeout: 10s
+      # The first cycle copies every file the consoles hold (about 70 MB, decrypted to check).
+      start_period: 1800s
+      retries: 3
+    logging:
+      driver: local
+      options: {max-size: "5m", max-file: "3"}
