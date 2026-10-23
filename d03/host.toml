@@ -117,6 +117,14 @@ name = "unifi-monitor"
 start_env = ["UNIFI_SITE_MANAGER_API_KEY"]
 restore = false                 # its state rebuilds in one check (firmware first-seen times restart)
 verify = ["verify"]
+# UniFi Network autobackups (MKE, DAY) copied hourly to /mnt/nas/data1/docker/unifi-backup, each
+# checked to open; host-maintenance's monitor reads its status.json. Same key, same delivery:
+#   credentials.py exec UNIFI_SITE_MANAGER_API_KEY -- build_host.py d03 build --only apps --app unifi-backup
+[[app]]
+name = "unifi-backup"
+start_env = ["UNIFI_SITE_MANAGER_API_KEY"]
+restore = false                 # its data is the copies on the NAS; its state rebuilds in one cycle
+verify = ["verify"]
 
 [[external]]
 name = "internal-access"

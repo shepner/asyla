@@ -1,0 +1,17 @@
+# What unifi_backup.py copies and when it calls something a problem (README.md beside this file).
+
+# The console's newest autobackup not on the NAS this long after it was made is urgent (the copy
+# was missed). A cycle runs every hour, so this allows a day of failed tries.
+copy_grace_hours = 24
+# A console that cannot be read (or a copy that cannot be fetched) this many cycles in a row is
+# urgent; before that it is a warning in the digest.
+api_fails_urgent = 3
+
+# Each console by its Site Manager name. max_age_days: the console's newest autobackup older than
+# this is reported (digest): autobackup off or failing on the console. Both consoles back up monthly
+# (GET .../get/setting/super_mgmt, 2026-10-23: MKE "30 0 1 * *" America/Chicago, DAY "0 0 1 * *"
+# America/New_York), kept by the operator (2026-10-23): due again by the 2nd of the next month.
+[consoles.MKE]
+max_age_days = 32   # home: Cloud Key G2 Plus unifiMgt; about 83 KB a file (settings only)
+[consoles.DAY]
+max_age_days = 32   # the parents' site; 2-15 MB a file (180 days of statistics)
