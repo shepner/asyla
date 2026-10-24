@@ -3,8 +3,8 @@
 # since 2026-10-23, vmh03 (also the testbed and canary). Runs as root on the node, piped from the
 # workstation by vmh/apply.sh, which puts HEALTH_B64, RX_B64 and (for patch) CANARY_B64 in front of
 # this file. Idempotent. Modes:
-#   check                    read-only: does the node match the parts below? non-zero if not
-#   setup [PART...]          converge the parts (default all, in this order), then check
+#   check [PART...]          read-only: does the node match the parts (default all)? non-zero if not
+#   setup [PART...]          converge the parts (default all, in this order), then check those parts
 #   patch [--dry-run|--plan] apt upgrade, no reboot. vmh03: everything. Production: only packages at
 #                            the version vmh03 has run for SOAK_DAYS (CANARY_B64); the rest is listed.
 #                            --plan is read-only: no apt-get update, the lists as they are, simulation
@@ -68,7 +68,9 @@ esac
 # install_file DEST MODE: write stdin to DEST only if it differs. It is often the end of a pipeline
 # (a subshell), so a write is recorded in a file: reset_changed before, changed after.
 MARK=$(mktemp -u /tmp/asyla-vmh-changed.XXXXXX)
-trap 'rm -f "$MARK"' EXIT
+# check's flag() is often the end of a pipeline too (want_file): a FAIL is recorded the same way.
+BADMARK=$(mktemp -u /tmp/asyla-vmh-bad.XXXXXX)
+trap 'rm -f "$MARK" "$BADMARK"' EXIT
 reset_changed() { rm -f "$MARK"; }
 changed() { [ -e "$MARK" ]; }
 install_file() {
@@ -422,9 +424,11 @@ part_health() {
 }
 
 # ---- check
-check() {
-    bad=0
-    flag() { say "FAIL    $*"; bad=1; }
+check() {   # check [PART...]: only those parts' lines (default all), so a one-part setup passes alone
+    cparts=" ${*:-repos updates crash netconsole-rx health} "
+    part() { case "$cparts" in *" $1 "*) return 0 ;; esac; return 1; }
+    bad=0; rm -f "$BADMARK"
+    flag() { say "FAIL    $*"; bad=1; : >"$BADMARK"; }
     okay() { say "ok      $*"; }
     note() { say "note    $*"; }
     want_file() {   # want_file PATH CONTENT-ON-STDIN
@@ -432,7 +436,8 @@ check() {
         if [ -f "$1" ] && cmp -s "$tmp" "$1"; then okay "$1"; else flag "$1 differs from vmh/setup.sh"; fi
         rm -f "$tmp"
     }
-    say "== check $node ($ROLE)"
+    say "== check $node ($ROLE):$cparts"
+    if part repos; then
     for f in "$SOURCES/pve-enterprise.sources" "$SOURCES/ceph.sources"; do
         [ -f "$f" ] || continue
         if awk '/^Types:/ { n++ } /^Enabled: false/ { d++ } END { exit !(n == d) }' "$f"; then okay "$f disabled"
@@ -441,9 +446,13 @@ check() {
     if grep -q '^[[:space:]]*deb ' /etc/apt/sources.list 2>/dev/null; then
         note "/etc/apt/sources.list has active deb lines (one-line format; review, see vmh/README.md)"
     fi
+    fi
+    if part updates; then
     installed unattended-upgrades && okay "unattended-upgrades installed" || flag "unattended-upgrades not installed"
     uu_config | want_file /etc/apt/apt.conf.d/52asyla-unattended-upgrades
+    fi
 
+    if part crash; then
     sysctl_body | want_file "$SYSCTL"
     sysctl_body | awk -F' *= *' '/^[a-z]/ { print $1, $2 }' | while read -r k v; do
         [ "$(sysctl -n "$k")" = "$v" ] || say "FAIL    sysctl $k is $(sysctl -n "$k"), want $v"
@@ -476,19 +485,22 @@ check() {
     for f in /etc/modprobe.d/netconsole.conf /etc/modules-load.d/netconsole.conf; do
         [ -f "$f" ] && note "$f: the old boot-time netconsole (fails before vmbr0); see vmh/README.md"
     done
-    if [ "$ROLE" = canary ]; then
+    fi
+    if part netconsole-rx && [ "$ROLE" = canary ]; then
         systemctl -q is-active asyla-netconsole-rx.service && okay "asyla-netconsole-rx active" \
             || flag "asyla-netconsole-rx not active"
         nft list table inet asyla_netconsole >/dev/null 2>&1 && okay "nft table inet asyla_netconsole" \
             || flag "nft table inet asyla_netconsole missing"
     fi
+    if part health; then
     [ -x /usr/local/sbin/asyla-vmh-health ] && okay "asyla-vmh-health installed" || flag "asyla-vmh-health missing"
     grep -qxF "$(monitor_line)" "$(root_keys)" 2>/dev/null && okay "host-maintenance key (health only)" \
         || flag "$(root_keys) lacks the host-maintenance line (health only)"
     if [ -n "${HEALTH_B64:-}" ] && [ -x /usr/local/sbin/asyla-vmh-health ]; then
         payload HEALTH_B64 | want_file /usr/local/sbin/asyla-vmh-health
     fi
-    [ "$bad" = 0 ] || die "check found problems (FAIL lines above)"
+    fi
+    [ "$bad" = 0 ] && [ ! -e "$BADMARK" ] || die "check found problems (FAIL lines above)"
     say "check: all ok"
 }
 
@@ -673,7 +685,7 @@ command -v pveversion >/dev/null || die "not a Proxmox VE host"
 
 mode=${1:-check}; [ $# -gt 0 ] && shift
 case "$mode" in
-    check) check ;;
+    check) check "$@" ;;
     setup)
         parts=${*:-repos updates crash netconsole-rx health}
         for p in $parts; do
@@ -683,7 +695,7 @@ case "$mode" in
                 *) die "unknown part $p (repos updates crash netconsole-rx health)" ;;
             esac
         done
-        check ;;
+        check $parts ;;
     patch) patch "$@" ;;
     kernel) kernel "$@" ;;
     cleanup) cleanup "$@" ;;

@@ -19,7 +19,7 @@ joined vmc01): every changing mode needs the operator's approval of the exact co
 
 ```shell
 vmh/apply.sh survey vmh01 vmh02 vmh03     # read-only facts, side by side (VMH_SURVEY_OUT=DIR keeps them)
-vmh/apply.sh check vmh03                  # read-only: does the node match setup.sh?
+vmh/apply.sh check vmh03 [PART...]       # read-only: does the node match setup.sh (those parts)?
 vmh/apply.sh health vmh03                 # read-only: the checks host-maintenance runs
 vmh/apply.sh patch vmh01 --plan           # read-only: what a patch would install or hold, and why
 vmh/apply.sh setup vmh03 [PART...] --production   # repos updates crash netconsole-rx health
