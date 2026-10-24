@@ -12,9 +12,9 @@
 #   vmh/apply.sh cleanup NODE [--dry-run] old kernels (PVE's keep list), old kdump initrds, apt cache
 #   vmh/apply.sh health NODE              read-only: vmh/health.sh, as host-maintenance runs it
 #   vmh/apply.sh crashtest vmh03 [--console|--clean]   sysrq crash: does kdump save a vmcore?
-# vmh01 and vmh02 are production (asyla critical-infra, CRI-1): any mode other than survey, check,
-# health and patch --plan also needs --production, given only after the operator approved that exact
-# command.
+# All three are production since vmh03 joined vmc01 on 2026-10-23 (asyla critical-infra, CRI-1): any
+# mode other than survey, check, health and patch --plan also needs --production, given only after
+# the operator approved that exact command. vmh03 stays the canary: patched first, the crash tests.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -60,17 +60,17 @@ plan=0
 [ "$mode" = patch ] && [ "${1:-}" = --plan ] && plan=1
 case "$mode" in
     check|health) ;;
-    patch) [ "$plan" = 1 ] || [ "$node" = vmh03 ] || [ "$production" = 1 ] || {
+    patch) [ "$plan" = 1 ] || [ "$production" = 1 ] || {
             echo "apply.sh: $node is production (CRI-1). Run 'patch' there only with the operator's" \
                  "approval of this exact command, and add --production ('patch $node --plan' is read-only)." >&2
             exit 3; } ;;
-    setup|kernel|cleanup)
-        if [ "$node" != vmh03 ] && [ "$production" != 1 ]; then
+    setup|kernel|cleanup|crashtest)
+        [ "$mode" != crashtest ] || [ "$node" = vmh03 ] || { echo "apply.sh: crashtest runs on vmh03 only" >&2; exit 3; }
+        if [ "$production" != 1 ]; then
             echo "apply.sh: $node is production (CRI-1). Run '$mode' there only with the operator's" \
                  "approval of this exact command, and add --production." >&2
             exit 3
         fi ;;
-    crashtest) [ "$node" = vmh03 ] || { echo "apply.sh: crashtest runs on vmh03 only" >&2; exit 3; } ;;
     *) usage ;;
 esac
 

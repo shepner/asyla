@@ -7,11 +7,13 @@ workstation over root SSH (asyla decision `hypervisor-scripts`).
 | --- | --- | --- | --- |
 | vmh01 | production, cluster vmc01 | 10.0.0.35 | ZFS root, proxmox-boot-tool (GRUB), serial ttyS0 |
 | vmh02 | production, cluster vmc01 | 10.0.0.36 | ZFS root, proxmox-boot-tool (GRUB), serial ttyS0 |
-| vmh03 | testbed and canary, standalone | 10.0.0.37 | LVM root, plain GRUB (UEFI), USB NIC, no serial; corosync-qnetd (`vmh03/`) |
+| vmh03 | production, cluster vmc01 (since 2026-10-23); testbed and canary | 10.0.0.37 | LVM root, plain GRUB (UEFI), USB NIC, no serial (`vmh03/`) |
 
 vmh03 runs every new version first. A production `patch` installs a package only at a version vmh03
-has run for `SOAK_DAYS` (7). vmh01 and vmh02 are critical infrastructure (asyla CRI-1): every
-changing mode there needs the operator's approval of the exact command, and then `--production`.
+has run for `SOAK_DAYS` (7). All three are critical infrastructure (asyla CRI-1; vmh03 since it
+joined vmc01): every changing mode needs the operator's approval of the exact command, and then
+`--production`. `crashtest` runs on vmh03 only, and only while vmh01 and vmh02 keep quorum without it.
+`health` reports `members` (every node in corosync.conf online, and the nodelist is vmh01 vmh02 vmh03).
 
 ## Commands (from the repo root)
 
@@ -20,12 +22,12 @@ vmh/apply.sh survey vmh01 vmh02 vmh03     # read-only facts, side by side (VMH_S
 vmh/apply.sh check vmh03                  # read-only: does the node match setup.sh?
 vmh/apply.sh health vmh03                 # read-only: the checks host-maintenance runs
 vmh/apply.sh patch vmh01 --plan           # read-only: what a patch would install or hold, and why
-vmh/apply.sh setup vmh03 [PART...]        # repos updates crash netconsole-rx health
-vmh/apply.sh patch vmh03 [--dry-run]      # apt upgrade, no reboot
-vmh/apply.sh kernel vmh03 VERSION --next-boot   # one trial boot; a panic (panic=10) falls back
-vmh/apply.sh kernel vmh03 VERSION|none    # pin for every boot, or remove the pin
-vmh/apply.sh cleanup vmh03 [--dry-run]    # old kernels by PVE's own keep list, apt cache
-vmh/apply.sh crashtest vmh03 [--clean]    # vmh03 only: sysrq crash; did kdump save a vmcore?
+vmh/apply.sh setup vmh03 [PART...] --production   # repos updates crash netconsole-rx health
+vmh/apply.sh patch vmh03 [--dry-run] --production # apt upgrade, no reboot
+vmh/apply.sh kernel vmh03 VERSION --next-boot --production   # one trial boot; a panic (panic=10) falls back
+vmh/apply.sh kernel vmh03 VERSION|none --production   # pin for every boot, or remove the pin
+vmh/apply.sh cleanup vmh03 [--dry-run] --production   # old kernels by PVE's own keep list, apt cache
+vmh/apply.sh crashtest vmh03 [--clean] --production   # vmh03 only: sysrq crash; did kdump save a vmcore?
 vmh/usage.py [--node vmh01] [--window 2]  # read-only: guest load by hour of week, quietest windows
 ```
 

@@ -1,8 +1,8 @@
 #!/bin/sh
-# Shared configuration of the Proxmox VE nodes vmh01, vmh02 (cluster vmc01, production) and vmh03
-# (standalone testbed and canary). Runs as root on the node, piped from the workstation by
-# vmh/apply.sh, which puts HEALTH_B64, RX_B64 and (for patch) CANARY_B64 in front of this file.
-# Idempotent. vmh03's own role (corosync-qnetd) stays in vmh03/setup.sh. Modes:
+# Shared configuration of the Proxmox VE nodes of cluster vmc01, all production: vmh01, vmh02 and,
+# since 2026-10-23, vmh03 (also the testbed and canary). Runs as root on the node, piped from the
+# workstation by vmh/apply.sh, which puts HEALTH_B64, RX_B64 and (for patch) CANARY_B64 in front of
+# this file. Idempotent. Modes:
 #   check                    read-only: does the node match the parts below? non-zero if not
 #   setup [PART...]          converge the parts (default all, in this order), then check
 #   patch [--dry-run|--plan] apt upgrade, no reboot. vmh03: everything. Production: only packages at
@@ -14,9 +14,10 @@
 #                            source-version" per installed package
 #   health                   read-only: the health checks (vmh/health.sh), as host-maintenance runs them
 #   crashtest [--console|--clean]   vmh03 only: a sysrq crash, to prove kdump saves a vmcore and the
-#                            node reboots by itself. --console: the crash kernel prints everything and
-#                            waits 120 s before its reboot, for someone at the screen. --clean: remove
-#                            the dumps and restore the normal crash kernel cmdline
+#                            node reboots by itself; refused unless the other members keep quorum
+#                            without it. --console: the crash kernel prints everything and waits
+#                            120 s before its reboot, for someone at the screen. --clean: remove the
+#                            dumps and restore the normal crash kernel cmdline
 # Parts:
 #   repos          pve-no-subscription; pve-enterprise and ceph disabled
 #   updates        unattended-upgrades: vmh03 all origins (the canary), production Debian-Security
@@ -641,9 +642,18 @@ crashtest() {
     [ "$(cat /sys/kernel/kexec_crash_loaded 2>/dev/null)" = 1 ] || die "kdump is not loaded"
     running=$( { qm list 2>/dev/null; pct list 2>/dev/null; } | awk '$0 ~ / running / { n++ } END { print n + 0 }')
     [ "$running" = 0 ] || die "$running guest(s) running"
-    if command -v corosync-qnetd-tool >/dev/null; then
-        clusters=$(corosync-qnetd-tool -l | grep -c '^Cluster' || true)
-        [ "$clusters" = 0 ] || die "corosync-qnetd serves $clusters cluster(s): a crash would cost them a vote"
+    if [ -f /etc/pve/corosync.conf ]; then
+        # A member's crash costs the cluster its vote: the others must keep quorum without it.
+        q=$(pvecm status 2>/dev/null) || die "pvecm status failed"
+        quorate=$(printf '%s\n' "$q" | awk -F': *' '/^Quorate:/ { print $2 }')
+        total=$(printf '%s\n' "$q" | awk -F': *' '/^Total votes:/ { print $2 + 0 }')
+        need=$(printf '%s\n' "$q" | awk -F': *' '/^Quorum:/ { print $2 + 0 }')
+        mine=$(pvecm nodes 2>/dev/null | awk '/\(local\)/ { print $2 + 0 }')
+        [ "$quorate" = Yes ] || die "the cluster is not quorate"
+        [ -n "$total" ] && [ -n "$need" ] && [ -n "$mine" ] || die "cannot read votes from pvecm"
+        [ $((total - mine)) -ge "$need" ] \
+            || die "without this node the cluster has $((total - mine)) of $need votes needed: a crash would cost it quorum"
+        say "ok      without $node: $((total - mine)) votes, quorum $need"
     fi
     if [ "${1:-}" = --console ]; then
         sed -i '/^[[:space:]]*#*[[:space:]]*KDUMP_CMDLINE_APPEND=/d' "$KDUMP_DEFAULTS"

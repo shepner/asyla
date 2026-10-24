@@ -58,13 +58,21 @@ if [ -f /etc/pve/corosync.conf ]; then
     votes=$(printf '%s\n' "$q" | awk -F': *' '/^Total votes:|^Expected votes:/ { printf "%s=%s ", $1, $2 }')
     if [ "$quorate" != Yes ]; then r crit cluster "not quorate: $votes$flags"
     else r ok cluster "quorate $votes$flags"; fi
+    # Members: every node in corosync.conf online, and the nodelist is the one vmc01 should have.
+    want="vmh01 vmh02 vmh03"
+    conf=$(awk '$1 == "name:" { print $2 }' /etc/pve/corosync.conf | sort | one)
+    online=$(pvecm nodes 2>/dev/null | awk '$1 ~ /^[0-9]+$/ { print $3 }' | sort | one)
+    off=$(for n in $conf; do case " $online " in (*" $n "*) ;; (*) printf '%s ' "$n" ;; esac; done | one)
+    if [ -z "$online" ]; then r warn members "pvecm nodes listed no members"
+    elif [ -n "$off" ]; then r warn members "offline: $off (online: $online)"
+    elif [ "$conf" != "$want" ]; then r warn members "configured: $conf; expected $want"
+    else r ok members "$online online"; fi
     if systemctl -q is-enabled corosync-qdevice 2>/dev/null; then
         case "$flags" in *Qdevice*) r ok qdevice "Qdevice in flags" ;; *) r warn qdevice "corosync-qdevice enabled but no Qdevice flag: $flags" ;; esac
     fi
 fi
 if [ "$node" = vmh03 ] && has corosync-qnetd-tool; then
-    systemctl -q is-active corosync-qnetd && r ok qnetd "active, $(corosync-qnetd-tool -l 2>/dev/null | grep -c '^Cluster') cluster(s)" \
-        || r crit qnetd "corosync-qnetd not active"
+    r warn qnetd "corosync-qnetd still installed; vmh03 is a member now (vmh03/apply.sh remove-qnetd)"
 fi
 since=$(( $(date +%s) - 86400 ))
 te=$(pvesh get "/nodes/$node/tasks" --errors 1 --since "$since" --limit 100 --output-format json 2>/dev/null \
