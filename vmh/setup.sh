@@ -652,9 +652,15 @@ leftovers() {   # 1 = dry run
     act() { if [ "$dry" = 1 ]; then say "would $*"; else say "changed $*"; fi; }
     dry=$1
     for u in $LEFTOVER_UNITS; do
-        [ -f "/etc/systemd/system/$u" ] || continue
-        act "remove $u"
-        [ "$dry" = 1 ] || { systemctl disable -q --now "$u"; rm -f "/etc/systemd/system/$u"; systemctl daemon-reload; }
+        if [ -f "/etc/systemd/system/$u" ]; then
+            act "remove $u"
+            [ "$dry" = 1 ] || { systemctl disable -q --now "$u"; rm -f "/etc/systemd/system/$u"; systemctl daemon-reload; }
+        fi
+        # A main process that exits non-zero on stop leaves the unit "failed" after its file is gone
+        # (vmh02's vmh01-netconsole, socat, 2026-10-24), and health warns on it.
+        systemctl -q is-failed "$u" 2>/dev/null || continue
+        act "reset-failed $u"
+        [ "$dry" = 1 ] || systemctl reset-failed "$u"
     done
     for f in $LEFTOVER_FILES; do
         [ -e "$f" ] || continue
