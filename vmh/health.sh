@@ -120,7 +120,10 @@ fi
 
 # ---- updates
 up=$(sed -n 's/^Start-Date: \([0-9-]*\).*/\1/p' /var/log/unattended-upgrades/unattended-upgrades-dpkg.log 2>/dev/null | tail -n1)
-last=$(grep -h -E 'INFO (No packages found|All upgrades installed)|ERROR' /var/log/unattended-upgrades/unattended-upgrades.log 2>/dev/null | tail -n1)
+# A --dry-run also logs "All upgrades installed" (vmh02, 2026-10-24); only real runs count.
+last=$(awk '/INFO Starting unattended upgrades script/ { dry = 0 } /Option --dry-run given/ { dry = 1 }
+    !dry && /INFO (No packages found|All upgrades installed)|ERROR/ { l = $0 } END { print l }' \
+    /var/log/unattended-upgrades/unattended-upgrades.log 2>/dev/null)
 case "$last" in
     *ERROR*) r warn unattended-upgrades "last run: $last" ;;
     "") has unattended-upgrade && r warn unattended-upgrades "no run logged yet" ;;
