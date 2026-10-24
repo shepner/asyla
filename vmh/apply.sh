@@ -9,7 +9,7 @@
 #   vmh/apply.sh patch NODE --plan        read-only: that verdict from the node's current lists, no
 #                                         apt-get update (VMH_SOAK_DAYS=N overrides SOAK_DAYS here only)
 #   vmh/apply.sh kernel NODE VERSION|none [--next-boot]   pin a kernel ABI for the next boot(s)
-#   vmh/apply.sh cleanup NODE [--dry-run] old kernels (PVE's keep list), old kdump initrds, apt cache
+#   vmh/apply.sh cleanup NODE [--dry-run] old kernels (PVE's keep list), old kdump initrds, apt cache, May leftovers
 #   vmh/apply.sh health NODE              read-only: vmh/health.sh, as host-maintenance runs it
 #   vmh/apply.sh crashtest vmh03 [--console|--clean]   sysrq crash: does kdump save a vmcore?
 # All three are production since vmh03 joined vmc01 on 2026-10-23 (asyla critical-infra, CRI-1): any

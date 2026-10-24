@@ -9,7 +9,7 @@
 #                            the version vmh03 has run for SOAK_DAYS (CANARY_B64); the rest is listed.
 #                            --plan is read-only: no apt-get update, the lists as they are, simulation
 #   kernel VERSION|none [--next-boot]   pin a kernel ABI (e.g. 6.14.11-9-pve) for the next boots
-#   cleanup [--dry-run]      old kernels (PVE's own keep list), old kdump initrds, apt cache
+#   cleanup [--dry-run]      old kernels (PVE's own keep list), old kdump initrds, apt cache, May leftovers
 #   canary-list              read-only (vmh03): "package version first-installed-epoch source
 #                            source-version" per installed package
 #   health                   read-only: the health checks (vmh/health.sh), as host-maintenance runs them
@@ -304,7 +304,9 @@ After=network-online.target
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/local/sbin/asyla-netconsole start $NC_TO $NC_PORT
-ExecStop=/usr/local/sbin/asyla-netconsole stop
+# No ExecStop: the target must outlive the unit, through shutdown to the kernel's last line. With
+# one, vmh02 stopped sending at 07:15:28 on 2026-10-24 and the shutdown lines at 07:16:22 went only
+# to the May netconsole.
 
 [Install]
 WantedBy=multi-user.target
@@ -609,6 +611,74 @@ kernel() {
 }
 
 # ---- cleanup
+# apt's own kernel protection (APT::VersionedKernelPackages) keeps old kernels that autoremove would
+# take: on vmh01 (2026-10-24) 5.11, 5.13, 5.15 and 6.8.12-25 stayed. So purge by PVE's keep list
+# directly: every kernel image or series package that APT::NeverAutoRemove (76pveconf: running,
+# pinned, next-boot, latest) does not name. Only when the purge takes nothing else with it.
+purge_old_kernels() {   # 1 = dry run
+    keep=$(apt-config dump | awk -F'"' '/^APT::NeverAutoRemove:: / { print $2 }')
+    cands=$(dpkg-query -W -f='${db:Status-Abbrev} ${Package}\n' 'proxmox-kernel-[0-9]*' 'pve-kernel-[0-9]*' 2>/dev/null \
+        | awk '$1 ~ /^ii/ { print $2 }' | while read -r k; do
+            printf '%s\n' "$keep" | while read -r re; do [ -n "$re" ] && printf '%s\n' "$k" | grep -qE "$re" && echo keep; done \
+                | grep -q keep || echo "$k"
+        done | tr '\n' ' ')
+    [ -n "${cands% }" ] || { say "ok      no kernel outside PVE's keep list"; return 0; }
+    # shellcheck disable=SC2086
+    other=$(apt-get -s purge $cands 2>/dev/null \
+        | awk -v c=" $cands " '/^(Purg|Remv) / && index(c, " " $2 " ") == 0 { printf "%s ", $2 }')
+    if [ -n "${other% }" ]; then
+        say "FAIL    kernel purge skipped: it would also remove ${other% }"
+        return 0
+    fi
+    if [ "$1" = 1 ]; then
+        for k in $cands; do say "would purge $k"; done
+    else
+        # shellcheck disable=SC2086
+        DEBIAN_FRONTEND=noninteractive apt-get -y -q purge $cands
+        say "changed purged ${cands% }"
+    fi
+}
+
+# Leftovers of the May 2026 vmh01/vmh02 crash investigation and old images, removed when present
+# (operator 2026-10-24: "Yes you may do the cleanup work"). Kept: vmh01-sol-tail (vmh01's serial
+# console, the only capture of it), bmc-sel-poll, every log, /root/scripts (decision
+# hypervisor-scripts is pending), the cloud-init snippets (guests use them).
+LEFTOVER_UNITS="vmh01-netconsole.service vmh02-netconsole.service"
+LEFTOVER_FILES="/usr/local/sbin/vmh02-netconsole-listener.sh /usr/local/sbin/vmh02-ping-watch.sh
+/usr/local/sbin/vmh02-edac-sampler.sh /root/debian-12-generic-amd64.qcow2
+/root/debian-12-generic-amd64.qcow2.bak /etc/modules-load.d/netconsole.conf"
+LEFTOVER_PKGS="memtester stress-ng"
+leftovers() {   # 1 = dry run
+    act() { if [ "$dry" = 1 ]; then say "would $*"; else say "changed $*"; fi; }
+    dry=$1
+    for u in $LEFTOVER_UNITS; do
+        [ -f "/etc/systemd/system/$u" ] || continue
+        act "remove $u"
+        [ "$dry" = 1 ] || { systemctl disable -q --now "$u"; rm -f "/etc/systemd/system/$u"; systemctl daemon-reload; }
+    done
+    for f in $LEFTOVER_FILES; do
+        [ -e "$f" ] || continue
+        act "remove $f"
+        [ "$dry" = 1 ] || rm -f "$f"
+    done
+    # The May netconsole as a module option (to vmh01): it fails at boot ("vmbr0 doesn't exist") and
+    # starts on the second load. Removing it ends that target only once the module reloads.
+    if grep -qs '^options netconsole netconsole=' /etc/modprobe.d/netconsole.conf; then
+        act "remove /etc/modprobe.d/netconsole.conf and reload netconsole"
+        if [ "$dry" = 0 ]; then
+            rm -f /etc/modprobe.d/netconsole.conf
+            [ -x /usr/local/sbin/asyla-netconsole ] && /usr/local/sbin/asyla-netconsole stop
+            modprobe -r netconsole
+            if systemctl -q is-enabled asyla-netconsole.service 2>/dev/null; then systemctl restart asyla-netconsole.service; fi
+        fi
+    fi
+    for k in $LEFTOVER_PKGS; do
+        installed "$k" || continue
+        act "purge $k"
+        [ "$dry" = 1 ] || DEBIAN_FRONTEND=noninteractive apt-get -y -q purge "$k"
+    done
+}
+
 cleanup() {
     dry=0; [ "${1:-}" = --dry-run ] && dry=1
     # Kernel images and series packages to "automatic", so autoremove may take what PVE's own keep
@@ -625,9 +695,13 @@ cleanup() {
         [ -z "$manual" ] || apt-mark -o Dir::State::extended_states="$tmp/extended_states" auto $manual >/dev/null
         apt-get -s -o Dir::State::extended_states="$tmp/extended_states" autoremove --purge | awk '/^Purg / { print "would purge " $2 }'
         rm -rf "$tmp"
+        purge_old_kernels 1
+        leftovers 1
     else
         [ -z "$manual" ] || { apt-mark auto $manual >/dev/null; say "changed marked automatic: $manual"; }
         DEBIAN_FRONTEND=noninteractive apt-get -y -q autoremove --purge
+        purge_old_kernels 0
+        leftovers 0
         apt-get clean
         # kdump initrds of kernels that are gone
         for f in /var/lib/kdump/initrd.img-* /var/lib/kdump/vmlinuz-*; do

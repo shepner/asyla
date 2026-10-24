@@ -97,7 +97,10 @@ if [ "$role" != unknown ]; then
 fi
 dumps=$(find /var/crash -mindepth 1 -maxdepth 1 -type d -newermt '-30 days' 2>/dev/null | sed 's#.*/##' | one)
 [ -n "$dumps" ] && r warn crash.dump "kdump saved a crash in the last 30 days: $dumps (/var/crash)"
-pstore=$(find /var/lib/systemd/pstore -mindepth 1 -maxdepth 1 -newermt '-30 days' 2>/dev/null | wc -l)
+# By the record's own file (dmesg-efi-*, dmesg-erst-*: the crash's date), not the directory, which is
+# the date systemd-pstore archived it: vmh02's 2026-05-29 ERST record came out at the 2026-10-24 boot.
+pstore=$(find /var/lib/systemd/pstore -mindepth 2 -maxdepth 2 -type f ! -name dmesg.txt -newermt '-30 days' \
+    -printf '%h\n' 2>/dev/null | sort -u | wc -l)
 [ "$pstore" -gt 0 ] && r warn crash.pstore "$pstore pstore record(s) in the last 30 days"
 ht=$(journalctl -k --since -24h --no-pager -q 2>/dev/null | grep -c 'blocked for more than')
 [ "$ht" -gt 0 ] && r warn hung-task "$ht hung-task warning(s) in 24h"
