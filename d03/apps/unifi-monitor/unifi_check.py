@@ -4,7 +4,9 @@
 The unifi-monitor container (compose.yml) runs this every UNIFI_INTERVAL seconds, a fresh process
 each time, so a script update from the nightly scripts task applies at the next cycle. Three GETs
 a cycle to https://api.ui.com/: v1/hosts (is each console connected), v1/devices (is each device
-online, its start time, its firmware), ea/isp-metrics/5m (the WAN of a console with a gateway).
+online, its start time, its firmware), ea/isp-metrics/5m (the WAN of a console with a gateway);
+a fourth, ea/isp-metrics/1h, only when a console's 5-minute series is empty. Which series the WAN
+findings came from is in each WAN message, status.json's consoles.<name>.wan and unifi.prom.
 
 Writes, in UNIFI_DATA (/data, the host's /mnt/docker/unifi-monitor):
   status.json  {"time", "checker", "problems": [{"key", "severity", "message"}], "consoles"}: the
@@ -116,8 +118,10 @@ def console_name(host: dict) -> str:
     return str(rs.get("name") or rs.get("hostname") or host.get("id", "?"))
 
 
-def evaluate(cfg: dict, hosts: list, devices: list, isp: list, state: dict, t: dt.datetime):
-    """(findings [(key, severity, message)], readings for unifi.prom, summary per console)."""
+def evaluate(cfg: dict, hosts: list, devices: list, isp: list, state: dict, t: dt.datetime,
+             isp_hourly: list | None = None):
+    """(findings [(key, severity, message)], readings for unifi.prom, summary per console).
+    `isp_hourly` (ea/isp-metrics/1h) stands in for a console whose 5-minute series is empty."""
     found, read, summary = [], {"consoles": [], "devices": [], "wan": []}, {}
     by_name = {console_name(h).lower(): h for h in hosts}
     devs = {d.get("hostId"): d.get("devices") or [] for d in devices}
@@ -179,7 +183,8 @@ def evaluate(cfg: dict, hosts: list, devices: list, isp: list, state: dict, t: d
                               f"UniFi {name}: {m.get('name')} is no longer listed (last seen {m.get('last_seen')})"))
         summary[name] = {"state": cstate, "devices": len(listed), "offline": offline}
         if ccfg.get("wan"):
-            found += wan_findings(cfg, name, h.get("id"), isp, read, t, tz)
+            found += wan_findings(cfg, name, h.get("id"), isp, read, t, tz, isp_hourly)
+            summary[name]["wan"] = next((w[3] for w in read["wan"] if w[0] == name), "none")
     expires = parse(cfg.get("key_expires"))
     if expires and expires - t < dt.timedelta(days=30):
         found.append(("key:expiry", "warn", f"UniFi Site Manager API key expires {cfg['key_expires']}: "
@@ -187,35 +192,45 @@ def evaluate(cfg: dict, hosts: list, devices: list, isp: list, state: dict, t: d
     return found, read, summary
 
 
+def wan_rows(isp: list, host_id: str) -> list:
+    """[(metricTime, wan figures)] of one console, oldest first; periods without a time dropped."""
+    rows = [(parse(p.get("metricTime")), (p.get("data") or {}).get("wan") or {})
+            for s in isp if s.get("hostId") == host_id for p in s.get("periods") or []]
+    return sorted((r for r in rows if r[0]), key=lambda r: r[0])
+
+
 def wan_findings(cfg: dict, name: str, host_id: str, isp: list, read: dict, t: dt.datetime,
-                 tz: ZoneInfo | None = None) -> list:
-    w = cfg["wan"]
-    periods = [p for s in isp if s.get("hostId") == host_id for p in s.get("periods") or []]
-    rows = sorted(((parse(p.get("metricTime")), (p.get("data") or {}).get("wan") or {}) for p in periods),
-                  key=lambda r: r[0] or t)
-    rows = [r for r in rows if r[0]]
+                 tz: ZoneInfo | None = None, isp_hourly: list | None = None) -> list:
+    """Findings from the 5-minute series, or from the hourly one when the 5-minute series is empty:
+    Site Manager stopped serving DAY's 5-minute figures after 2026-10-24 07:50Z while the hourly
+    ones went on (read 2026-10-25). An hourly period's metricTime is its start (the 13:23Z console
+    reconnect fell in the 13:00Z period), so its messages say "the hour from"."""
+    w, series, span, rows = cfg["wan"], "5-minute", "the hour to", wan_rows(isp, host_id)
+    if not rows and isp_hourly is not None:
+        w, series, span, rows = cfg["wan_hourly"], "hourly", "the hour from", wan_rows(isp_hourly, host_id)
     if not rows:
-        return [(f"wan:{name}:none", "warn", f"UniFi {name}: Site Manager has no WAN figures")]
+        return [(f"wan:{name}:none", "warn", f"UniFi {name}: Site Manager has no WAN figures (5-minute or hourly)")]
     latest_t, latest = rows[-1]
-    read["wan"].append((name, latest_t, latest))
+    read["wan"].append((name, latest_t, latest, series))
     found = []
     if t - latest_t > dt.timedelta(hours=w["stale_hours"]):
-        found.append((f"wan:{name}:stale", "warn", f"UniFi {name}: newest WAN figures are from {when(latest_t, tz)}"))
+        found.append((f"wan:{name}:stale", "warn",
+                      f"UniFi {name}: newest {series} WAN figures are from {when(latest_t, tz)}"))
     recent = [x for at, x in rows if latest_t - at < dt.timedelta(minutes=w["window_minutes"])]
     down = sum(x.get("downtime") or 0 for x in recent)
     if down:
         found.append((f"wan:{name}:downtime", "warn",
-                      f"UniFi {name}: WAN downtime {down} in the hour to {when(latest_t, tz)}"))
+                      f"UniFi {name}: WAN downtime {down} in {span} {when(latest_t, tz)} ({series} figures)"))
     slow = [x.get("avgLatency") for x in recent if (x.get("avgLatency") or 0) > w["latency_ms"]]
     if len(slow) >= w["periods"]:
         found.append((f"wan:{name}:latency", "warn",
                       f"UniFi {name}: WAN latency above {w['latency_ms']} ms in {len(slow)} of {len(recent)} "
-                      f"5-minute periods (up to {max(slow)} ms) in the hour to {when(latest_t, tz)}"))
+                      f"{series} periods (up to {max(slow)} ms) in {span} {when(latest_t, tz)}"))
     lossy = [x.get("packetLoss") for x in recent if (x.get("packetLoss") or 0) >= w["loss"]]
     if len(lossy) >= w["periods"]:
         found.append((f"wan:{name}:loss", "warn",
                       f"UniFi {name}: WAN packet loss {w['loss']} or more in {len(lossy)} of {len(recent)} "
-                      f"5-minute periods (up to {max(lossy)}) in the hour to {when(latest_t, tz)}"))
+                      f"{series} periods (up to {max(lossy)}) in {span} {when(latest_t, tz)}"))
     return found
 
 
@@ -252,8 +267,8 @@ def prom(ok: bool, t: dt.datetime, read: dict, problems: list) -> str:
         out.append(f"unifi_device_update_available{{{lab}}} {int(update)}")
         if start:
             out.append(f"unifi_device_start_timestamp_seconds{{{lab}}} {int(start.timestamp())}")
-    for name, at, x in read["wan"]:
-        lab = f'console="{esc(name)}"'
+    for name, at, x, series in read["wan"]:
+        lab = f'console="{esc(name)}",series="{series}"'
         out.append(f"unifi_wan_metric_timestamp_seconds{{{lab}}} {int(at.timestamp())}")
         for field, metric in (("avgLatency", "avg_latency_ms"), ("maxLatency", "max_latency_ms"),
                               ("packetLoss", "packet_loss"), ("downtime", "downtime"), ("uptime", "uptime")):
@@ -275,11 +290,15 @@ def main() -> int:
     try:
         hosts = get("v1/hosts?pageSize=100", key).get("data") or []
         devices = get("v1/devices?pageSize=100", key).get("data") or []
-        isp = []
-        if any(c.get("wan") for c in cfg.get("consoles", {}).values()):
+        isp, isp_hourly = [], None
+        wan_names = {n.lower() for n, c in cfg.get("consoles", {}).items() if c.get("wan")}
+        wan_ids = [h.get("id") for h in hosts if console_name(h).lower() in wan_names]
+        if wan_names:
             isp = get("ea/isp-metrics/5m?duration=24h", key).get("data") or []
+        if any(not wan_rows(isp, i) for i in wan_ids):   # 1h with duration=24h is HTTP 400; 7d works (2026-10-25)
+            isp_hourly = get("ea/isp-metrics/1h?duration=7d", key).get("data") or []
         state["api_fails"] = 0
-        found, read, summary = evaluate(cfg, hosts, devices, isp, state, t)
+        found, read, summary = evaluate(cfg, hosts, devices, isp, state, t, isp_hourly)
         found = confirm(found, state, cfg["confirm_cycles"])
         ok = True
     except ApiError as e:
@@ -295,6 +314,7 @@ def main() -> int:
         {"time": iso(t), "checker": "unifi-monitor", "ok": ok, "problems": problems, "consoles": summary},
         indent=1, sort_keys=True))
     print(f"{iso(t)} ok={ok} " + " ".join(f"{n}:{s['state']}:{s['devices'] - s['offline']}/{s['devices']}"
+                                         + (f":wan={s['wan']}" if "wan" in s else "")
                                          for n, s in summary.items())
           + "".join(f"\n  [{p['severity']}] {p['message']}" for p in problems), flush=True)
     return 0

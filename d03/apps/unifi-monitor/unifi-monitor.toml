@@ -26,3 +26,15 @@ latency_ms = 30
 loss = 10
 periods = 3
 stale_hours = 3   # the newest period was about an hour old when read (2026-10-22T20:01Z)
+
+# The same limits for the hourly series, used only when the 5-minute series is empty (Site Manager
+# served no 5-minute DAY figures after 2026-10-24T07:50Z; the hourly ones went on). One hourly
+# period is the window, so one bad hour is reported. Read 2026-10-25T16:30Z: 96 periods over 7 d,
+# avgLatency 12-13 ms, packetLoss 0-2, downtime 92 in two hours; the newest period (it is
+# labelled with its start) was 2 h 30 m old, so a period lands well after its hour ends.
+[wan_hourly]
+window_minutes = 60
+latency_ms = 30
+loss = 10
+periods = 1
+stale_hours = 4

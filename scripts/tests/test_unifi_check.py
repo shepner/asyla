@@ -4,7 +4,7 @@
     python3 scripts/tests/test_unifi_check.py
 
 The Site Manager answers are built here in the shapes read on 2026-10-22 (v1/hosts, v1/devices,
-ea/isp-metrics/5m); nothing reaches the network.
+ea/isp-metrics/5m) and 2026-10-25 (ea/isp-metrics/1h); nothing reaches the network.
 """
 from __future__ import annotations
 
@@ -48,8 +48,8 @@ def period(at, lat=12, loss=0, down=0):
                                                   "packetLoss": loss, "downtime": down, "uptime": 100}}}
 
 
-def isp(hid, periods):
-    return [{"hostId": hid, "metricType": "5m", "periods": periods}]
+def isp(hid, periods, kind="5m"):
+    return [{"hostId": hid, "metricType": kind, "periods": periods}]
 
 
 def healthy_wan(n=12):
@@ -64,10 +64,10 @@ def devices(day=None, mke=None):
             {"hostId": "h-mke", "devices": mke if mke is not None else [dev("BB", "UpstairsAP")]}]
 
 
-def run(hosts=HOSTS, devs=None, wan=None, state=None, t=T, cfg=CFG):
+def run(hosts=HOSTS, devs=None, wan=None, state=None, t=T, cfg=CFG, hourly=None):
     state = {} if state is None else state
     found, read, summary = uc.evaluate(cfg, hosts, devs or devices(), isp("h-day", healthy_wan() if wan is None else wan),
-                                       state, t)
+                                       state, t, None if hourly is None else isp("h-day", hourly, "1h"))
     return {k: (s, m) for k, s, m in found}, read, summary, state
 
 
@@ -75,7 +75,8 @@ class Findings(unittest.TestCase):
     def test_all_well_is_quiet(self):
         found, _, summary, _ = run()
         self.assertEqual(found, {})
-        self.assertEqual(summary["DAY"], {"state": "connected", "devices": 1, "offline": 0})
+        self.assertEqual(summary["DAY"], {"state": "connected", "devices": 1, "offline": 0, "wan": "5-minute"})
+        self.assertNotIn("wan", summary["MKE"])
 
     def test_console_disconnected_is_urgent(self):
         found, *_ = run(hosts=[host("h-day", "DAY", "disconnected"), HOSTS[1]])
@@ -137,6 +138,47 @@ class Findings(unittest.TestCase):
         old = [period(T - dt.timedelta(hours=4))]
         self.assertIn("wan:DAY:stale", run(wan=old)[0])
         self.assertIn("wan:DAY:none", run(wan=[])[0])
+        self.assertIn("wan:DAY:none", run(wan=[], hourly=[])[0], "both series empty")
+
+
+def hour(at, **kw):
+    return period(at, **kw)
+
+
+class HourlyFallback(unittest.TestCase):
+    """2026-10-24/25: Site Manager served no 5-minute DAY figures while the hourly ones went on."""
+    # As read 2026-10-25T16:30Z: the newest hourly period is labelled with its start, 2.5 h before.
+    HOURS = [hour(T - dt.timedelta(hours=2, minutes=30) - dt.timedelta(hours=i)) for i in range(24)]
+
+    def test_healthy_hourly_figures_are_quiet_and_named(self):
+        found, read, summary, _ = run(wan=[], hourly=self.HOURS)
+        self.assertEqual(found, {})
+        self.assertEqual(summary["DAY"]["wan"], "hourly")
+        self.assertEqual(read["wan"][0][3], "hourly")
+
+    def test_five_minute_figures_win_when_present(self):
+        bad = [hour(T - dt.timedelta(hours=1), down=92)]
+        found, read, summary, _ = run(hourly=bad)
+        self.assertEqual((found, summary["DAY"]["wan"]), ({}, "5-minute"))
+
+    def test_downtime_in_the_newest_hour(self):
+        hours = [hour(T - dt.timedelta(hours=2, minutes=30), down=92)] + self.HOURS[1:]
+        found, *_ = run(hosts=LocalTime.ZONED, wan=[], hourly=hours)
+        self.assertEqual(found["wan:DAY:downtime"],
+                         ("warn", "UniFi DAY: WAN downtime 92 in the hour from 2026-10-22 13:30 EDT (17:30Z) (hourly figures)"))
+
+    def test_one_slow_hour_is_reported(self):
+        hours = [hour(T - dt.timedelta(hours=1, minutes=30), lat=45)] + self.HOURS   # the next hour lands
+        self.assertIn("in 1 of 1 hourly periods (up to 45 ms)", run(wan=[], hourly=hours)[0]["wan:DAY:latency"][1])
+
+    def test_an_older_hour_is_outside_the_window(self):
+        hours = self.HOURS[:1] + [hour(T - dt.timedelta(hours=3, minutes=30), down=92, loss=20)] + self.HOURS[2:]
+        self.assertEqual(run(wan=[], hourly=hours)[0], {})
+
+    def test_hourly_stale_after_four_hours_not_three(self):
+        self.assertEqual(run(wan=[], hourly=[hour(T - dt.timedelta(hours=3, minutes=30))])[0], {})
+        found, *_ = run(wan=[], hourly=[hour(T - dt.timedelta(hours=4, minutes=30))])
+        self.assertIn("newest hourly WAN figures are from", found["wan:DAY:stale"][1])
 
     def test_mke_has_no_wan_check(self):
         found, read, *_ = run()
@@ -204,7 +246,7 @@ class Prom(unittest.TestCase):
         text = uc.prom(True, T, read, [{"severity": "urgent"}])
         self.assertIn('unifi_device_online{console="DAY",device="AP \\"Hall\\"",model="AC LR"} 0', text)
         self.assertIn('unifi_console_connected{console="MKE"} 1', text)
-        self.assertIn('unifi_wan_avg_latency_ms{console="DAY"} 12', text)
+        self.assertIn('unifi_wan_avg_latency_ms{console="DAY",series="5-minute"} 12', text)
         self.assertIn('unifi_problems{severity="urgent"} 1', text)
 
 

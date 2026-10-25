@@ -11,6 +11,10 @@ collects the same readings later, once it is production on d06.
   user. Every 5 minutes (`UNIFI_INTERVAL`) it runs `unifi_check.py` as a fresh process, so a script
   update from the nightly scripts task applies at the next cycle. Three GETs a cycle to
   `https://api.ui.com/`: `v1/hosts`, `v1/devices`, `ea/isp-metrics/5m` (DAY only). Read-only.
+  A fourth, `ea/isp-metrics/1h?duration=7d`, only when DAY's 5-minute series is empty: Site
+  Manager served no 5-minute DAY figures after 2026-10-24 07:50Z while the hourly ones went on
+  (read 2026-10-25). The WAN messages, `status.json`'s `consoles.DAY.wan` (`5-minute`, `hourly`
+  or `none`), the `series` label in `unifi.prom` and the container log say which series was used.
 - **What it writes** in `/mnt/docker/unifi-monitor/`:
   - `status.json`: `{time, checker, ok, problems: [{key, severity, message}], consoles}`. The
     collection point: host-maintenance's monitor reads it on each run (`[[status]]` in its
@@ -31,6 +35,8 @@ collects the same readings later, once it is production on d06.
   | Firmware update waiting 7 days or more | warn |
   | Device no longer listed (warned for a day, then forgotten) | warn |
   | DAY WAN: any downtime; latency over 30 ms or loss 10+ in 3 of the hour's 5-minute periods; figures over 3 h old | warn |
+  | DAY WAN from the hourly series (5-minute empty): the same limits in the newest hour; figures over 4 h old | warn |
+  | DAY WAN: neither series has figures | warn |
   | Site Manager key within 30 days of expiry (`key_expires`) | warn |
   | A staged test alert (`stage`) | urgent, at once |
 
