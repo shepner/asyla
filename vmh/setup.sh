@@ -27,6 +27,9 @@
 #   netconsole-rx  vmh03 only: UDP 6666 from vmh01/vmh02, one log per sender with receive times
 #   health         /usr/local/sbin/asyla-vmh-health (read-only), and root's authorized_keys line that
 #                  lets host-maintenance's monitor (the d03 runner's key) run it and nothing else
+#   swap           no swap on a ZFS zvol: swapoff it and comment its fstab line (the zvol stays).
+#                  vmh02 deadlocked swapping to rpool/swap on 2026-05-24 (asyla incident
+#                  vmh02-may24-hang-investigation; openzfs/zfs#18200 still open 2026-10-24)
 set -eu
 
 SOURCES=/etc/apt/sources.list.d
@@ -436,9 +439,39 @@ part_health() {
     fi
 }
 
+# ---- swap
+zvol_swaps() {   # active swap devices that are ZFS zvols (/dev/zdN)
+    awk 'NR > 1 { print $1 }' /proc/swaps | while read -r d; do
+        case "$(readlink -f "$d")" in /dev/zd*) echo "$d" ;; esac
+    done
+}
+fstab_zvol_swap() {   # uncommented fstab swap lines on a zvol
+    awk '$1 !~ /^#/ && $3 == "swap" && ($1 ~ /^\/dev\/zvol\// || $1 ~ /^\/dev\/zd/)' /etc/fstab
+}
+
+part_swap() {
+    say "== swap"
+    for d in $(zvol_swaps); do
+        used=$(awk -v d="$d" '$1 == d { print $4 }' /proc/swaps)
+        avail=$(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo)
+        [ "$used" -lt $((avail / 2)) ] || die "swap on $d holds $used KiB, too much for MemAvailable $avail KiB; nothing changed"
+        swapoff "$d"
+        say "changed swapoff $d (held $used KiB)"
+    done
+    if [ -n "$(fstab_zvol_swap)" ]; then
+        [ -e /etc/fstab.before-asyla-swap ] || cp -p /etc/fstab /etc/fstab.before-asyla-swap
+        awk '$1 !~ /^#/ && $3 == "swap" && ($1 ~ /^\/dev\/zvol\// || $1 ~ /^\/dev\/zd/) {
+                 print "# asyla vmh/setup.sh swap: no swap on a zvol (openzfs/zfs#18200)"; print "#" $0; next }
+             { print }' /etc/fstab | install_file /etc/fstab 644
+        systemctl daemon-reload
+    else
+        say "ok      /etc/fstab: no swap on a zvol"
+    fi
+}
+
 # ---- check
 check() {   # check [PART...]: only those parts' lines (default all), so a one-part setup passes alone
-    cparts=" ${*:-repos updates crash netconsole-rx health} "
+    cparts=" ${*:-repos updates crash netconsole-rx health swap} "
     part() { case "$cparts" in *" $1 "*) return 0 ;; esac; return 1; }
     bad=0; rm -f "$BADMARK"
     flag() { say "FAIL    $*"; bad=1; : >"$BADMARK"; }
@@ -514,6 +547,11 @@ check() {   # check [PART...]: only those parts' lines (default all), so a one-p
     if [ -n "${HEALTH_B64:-}" ] && [ -x /usr/local/sbin/asyla-vmh-health ]; then
         payload HEALTH_B64 | want_file /usr/local/sbin/asyla-vmh-health
     fi
+    fi
+    if part swap; then
+    zs=$(zvol_swaps | tr '\n' ' ')
+    [ -z "$zs" ] && okay "no active swap on a zvol" || flag "active swap on a zvol: $zs"
+    [ -z "$(fstab_zvol_swap)" ] && okay "/etc/fstab: no swap on a zvol" || flag "/etc/fstab swaps on a zvol"
     fi
     [ "$bad" = 0 ] && [ ! -e "$BADMARK" ] || die "check found problems (FAIL lines above)"
     say "check: all ok"
@@ -817,12 +855,12 @@ mode=${1:-check}; [ $# -gt 0 ] && shift
 case "$mode" in
     check) check "$@" ;;
     setup)
-        parts=${*:-repos updates crash netconsole-rx health}
+        parts=${*:-repos updates crash netconsole-rx health swap}
         for p in $parts; do
             case "$p" in
                 repos) part_repos ;; updates) part_updates ;; crash) part_crash ;;
-                netconsole-rx) part_netconsole_rx ;; health) part_health ;;
-                *) die "unknown part $p (repos updates crash netconsole-rx health)" ;;
+                netconsole-rx) part_netconsole_rx ;; health) part_health ;; swap) part_swap ;;
+                *) die "unknown part $p (repos updates crash netconsole-rx health swap)" ;;
             esac
         done
         check $parts ;;

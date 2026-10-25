@@ -22,7 +22,7 @@ vmh/apply.sh survey vmh01 vmh02 vmh03     # read-only facts, side by side (VMH_S
 vmh/apply.sh check vmh03 [PART...]       # read-only: does the node match setup.sh (those parts)?
 vmh/apply.sh health vmh03                 # read-only: the checks host-maintenance runs
 vmh/apply.sh patch vmh01 --plan           # read-only: what a patch would install or hold, and why
-vmh/apply.sh setup vmh03 [PART...] --production   # repos updates crash netconsole-rx health
+vmh/apply.sh setup vmh03 [PART...] --production   # repos updates crash netconsole-rx health swap
 vmh/apply.sh patch vmh03 [--dry-run] --production # apt upgrade, no reboot
 vmh/apply.sh kernel vmh03 VERSION --next-boot --production   # one trial boot; a panic (panic=10) falls back
 vmh/apply.sh kernel vmh03 VERSION|none --production   # pin for every boot, or remove the pin
@@ -46,6 +46,10 @@ vmh/usage.py [--node vmh01] [--window 2]  # read-only: guest load by hour of wee
 - **health**: `/usr/local/sbin/asyla-vmh-health` (read-only), plus one line in root's
   authorized_keys. That line lets host-maintenance's d03 runner key run the health check, and nothing
   else.
+- **swap**: no swap on a ZFS zvol. It runs `swapoff` and comments out the fstab line, keeping the zvol
+  and a copy at `/etc/fstab.before-asyla-swap`. vmh02 deadlocked on 2026-05-24 while swapping to
+  `rpool/swap` (OpenZFS zvol write path, openzfs/zfs#18200, still open on 2026-10-24). It refuses if the
+  swap holds more than half of MemAvailable.
 
 ## Kernel moves
 
@@ -55,5 +59,10 @@ A new kernel is installed by `patch` but does not boot until it is planned:
 2. Reboot in a window.
 3. Check `uname -r` and `health`.
 4. `kernel NODE NEW` to keep it, or reboot again to return to the pinned one.
+
+The next-boot pin is PVE's: `/etc/kernel/next-boot-pin`, written into
+`/etc/default/grub.d/proxmox-kernel-pin.cfg` and each ESP's grub.cfg. `proxmox-boot-cleanup.service`
+removes it once the trial boot reaches systemd. A hang before that point boots the trial kernel again.
+To get back, choose the old kernel under "Advanced options" in the GRUB menu at the console.
 
 `cleanup` never removes the running, pinned, or two newest kernels (`/etc/apt/apt.conf.d/76pveconf`).
