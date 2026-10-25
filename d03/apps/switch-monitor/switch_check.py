@@ -36,6 +36,7 @@ DATA = Path(os.environ.get("SWITCH_DATA", "/data"))
 CONFIG = Path(os.environ.get("SWITCH_CONFIG", Path(__file__).with_name("switch-monitor.toml")))
 EXPORTER_FAILS_URGENT = 3   # cycles in a row with the exporter itself not answering
 UP = 1                      # IF-MIB ifAdminStatus / ifOperStatus up(1)
+GAUGE_UNITS = {1: "temp", 2: "fan", 6: "state"}   # mtxrGaugeUnit; dV, dA, dW are not watched
 SAMPLE = re.compile(r"^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{(.*)\})?\s+(\S+)")
 LABEL = re.compile(r'([a-zA-Z_][a-zA-Z0-9_]*)="((?:[^"\\]|\\.)*)"')
 
@@ -85,6 +86,14 @@ def fetch(url: str, timeout: int = 120) -> str:
         raise FetchError(f"HTTP {e.code}" + (f": {body[0][:200]}" if body else "")) from None
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         raise FetchError(f"{type(e).__name__}: {getattr(e, 'reason', e)}") from None
+
+
+def answers(url: str) -> bool:
+    try:
+        fetch(url, timeout=10)
+    except FetchError:
+        return False
+    return True
 
 
 def samples(text: str) -> list:
@@ -207,19 +216,32 @@ def evaluate(cfg: dict, name: str, scfg: dict, rows: list, prev: dict, t: dt.dat
     return found, held, summary, new_prev
 
 
+def gauge_kind(g: str, unit: float | None) -> str | None:
+    """A MikroTik gauge by its mtxrGaugeUnit (MIKROTIK-MIB: 1 celsius, 2 rpm, 6 status), else by its name."""
+    if unit is not None:
+        return GAUGE_UNITS.get(int(unit))
+    if "temperature" in g:
+        return "temp"
+    if "fan" in g and g.endswith("speed"):
+        return "fan"
+    return "state" if g.endswith("-state") else None
+
+
 def health(cfg: dict, name: str, rows: list, label: dict) -> list:
-    """MikroTik health gauges (by name: *temperature in C, *fan*-speed in RPM, *-state 1 = ok) and optics."""
+    """MikroTik health gauges (temperature in C, fan speed in RPM, a state ok = state_ok_value) and optics."""
     found = []
+    units = {lab.get("mtxrGaugeName"): v for lab, v in by_name(rows, "mtxrGaugeUnit")}
     for lab, v in by_name(rows, "mtxrGaugeValue"):
         g = lab.get("mtxrGaugeName") or "?"
-        if g.endswith("temperature"):
+        kind = gauge_kind(g, units.get(g))
+        if kind == "temp":
             if v >= cfg["temp_urgent_c"]:
                 found.append((f"{name}:health:{g}", "urgent", f"{name}: {g} {v:.0f} C (limit {cfg['temp_urgent_c']} C)"))
             elif v >= cfg["temp_warn_c"]:
                 found.append((f"{name}:health:{g}", "warn", f"{name}: {g} {v:.0f} C (over {cfg['temp_warn_c']} C)"))
-        elif "fan" in g and g.endswith("speed") and v < cfg["fan_min_rpm"]:
+        elif kind == "fan" and v < cfg["fan_min_rpm"]:
             found.append((f"{name}:health:{g}", "urgent", f"{name}: {g} {v:.0f} RPM (under {cfg['fan_min_rpm']})"))
-        elif g.endswith("-state") and v != cfg.get("state_ok_value", 1):
+        elif kind == "state" and v != cfg["state_ok_value"]:
             found.append((f"{name}:health:{g}", "urgent", f"{name}: {g} is not ok (value {v:.0f})"))
     scale = cfg["optic_power_scale"]
     for metric, field in (("mtxrOpticalRxPower", "rx"), ("mtxrOpticalTxPower", "tx")):
@@ -247,13 +269,14 @@ def firmware(cfg: dict, name: str, scfg: dict, rows: list, prev: dict, t: dt.dat
     fw = next((lab.get("mtxrFirmwareVersion") for lab, _ in by_name(rows, "mtxrFirmwareVersion")), None)
     fw_up = next((lab.get("mtxrFirmwareUpgradeVersion") for lab, _ in by_name(rows, "mtxrFirmwareUpgradeVersion")), None)
     seen = prev.setdefault("release_seen", {})
-    if running and release and version_tuple(release) > version_tuple(running):
+    newer = running and release and version_tuple(release) > version_tuple(running)
+    if newer:
         first = parse(seen.setdefault(release, iso(t)))
         if t - first >= dt.timedelta(days=cfg["release_waiting_days"]):
             found.append((f"{name}:release", "warn",
                           f"{name}: RouterOS {release} ({scfg.get('routeros_channel')}) is out since at least "
                           f"{first:%Y-%m-%d}; it runs {running}"))
-    for r in [r for r in seen if r != release]:
+    for r in [r for r in seen if not newer or r != release]:   # applied or superseded: forgotten
         seen.pop(r)
     if fw and fw_up and version_tuple(fw_up) > version_tuple(fw):
         found.append((f"{name}:routerboard", "warn",
@@ -320,8 +343,10 @@ def main() -> int:
         try:
             rows = samples(fetch(f"{cfg['exporter']}/snmp?{q}"))
         except FetchError as e:
-            if not str(e).startswith("HTTP"):
-                exporter_down = str(e)   # the exporter itself, not the switch
+            # The exporter answers 500 for a switch it cannot walk; no answer at all is the exporter's
+            # failure only if its own page does not answer either (a slow walk can time out alone).
+            if not str(e).startswith("HTTP") and not answers(f"{cfg['exporter']}/"):
+                exporter_down = str(e)
                 break
             found.append((f"{name}:unreachable", "urgent", f"{name} ({scfg['target']}) not answering SNMP: {e}"))
             summary[name] = {"reachable": False}

@@ -29,6 +29,9 @@ optic_power_scale = 0.001
 temp_warn_c = 65
 temp_urgent_c = 75
 fan_min_rpm = 1000
+# A gauge whose unit is "status" (fan-state, psu1-state, psu2-state) is ok at this value (initial:
+# RouterOS shows "ok"; confirm the number on the first live read).
+state_ok_value = 1
 # A newer RouterOS release in the switch's channel is reported (digest) once it has been out this long.
 release_waiting_days = 7
 release_feed = "https://upgrade.mikrotik.com/routeros/NEWEST{major}.{channel}"
