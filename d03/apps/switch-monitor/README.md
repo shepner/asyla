@@ -55,8 +55,8 @@ can reach d03 (section theOrg below).
   switch2 and switch3 are end of life: there is no firmware to track, and no alert repeats it.
 - **Not watched yet:** switch2 and switch3 have `enabled = false` until their SNMPv3 user is set and
   a first walk names their uplink ports and health readings (backlog item, step 6).
-- **The SNMPv3 login:** user `asyla-monitor`, authPriv (SHA, AES), read-only, allowed from d03
-  only; set on switch1 by `tools/switch_snmp.py` in the asyla hub (plan by default, `--apply` after
+- **The SNMPv3 login:** user `asyla-monitor`, authPriv (SHA, AES), read-only, allowed from
+  10.0.0.0/24 only (a subnet, not d03 alone, so the exporter can move without a switch change); set on switch1 by `tools/switch_snmp.py` in the asyla hub (plan by default, `--apply` after
   the operator's approval). The two passwords, `SWITCH_SNMP_AUTH_PASSWORD` and
   `SWITCH_SNMP_PRIV_PASSWORD`, are in OpenBao (`hubs/asyla/switch-snmp-auth-password`,
   `hubs/asyla/switch-snmp-priv-password`) and in no file here: `build_host.py` resolves them on
