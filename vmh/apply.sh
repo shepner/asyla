@@ -7,7 +7,9 @@
 #   vmh/apply.sh patch NODE [--dry-run]   apt upgrade, no reboot; on vmh01/vmh02 only what vmh03 has
 #                                         run for setup.sh's SOAK_DAYS (vmh03's list is read first)
 #   vmh/apply.sh patch NODE --plan        read-only: that verdict from the node's current lists, no
-#                                         apt-get update (VMH_SOAK_DAYS=N overrides SOAK_DAYS here only)
+#                                         apt-get update
+#   VMH_SOAK_DAYS=N in front of patch overrides SOAK_DAYS for that run (printed): with --production
+#   only when the operator chose to shorten the soak for that window
 #   vmh/apply.sh kernel NODE VERSION|none [--next-boot]   pin a kernel ABI for the next boot(s)
 #   vmh/apply.sh cleanup NODE [--dry-run] old kernels (PVE's keep list), old kdump initrds, apt cache, May leftovers
 #   vmh/apply.sh health NODE              read-only: vmh/health.sh, as host-maintenance runs it
@@ -29,7 +31,7 @@ address() {
     esac
 }
 
-usage() { sed -n '2,18p' "$0" >&2; exit 2; }
+usage() { sed -n '2,20p' "$0" >&2; exit 2; }
 
 [ $# -ge 2 ] || usage
 mode=$1; shift
@@ -79,8 +81,9 @@ b64() { base64 <"$1" | tr -d '\n'; }
 prelude="HEALTH_B64='$(b64 "$HERE/health.sh")'
 RX_B64='$(b64 "$HERE/netconsole-rx.py")'
 "
-if [ "$plan" = 1 ] && [ -n "${VMH_SOAK_DAYS:-}" ]; then
-    case "$VMH_SOAK_DAYS" in *[!0-9]*) echo "apply.sh: VMH_SOAK_DAYS is a number of days" >&2; exit 2 ;; esac
+if [ "$mode" = patch ] && [ -n "${VMH_SOAK_DAYS:-}" ]; then
+    case "$VMH_SOAK_DAYS" in ''|*[!0-9]*) echo "apply.sh: VMH_SOAK_DAYS is a number of days" >&2; exit 2 ;; esac
+    echo "apply.sh: soak shortened to $VMH_SOAK_DAYS days for this run (VMH_SOAK_DAYS; setup.sh's default is 7)" >&2
     prelude="${prelude}SOAK_DAYS=$VMH_SOAK_DAYS
 "
 fi

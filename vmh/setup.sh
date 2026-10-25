@@ -41,7 +41,7 @@ CANARY=10.0.0.37                             # vmh03: netconsole receiver and ve
 # the health script only, from d03 (its address, or a job container's).
 MONITOR_KEY='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIN8NNenIyQGHyq+UJRcpLsQA9OMk2c9C2+BVuPY98k7x host-maintenance@d03'
 MONITOR_OPTS='from="10.0.0.62,172.16.0.0/12",restrict,command="/usr/local/sbin/asyla-vmh-health"'
-SOAK_DAYS=${SOAK_DAYS:-7}                    # apply.sh may lower it for --plan only
+SOAK_DAYS=${SOAK_DAYS:-7}                    # apply.sh's VMH_SOAK_DAYS may lower it for one patch run
 # One reservation rule for all three; the kernel picks by RAM (vmh03 15 GB and vmh01/vmh02 125 GB: 2G).
 # kdump-tools' own default (512M-:192M) is far too small once the kdump initrd carries MODULES=most
 # (84 MB compressed, 355 MiB unpacked): on vmh03 (2026-10-23) a sysrq crash ran the crash kernel out of
