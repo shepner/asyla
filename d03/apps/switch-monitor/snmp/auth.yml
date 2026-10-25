@@ -1,0 +1,13 @@
+# SNMPv3 login for every switch (README.md beside compose.yml). The user is read-only on each
+# switch; the two passwords are in no file: snmp_exporter expands them from its environment
+# (--config.expand-environment-variables, snmp_exporter v0.30.1 config/config.go), which
+# switch-monitor.sh up fills from build_host.py start_env (OpenBao, on the workstation).
+auths:
+  asyla_v3:
+    version: 3
+    security_level: authPriv
+    username: asyla-monitor
+    auth_protocol: SHA          # RouterOS 7 offers MD5 or SHA1, and DES or AES (128)
+    password: ${SWITCH_SNMP_AUTH_PASSWORD}
+    priv_protocol: AES
+    priv_password: ${SWITCH_SNMP_PRIV_PASSWORD}

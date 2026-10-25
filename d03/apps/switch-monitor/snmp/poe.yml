@@ -1,0 +1,33 @@
+# PoE budget of a switch's power sourcing equipment (POWER-ETHERNET-MIB, RFC 3621 section 6,
+# pethMainPseEntry 1.3.6.1.2.1.105.1.3.1.1). Not in snmp_exporter's stock snmp.yml, so written
+# by hand here in its format; used for switch2 and switch3 (Aruba S2500-48P / -24P, the APs' power).
+modules:
+  poe_mib:
+    walk:
+    - 1.3.6.1.2.1.105.1.3.1.1
+    metrics:
+    - name: pethMainPsePower
+      oid: 1.3.6.1.2.1.105.1.3.1.1.2
+      type: gauge
+      help: Nominal power of the PSE, watts - 1.3.6.1.2.1.105.1.3.1.1.2
+      indexes:
+      - labelname: pethMainPseGroupIndex
+        type: gauge
+    - name: pethMainPseOperStatus
+      oid: 1.3.6.1.2.1.105.1.3.1.1.3
+      type: gauge
+      help: Operational status of the PSE (1 on, 2 off, 3 faulty) - 1.3.6.1.2.1.105.1.3.1.1.3
+      indexes:
+      - labelname: pethMainPseGroupIndex
+        type: gauge
+      enum_values:
+        1: "on"
+        2: "off"
+        3: faulty
+    - name: pethMainPseConsumptionPower
+      oid: 1.3.6.1.2.1.105.1.3.1.1.4
+      type: gauge
+      help: Power drawn from the PSE, watts - 1.3.6.1.2.1.105.1.3.1.1.4
+      indexes:
+      - labelname: pethMainPseGroupIndex
+        type: gauge

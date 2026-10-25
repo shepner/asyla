@@ -1,0 +1,71 @@
+# What switch_check.py watches and when it calls something a problem (README.md beside this file).
+# Limits marked "initial" are not yet from a measured baseline: tune them from the first day of
+# readings (asyla backlog item 2026-10-25-network-switch-monitoring-snmp-exporter-on-d03).
+
+# The snmp_exporter beside it in compose.yml, and the auth in snmp/auth.yml.
+exporter = "http://snmp-exporter:9116"
+auth = "asyla_v3"
+# An urgent finding (switch not answering, watched port down, PSU/fan/temperature) must be seen on
+# this many checks in a row (5 minutes apart) before status.json carries it; the monitor mails at once.
+confirm_cycles = 2
+# A switch whose SNMP uptime is this recent is reported as restarted (digest).
+reboot_report_hours = 24
+# A warning from counters between two checks (errors, discards, link drops) stays in status.json this
+# long after it was last seen, so the 07:00 digest still lists one from the night.
+hold_hours = 24
+# Port counters, per port, as a rate between two checks (initial).
+errors_per_hour = 10       # ifInErrors + ifOutErrors
+discards_per_hour = 1000   # ifInDiscards + ifOutDiscards (nas01 ix1 showed 2744 tx drops in 2026-10)
+# Optics (MikroTik): read 2026-10-25 on sfp-sfpplus9/10/17 (Finisar FTLX8571D3BNL-E5): rx -2.7 to
+# -2.8 dBm, tx -2.1 to -2.4 dBm, 44-48 C. Initial limits, well inside the module's own alarms.
+optic_rx_min_dbm = -10.0
+optic_tx_min_dbm = -6.0
+optic_max_c = 70
+# MIKROTIK-MIB optical power is in thousandths of a dBm (initial: confirm against /interface
+# ethernet monitor on the first live read, then drop this note).
+optic_power_scale = 0.001
+# Health gauges (MikroTik mtxrGaugeTable: name, value, unit). Read 2026-10-25 on switch1:
+# sfp-temperature 48 C, switch-temperature 49 C, fans 3870-3960 RPM, fan-state and psu1/2-state ok.
+temp_warn_c = 65
+temp_urgent_c = 75
+fan_min_rpm = 1000
+# A newer RouterOS release in the switch's channel is reported (digest) once it has been out this long.
+release_waiting_days = 7
+release_feed = "https://upgrade.mikrotik.com/routeros/NEWEST{major}.{channel}"
+release_check_hours = 24
+# PoE (Aruba): drawn power over this share of the PSE's nominal power is reported (digest).
+poe_warn_ratio = 0.8
+
+# Each switch: address as d03 reaches it, the exporter modules to walk, and the ports whose state is
+# urgent (by ifName, with what is on the other end). Errors are watched on every port, discards and
+# link drops on the listed ports. enabled = false until the switch has its SNMPv3 user.
+[switches.switch1]
+target = "192.168.88.1"
+kind = "mikrotik"
+modules = ["system", "if_mib", "mikrotik"]
+routeros_channel = "long-term"
+[switches.switch1.ports]   # live bridge port comments, 2026-10-25
+"sfp-sfpplus1" = "Internet (modem)"
+"sfp-sfpplus5" = "trunk: switch2 (house)"
+"sfp-sfpplus6" = "trunk: switch3 (garage)"
+"sfp-sfpplus9" = "nas01 ix0"
+"sfp-sfpplus10" = "nas01 ix1"
+"sfp-sfpplus17" = "vmh01 enp5s0f0"
+"sfp-sfpplus18" = "trunk: vmh01 enp5s0f1"
+"sfp-sfpplus19" = "vmh02 enp5s0f4"
+"sfp-sfpplus20" = "trunk: vmh02 enp5s0f4d1"
+
+# Aruba S2500, end of life: no firmware to track. Their uplink ports are named from the first walk.
+[switches.switch2]
+target = "10.0.0.41"
+kind = "aruba"
+enabled = false   # its SNMPv3 user is not set yet
+modules = ["system", "if_mib", "poe_mib"]
+[switches.switch2.ports]
+
+[switches.switch3]
+target = "10.0.0.42"
+kind = "aruba"
+enabled = false   # its SNMPv3 user is not set yet
+modules = ["system", "if_mib", "poe_mib"]
+[switches.switch3.ports]

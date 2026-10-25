@@ -1,0 +1,69 @@
+# switch-monitor on d03 (README.md): snmp_exporter walks the switches over SNMPv3; switch_check.py
+# reads it every SWITCH_INTERVAL seconds, a fresh process each time, and writes status.json for
+# host-maintenance. The SNMPv3 passwords are in no file: switch-monitor.sh up refuses to start
+# without them in its environment (build_host.py start_env); the empty defaults let down, logs and
+# verify run without them.
+name: switch-monitor
+
+services:
+  snmp-exporter:
+    image: prom/snmp-exporter:v0.30.1
+    container_name: switch-snmp-exporter
+    restart: unless-stopped
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      SWITCH_SNMP_AUTH_PASSWORD: ${SWITCH_SNMP_AUTH_PASSWORD:-}
+      SWITCH_SNMP_PRIV_PASSWORD: ${SWITCH_SNMP_PRIV_PASSWORD:-}
+    # The image's own snmp.yml (stock modules system, if_mib, mikrotik) plus ours: the auth and the PoE module.
+    command:
+      - --config.file=/etc/snmp_exporter/snmp.yml
+      - --config.file=/etc/asyla/auth.yml
+      - --config.file=/etc/asyla/poe.yml
+      - --config.expand-environment-variables
+    volumes:
+      - ./snmp:/etc/asyla:ro
+    # Not published: only the checker reaches it, on this project's network. theOrg's Prometheus
+    # scrapes it once it can reach d03 (README.md, "theOrg"): publish 9116 then, not before.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9116/"]
+      interval: 60s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+    logging:
+      driver: local
+      options: {max-size: "5m", max-file: "3"}
+
+  switch-monitor:
+    image: python:3.12-alpine
+    container_name: switch-monitor
+    restart: unless-stopped
+    user: "${SWITCH_UID:?}:${SWITCH_GID:?}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    depends_on: [snmp-exporter]
+    environment:
+      SWITCH_DATA: /data
+      SWITCH_INTERVAL: "300"
+      PYTHONDONTWRITEBYTECODE: "1"
+      TZ: UTC
+    command: ["sh", "-c", "while :; do python3 /app/switch_check.py; sleep \"$$SWITCH_INTERVAL\"; done"]
+    volumes:
+      # The app directory, not single files: the nightly scripts task replaces files, and a file
+      # mount would keep the old one.
+      - ./:/app:ro
+      - ${SWITCH_ROOT:?}:/data
+    healthcheck:
+      # status.json rewritten within two cycles and a bit.
+      test: ["CMD", "python3", "-c", "import os,sys,time; sys.exit(time.time() - os.path.getmtime('/data/status.json') > 720)"]
+      interval: 60s
+      timeout: 10s
+      start_period: 120s
+      retries: 3
+    logging:
+      driver: local
+      options: {max-size: "5m", max-file: "3"}
