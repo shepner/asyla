@@ -657,6 +657,9 @@ results = [
     check("d03's unifi-backup: the same key over SSH stdin only, no restore",
           (lambda a: (a.get("start_env"), a.get("restore")) == (["UNIFI_SITE_MANAGER_API_KEY"], False))(
               next(x for x in build_host.load_spec("d03")["app"] if x["name"] == "unifi-backup"))),
+    check("d03's switch-monitor: its two SNMPv3 passwords over SSH stdin only, no restore",
+          (lambda a: (a.get("start_env"), a.get("restore")) == (["SWITCH_SNMP_AUTH_PASSWORD", "SWITCH_SNMP_PRIV_PASSWORD"], False))(
+              next(x for x in build_host.load_spec("d03")["app"] if x["name"] == "switch-monitor"))),
     check("d03's att-monitor: no key, no restore",
           (lambda a: (a.get("start_env"), a.get("restore")) == (None, False))(
               next(x for x in build_host.load_spec("d03")["app"] if x["name"] == "att-monitor"))),

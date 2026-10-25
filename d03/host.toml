@@ -125,6 +125,15 @@ name = "unifi-backup"
 start_env = ["UNIFI_SITE_MANAGER_API_KEY"]
 restore = false                 # its data is the copies on the NAS; its state rebuilds in one cycle
 verify = ["verify"]
+# Switch check every 5 min over SNMPv3 (snmp_exporter + switch_check.py); host-maintenance's monitor
+# reads its status.json. The two SNMPv3 passwords are resolved from OpenBao on the workstation and
+# sent over SSH stdin (no file on d03):
+#   credentials.py exec SWITCH_SNMP_AUTH_PASSWORD SWITCH_SNMP_PRIV_PASSWORD -- build_host.py d03 build --only apps --app switch-monitor
+[[app]]
+name = "switch-monitor"
+start_env = ["SWITCH_SNMP_AUTH_PASSWORD", "SWITCH_SNMP_PRIV_PASSWORD"]
+restore = false                 # its state rebuilds in one check (a release's 7-day wait restarts)
+verify = ["verify"]
 # AT&T gateway (BGW320) check every 5 min from its status pages; host-maintenance's monitor reads
 # its status.json. No key: the pages need no login.
 [[app]]

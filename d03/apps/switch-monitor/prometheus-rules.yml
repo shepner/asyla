@@ -1,0 +1,146 @@
+# Alerting rules for theOrg's Prometheus, for the scrape job asyla-switch-snmp in README.md
+# ("theOrg"): the findings of switch_check.py with the limits of switch-monitor.toml. The watched
+# ports below are switch1's [switches.switch1.ports]; change both together. Until theOrg scrapes
+# d03, host-maintenance mails these from status.json instead. Check:
+#   promtool check rules prometheus-rules.yml
+groups:
+  - name: asyla-switches
+    rules:
+      - alert: SwitchNotAnsweringSnmp
+        expr: up{job="asyla-switch-snmp"} == 0
+        for: 10m
+        labels: {severity: critical}
+        annotations:
+          summary: "{{ $labels.switch }} ({{ $labels.instance }}) is not answering SNMP"
+
+      - alert: SwitchWatchedPortDown
+        expr: >
+          ifOperStatus{job="asyla-switch-snmp", switch="switch1",
+            ifName=~"sfp-sfpplus(1|5|6|9|10|17|18|19|20)"} != 1
+          and on (instance, ifIndex) ifAdminStatus == 1
+        for: 10m
+        labels: {severity: critical}
+        annotations:
+          summary: "{{ $labels.switch }}: port {{ $labels.ifName }} ({{ $labels.ifAlias }}) is down"
+
+      - alert: SwitchHealthStateNotOk
+        expr: >
+          mtxrGaugeValue{job="asyla-switch-snmp"} != 1
+          and on (instance, mtxrGaugeName) mtxrGaugeUnit == 6
+        for: 10m
+        labels: {severity: critical}
+        annotations:
+          summary: "{{ $labels.switch }}: {{ $labels.mtxrGaugeName }} is not ok (value {{ $value }})"
+
+      - alert: SwitchTemperatureCritical
+        expr: >
+          mtxrGaugeValue{job="asyla-switch-snmp"} >= 75
+          and on (instance, mtxrGaugeName) mtxrGaugeUnit == 1
+        for: 10m
+        labels: {severity: critical}
+        annotations:
+          summary: "{{ $labels.switch }}: {{ $labels.mtxrGaugeName }} {{ $value }} C (limit 75 C)"
+
+      - alert: SwitchTemperatureHigh
+        expr: >
+          mtxrGaugeValue{job="asyla-switch-snmp"} >= 65
+          and on (instance, mtxrGaugeName) mtxrGaugeUnit == 1
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.switch }}: {{ $labels.mtxrGaugeName }} {{ $value }} C (over 65 C)"
+
+      - alert: SwitchFanSlow
+        expr: >
+          mtxrGaugeValue{job="asyla-switch-snmp"} < 1000
+          and on (instance, mtxrGaugeName) mtxrGaugeUnit == 2
+        for: 10m
+        labels: {severity: critical}
+        annotations:
+          summary: "{{ $labels.switch }}: {{ $labels.mtxrGaugeName }} {{ $value }} RPM (under 1000)"
+
+      - alert: SwitchPoeFaulty
+        expr: pethMainPseOperStatus{job="asyla-switch-snmp"} == 3
+        for: 10m
+        labels: {severity: critical}
+        annotations:
+          summary: "{{ $labels.switch }}: PoE supply {{ $labels.pethMainPseGroupIndex }} is faulty"
+
+      - alert: SwitchRestarted
+        expr: sysUpTime{job="asyla-switch-snmp"} / 100 < 86400
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.switch }}: restarted (SNMP uptime {{ $value | humanizeDuration }})"
+
+      - alert: SwitchPortErrors
+        expr: >
+          increase(ifInErrors{job="asyla-switch-snmp"}[1h])
+          + increase(ifOutErrors{job="asyla-switch-snmp"}[1h]) > 10
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.switch }}: port {{ $labels.ifName }}: {{ $value | humanize }} errors in an hour (over 10)"
+
+      - alert: SwitchWatchedPortDiscards
+        expr: >
+          increase(ifInDiscards{job="asyla-switch-snmp", switch="switch1",
+            ifName=~"sfp-sfpplus(1|5|6|9|10|17|18|19|20)"}[1h])
+          + increase(ifOutDiscards{job="asyla-switch-snmp", switch="switch1",
+            ifName=~"sfp-sfpplus(1|5|6|9|10|17|18|19|20)"}[1h]) > 1000
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.switch }}: port {{ $labels.ifName }}: {{ $value | humanize }} discards in an hour (over 1000)"
+
+      - alert: SwitchWatchedPortFlapped
+        expr: >
+          increase(mtxrInterfaceStatsLinkDowns{job="asyla-switch-snmp", switch="switch1",
+            ifName=~"sfp-sfpplus(1|5|6|9|10|17|18|19|20)"}[1h]) > 0
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.switch }}: port {{ $labels.ifName }} went down in the last hour"
+
+      # MIKROTIK-MIB optical power in thousandths of a dBm (optic_power_scale; confirm on the first read).
+      - alert: SwitchOpticRxLow
+        expr: >
+          mtxrOpticalRxPower{job="asyla-switch-snmp", switch="switch1",
+            mtxrOpticalName=~"sfp-sfpplus(1|5|6|9|10|17|18|19|20)"} * 0.001 < -10
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.switch }}: {{ $labels.mtxrOpticalName }} optic rx {{ $value }} dBm (under -10)"
+
+      - alert: SwitchOpticTxLow
+        expr: >
+          mtxrOpticalTxPower{job="asyla-switch-snmp", switch="switch1",
+            mtxrOpticalName=~"sfp-sfpplus(1|5|6|9|10|17|18|19|20)"} * 0.001 < -6
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.switch }}: {{ $labels.mtxrOpticalName }} optic tx {{ $value }} dBm (under -6)"
+
+      - alert: SwitchOpticHotOrFaulty
+        expr: >
+          (mtxrOpticalTemperature{job="asyla-switch-snmp", switch="switch1",
+            mtxrOpticalName=~"sfp-sfpplus(1|5|6|9|10|17|18|19|20)"} > 70)
+          or (mtxrOpticalTxFault{job="asyla-switch-snmp", switch="switch1",
+            mtxrOpticalName=~"sfp-sfpplus(1|5|6|9|10|17|18|19|20)"} == 1)
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.switch }}: {{ $labels.mtxrOpticalName }} optic over 70 C or reporting a transmit fault"
+
+      - alert: SwitchRouterboardFirmwareBehind
+        expr: >
+          mtxrFirmwareVersion{job="asyla-switch-snmp"}
+          unless on (instance, mtxrFirmwareVersion)
+          label_replace(mtxrFirmwareUpgradeVersion{job="asyla-switch-snmp"},
+            "mtxrFirmwareVersion", "$1", "mtxrFirmwareUpgradeVersion", "(.*)")
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.switch }}: routerboard firmware differs from the one installed with RouterOS"
+
+      - alert: SwitchPoeBudgetHigh
+        expr: >
+          pethMainPseConsumptionPower{job="asyla-switch-snmp"}
+          / pethMainPsePower{job="asyla-switch-snmp"} > 0.8
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.switch }}: PoE draws over 80 % of supply {{ $labels.pethMainPseGroupIndex }}"

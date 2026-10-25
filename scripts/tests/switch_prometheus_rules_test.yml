@@ -1,0 +1,71 @@
+# promtool unit test of d03/apps/switch-monitor/prometheus-rules.yml (README.md there, "Tests"):
+#   docker run --rm -v "$PWD:/r:ro" -w /r --entrypoint promtool prom/prometheus:v2.48.1 test rules scripts/tests/switch_prometheus_rules_test.yml
+# Series in the label shapes of snmp_exporter v0.30.1's stock modules, as theOrg's job would label them.
+rule_files:
+  - ../../d03/apps/switch-monitor/prometheus-rules.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'ifOperStatus{job="asyla-switch-snmp",switch="switch1",instance="192.168.88.1",ifIndex="9",ifName="sfp-sfpplus9",ifAlias="nas01"}'
+        values: '2x20'
+      - series: 'ifAdminStatus{job="asyla-switch-snmp",switch="switch1",instance="192.168.88.1",ifIndex="9",ifName="sfp-sfpplus9",ifAlias="nas01"}'
+        values: '1x20'
+      - series: 'ifOperStatus{job="asyla-switch-snmp",switch="switch1",instance="192.168.88.1",ifIndex="2",ifName="ether2",ifAlias=""}'
+        values: '2x20'
+      - series: 'ifAdminStatus{job="asyla-switch-snmp",switch="switch1",instance="192.168.88.1",ifIndex="2",ifName="ether2",ifAlias=""}'
+        values: '1x20'
+      - series: 'mtxrGaugeValue{job="asyla-switch-snmp",switch="switch1",instance="192.168.88.1",mtxrGaugeName="psu2-state"}'
+        values: '0x20'
+      - series: 'mtxrGaugeUnit{job="asyla-switch-snmp",switch="switch1",instance="192.168.88.1",mtxrGaugeName="psu2-state"}'
+        values: '6x20'
+      - series: 'mtxrGaugeValue{job="asyla-switch-snmp",switch="switch1",instance="192.168.88.1",mtxrGaugeName="switch-temperature"}'
+        values: '49x20'
+      - series: 'mtxrGaugeUnit{job="asyla-switch-snmp",switch="switch1",instance="192.168.88.1",mtxrGaugeName="switch-temperature"}'
+        values: '1x20'
+      - series: 'ifInErrors{job="asyla-switch-snmp",switch="switch1",instance="192.168.88.1",ifIndex="2",ifName="ether2",ifAlias=""}'
+        values: '0+1x60'
+      - series: 'ifOutErrors{job="asyla-switch-snmp",switch="switch1",instance="192.168.88.1",ifIndex="2",ifName="ether2",ifAlias=""}'
+        values: '0x60'
+      - series: 'mtxrFirmwareVersion{job="asyla-switch-snmp",switch="switch1",instance="192.168.88.1",mtxrFirmwareVersion="7.21.4"}'
+        values: '1x20'
+      - series: 'mtxrFirmwareUpgradeVersion{job="asyla-switch-snmp",switch="switch1",instance="192.168.88.1",mtxrFirmwareUpgradeVersion="7.23.8"}'
+        values: '1x20'
+      - series: 'pethMainPsePower{job="asyla-switch-snmp",switch="switch2",instance="10.0.0.41",pethMainPseGroupIndex="1"}'
+        values: '400x20'
+      - series: 'pethMainPseConsumptionPower{job="asyla-switch-snmp",switch="switch2",instance="10.0.0.41",pethMainPseGroupIndex="1"}'
+        values: '330x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: SwitchWatchedPortDown
+        exp_alerts:
+          - exp_labels: {severity: critical, job: asyla-switch-snmp, switch: switch1, instance: 192.168.88.1,
+                         ifIndex: "9", ifName: sfp-sfpplus9, ifAlias: nas01}
+            exp_annotations: {summary: "switch1: port sfp-sfpplus9 (nas01) is down"}
+      - eval_time: 15m
+        alertname: SwitchHealthStateNotOk
+        exp_alerts:
+          - exp_labels: {severity: critical, job: asyla-switch-snmp, switch: switch1, instance: 192.168.88.1,
+                         mtxrGaugeName: psu2-state}
+            exp_annotations: {summary: "switch1: psu2-state is not ok (value 0)"}
+      - eval_time: 15m
+        alertname: SwitchTemperatureHigh
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: SwitchPortErrors
+        exp_alerts:
+          - exp_labels: {severity: warning, job: asyla-switch-snmp, switch: switch1, instance: 192.168.88.1,
+                         ifIndex: "2", ifName: ether2}   # an empty ifAlias is no label
+            exp_annotations: {summary: "switch1: port ether2: 60 errors in an hour (over 10)"}
+      - eval_time: 15m
+        alertname: SwitchRouterboardFirmwareBehind
+        exp_alerts:
+          - exp_labels: {severity: warning, job: asyla-switch-snmp, switch: switch1, instance: 192.168.88.1,
+                         mtxrFirmwareVersion: "7.21.4"}
+            exp_annotations: {summary: "switch1: routerboard firmware differs from the one installed with RouterOS"}
+      - eval_time: 15m
+        alertname: SwitchPoeBudgetHigh
+        exp_alerts:
+          - exp_labels: {severity: warning, job: asyla-switch-snmp, switch: switch2, instance: 10.0.0.41,
+                         pethMainPseGroupIndex: "1"}
+            exp_annotations: {summary: "switch2: PoE draws over 80 % of supply 1"}
