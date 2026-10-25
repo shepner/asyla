@@ -52,6 +52,7 @@ CRASHKERNEL=1G-4G:192M,4G-:2G
 KDUMP_DEFAULTS=/etc/default/kdump-tools
 # The crash kernel's own panic must reboot, never wait at the panic screen (the 2026-10-23 hang).
 KDUMP_APPEND='reset_devices systemd.unit=kdump-tools-dump.service nr_cpus=1 irqpoll usbcore.nousb panic=10'
+KDUMP_KEEP=1
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'vmh setup: %s\n' "$*" >&2; exit 1; }
@@ -279,6 +280,16 @@ part_crash() {
             say "changed kdump reloaded"
         fi
     fi
+    # Keep one dump. Proxmox ships no kernel debug symbols, so crash cannot open a vmcore here; the
+    # dmesg saved beside it is what a dump gives (operator 2026-10-24: keep kdump, build nothing).
+    # Read by kdump-config at dump time, so no reload.
+    if grep -qx "KDUMP_NUM_DUMPS=$KDUMP_KEEP" "$KDUMP_DEFAULTS"; then
+        say "ok      $KDUMP_DEFAULTS: keeps $KDUMP_KEEP dump"
+    else
+        sed -i '/^[[:space:]]*#*[[:space:]]*KDUMP_NUM_DUMPS=/d' "$KDUMP_DEFAULTS"
+        echo "KDUMP_NUM_DUMPS=$KDUMP_KEEP" >>"$KDUMP_DEFAULTS"
+        say "changed $KDUMP_DEFAULTS: keeps $KDUMP_KEEP dump"
+    fi
 
     reset_changed
     grub_body | install_file "$GRUB_DROPIN" 644
@@ -462,6 +473,8 @@ check() {   # check [PART...]: only those parts' lines (default all), so a one-p
     installed kdump-tools && okay "kdump-tools installed" || flag "kdump-tools not installed"
     grep -qxF "KDUMP_CMDLINE_APPEND=\"$KDUMP_APPEND\"" "$KDUMP_DEFAULTS" 2>/dev/null \
         && okay "crash kernel panic=10" || flag "$KDUMP_DEFAULTS lacks the crash kernel's panic=10"
+    grep -qx "KDUMP_NUM_DUMPS=$KDUMP_KEEP" "$KDUMP_DEFAULTS" 2>/dev/null \
+        && okay "kdump keeps $KDUMP_KEEP dump" || flag "$KDUMP_DEFAULTS lacks KDUMP_NUM_DUMPS=$KDUMP_KEEP"
     grep -q '^[[:space:]]*KDUMP_MODULES=most' "$KDUMP_HOOK" 2>/dev/null && okay "kdump initrd MODULES=most" \
         || flag "$KDUMP_HOOK not patched to KDUMP_MODULES=most"
     grub_body | want_file "$GRUB_DROPIN"
