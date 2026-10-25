@@ -648,6 +648,23 @@ LEFTOVER_FILES="/usr/local/sbin/vmh02-netconsole-listener.sh /usr/local/sbin/vmh
 /usr/local/sbin/vmh02-edac-sampler.sh /root/debian-12-generic-amd64.qcow2
 /root/debian-12-generic-amd64.qcow2.bak /etc/modules-load.d/netconsole.conf"
 LEFTOVER_PKGS="memtester stress-ng"
+# Packages vmh03's stock PVE 9 lacks, so the patch gate can never pass their updates (operator
+# 2026-10-24: "validate nothing needs them and remove if not needed"). Debian 10 leftovers kept
+# by a manual mark through the upgrades (libc6-dev, rsyslog: the journal is persistent, reportbug's
+# python3-httplib2, criu's python bindings) and what hangs off them (GTK, libgd3, libheif,
+# librsvg2); vmh01's libguestfs-tools (virt-customize for the old k8s cloud image). Checked
+# 2026-10-24 on vmh01/vmh02: no running process maps their files, no active unit but rsyslog, no
+# cron, local script, unit or storage names their commands, no md array, no DKMS.
+OLD_PKGS="libdecor-0-plugin-1-gtk libgtk-3-bin libgtk-3-0t64 adwaita-icon-theme at-spi2-core
+at-spi2-common libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 gtk-update-icon-cache
+libgdk-pixbuf-2.0-0 libgdk-pixbuf2.0-bin librsvg2-common librsvg2-2 libc-devtools libgd3 libxpm4
+libtiff6 netpbm libavif16 libaom3 libheif1 libheif-plugin-aomenc libheif-plugin-x265
+libheif-plugin-libde265 libheif-plugin-dav1d libde265-0 libcaca0 libc6-dev linux-libc-dev
+libacl1-dev libattr1-dev libglusterfs-dev python3-pycriu python3-protobuf libprotobuf32t64
+python3-pysimplesoap python3-httplib2 rsyslog ghostscript libgs10 libgs10-common libgs-common
+libjbig2dec0 libguestfs-tools guestfs-tools guestfish guestmount virt-p2v libguestfs0t64
+libguestfs-perl libguestfs-hfsplus libguestfs-reiserfs libguestfs-xfs ntfs-3g libntfs-3g89t64
+libvirt0 libvirt-common libvirt-l10n libsys-virt-perl libssh-4"
 leftovers() {   # 1 = dry run
     act() { if [ "$dry" = 1 ]; then say "would $*"; else say "changed $*"; fi; }
     dry=$1
@@ -683,6 +700,26 @@ leftovers() {   # 1 = dry run
         act "purge $k"
         [ "$dry" = 1 ] || DEBIAN_FRONTEND=noninteractive apt-get -y -q purge "$k"
     done
+    # The old packages, as one purge, only when it takes nothing outside the list; autoremove then
+    # takes what only they needed.
+    old=; for k in $OLD_PKGS; do installed "$k" && old="$old $k"; done
+    [ -n "$old" ] || return 0
+    # shellcheck disable=SC2086
+    other=$(apt-get -s purge $old 2>/dev/null \
+        | awk -v c=" $old " '/^(Purg|Remv) / && index(c, " " $2 " ") == 0 { printf "%s ", $2 }')
+    if [ -n "${other% }" ]; then
+        say "FAIL    old-package purge skipped: it would also remove ${other% }"
+        return 0
+    fi
+    act "purge${old}"
+    if [ "$dry" = 1 ]; then
+        # shellcheck disable=SC2086
+        apt-get -s purge --autoremove $old 2>/dev/null \
+            | awk -v c=" $old " '/^Purg / && index(c, " " $2 " ") == 0 { printf "would autoremove %s\n", $2 }'
+    else
+        # shellcheck disable=SC2086
+        DEBIAN_FRONTEND=noninteractive apt-get -y -q purge --autoremove $old
+    fi
 }
 
 cleanup() {
