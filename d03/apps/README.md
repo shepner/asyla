@@ -41,6 +41,7 @@ has are deleted on the host unless a repo `.gitignore` matches them (`*.env` sec
 | **tc-datalogger** | `~/scripts/d03/apps/tc-datalogger/tc-datalogger.sh` | Torn City API → BigQuery stack; needs `.env` |
 | **unifi-monitor** | `~/scripts/d03/apps/unifi-monitor/unifi-monitor.sh` | UniFi Site Manager check every 5 min (DAY, MKE) → `status.json` for host-maintenance, `unifi.prom` for Prometheus; `up` needs the key from OpenBao (build_host.py start_env); see its README |
 | **unifi-backup** | `~/scripts/d03/apps/unifi-backup/unifi-backup.sh` | UniFi Network autobackups of DAY and MKE copied hourly to `/mnt/nas/data1/docker/unifi-backup/<console>/`, each checked to open → `status.json` for host-maintenance; `up` needs the key from OpenBao (build_host.py start_env); see its README |
+| **att-monitor** | `~/scripts/d03/apps/att-monitor/att-monitor.sh` | AT&T gateway (BGW320) check every 5 min from its status pages (link, WAN address and gateway changes, reboots, optics, outages) → `status.json` for host-maintenance, `att.prom` for Prometheus; no key; see its README |
 | **gitea-runner** | `~/scripts/d03/apps/gitea-runner/gitea-runner.sh` | Gitea Actions runner, native (systemd); jobs run on the host as `docker`. Instance-wide; labels `asyla`, `d03`, `docker`. Symlink to the shared `docker/gitea-runner/`; see its README |
 
 ## Owned elsewhere — do not add them here

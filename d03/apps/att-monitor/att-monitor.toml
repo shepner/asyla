@@ -1,0 +1,51 @@
+# What att_check.py watches on the AT&T gateway and when it calls something a problem (README.md beside this file).
+
+# The gateway's LAN side, reached from d03 through fw01 (HTTP 200 in 0.9 s from d03, 2026-10-25).
+# Its status pages need no login.
+gateway = "http://192.168.1.254"
+timeout_seconds = 20
+# Times in messages: the home site's zone, with UTC beside it.
+timezone = "America/Chicago"
+
+# An urgent condition (link down, gateway not answering, an optics alarm) must be seen on this many
+# checks in a row (5 minutes apart) before status.json carries it; the host-maintenance monitor
+# mails at once. A down spell is reported as an outage only when it lasted this many checks.
+confirm_cycles = 2
+
+# Each value whose change is reported, by its label on the status pages. A change is compared only
+# with the link up, against the last value seen with the link up. Read 2026-10-25T18:04Z: IPv4
+# 104.4.193.82, gateway 104.4.192.1 (192.168.1.254 before fw01's 2026-10-20 upgrade), DNS
+# 68.94.156.10 and 68.94.157.10, software 6.35.8, 10000 Mbps, FIBER.
+watch_changes = [
+  "Broadband IPv4 Address",
+  "Gateway IPv4 Address",
+  "Global Unicast IPv6 Address",
+  "Default IPv6 Gateway Address",
+  "Primary DNS",
+  "Secondary DNS",
+  "Software Version",
+  "Current Speed (Mbps)",
+  "Broadband Connection Source",
+]
+
+# Events (a change, a reboot, an outage that ended, error counts) are reported for a while after
+# they happen: urgent ones for urgent_hold_minutes, so an hourly monitor run sees one and mails it
+# once ([RESOLVED] follows when it drops off); warn ones for warn_hold_hours, so they reach the
+# 07:00 digest. An outage cannot be mailed while it lasts (the monitor runs from gitlab.com), so it
+# is mailed when the line is back.
+[events]
+urgent_hold_minutes = 75
+warn_hold_hours = 24
+[events.severity]
+change = "urgent"   # operator, 2026-10-20: the gateway changing configs "ought to get monitored"
+outage = "urgent"
+reboot = "warn"
+
+# The fiber module's readings, in the page's units (tenths of a dBm, degrees C). The page's own
+# alarm and warning flags are reported too (alarm urgent, warning warn); these limits warn sooner.
+# Read 2026-10-25T18:04Z: Rx -178 (page warning -279, alarm -292), Tx 33, temperature 42 (page
+# warning 90). rx_power_min is about 3 dB below that baseline: a choice, not a vendor limit.
+[optics]
+rx_power_baseline = -178
+rx_power_min = -210
+temperature_max = 70

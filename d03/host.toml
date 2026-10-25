@@ -125,6 +125,12 @@ name = "unifi-backup"
 start_env = ["UNIFI_SITE_MANAGER_API_KEY"]
 restore = false                 # its data is the copies on the NAS; its state rebuilds in one cycle
 verify = ["verify"]
+# AT&T gateway (BGW320) check every 5 min from its status pages; host-maintenance's monitor reads
+# its status.json. No key: the pages need no login.
+[[app]]
+name = "att-monitor"
+restore = false                 # its state rebuilds in one check (the first values are recorded, not reported)
+verify = ["verify"]
 
 [[external]]
 name = "internal-access"

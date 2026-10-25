@@ -657,6 +657,9 @@ results = [
     check("d03's unifi-backup: the same key over SSH stdin only, no restore",
           (lambda a: (a.get("start_env"), a.get("restore")) == (["UNIFI_SITE_MANAGER_API_KEY"], False))(
               next(x for x in build_host.load_spec("d03")["app"] if x["name"] == "unifi-backup"))),
+    check("d03's att-monitor: no key, no restore",
+          (lambda a: (a.get("start_env"), a.get("restore")) == (None, False))(
+              next(x for x in build_host.load_spec("d03")["app"] if x["name"] == "att-monitor"))),
     spec_case("test01 defaults to its spec's node", "test01", None, "vmh01"),
     spec_case("test01 on the other node", "test01", "vmh02", "vmh02"),
     spec_case("a production host keeps its node", "d03", "vmh02", "is not disposable", refused=True),

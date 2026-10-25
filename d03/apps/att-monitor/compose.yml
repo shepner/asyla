@@ -1,0 +1,36 @@
+# att-monitor on d03 (README.md): att_check.py every ATT_INTERVAL seconds, a fresh process each time.
+# No secret: the gateway's status pages need no login.
+name: att-monitor
+
+services:
+  att-monitor:
+    image: python:3.12-alpine
+    container_name: att-monitor
+    restart: unless-stopped
+    user: "${ATT_UID:?}:${ATT_GID:?}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      ATT_DATA: /data
+      ATT_INTERVAL: "300"
+      PYTHONDONTWRITEBYTECODE: "1"
+      TZ: UTC
+    command: ["sh", "-c", "while :; do python3 /app/att_check.py; sleep \"$$ATT_INTERVAL\"; done"]
+    volumes:
+      # The app directory, not single files: the nightly scripts task replaces files, and a file
+      # mount would keep the old one.
+      - ./:/app:ro
+      - ${ATT_ROOT:?}:/data
+      # Zone data for local times in messages (the alpine image has none).
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
+    healthcheck:
+      # status.json rewritten within two cycles and a bit.
+      test: ["CMD", "python3", "-c", "import os,sys,time; sys.exit(time.time() - os.path.getmtime('/data/status.json') > 720)"]
+      interval: 60s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    logging:
+      driver: local
+      options: {max-size: "5m", max-file: "3"}
