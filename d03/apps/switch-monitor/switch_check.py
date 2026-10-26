@@ -37,6 +37,8 @@ CONFIG = Path(os.environ.get("SWITCH_CONFIG", Path(__file__).with_name("switch-m
 EXPORTER_FAILS_URGENT = 3   # cycles in a row with the exporter itself not answering
 UP = 1                      # IF-MIB ifAdminStatus / ifOperStatus up(1)
 GAUGE_UNITS = {1: "temp", 2: "fan", 6: "state"}   # mtxrGaugeUnit; dV, dA, dW are not watched
+ARUBA_ACTIVE = 1               # WLSX-SYSTEMEXT-MIB ArubaActiveState: 1 active, 2 inactive
+ARUBA_POE_HARDWARE_ERROR = 6   # WLSX-POE-MIB wlsxPsePortStatus offHardwareError
 SAMPLE = re.compile(r"^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{(.*)\})?\s+(\S+)")
 LABEL = re.compile(r'([a-zA-Z_][a-zA-Z0-9_]*)="((?:[^"\\]|\\.)*)"')
 
@@ -194,21 +196,15 @@ def evaluate(cfg: dict, name: str, scfg: dict, rows: list, prev: dict, t: dt.dat
                              f"{name}: port {what} " + (f"went down {downs:.0f} time(s)" if downs else "changed state")
                              + f" between {iso(prev_t)} and {iso(t)}"))
     found += health(cfg, name, rows, label)
+    found += aruba(cfg, name, rows)
     found += firmware(cfg, name, scfg, rows, prev, t, release)
-    poe = by_name(rows, "pethMainPseConsumptionPower")
-    for lab, used in poe:
-        g = lab.get("pethMainPseGroupIndex")
-        total = next((v for la, v in by_name(rows, "pethMainPsePower") if la.get("pethMainPseGroupIndex") == g), 0)
-        if total and used / total > cfg["poe_warn_ratio"]:
-            found.append((f"{name}:poe:{g}:budget", "warn",
-                          f"{name}: PoE draws {used:.0f} W of {total:.0f} W (over {cfg['poe_warn_ratio']:.0%})"))
-    for lab, v in by_name(rows, "pethMainPseOperStatus"):
-        if v == 3:
-            found.append((f"{name}:poe:{lab.get('pethMainPseGroupIndex')}:faulty", "urgent", f"{name}: PoE supply is faulty"))
     watched_up = sum(1 for p in label if (pts.get(p) or {}).get("oper") == UP)
+    descr = next((lab.get("sysDescr") for lab, _ in by_name(rows, "sysDescr")), None)
+    m = re.search(r"Version (\S+)", descr or "")
     summary = {"reachable": True, "uptime_hours": round(uptime / 3600, 1) if uptime is not None else None,
                "ports": len(pts), "watched_up": f"{watched_up}/{len(label)}",
-               "version": next((lab.get("mtxrLicVersion") for lab, _ in by_name(rows, "mtxrLicVersion")), None)}
+               "version": next((lab.get("mtxrLicVersion") for lab, _ in by_name(rows, "mtxrLicVersion")),
+                               m.group(1) if m else None)}
     new_prev = {"time": iso(t), "uptime": uptime,
                 "ports": {p: {k: st[k] for k in ("errors", "discards", "downs", "last_change") if k in st}
                           for p, st in pts.items()},
@@ -259,6 +255,38 @@ def health(cfg: dict, name: str, rows: list, label: dict) -> list:
         p = lab.get("mtxrOpticalName") or "?"
         if p in label and v == 1:
             found.append((f"{name}:optic:{p}:txfault", "warn", f"{name}: {p} ({label[p]}) optic reports a transmit fault"))
+    return found
+
+
+def aruba(cfg: dict, name: str, rows: list) -> list:
+    """Aruba S2500 (snmp/aruba.yml): fans and power supplies active, the internal temperature (C, the
+    exporter takes it from the switch's text), each PoE slot's draw against its budget, and a PoE port
+    in hardware error."""
+    found = []
+    for metric, index, what in (("sysExtFanStatus", "sysExtFanIndex", "fan"),
+                                ("sysExtPowerSupplyStatus", "sysExtPowerSupplyIndex", "psu")):
+        for lab, v in by_name(rows, metric):
+            if v != ARUBA_ACTIVE:
+                i = lab.get(index)
+                found.append((f"{name}:health:{what}{i}", "urgent", f"{name}: {what} {i} is not active (value {v:.0f})"))
+    for _, c in by_name(rows, "wlsxSysExtInternalTemparature"):
+        if c >= cfg["temp_urgent_c"]:
+            found.append((f"{name}:health:temperature", "urgent", f"{name}: temperature {c:.0f} C (limit {cfg['temp_urgent_c']} C)"))
+        elif c >= cfg["temp_warn_c"]:
+            found.append((f"{name}:health:temperature", "warn", f"{name}: temperature {c:.0f} C (over {cfg['temp_warn_c']} C)"))
+    budget = {lab.get("wlsxPseSlotIndex"): v for lab, v in by_name(rows, "wlsxPseSlotPowerAvailable")}
+    for lab, used in by_name(rows, "wlsxPseSlotPowerConsumption"):
+        s, total = lab.get("wlsxPseSlotIndex"), budget.get(lab.get("wlsxPseSlotIndex"))
+        if total and used / total > cfg["poe_warn_ratio"]:
+            found.append((f"{name}:poe:{s}:budget", "warn",
+                          f"{name}: PoE draws {used:.0f} W of {total:.0f} W (over {cfg['poe_warn_ratio']:.0%})"))
+    # wlsxPsePortIndex is the port's ifIndex: on switch2 the five ports drawing power were the five
+    # copper ports up (2026-10-26).
+    names = {lab.get("ifIndex"): lab.get("ifName") for lab, _ in by_name(rows, "ifOperStatus")}
+    for lab, v in by_name(rows, "wlsxPsePortStatus"):
+        if v == ARUBA_POE_HARDWARE_ERROR:
+            p = names.get(lab.get("wlsxPsePortIndex")) or f"PoE port {lab.get('wlsxPsePortIndex')}"
+            found.append((f"{name}:poe:{p}:hardware-error", "warn", f"{name}: port {p} gives no PoE: hardware error"))
     return found
 
 

@@ -17,11 +17,11 @@ services:
     environment:
       SWITCH_SNMP_AUTH_PASSWORD: ${SWITCH_SNMP_AUTH_PASSWORD:-}
       SWITCH_SNMP_PRIV_PASSWORD: ${SWITCH_SNMP_PRIV_PASSWORD:-}
-    # The image's own snmp.yml (stock modules system, if_mib, mikrotik) plus ours: the auth and the PoE module.
+    # The image's own snmp.yml (stock modules system, if_mib, mikrotik) plus ours: the auth and the Aruba module.
     command:
       - --config.file=/etc/snmp_exporter/snmp.yml
       - --config.file=/etc/asyla/auth.yml
-      - --config.file=/etc/asyla/poe.yml
+      - --config.file=/etc/asyla/aruba.yml
       - --config.expand-environment-variables
     volumes:
       - ./snmp:/etc/asyla:ro

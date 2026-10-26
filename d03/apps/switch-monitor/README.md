@@ -11,8 +11,9 @@ can reach d03 (section theOrg below).
 - **What runs:** two containers, read-only, no capabilities.
   - `switch-snmp-exporter`: Prometheus's own `prom/snmp-exporter:v0.30.1`, as uid 65534. It walks a
     switch over SNMPv3 when asked (`/snmp?target=...&module=...&auth=asyla_v3`) and answers in
-    Prometheus text. Modules: the image's stock `system`, `if_mib` and `mikrotik`, plus `poe_mib`
-    from `snmp/poe.yml` (POWER-ETHERNET-MIB, for the Arubas). Not published on the host.
+    Prometheus text. Modules: the image's stock `system`, `if_mib` and `mikrotik`, plus `aruba`
+    from `snmp/aruba.yml` (Aruba's WLSX-SYSTEMEXT-MIB and WLSX-POE-MIB: fans, power supplies,
+    temperature, PoE; the S2500 does not answer the standard POWER-ETHERNET-MIB). Not published on the host.
   - `switch-monitor`: `python:3.12-alpine` as the `docker` user. Every 5 minutes (`SWITCH_INTERVAL`)
     it runs `switch_check.py` as a fresh process, so a script update from the nightly scripts task
     applies at the next cycle: one exporter request per enabled switch, and once a day for switch1
@@ -34,7 +35,7 @@ can reach d03 (section theOrg below).
   | Switch not answering SNMP (the exporter answers 500, or its walk times out) | urgent, after 2 checks in a row |
   | A watched port (`[switches.NAME.ports]`: uplinks, trunks, nas01, vmh01, vmh02) down while admin up, or not listed | urgent, after 2 checks in a row |
   | MikroTik health: temperature 75 C or more; fan under 1000 RPM; a fan or PSU state not ok | urgent, after 2 checks in a row |
-  | PoE supply faulty (pethMainPseOperStatus 3) | urgent, after 2 checks in a row |
+  | Aruba health: a fan or power supply not active; temperature 75 C or more | urgent, after 2 checks in a row |
   | snmp-exporter not answering | warn, urgent from the 3rd check in a row |
   | Restarted (SNMP uptime under 24 h) | warn |
   | Errors (in + out) over 10/h on any port; discards over 1000/h on a watched port | warn, held 24 h |
@@ -43,7 +44,7 @@ can reach d03 (section theOrg below).
   | Optic on a watched port: rx under -10 dBm, tx under -6 dBm, over 70 C, or a transmit fault | warn |
   | switch1: a newer RouterOS in its channel (long-term), first seen 7 days ago or more | warn |
   | switch1: routerboard firmware behind the installed RouterOS | warn |
-  | PoE drawing over 80 % of the supply's nominal power | warn |
+  | Aruba PoE: a slot drawing over 80 % of its budget; a port in PoE hardware error | warn |
   | A staged test alert (`stage`) | urgent, at once |
 
   Rates are taken between two checks of the same boot: after a restart the counters start a new
@@ -53,10 +54,14 @@ can reach d03 (section theOrg below).
   so it wraps after 497 days: a switch up that long reads as restarted for one day.
 
   switch2 and switch3 are end of life: there is no firmware to track, and no alert repeats it.
-- **Not watched yet:** switch2 and switch3 have `enabled = false` until their SNMPv3 user is set and
-  a first walk names their uplink ports and health readings (backlog item, step 6).
-- **The SNMPv3 login:** user `asyla-monitor`, authPriv (SHA, AES), read-only, allowed from
-  10.0.0.0/24 only (a subnet, not d03 alone, so the exporter can move without a switch change); set on switch1 by `tools/switch_snmp.py` in the asyla hub (plan by default, `--apply` after
+- **Watched:** switch1 since 2026-10-26 (9 ports: modem, trunks, nas01, vmh01, vmh02); switch2 from
+  its first walk, 2026-10-26 (its uplink to switch1; its five PoE-powered ports are not watched,
+  what is on them was not checked). switch3 has `enabled = false` until its SNMPv3 user is set and
+  a walk names its uplink.
+- **The SNMPv3 login:** user `asyla-monitor`, authPriv (SHA, AES), read-only. On switch1 it is
+  allowed from 10.0.0.0/24 only (a subnet, not d03 alone, so the exporter can move without a switch
+  change); the Arubas take no address restriction for SNMP, which the operator accepted (2026-10-26).
+  Set on each switch by `tools/switch_snmp.py` in the asyla hub (plan by default, `--apply` after
   the operator's approval). The two passwords, `SWITCH_SNMP_AUTH_PASSWORD` and
   `SWITCH_SNMP_PRIV_PASSWORD`, are in OpenBao (`hubs/asyla/switch-snmp-auth-password`,
   `hubs/asyla/switch-snmp-priv-password`) and in no file here: `build_host.py` resolves them on
@@ -109,7 +114,9 @@ static job there: asked in theOrg's backlog (hand-off of 2026-10-26). When it ca
      static_configs:
        - targets: [192.168.88.1]
          labels: {switch: switch1, __param_module: "system,if_mib,mikrotik"}
-       # switch2 10.0.0.41, switch3 10.0.0.42: "system,if_mib,poe_mib", once enabled here
+       - targets: [10.0.0.41]
+         labels: {switch: switch2, __param_module: "system,if_mib,aruba"}
+       # switch3 10.0.0.42: "system,if_mib,aruba", once enabled here
      relabel_configs:
        - {source_labels: [__address__], target_label: __param_target}
        - {source_labels: [__param_target], target_label: instance}

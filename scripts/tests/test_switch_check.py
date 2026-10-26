@@ -5,7 +5,8 @@
 
 The exporter answers are built here with the metric and label names of snmp_exporter v0.30.1's
 stock modules (system, if_mib, mikrotik; read from the image's snmp.yml 2026-10-25) and our
-poe_mib; the values are switch1's as read over SSH that day. Nothing reaches the network.
+aruba module; the values are switch1's as read over SSH that day, and switch2's as walked from d03
+on 2026-10-26. Nothing reaches the network.
 """
 from __future__ import annotations
 
@@ -30,6 +31,8 @@ sc.urllib.request.urlopen = lambda *a, **kw: (_ for _ in ()).throw(AssertionErro
 with open(APP / "switch-monitor.toml", "rb") as f:
     CFG = tomllib.load(f)
 S1 = CFG["switches"]["switch1"]
+S2 = CFG["switches"]["switch2"]
+UPLINK2 = "gigabitethernet0/1/0"
 T = dt.datetime(2026, 10, 25, 20, 0, tzinfo=dt.timezone.utc)
 FIVE = dt.timedelta(minutes=5)
 DAY = 86400
@@ -46,7 +49,7 @@ def port(ifname, admin=1, oper=1, errors=0, discards=0, last_change=100, downs=0
 
 
 def scrape(uptime=153 * DAY, ports=None, gauges=None, units=True, optics=None, version="7.21.4",
-           fw=("7.21.4", "7.21.4"), poe=None, mikrotik=True) -> str:
+           fw=("7.21.4", "7.21.4"), aruba=None, mikrotik=True) -> str:
     """The exporter's text for one switch: uptime in seconds, ports as port() dicts."""
     ports = ports if ports is not None else [port(p) for p in WATCHED] + [port("ether2")]
     out = ["# HELP sysUpTime The time (in hundredths of a second) since ... - 1.3.6.1.2.1.1.3",
@@ -76,11 +79,23 @@ def scrape(uptime=153 * DAY, ports=None, gauges=None, units=True, optics=None, v
         out += [f"mtxrLicVersion{lab(mtxrLicVersion=version)} 1",
                 f"mtxrFirmwareVersion{lab(mtxrFirmwareVersion=fw[0])} 1",
                 f"mtxrFirmwareUpgradeVersion{lab(mtxrFirmwareUpgradeVersion=fw[1])} 1"]
-    for grp, (power, status, used) in (poe or {}).items():
-        pl = lab(pethMainPseGroupIndex=grp)
-        out += [f"pethMainPsePower{pl} {power}", f"pethMainPseOperStatus{pl} {status}",
-                f"pethMainPseConsumptionPower{pl} {used}"]
+    if aruba is not None:
+        a = {"fans": [1, 1, 1, 1], "psus": [1], "temp": 52.5, "slot": (400, 38), "poe_ports": {1: 1, 3: 1, 14: 7}} | aruba
+        out.append(f'sysDescr{lab(sysDescr="ArubaOS (MODEL: ArubaS2500-48P-US), Version 7.4.1.10 (65516)")} 1')
+        out += [f"sysExtFanStatus{lab(sysExtFanIndex=i)} {v}" for i, v in enumerate(a["fans"])]
+        out += [f"sysExtPowerSupplyStatus{lab(sysExtPowerSupplyIndex=i)} {v}" for i, v in enumerate(a["psus"])]
+        out.append(f"wlsxSysExtInternalTemparature {a['temp']}")
+        out += [f"wlsxPseSlotPowerAvailable{lab(wlsxPseSlotIndex=0)} {a['slot'][0]}",
+                f"wlsxPseSlotPowerConsumption{lab(wlsxPseSlotIndex=0)} {a['slot'][1]}"]
+        out += [f"wlsxPsePortStatus{lab(wlsxPsePortIndex=i)} {v}" for i, v in a["poe_ports"].items()]
     return "\n".join(out) + "\n"
+
+
+def aruba_scrape(ports=None, **aruba) -> str:
+    """switch2 as walked from d03 on 2026-10-26: its uplink and some copper ports, health, PoE."""
+    ports = ports if ports is not None else [port("gigabitethernet0/0/0"), port("gigabitethernet0/0/1", oper=2),
+                                             port("gigabitethernet0/0/2"), port(UPLINK2)]
+    return scrape(uptime=399 * DAY, ports=ports, mikrotik=False, aruba=aruba)
 
 
 def aged(text: str, seconds: float) -> str:
@@ -268,17 +283,50 @@ class Firmware(unittest.TestCase):
         self.assertEqual(sc.version_tuple("7.21.4 (long-term)"), (7, 21, 4))
 
 
-class Poe(unittest.TestCase):
-    S2 = CFG["switches"]["switch2"]
+class Aruba(unittest.TestCase):
+    """switch2's findings (evaluate() names every switch switch1 here; the keys say so)."""
 
-    def test_budget_and_fault(self):
-        text = scrape(mikrotik=False, ports=[], poe={1: (400, 1, 330), 2: (370, 3, 0)})
-        found, *_ = run(text, scfg=self.S2)
-        self.assertEqual(found["switch1:poe:1:budget"], ("warn", "switch1: PoE draws 330 W of 400 W (over 80%)"))
-        self.assertEqual(found["switch1:poe:2:faulty"][0], "urgent")
+    def test_as_read_is_quiet(self):
+        found, summary, _ = run(aruba_scrape(), scfg=S2)
+        self.assertEqual(found, {})
+        self.assertEqual(summary, {"reachable": True, "uptime_hours": 9576.0, "ports": 4,
+                                   "watched_up": "1/1", "version": "7.4.1.10"})
 
-    def test_under_budget_is_quiet(self):
-        self.assertEqual(run(scrape(mikrotik=False, ports=[], poe={1: (400, 1, 200)}), scfg=self.S2)[0], {})
+    def test_uplink_down_is_urgent(self):
+        found, *_ = run(aruba_scrape(ports=[port("gigabitethernet0/0/0"), port(UPLINK2, oper=2)]), scfg=S2)
+        self.assertEqual(found, {f"switch1:port:{UPLINK2}:down":
+                                 ("urgent", f"switch1: port {UPLINK2} (trunk: switch1 sfp-sfpplus5) is down")})
+
+    def test_uplink_flap_by_last_change(self):
+        later = aruba_scrape(ports=[port("gigabitethernet0/0/0"), port(UPLINK2, last_change=999)])
+        found = two(aruba_scrape(ports=[port("gigabitethernet0/0/0"), port(UPLINK2)]), later, scfg=S2)
+        self.assertEqual(list(found), [f"switch1:port:{UPLINK2}:flap"])
+
+    def test_fan_or_psu_inactive_is_urgent(self):
+        found, *_ = run(aruba_scrape(fans=[1, 2, 1, 1], psus=[2]), scfg=S2)
+        self.assertEqual(found, {"switch1:health:fan1": ("urgent", "switch1: fan 1 is not active (value 2)"),
+                                 "switch1:health:psu0": ("urgent", "switch1: psu 0 is not active (value 2)")})
+
+    def test_temperature_warn_then_urgent(self):
+        self.assertEqual(run(aruba_scrape(temp=65.5), scfg=S2)[0],
+                         {"switch1:health:temperature": ("warn", "switch1: temperature 66 C (over 65 C)")})
+        self.assertEqual(run(aruba_scrape(temp=75), scfg=S2)[0]["switch1:health:temperature"][0], "urgent")
+
+    def test_poe_budget(self):
+        found, *_ = run(aruba_scrape(slot=(400, 330)), scfg=S2)
+        self.assertEqual(found, {"switch1:poe:0:budget": ("warn", "switch1: PoE draws 330 W of 400 W (over 80%)")})
+        self.assertEqual(run(aruba_scrape(slot=(400, 320)), scfg=S2)[0], {}, "80 % is not over 80 %")
+        self.assertEqual(run(aruba_scrape(slot=(0, 0)), scfg=S2)[0], {}, "no budget, no ratio")
+
+    def test_poe_port_hardware_error_named_by_ifindex(self):
+        found, *_ = run(aruba_scrape(poe_ports={1: 6, 3: 1, 9: 6}), scfg=S2)
+        self.assertEqual(found, {
+            "switch1:poe:gigabitethernet0/0/0:hardware-error":
+                ("warn", "switch1: port gigabitethernet0/0/0 gives no PoE: hardware error"),
+            "switch1:poe:PoE port 9:hardware-error": ("warn", "switch1: port PoE port 9 gives no PoE: hardware error")})
+
+    def test_non_standard_device_and_searching_ports_are_quiet(self):
+        self.assertEqual(run(aruba_scrape(poe_ports={i: v for i, v in enumerate((1, 2, 3, 5, 7), 1)}), scfg=S2)[0], {})
 
 
 class Confirm(unittest.TestCase):
@@ -308,7 +356,8 @@ class Main(unittest.TestCase):
         self.data = Path(self.tmp.name)
         sc.DATA, sc.CONFIG, self.t = self.data, APP / "switch-monitor.toml", T
         sc.now = lambda: self.t
-        self.answer = scrape()   # text, or a FetchError to raise for the switch
+        self.answer = scrape()   # switch1's text, or a FetchError to raise for it
+        self.answer2 = aruba_scrape()   # switch2's
         self.exporter_up = True
         self.urls = []
         sc.fetch = self.fetch
@@ -324,9 +373,10 @@ class Main(unittest.TestCase):
             raise sc.FetchError("URLError: [Errno 111] Connection refused")
         if url.endswith("/"):
             return "<html>snmp exporter</html>"
-        if isinstance(self.answer, Exception):
-            raise self.answer
-        return aged(self.answer, (self.t - T).total_seconds())
+        answer = self.answer2 if "target=10.0.0.41&" in url else self.answer
+        if isinstance(answer, Exception):
+            raise answer
+        return aged(answer, (self.t - T).total_seconds())
 
     def cycle(self):
         with contextlib.redirect_stdout(io.StringIO()):
@@ -338,9 +388,11 @@ class Main(unittest.TestCase):
         s = self.cycle()
         self.assertEqual((s["checker"], s["ok"], s["problems"]), ("switch-monitor", True, []))
         self.assertEqual(s["switches"]["switch1"]["watched_up"], "9/9")
-        self.assertEqual(s["switches"]["switch2"], {"reachable": None, "note": "not watched yet (enabled = false)"})
+        self.assertEqual(s["switches"]["switch2"]["watched_up"], "1/1")
+        self.assertEqual(s["switches"]["switch3"], {"reachable": None, "note": "not watched yet (enabled = false)"})
         self.assertEqual([u for u in self.urls if "snmp?" in u],
-                         ["http://snmp-exporter:9116/snmp?target=192.168.88.1&module=system%2Cif_mib%2Cmikrotik&auth=asyla_v3"])
+                         ["http://snmp-exporter:9116/snmp?target=192.168.88.1&module=system%2Cif_mib%2Cmikrotik&auth=asyla_v3",
+                          "http://snmp-exporter:9116/snmp?target=10.0.0.41&module=system%2Cif_mib%2Caruba&auth=asyla_v3"])
         self.assertIn("https://upgrade.mikrotik.com/routeros/NEWESTa7.long-term", self.urls)
         state = json.loads((self.data / "state.json").read_text())
         self.assertEqual(state["switches"]["switch1"]["release_seen"], {"7.23.8": "2026-10-25T20:00:00Z"})

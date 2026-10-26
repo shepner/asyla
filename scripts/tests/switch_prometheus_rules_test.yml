@@ -31,10 +31,24 @@ tests:
         values: '1x20'
       - series: 'mtxrFirmwareUpgradeVersion{job="asyla-switch-snmp",switch="switch1",instance="192.168.88.1",mtxrFirmwareUpgradeVersion="7.23.8"}'
         values: '1x20'
-      - series: 'pethMainPsePower{job="asyla-switch-snmp",switch="switch2",instance="10.0.0.41",pethMainPseGroupIndex="1"}'
+      - series: 'wlsxPseSlotPowerAvailable{job="asyla-switch-snmp",switch="switch2",instance="10.0.0.41",wlsxPseSlotIndex="0"}'
         values: '400x20'
-      - series: 'pethMainPseConsumptionPower{job="asyla-switch-snmp",switch="switch2",instance="10.0.0.41",pethMainPseGroupIndex="1"}'
+      - series: 'wlsxPseSlotPowerConsumption{job="asyla-switch-snmp",switch="switch2",instance="10.0.0.41",wlsxPseSlotIndex="0"}'
         values: '330x20'
+      - series: 'ifOperStatus{job="asyla-switch-snmp",switch="switch2",instance="10.0.0.41",ifIndex="129",ifName="gigabitethernet0/1/0",ifAlias="uplink"}'
+        values: '2x20'
+      - series: 'ifAdminStatus{job="asyla-switch-snmp",switch="switch2",instance="10.0.0.41",ifIndex="129",ifName="gigabitethernet0/1/0",ifAlias="uplink"}'
+        values: '1x20'
+      - series: 'ifLastChange{job="asyla-switch-snmp",switch="switch2",instance="10.0.0.41",ifIndex="129",ifName="gigabitethernet0/1/0",ifAlias="uplink"}'
+        values: '100x10 999x10'
+      - series: 'sysExtFanStatus{job="asyla-switch-snmp",switch="switch2",instance="10.0.0.41",sysExtFanIndex="1"}'
+        values: '2x20'
+      - series: 'sysExtPowerSupplyStatus{job="asyla-switch-snmp",switch="switch2",instance="10.0.0.41",sysExtPowerSupplyIndex="0"}'
+        values: '1x20'
+      - series: 'wlsxSysExtInternalTemparature{job="asyla-switch-snmp",switch="switch2",instance="10.0.0.41"}'
+        values: '66x20'
+      - series: 'wlsxPsePortStatus{job="asyla-switch-snmp",switch="switch2",instance="10.0.0.41",wlsxPsePortIndex="5"}'
+        values: '6x20'
     alert_rule_test:
       - eval_time: 15m
         alertname: SwitchWatchedPortDown
@@ -42,6 +56,38 @@ tests:
           - exp_labels: {severity: critical, job: asyla-switch-snmp, switch: switch1, instance: 192.168.88.1,
                          ifIndex: "9", ifName: sfp-sfpplus9, ifAlias: nas01}
             exp_annotations: {summary: "switch1: port sfp-sfpplus9 (nas01) is down"}
+          - exp_labels: {severity: critical, job: asyla-switch-snmp, switch: switch2, instance: 10.0.0.41,
+                         ifIndex: "129", ifName: gigabitethernet0/1/0, ifAlias: uplink}
+            exp_annotations: {summary: "switch2: port gigabitethernet0/1/0 (uplink) is down"}
+      - eval_time: 15m
+        alertname: SwitchWatchedPortChangedState
+        exp_alerts:
+          - exp_labels: {severity: warning, job: asyla-switch-snmp, switch: switch2, instance: 10.0.0.41,
+                         ifIndex: "129", ifName: gigabitethernet0/1/0, ifAlias: uplink}
+            exp_annotations: {summary: "switch2: port gigabitethernet0/1/0 changed state in the last hour"}
+      - eval_time: 15m
+        alertname: SwitchFanInactive
+        exp_alerts:
+          - exp_labels: {severity: critical, job: asyla-switch-snmp, switch: switch2, instance: 10.0.0.41,
+                         sysExtFanIndex: "1"}
+            exp_annotations: {summary: "switch2: fan 1 is not active (value 2)"}
+      - eval_time: 15m
+        alertname: SwitchPsuInactive
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: SwitchArubaTemperatureHigh
+        exp_alerts:
+          - exp_labels: {severity: warning, job: asyla-switch-snmp, switch: switch2, instance: 10.0.0.41}
+            exp_annotations: {summary: "switch2: temperature 66 C (over 65 C)"}
+      - eval_time: 15m
+        alertname: SwitchArubaTemperatureCritical
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: SwitchPoePortHardwareError
+        exp_alerts:
+          - exp_labels: {severity: warning, job: asyla-switch-snmp, switch: switch2, instance: 10.0.0.41,
+                         wlsxPsePortIndex: "5"}
+            exp_annotations: {summary: "switch2: PoE port (ifIndex 5) gives no power: hardware error"}
       - eval_time: 15m
         alertname: SwitchHealthStateNotOk
         exp_alerts:
@@ -67,5 +113,5 @@ tests:
         alertname: SwitchPoeBudgetHigh
         exp_alerts:
           - exp_labels: {severity: warning, job: asyla-switch-snmp, switch: switch2, instance: 10.0.0.41,
-                         pethMainPseGroupIndex: "1"}
-            exp_annotations: {summary: "switch2: PoE draws over 80 % of supply 1"}
+                         wlsxPseSlotIndex: "0"}
+            exp_annotations: {summary: "switch2: PoE draws over 80 % of slot 0's budget"}

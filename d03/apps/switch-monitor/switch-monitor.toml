@@ -26,6 +26,7 @@ optic_max_c = 70
 optic_power_scale = 0.001
 # Health gauges (MikroTik mtxrGaugeTable: name, value, unit). Read 2026-10-25 on switch1:
 # sfp-temperature 48 C, switch-temperature 49 C, fans 3870-3960 RPM, fan-state and psu1/2-state ok.
+# The same temperature limits apply to the Arubas' one internal reading: switch2 52 C on 2026-10-26.
 temp_warn_c = 65
 temp_urgent_c = 75
 fan_min_rpm = 1000
@@ -36,7 +37,8 @@ state_ok_value = 0
 release_waiting_days = 7
 release_feed = "https://upgrade.mikrotik.com/routeros/NEWEST{major}.{channel}"
 release_check_hours = 24
-# PoE (Aruba): drawn power over this share of the PSE's nominal power is reported (digest).
+# PoE (Aruba): drawn power over this share of the slot's PoE budget is reported (digest). switch2
+# drew 38 W of 400 W on 2026-10-26.
 poe_warn_ratio = 0.8
 
 # Each switch: address as d03 reaches it, the exporter modules to walk, and the ports whose state is
@@ -58,17 +60,17 @@ routeros_channel = "long-term"
 "sfp-sfpplus19" = "vmh02 enp5s0f4"
 "sfp-sfpplus20" = "trunk: vmh02 enp5s0f4d1"
 
-# Aruba S2500, end of life: no firmware to track. Their uplink ports are named from the first walk.
+# Aruba S2500, end of life: no firmware to track. Health and PoE from Aruba's own MIBs (snmp/aruba.yml).
 [switches.switch2]
 target = "10.0.0.41"
 kind = "aruba"
-enabled = false   # its SNMPv3 user is not set yet
-modules = ["system", "if_mib", "poe_mib"]
-[switches.switch2.ports]
+modules = ["system", "if_mib", "aruba"]
+[switches.switch2.ports]   # first walk from d03, 2026-10-26: the only 10G port up; its traffic matched switch1 sfp-sfpplus5
+"gigabitethernet0/1/0" = "trunk: switch1 sfp-sfpplus5"
 
 [switches.switch3]
 target = "10.0.0.42"
 kind = "aruba"
 enabled = false   # its SNMPv3 user is not set yet
-modules = ["system", "if_mib", "poe_mib"]
+modules = ["system", "if_mib", "aruba"]
 [switches.switch3.ports]
