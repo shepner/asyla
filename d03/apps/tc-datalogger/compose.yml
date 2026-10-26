@@ -1,5 +1,9 @@
 # tc-datalogger on d03 — data under /mnt/docker/tc-datalogger
 # Dashboard: host :8081 (breeding-research uses :8080). Pipelines: Gitea images or local build.
+# Store: tc-doltgres (Doltgres, database torn_data), not published; data in doltgres/, its
+# verified Dolt backup in doltgres-backup/ (tc-datalogger.sh backup). The password is
+# tc_db_password.secret beside this file (host.toml [[secret]] D03_TC_DATALOGGER_DB_PASSWORD),
+# /run/secrets/tc_db_password in every container. Cutover: tc-datalogger docs/d03-cutover.md.
 # Run: ~/scripts/d03/apps/tc-datalogger/tc-datalogger.sh up
 
 networks:
@@ -8,6 +12,39 @@ networks:
     driver: bridge
 
 services:
+  tc-doltgres:
+    image: dolthub/doltgresql:1.3.3
+    container_name: tc-doltgres
+    restart: unless-stopped
+    # The image takes DOLTGRES_PASSWORD only when it initialises an empty data dir; an empty or
+    # missing secret refuses to start rather than initialise without the provisioned password.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >-
+        DOLTGRES_PASSWORD="$$(cat /run/secrets/tc_db_password 2>/dev/null)";
+        [ -n "$$DOLTGRES_PASSWORD" ] || { echo "no password in /run/secrets/tc_db_password; refusing to start" >&2; exit 1; };
+        export DOLTGRES_PASSWORD;
+        exec tini -v -- docker-entrypoint.sh
+    environment:
+      - TZ=UTC
+      - DOLTGRES_USER=postgres
+    secrets:
+      - tc_db_password
+    volumes:
+      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/doltgres:/var/lib/doltgres
+      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/doltgres-backup:/backups
+    networks:
+      - tc_datalogger_net
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - PGPASSWORD="$$(cat /run/secrets/tc_db_password)" psql -h 127.0.0.1 -U postgres -d postgres -tAc 'SELECT 1' >/dev/null
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
   tc-faction-crimes:
     image: ${TC_REGISTRY:-gitea.asyla.org/personal}/tc-datalogger-faction-crimes:${TC_IMAGE_TAG}
     container_name: tc-faction-crimes-pipeline
@@ -21,12 +58,19 @@ services:
       timeout: 5s
       retries: 3
       start_period: 60s
+    depends_on:
+      tc-doltgres:
+        condition: service_healthy
+    secrets:
+      - tc_db_password
     environment:
       - TZ=${LOCAL_TZ:-America/Chicago}
+      - TC_DB_HOST=tc-doltgres
+      - TC_DB_PORT=5432
+      - TC_DB_NAME=torn_data
     networks:
       - tc_datalogger_net
     volumes:
-      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_faction_crimes/config/credentials.json:/app/config/credentials.json:ro
       - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_faction_crimes/config/TC_API_config.json:/app/config/TC_API_config.json:ro
       - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_faction_crimes/config/oc_records_schema.json:/app/config/oc_records_schema.json:ro
       - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_faction_crimes/logs:/app/logs
@@ -41,10 +85,17 @@ services:
       timeout: 5s
       retries: 3
       start_period: 60s
+    depends_on:
+      tc-doltgres:
+        condition: service_healthy
+    secrets:
+      - tc_db_password
     environment:
       - TZ=${LOCAL_TZ:-America/Chicago}
+      - TC_DB_HOST=tc-doltgres
+      - TC_DB_PORT=5432
+      - TC_DB_NAME=torn_data
     volumes:
-      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_faction_members/config/credentials.json:/app/config/credentials.json:ro
       - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_faction_members/config/TC_API_config.json:/app/config/TC_API_config.json:ro
       - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_faction_members/logs:/app/logs
     networks:
@@ -60,10 +111,17 @@ services:
       timeout: 5s
       retries: 3
       start_period: 60s
+    depends_on:
+      tc-doltgres:
+        condition: service_healthy
+    secrets:
+      - tc_db_password
     environment:
       - TZ=${LOCAL_TZ:-America/Chicago}
+      - TC_DB_HOST=tc-doltgres
+      - TC_DB_PORT=5432
+      - TC_DB_NAME=torn_data
     volumes:
-      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_items/config/credentials.json:/app/config/credentials.json:ro
       - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_items/config/TC_API_config.json:/app/config/TC_API_config.json:ro
       - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_items/logs:/app/logs
     networks:
@@ -79,10 +137,17 @@ services:
       timeout: 5s
       retries: 3
       start_period: 60s
+    depends_on:
+      tc-doltgres:
+        condition: service_healthy
+    secrets:
+      - tc_db_password
     environment:
       - TZ=${LOCAL_TZ:-America/Chicago}
+      - TC_DB_HOST=tc-doltgres
+      - TC_DB_PORT=5432
+      - TC_DB_NAME=torn_data
     volumes:
-      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_user_events/config/credentials.json:/app/config/credentials.json:ro
       - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_user_events/config/TC_API_config.json:/app/config/TC_API_config.json:ro
       - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_user_events/logs:/app/logs
     networks:
@@ -98,10 +163,17 @@ services:
       timeout: 5s
       retries: 3
       start_period: 60s
+    depends_on:
+      tc-doltgres:
+        condition: service_healthy
+    secrets:
+      - tc_db_password
     environment:
       - TZ=${LOCAL_TZ:-America/Chicago}
+      - TC_DB_HOST=tc-doltgres
+      - TC_DB_PORT=5432
+      - TC_DB_NAME=torn_data
     volumes:
-      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_faction_chains/config/credentials.json:/app/config/credentials.json:ro
       - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_faction_chains/config/TC_API_config.json:/app/config/TC_API_config.json:ro
       - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_faction_chains/logs:/app/logs
     networks:
@@ -117,13 +189,17 @@ services:
       timeout: 5s
       retries: 3
       start_period: 60s
+    secrets:
+      - tc_db_password
     environment:
       - TZ=${LOCAL_TZ:-America/Chicago}
+      - TC_DB_HOST=tc-doltgres
+      - TC_DB_PORT=5432
+      - TC_DB_NAME=torn_data
       - DASHBOARD_PORT=8080
       - DASHBOARD_BASE_PATH=/app/data
       - DASHBOARD_SECRET_KEY=${DASHBOARD_SECRET_KEY:-}
       - DASHBOARD_MODE=${DASHBOARD_MODE:-production}
-      - GOOGLE_APPLICATION_CREDENTIALS=/app/config/credentials.json
     ports:
       - "8081:8080"
     volumes:
@@ -134,8 +210,10 @@ services:
       - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_faction_chains/logs:/app/logs/faction_chains:ro
       - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_dashboard/logs:/app/logs
       - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/repo/TC_dashboard:/app/data:ro
-      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/repo/sql_queries:/app/sql_queries:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_faction_crimes/config/credentials.json:/app/config/credentials.json:ro
     networks:
       - tc_datalogger_net
+
+secrets:
+  tc_db_password:
+    file: ./tc_db_password.secret

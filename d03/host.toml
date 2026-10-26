@@ -31,6 +31,11 @@ path = "/home/docker/scripts/d03/apps/tc-datalogger/.env"
 owner = "docker:docker"
 mode = "600"
 [[secret]]
+var = "D03_TC_DATALOGGER_DB_PASSWORD"    # tc-doltgres password; outside /mnt/docker so restore's dbup has it
+path = "/home/docker/scripts/d03/apps/tc-datalogger/tc_db_password.secret"
+owner = "docker:docker"
+mode = "600"
+[[secret]]
 var = "D03_BREEDING_RESEARCH_GCP_CREDENTIALS_JSON"
 path = "/mnt/docker/breeding-research/gcp-credentials.json"
 owner = "docker:docker"
