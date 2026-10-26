@@ -1,0 +1,9 @@
+
+# Appended by home-assistant.sh up only until config/.storage/http exists. Home Assistant migrates
+# the http YAML into that store once, on the first start, and ignores it afterwards (core
+# homeassistant/components/http/config.py async_load_config). Without it, requests through the
+# internal-access Caddy are blocked, so the UI could not be reached to set it there.
+http:
+  use_x_forwarded_for: true
+  trusted_proxies:
+    - 172.31.240.0/24   # home_assistant_net, created with this subnet by home-assistant.sh

@@ -56,6 +56,8 @@ name = "duplicati"
 [[app]]
 name = "homebridge"
 [[app]]
+name = "home-assistant"     # .storage is not mirrored: restore HA's own backup in its UI (README)
+[[app]]
 name = "breeding-program"
 start = ["build", "up"]    # builds breeding-program:local from the restored src/ (push-source.sh ships it)
 verify = ["verify"]
