@@ -62,7 +62,7 @@ def scrape(uptime=153 * DAY, ports=None, gauges=None, units=True, optics=None, v
     if mikrotik:
         g = gauges if gauges is not None else {"sfp-temperature": (48, 1), "switch-temperature": (49, 1),
                                                "fan1-speed": (3870, 2), "fan2-speed": (3960, 2),
-                                               "fan-state": (1, 6), "psu1-state": (1, 6), "psu2-state": (1, 6)}
+                                               "fan-state": (0, 6), "psu1-state": (0, 6), "psu2-state": (0, 6)}
         for name, (v, unit) in g.items():
             out.append(f"mtxrGaugeValue{lab(mtxrGaugeName=name)} {v}")
             if units:
@@ -194,7 +194,7 @@ class Restart(unittest.TestCase):
 class Health(unittest.TestCase):
     def gauges(self, **over):
         g = {"sfp-temperature": (48, 1), "switch-temperature": (49, 1), "fan1-speed": (3870, 2),
-             "fan-state": (1, 6), "psu1-state": (1, 6), "psu2-state": (1, 6), "voltage": (240, 3)}
+             "fan-state": (0, 6), "psu1-state": (0, 6), "psu2-state": (0, 6), "voltage": (240, 3)}
         g.update({k.replace("_", "-"): v for k, v in over.items()})
         return g
 
@@ -204,14 +204,14 @@ class Health(unittest.TestCase):
                          ("urgent", "switch1: switch-temperature 75 C (limit 75 C)"))
 
     def test_fan_slow_and_states_not_ok_are_urgent(self):
-        found, *_ = run(scrape(gauges=self.gauges(fan1_speed=(0, 2), psu2_state=(0, 6))))
+        found, *_ = run(scrape(gauges=self.gauges(fan1_speed=(0, 2), psu2_state=(1, 6))))
         self.assertEqual(found["switch1:health:fan1-speed"][0], "urgent")
-        self.assertEqual(found["switch1:health:psu2-state"], ("urgent", "switch1: psu2-state is not ok (value 0)"))
+        self.assertEqual(found["switch1:health:psu2-state"], ("urgent", "switch1: psu2-state is not ok (value 1)"))
         self.assertEqual(len(found), 2, "voltage (dV) is not watched")
 
     def test_state_ok_value_is_configurable(self):
-        cfg = CFG | {"state_ok_value": 0}
-        found, *_ = run(scrape(gauges=self.gauges(fan_state=(0, 6), psu1_state=(0, 6), psu2_state=(0, 6))), cfg=cfg)
+        cfg = CFG | {"state_ok_value": 1}
+        found, *_ = run(scrape(gauges=self.gauges(fan_state=(1, 6), psu1_state=(1, 6), psu2_state=(1, 6))), cfg=cfg)
         self.assertEqual(found, {})
 
     def test_unit_wins_over_name(self):
@@ -220,7 +220,7 @@ class Health(unittest.TestCase):
         self.assertEqual(found["switch1:health:odd-state"][0], "urgent", "unit celsius: a temperature")
 
     def test_names_when_units_are_absent(self):
-        found, *_ = run(scrape(gauges=self.gauges(fan2_speed=(10, 2), psu1_state=(0, 6)), units=False))
+        found, *_ = run(scrape(gauges=self.gauges(fan2_speed=(10, 2), psu1_state=(1, 6)), units=False))
         self.assertEqual(sorted(found), ["switch1:health:fan2-speed", "switch1:health:psu1-state"])
 
     def test_optics_scaled_and_watched_ports_only(self):

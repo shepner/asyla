@@ -25,8 +25,8 @@ groups:
 
       - alert: SwitchHealthStateNotOk
         expr: >
-          mtxrGaugeValue{job="asyla-switch-snmp"} != 1
-          and on (instance, mtxrGaugeName) mtxrGaugeUnit == 6
+          mtxrGaugeValue{job="asyla-switch-snmp"} != 0
+          and on (instance, mtxrGaugeName) mtxrGaugeUnit == 6   # 0 is ok (state_ok_value)
         for: 10m
         labels: {severity: critical}
         annotations:

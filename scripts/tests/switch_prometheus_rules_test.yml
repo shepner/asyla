@@ -16,7 +16,7 @@ tests:
       - series: 'ifAdminStatus{job="asyla-switch-snmp",switch="switch1",instance="192.168.88.1",ifIndex="2",ifName="ether2",ifAlias=""}'
         values: '1x20'
       - series: 'mtxrGaugeValue{job="asyla-switch-snmp",switch="switch1",instance="192.168.88.1",mtxrGaugeName="psu2-state"}'
-        values: '0x20'
+        values: '1x20'
       - series: 'mtxrGaugeUnit{job="asyla-switch-snmp",switch="switch1",instance="192.168.88.1",mtxrGaugeName="psu2-state"}'
         values: '6x20'
       - series: 'mtxrGaugeValue{job="asyla-switch-snmp",switch="switch1",instance="192.168.88.1",mtxrGaugeName="switch-temperature"}'
@@ -47,7 +47,7 @@ tests:
         exp_alerts:
           - exp_labels: {severity: critical, job: asyla-switch-snmp, switch: switch1, instance: 192.168.88.1,
                          mtxrGaugeName: psu2-state}
-            exp_annotations: {summary: "switch1: psu2-state is not ok (value 0)"}
+            exp_annotations: {summary: "switch1: psu2-state is not ok (value 1)"}
       - eval_time: 15m
         alertname: SwitchTemperatureHigh
         exp_alerts: []

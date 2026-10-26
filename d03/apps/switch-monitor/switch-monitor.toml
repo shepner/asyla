@@ -21,17 +21,17 @@ discards_per_hour = 1000   # ifInDiscards + ifOutDiscards (nas01 ix1 showed 2744
 optic_rx_min_dbm = -10.0
 optic_tx_min_dbm = -6.0
 optic_max_c = 70
-# MIKROTIK-MIB optical power is in thousandths of a dBm (initial: confirm against /interface
-# ethernet monitor on the first live read, then drop this note).
+# MIKROTIK-MIB optical power is in thousandths of a dBm: first live read 2026-10-26, sfp-sfpplus9 rx
+# -2703 where the switch's own monitor showed -2.7 dBm.
 optic_power_scale = 0.001
 # Health gauges (MikroTik mtxrGaugeTable: name, value, unit). Read 2026-10-25 on switch1:
 # sfp-temperature 48 C, switch-temperature 49 C, fans 3870-3960 RPM, fan-state and psu1/2-state ok.
 temp_warn_c = 65
 temp_urgent_c = 75
 fan_min_rpm = 1000
-# A gauge whose unit is "status" (fan-state, psu1-state, psu2-state) is ok at this value (initial:
-# RouterOS shows "ok"; confirm the number on the first live read).
-state_ok_value = 1
+# A gauge whose unit is "status" (fan-state, psu1-state, psu2-state) is ok at this value: all three
+# read 0 over SNMP on 2026-10-26 while /system health showed them "ok" (2026-10-25).
+state_ok_value = 0
 # A newer RouterOS release in the switch's channel is reported (digest) once it has been out this long.
 release_waiting_days = 7
 release_feed = "https://upgrade.mikrotik.com/routeros/NEWEST{major}.{channel}"
