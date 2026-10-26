@@ -144,12 +144,37 @@ class Events(unittest.TestCase):
         r.t += dt.timedelta(minutes=CFG["events"]["urgent_hold_minutes"])
         self.assertNotIn(k, r.cycle(status(nogndcount=3)))
 
-    def test_wifi_restart_warns(self):
+    def test_counters_read_as_zero_after_a_restart_are_quiet(self):
+        # 2026-10-26 13:26-13:32Z: no ground 2, then 0 in the first reading after a WiFi restart, then 2.
+        r = Run()
+        r.cycle(status(comm_sent=784, comm_success=784))
+        self.assertEqual(r.cycle(status(comm_sent=21, comm_success=21, gfcicount=0, nogndcount=0, stuckcount=0)), {})
+        self.assertEqual(r.cycle(status(comm_sent=180, comm_success=180)), {})
+        self.assertEqual(r.state["faults"]["nogndcount"], 2)
+        f = r.cycle(status(comm_sent=330, comm_success=330, nogndcount=3))
+        self.assertIn("from 2 to 3", f[next(k for k in f if k.startswith("fault:no_ground"))][1])
+
+    def test_wifi_restart_is_counted_not_reported(self):
         r = Run()
         r.cycle(status(comm_sent=5000, comm_success=5000))
-        f = r.cycle(status(comm_sent=12, comm_success=12))
-        k = next(k for k in f if k.startswith("restart:"))
-        self.assertEqual(f[k][0], "warn")
+        self.assertEqual(r.cycle(status(comm_sent=12, comm_success=12)), {})
+        self.assertEqual(r.state["wifi_restarts"], 1)
+        self.assertEqual(r.state["wifi_last_restart"], oc.iso(T + STEP))
+        self.assertEqual(r.state.get("events", []), [])
+        r.cycle(status(comm_sent=900, comm_success=900))
+        r.cycle(status(comm_sent=30, comm_success=30))
+        self.assertEqual(r.state["wifi_restarts"], 2)
+        self.assertEqual(oc.summary(status(), 1.0, r.state)["wifi_restarts"], 2)
+
+    def test_old_restart_events_become_the_count(self):
+        r = Run()
+        r.state = {"comm_sent": 145, "events": [
+            {"key": "restart:2026-10-26T04:15:00Z", "kind": "restart", "message": "m", "at": "2026-10-26T04:15:00Z"},
+            {"key": "outage:2026-10-26T03:00:00Z", "kind": "outage", "message": "o", "at": "2026-10-26T04:00:00Z"}]}
+        f = r.cycle(status(comm_sent=200, comm_success=200))
+        self.assertEqual(r.state["wifi_restarts"], 1)
+        self.assertEqual([e["kind"] for e in r.state["events"]], ["outage"])
+        self.assertEqual(list(f), ["outage:2026-10-26T03:00:00Z"])
 
     def test_counter_rising_normally_is_quiet(self):
         r = Run()
@@ -158,10 +183,10 @@ class Events(unittest.TestCase):
 
 
 class Limits(unittest.TestCase):
-    def test_weak_rssi_and_low_heap_warn(self):
-        f = Run().cycle(status(srssi=-80, free_heap=6000))
+    def test_weak_rssi_warns_low_heap_does_not(self):
+        f = Run().cycle(status(srssi=-80, free_heap=5808))
         self.assertEqual(f["rssi"][0], "warn")
-        self.assertEqual(f["heap"][0], "warn")
+        self.assertEqual(list(f), ["rssi"])
 
 
 class Stage(unittest.TestCase):
@@ -188,9 +213,13 @@ class Output(unittest.TestCase):
         self.assertFalse(any("voltage" in k for k in lines))
 
     def test_prom_down(self):
-        p = oc.prom(False, T, None, None, [{"severity": "urgent"}])
+        p = oc.prom(False, T, None, None, [{"severity": "urgent"}], {"wifi_restarts": 3})
         self.assertIn("openevse_up 0", p)
         self.assertIn('openevse_problems{severity="urgent"} 1', p)
+        self.assertIn("openevse_wifi_restarts_total 3", p)
+
+    def test_prom_restarts_start_at_zero(self):
+        self.assertIn("openevse_wifi_restarts_total 0", oc.prom(True, T, status(), 1.0, [], {}))
 
     def test_summary(self):
         s = oc.summary(status(), 2.0, {})

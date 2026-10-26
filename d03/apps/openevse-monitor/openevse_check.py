@@ -27,8 +27,12 @@ Writes, in OPENEVSE_DATA (/data, the host's /mnt/docker/openevse-monitor):
 Two kinds of finding, as att-monitor's:
 - a condition (not answering, the controller link down, an error state): written while it lasts,
   an urgent one only after its confirm count of cycles in a row;
-- an event (a fault counter went up, the WiFi module restarted, an outage that ended): written for a
-  while after it happened ([events] in openevse-monitor.toml), so one monitor run sees it.
+- an event (a fault counter went up, an outage that ended): written for a while after it happened
+  ([events] in openevse-monitor.toml), so one monitor run sees it.
+WiFi module restarts are counted, not reported: it runs out of memory and restarts about every 30
+minutes on its own (readings 2026-10-26), and the operator asked for no warning on them or on its
+free memory. The count is in status.json (charger.wifi_restarts) and openevse.prom
+(openevse_wifi_restarts_total), so a change in the pattern shows in the trends.
 stage.json, written by `openevse-monitor.sh stage`, adds one urgent problem at once until it
 expires: the end-to-end test of the alert path.
 
@@ -160,7 +164,7 @@ def event_findings(cfg: dict, state: dict, t: dt.datetime) -> list:
 
 def evaluate(cfg: dict, st: dict | None, error: str | None, state: dict, t: dt.datetime) -> tuple[list, str | None]:
     """(conditions [(key, severity, message)], down reason or None). Updates state with the events
-    this reading shows (a fault counter up, a WiFi restart)."""
+    this reading shows (a fault counter up) and the WiFi restart count."""
     tz, found = zone(cfg.get("timezone")), []
     if st is None:
         if error and ("401" in error or "not set" in error):
@@ -187,39 +191,45 @@ def evaluate(cfg: dict, st: dict | None, error: str | None, state: dict, t: dt.d
     if rssi is not None and rssi < lim["rssi_min_dbm"]:
         found.append(("rssi", "warn", f"{NAME}: WiFi signal {rssi:.0f} dBm, weaker than {lim['rssi_min_dbm']} dBm "
                                       f"(baseline {lim['rssi_baseline_dbm']} dBm)"))
-    heap = num(st.get("free_heap"))
-    if heap is not None and heap < lim["free_heap_min_bytes"]:
-        found.append(("heap", "warn", f"{NAME}: WiFi module free memory {heap:.0f} bytes, below "
-                                      f"{lim['free_heap_min_bytes']} (baseline 16-19 KB)"))
     faults(st, state, t, tz)
-    restart(st, state, t, tz)
+    restart(st, state, t)
     return found, None
 
 
 def faults(st: dict, state: dict, t: dt.datetime, tz: ZoneInfo | None) -> None:
-    """An event for each fault counter that went up. A first reading is only recorded."""
+    """An event for each fault counter that went above the highest seen. A first reading is only
+    recorded, and a lower one is ignored: right after a restart the WiFi module serves 0 until it has
+    read the controller's counters (no ground 2 -> 0 -> 2 around 13:26Z 2026-10-26 mailed a false
+    [URGENT]). Cost: if the controller's counters were ever reset, a rise below the old high is missed."""
     last = state.setdefault("faults", {})
     for field, key, label in FAULTS:
         v = num(st.get(field))
         if v is None:
             continue
         before = last.get(field)
-        if isinstance(before, (int, float)) and v > before:
+        if isinstance(before, (int, float)) and v <= before:
+            continue
+        if isinstance(before, (int, float)):
             add_event(state, f"fault:{key}:{iso(t)}", "fault",
                       f"{NAME}: {label} fault count went from {before:.0f} to {v:.0f} (seen {when(t, tz)})", t)
         last[field] = v
 
 
-def restart(st: dict, state: dict, t: dt.datetime, tz: ZoneInfo | None) -> None:
-    """The WiFi module restarted: its RAPI command count (comm_sent, counted from its start) went down."""
+def restart(st: dict, state: dict, t: dt.datetime) -> None:
+    """Count a WiFi module restart: its RAPI command count (comm_sent, counted from its start) went down."""
+    if "wifi_restarts" not in state:
+        # Restarts were warn events until 2026-10-26: they start the count and leave the events.
+        old = [e for e in state.get("events", []) if e.get("kind") == "restart"]
+        state["wifi_restarts"] = len(old)
+        if old:
+            state["events"] = [e for e in state["events"] if e.get("kind") != "restart"]
     v = num(st.get("comm_sent"))
     if v is None:
         return
     before = state.get("comm_sent")
     if isinstance(before, (int, float)) and v < before:
-        add_event(state, f"restart:{iso(t)}", "restart",
-                  f"{NAME}: the WiFi module restarted since the last check (seen {when(t, tz)}; "
-                  f"RAPI count {before:.0f} -> {v:.0f})", t)
+        state["wifi_restarts"] = state.get("wifi_restarts", 0) + 1
+        state["wifi_last_restart"] = iso(t)
     state["comm_sent"] = v
 
 
@@ -274,7 +284,8 @@ def write_atomic(path: Path, body: str) -> None:
 
 def summary(st: dict | None, took: float | None, state: dict) -> dict:
     s = {"reachable": st is not None, "poll_seconds": took, "outage": state.get("outage"),
-         "events": state.get("events", [])[-10:]}
+         "events": state.get("events", [])[-10:], "wifi_restarts": state.get("wifi_restarts", 0),
+         "wifi_last_restart": state.get("wifi_last_restart")}
     if st:
         code = num(st.get("state"))
         temps = [num(st.get(f"temp{i}")) for i in (1, 2, 3)]
@@ -289,12 +300,16 @@ def summary(st: dict | None, took: float | None, state: dict) -> dict:
     return s
 
 
-def prom(ok: bool, t: dt.datetime, st: dict | None, took: float | None, problems: list) -> str:
-    """Prometheus text, names as in the theOrg hand-off; one instance label, added by the scrape."""
+def prom(ok: bool, t: dt.datetime, st: dict | None, took: float | None, problems: list,
+         state: dict | None = None) -> str:
+    """Prometheus text, names as in the theOrg hand-off; one instance label, added by the scrape.
+    openevse_wifi_restarts_total counts from state.json's start (a lost state.json is a counter reset)."""
     out = ["# EV charger readings (asyla-hosts d03/apps/openevse-monitor/openevse_check.py); times are the checker's",
            f"openevse_up {int(ok)}", f"openevse_check_timestamp_seconds {int(t.timestamp())}"]
     for sev in ("urgent", "warn"):
         out.append(f'openevse_problems{{severity="{sev}"}} {sum(1 for p in problems if p["severity"] == sev)}')
+    if state is not None:
+        out.append(f"openevse_wifi_restarts_total {state.get('wifi_restarts', 0)}")
     if took is not None:
         out.append(f"openevse_poll_seconds {took}")
     if not st:
@@ -351,7 +366,7 @@ def main() -> int:
     ok = st is not None
     problems = [{"key": k, "severity": s, "message": m} for k, s, m in found]
     write_atomic(DATA / "state.json", json.dumps(state, indent=1, sort_keys=True))
-    write_atomic(DATA / "openevse.prom", prom(ok, t, st, took, problems))
+    write_atomic(DATA / "openevse.prom", prom(ok, t, st, took, problems, state))
     s = summary(st, took, state)
     write_atomic(DATA / "status.json", json.dumps(
         {"time": iso(t), "checker": "openevse-monitor", "ok": ok, "problems": problems, "charger": s},

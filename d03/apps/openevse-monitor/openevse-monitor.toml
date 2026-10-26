@@ -18,14 +18,14 @@ confirm_down_cycles = 3
 # The rest (the controller link down, an error state): 2 checks.
 confirm_cycles = 2
 
-# Readings on 2026-10-26 (healthy): RSSI -59 to -60 dBm, free heap 16776-19432 bytes. The heap
-# limit is a first choice, to revisit after a week of readings.
+# Readings on 2026-10-26 (healthy): RSSI -59 to -60 dBm. Free memory has no limit: the WiFi module
+# runs out and restarts about every 30 minutes on its own (18 KB down to 6 KB, then a restart), so
+# it and the restarts are recorded, not reported (operator, 2026-10-26: no warning on either).
 [limits]
 rssi_baseline_dbm = -60
 rssi_min_dbm = -75
-free_heap_min_bytes = 8000
 
-# Events (a fault counter up, a WiFi module restart, an outage that ended) are reported for a while
+# Events (a fault counter up, an outage that ended) are reported for a while
 # after they happen: urgent ones for urgent_hold_minutes, so an hourly monitor run sees one and mails
 # it once ([RESOLVED] follows when it drops off); warn ones for warn_hold_hours, so they reach the
 # 07:00 digest.
@@ -34,5 +34,4 @@ urgent_hold_minutes = 75
 warn_hold_hours = 24
 [events.severity]
 fault = "urgent"     # GFCI, no ground, stuck relay: the counters stood at 0, 2, 0 on 2026-10-25/26
-restart = "warn"
 outage = "warn"      # the urgent mail came while it lasted; this records how long it was
