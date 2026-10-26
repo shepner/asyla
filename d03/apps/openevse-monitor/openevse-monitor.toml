@@ -1,0 +1,38 @@
+# What openevse_check.py watches on the EV charger and when it calls something a problem (README.md beside this file).
+
+# openevse01 by address (Pi-hole hosts file: "OpenEVSE charging station"), on the same LAN as d03.
+charger = "http://10.0.0.87"
+# The charger has always been slow (operator, 2026-10-26): ping loss up to 70 %, a first connection
+# of 5 s or more, and a 33 s request once. So up to 3 tries a cycle, 30 s each, 10 s apart.
+timeout_seconds = 30
+tries = 3
+retry_pause_seconds = 10
+# Times in messages: the home site's zone, with UTC beside it. Never the charger's own clock: its
+# battery is dead (operator, 2026-10-26).
+timezone = "America/Chicago"
+
+# An urgent condition must be seen on this many checks in a row (5 minutes apart) before
+# status.json carries it; the host-maintenance monitor then mails at once.
+# Not answering (or the login refused): 3 checks, 15 minutes, since one slow cycle is its normal.
+confirm_down_cycles = 3
+# The rest (the controller link down, an error state): 2 checks.
+confirm_cycles = 2
+
+# Readings on 2026-10-26 (healthy): RSSI -59 to -60 dBm, free heap 16776-19432 bytes. The heap
+# limit is a first choice, to revisit after a week of readings.
+[limits]
+rssi_baseline_dbm = -60
+rssi_min_dbm = -75
+free_heap_min_bytes = 8000
+
+# Events (a fault counter up, a WiFi module restart, an outage that ended) are reported for a while
+# after they happen: urgent ones for urgent_hold_minutes, so an hourly monitor run sees one and mails
+# it once ([RESOLVED] follows when it drops off); warn ones for warn_hold_hours, so they reach the
+# 07:00 digest.
+[events]
+urgent_hold_minutes = 75
+warn_hold_hours = 24
+[events.severity]
+fault = "urgent"     # GFCI, no ground, stuck relay: the counters stood at 0, 2, 0 on 2026-10-25/26
+restart = "warn"
+outage = "warn"      # the urgent mail came while it lasted; this records how long it was

@@ -140,6 +140,15 @@ verify = ["verify"]
 name = "att-monitor"
 restore = false                 # its state rebuilds in one check (the first values are recorded, not reported)
 verify = ["verify"]
+# EV charger (OpenEVSE openevse01) check every 5 min from its /status; host-maintenance's monitor
+# reads its status.json. Its web login is resolved from OpenBao on the workstation and sent over SSH
+# stdin (no file on d03):
+#   credentials.py exec OPENEVSE_WWW_USER OPENEVSE_WWW_PASSWORD -- build_host.py d03 build --only apps --app openevse-monitor
+[[app]]
+name = "openevse-monitor"
+start_env = ["OPENEVSE_WWW_USER", "OPENEVSE_WWW_PASSWORD"]
+restore = false                 # its state rebuilds in one check (the first counters are recorded, not reported)
+verify = ["verify"]
 
 [[external]]
 name = "internal-access"
