@@ -18,7 +18,8 @@ theOrg's trends Prometheus collects the same readings.
     collection point: host-maintenance's monitor reads it on each run (`[[status]]` in its
     `config/maintenance.toml`). `urgent` mails at once, `warn` goes to the 07:00 digest. Stale or
     unreadable is urgent there. `charger` holds the current readings (state, amps, energy,
-    temperatures, fault counters, RSSI, free heap, poll time), the open outage and the last 10 events.
+    temperatures, fault counters, RSSI, free heap, poll time), the open outage, the last 10 events and
+    the WiFi restart count (`wifi_restarts`, `wifi_last_restart`).
   - `openevse.prom`: the same readings in Prometheus text format (`openevse_*`), for theOrg's trends
     Prometheus (theOrg backlog `2026-10-25-observability-asyla-openevse-charger-openevse01-into-the-trends-prometheus`),
     served with d03's other `.prom` files once that path exists.
@@ -34,14 +35,19 @@ theOrg's trends Prometheus collects the same readings.
   | The monitor's login refused (HTTP 401) or not given to the container | urgent, after 3 checks in a row |
   | The WiFi module answers but its link to the controller is down (`rapi_connected` 0) | urgent, after 2 checks in a row |
   | Controller in an error state (4-17: vent required, GFCI, no ground, stuck relay, over temperature, ...) | urgent, after 2 checks in a row |
-  | A fault counter went up (GFCI, no ground, stuck relay; 0, 2, 0 on 2026-10-26) | urgent, once (held 75 min) |
+  | A fault counter went above its highest seen (GFCI, no ground, stuck relay; 0, 2, 0 on 2026-10-26; a lower reading, as the 0s right after a WiFi restart, is ignored) | urgent, once (held 75 min) |
   | Charging disabled at the charger (state 255), or an unknown state | warn |
-  | The WiFi module restarted (its RAPI count `comm_sent` went down) | warn, for 24 h |
   | A not-answering spell that ended (3 checks or more): its start, end and cause | warn, for 24 h |
   | WiFi signal below -75 dBm (baseline -60) | warn |
-  | Free heap below 8000 bytes (baseline 16-19 KB; a first choice) | warn |
   | `/status` without a `state` (a firmware change) | warn |
   | A staged test alert (`stage`) | urgent, at once |
+  | The WiFi module restarted (its RAPI count `comm_sent` went down) | none: counted (`openevse_wifi_restarts_total`) |
+  | Free heap low | none: recorded (`openevse_free_heap_bytes`) |
+
+  The WiFi module runs out of memory and restarts about every 30 minutes on its own (2026-10-26:
+  free heap 18 KB down to 6 KB, then a restart, the controller unaffected; the cycle predates this
+  monitor, by its RAPI count). A warning for each would be about 46 a day, so the operator asked
+  for none on restarts or free memory (2026-10-26); the count and the heap stay in the trends.
 
   State codes: open_evse v5.0.1 `firmware/open_evse/J1772EvseController.h` (1-4 vehicle states
   A-D, 5-11 errors, 254 sleeping, 255 disabled; 12-17 are later firmware's errors). Units: 2.9.1
