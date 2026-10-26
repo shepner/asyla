@@ -5,7 +5,7 @@ CRS326-24S+2Q+, the home core, every 10G path), **switch2** (Aruba S2500-48P, ho
 (Aruba S2500-24P, garage). Asked for by the operator 2026-10-25 (asyla backlog item
 `2026-10-25-network-switch-monitoring-snmp-exporter-on-d03`): SNMP, all three, and data theOrg can
 receive. It follows unifi-monitor's pattern: a container with its own loop writes a status file;
-host-maintenance pulls it hourly and mails. theOrg's Prometheus scrapes the exporter here once it
+host-maintenance pulls it hourly and mails. theOrg's trends Prometheus scrapes the exporter here once it
 can reach d03 (section theOrg below).
 
 - **What runs:** two containers, read-only, no capabilities.
@@ -88,12 +88,15 @@ can reach d03 (section theOrg below).
 
 ## theOrg
 
-theOrg's decision (`decisions/asyla-network-monitoring.md`): asyla picks the exporters, and theOrg
-scrapes the targets asyla lists. theOrg cannot reach d03 yet (its static scrape list is open, part A
-of its observability item). When it can:
+The exporter's data goes to theOrg's **trends Prometheus**, the long-retention instance the Emporia
+energy data goes to (operator, 2026-10-26: "data logs suitable for promethius should be sent to the
+instance that the emporia data is going to"), not its operations one. theOrg's decision
+(`decisions/asyla-network-monitoring.md`): asyla picks the exporters, and theOrg scrapes the targets
+asyla lists. The trends instance finds targets by Docker label on its own host only, so d03 needs a
+static job there: asked in theOrg's backlog (hand-off of 2026-10-26). When it can take it:
 
 1. Publish the exporter: add `ports: ["9116:9116"]` to `snmp-exporter` in `compose.yml`, and allow
-   theOrg's Prometheus host to d03:9116 only. Nothing secret is served: the exporter's `/config`
+   the trends Prometheus's host (the Mini today, d06 later) to d03:9116 only. Nothing secret is served: the exporter's `/config`
    shows the passwords as `<secret>` (read 2026-10-25 against v0.30.1).
 2. Hand theOrg this scrape job (the exporter's multi-target pattern; `instance` is the switch):
 
@@ -114,3 +117,5 @@ of its observability item). When it can:
    ```
 
 3. Hand theOrg `prometheus-rules.yml`: the same findings with the same limits, for that job.
+4. unifi-monitor's `unifi.prom` and att-monitor's `att.prom` go to the same instance, through a
+   textfile exporter on d03 (not built yet).

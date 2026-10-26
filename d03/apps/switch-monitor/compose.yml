@@ -25,7 +25,7 @@ services:
       - --config.expand-environment-variables
     volumes:
       - ./snmp:/etc/asyla:ro
-    # Not published: only the checker reaches it, on this project's network. theOrg's Prometheus
+    # Not published: only the checker reaches it, on this project's network. theOrg's trends Prometheus
     # scrapes it once it can reach d03 (README.md, "theOrg"): publish 9116 then, not before.
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9116/"]
