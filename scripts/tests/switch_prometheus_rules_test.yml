@@ -41,6 +41,10 @@ tests:
         values: '1x20'
       - series: 'ifLastChange{job="asyla-switch-snmp",switch="switch2",instance="10.0.0.41",ifIndex="129",ifName="gigabitethernet0/1/0",ifAlias="uplink"}'
         values: '100x10 999x10'
+      - series: 'ifOperStatus{job="asyla-switch-snmp",switch="switch3",instance="10.0.0.42",ifIndex="129",ifName="gigabitethernet0/1/0",ifAlias="uplink"}'
+        values: '2x20'
+      - series: 'ifAdminStatus{job="asyla-switch-snmp",switch="switch3",instance="10.0.0.42",ifIndex="129",ifName="gigabitethernet0/1/0",ifAlias="uplink"}'
+        values: '1x20'
       - series: 'sysExtFanStatus{job="asyla-switch-snmp",switch="switch2",instance="10.0.0.41",sysExtFanIndex="1"}'
         values: '2x20'
       - series: 'sysExtPowerSupplyStatus{job="asyla-switch-snmp",switch="switch2",instance="10.0.0.41",sysExtPowerSupplyIndex="0"}'
@@ -59,6 +63,9 @@ tests:
           - exp_labels: {severity: critical, job: asyla-switch-snmp, switch: switch2, instance: 10.0.0.41,
                          ifIndex: "129", ifName: gigabitethernet0/1/0, ifAlias: uplink}
             exp_annotations: {summary: "switch2: port gigabitethernet0/1/0 (uplink) is down"}
+          - exp_labels: {severity: critical, job: asyla-switch-snmp, switch: switch3, instance: 10.0.0.42,
+                         ifIndex: "129", ifName: gigabitethernet0/1/0, ifAlias: uplink}
+            exp_annotations: {summary: "switch3: port gigabitethernet0/1/0 (uplink) is down"}
       - eval_time: 15m
         alertname: SwitchWatchedPortChangedState
         exp_alerts:

@@ -56,8 +56,9 @@ can reach d03 (section theOrg below).
   switch2 and switch3 are end of life: there is no firmware to track, and no alert repeats it.
 - **Watched:** switch1 since 2026-10-26 (9 ports: modem, trunks, nas01, vmh01, vmh02); switch2 from
   its first walk, 2026-10-26 (its uplink to switch1; its five PoE-powered ports are not watched,
-  what is on them was not checked). switch3 has `enabled = false` until its SNMPv3 user is set and
-  a walk names its uplink.
+  what is on them was not checked); switch3 the same way, also 2026-10-26 (its uplink, matched by
+  traffic to switch1 sfp-sfpplus6; its three PoE-powered ports are not watched). A switch with
+  `enabled = false` in the toml is not walked.
 - **The SNMPv3 login:** user `asyla-monitor`, authPriv (SHA, AES), read-only. On switch1 it is
   allowed from 10.0.0.0/24 only (a subnet, not d03 alone, so the exporter can move without a switch
   change); the Arubas take no address restriction for SNMP, which the operator accepted (2026-10-26).
@@ -116,7 +117,8 @@ static job there: asked in theOrg's backlog (hand-off of 2026-10-26). When it ca
          labels: {switch: switch1, __param_module: "system,if_mib,mikrotik"}
        - targets: [10.0.0.41]
          labels: {switch: switch2, __param_module: "system,if_mib,aruba"}
-       # switch3 10.0.0.42: "system,if_mib,aruba", once enabled here
+       - targets: [10.0.0.42]
+         labels: {switch: switch3, __param_module: "system,if_mib,aruba"}
      relabel_configs:
        - {source_labels: [__address__], target_label: __param_target}
        - {source_labels: [__param_target], target_label: instance}

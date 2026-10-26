@@ -71,6 +71,6 @@ modules = ["system", "if_mib", "aruba"]
 [switches.switch3]
 target = "10.0.0.42"
 kind = "aruba"
-enabled = false   # its SNMPv3 user is not set yet
 modules = ["system", "if_mib", "aruba"]
-[switches.switch3.ports]
+[switches.switch3.ports]   # first walk from d03, 2026-10-26: the only 10G port up; its traffic matched switch1 sfp-sfpplus6
+"gigabitethernet0/1/0" = "trunk: switch1 sfp-sfpplus6"

@@ -357,7 +357,7 @@ class Main(unittest.TestCase):
         sc.DATA, sc.CONFIG, self.t = self.data, APP / "switch-monitor.toml", T
         sc.now = lambda: self.t
         self.answer = scrape()   # switch1's text, or a FetchError to raise for it
-        self.answer2 = aruba_scrape()   # switch2's
+        self.answer2 = aruba_scrape()   # switch2's and switch3's
         self.exporter_up = True
         self.urls = []
         sc.fetch = self.fetch
@@ -373,7 +373,7 @@ class Main(unittest.TestCase):
             raise sc.FetchError("URLError: [Errno 111] Connection refused")
         if url.endswith("/"):
             return "<html>snmp exporter</html>"
-        answer = self.answer2 if "target=10.0.0.41&" in url else self.answer
+        answer = self.answer2 if ("target=10.0.0.41&" in url or "target=10.0.0.42&" in url) else self.answer
         if isinstance(answer, Exception):
             raise answer
         return aged(answer, (self.t - T).total_seconds())
@@ -389,13 +389,24 @@ class Main(unittest.TestCase):
         self.assertEqual((s["checker"], s["ok"], s["problems"]), ("switch-monitor", True, []))
         self.assertEqual(s["switches"]["switch1"]["watched_up"], "9/9")
         self.assertEqual(s["switches"]["switch2"]["watched_up"], "1/1")
-        self.assertEqual(s["switches"]["switch3"], {"reachable": None, "note": "not watched yet (enabled = false)"})
+        self.assertEqual(s["switches"]["switch3"]["watched_up"], "1/1")
         self.assertEqual([u for u in self.urls if "snmp?" in u],
                          ["http://snmp-exporter:9116/snmp?target=192.168.88.1&module=system%2Cif_mib%2Cmikrotik&auth=asyla_v3",
-                          "http://snmp-exporter:9116/snmp?target=10.0.0.41&module=system%2Cif_mib%2Caruba&auth=asyla_v3"])
+                          "http://snmp-exporter:9116/snmp?target=10.0.0.41&module=system%2Cif_mib%2Caruba&auth=asyla_v3",
+                          "http://snmp-exporter:9116/snmp?target=10.0.0.42&module=system%2Cif_mib%2Caruba&auth=asyla_v3"])
         self.assertIn("https://upgrade.mikrotik.com/routeros/NEWESTa7.long-term", self.urls)
         state = json.loads((self.data / "state.json").read_text())
         self.assertEqual(state["switches"]["switch1"]["release_seen"], {"7.23.8": "2026-10-25T20:00:00Z"})
+
+    def test_a_switch_with_enabled_false_is_not_walked(self):
+        toml = (APP / "switch-monitor.toml").read_text()
+        head, sep, tail = toml.partition('[switches.switch3]\n')
+        self.assertTrue(sep)
+        sc.CONFIG = self.data / "switch-monitor.toml"
+        sc.CONFIG.write_text(head + sep + "enabled = false\n" + tail)
+        s = self.cycle()
+        self.assertEqual(s["switches"]["switch3"], {"reachable": None, "note": "not watched yet (enabled = false)"})
+        self.assertFalse([u for u in self.urls if "target=10.0.0.42&" in u])
 
     def test_feed_read_once_a_day(self):
         self.cycle()

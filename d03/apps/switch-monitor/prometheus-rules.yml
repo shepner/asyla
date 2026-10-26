@@ -1,6 +1,6 @@
 # Alerting rules for theOrg's Prometheus, for the scrape job asyla-switch-snmp in README.md
 # ("theOrg"): the findings of switch_check.py with the limits of switch-monitor.toml. The watched
-# ports below are [switches.switch1.ports] and [switches.switch2.ports]; change both together. Until theOrg scrapes
+# ports below are [switches.switch1/2/3.ports] in the toml; change the two together. Until theOrg scrapes
 # d03, host-maintenance mails these from status.json instead. Check:
 #   promtool check rules prometheus-rules.yml
 groups:
@@ -17,7 +17,7 @@ groups:
         expr: >
           (ifOperStatus{job="asyla-switch-snmp", switch="switch1",
             ifName=~"sfp-sfpplus(1|5|6|9|10|17|18|19|20)"} != 1
-          or ifOperStatus{job="asyla-switch-snmp", switch="switch2", ifName="gigabitethernet0/1/0"} != 1)
+          or ifOperStatus{job="asyla-switch-snmp", switch=~"switch2|switch3", ifName="gigabitethernet0/1/0"} != 1)
           and on (instance, ifIndex) ifAdminStatus == 1
         for: 10m
         labels: {severity: critical}
@@ -107,8 +107,8 @@ groups:
             ifName=~"sfp-sfpplus(1|5|6|9|10|17|18|19|20)"}[1h])
           + increase(ifOutDiscards{job="asyla-switch-snmp", switch="switch1",
             ifName=~"sfp-sfpplus(1|5|6|9|10|17|18|19|20)"}[1h]) > 1000)
-          or (increase(ifInDiscards{job="asyla-switch-snmp", switch="switch2", ifName="gigabitethernet0/1/0"}[1h])
-          + increase(ifOutDiscards{job="asyla-switch-snmp", switch="switch2", ifName="gigabitethernet0/1/0"}[1h]) > 1000)
+          or (increase(ifInDiscards{job="asyla-switch-snmp", switch=~"switch2|switch3", ifName="gigabitethernet0/1/0"}[1h])
+          + increase(ifOutDiscards{job="asyla-switch-snmp", switch=~"switch2|switch3", ifName="gigabitethernet0/1/0"}[1h]) > 1000)
         labels: {severity: warning}
         annotations:
           summary: "{{ $labels.switch }}: port {{ $labels.ifName }}: {{ $value | humanize }} discards in an hour (over 1000)"
@@ -124,7 +124,7 @@ groups:
       # The Arubas have no link-down counter: a watched port whose ifLastChange moved changed state.
       - alert: SwitchWatchedPortChangedState
         expr: >
-          changes(ifLastChange{job="asyla-switch-snmp", switch="switch2", ifName="gigabitethernet0/1/0"}[1h]) > 0
+          changes(ifLastChange{job="asyla-switch-snmp", switch=~"switch2|switch3", ifName="gigabitethernet0/1/0"}[1h]) > 0
         labels: {severity: warning}
         annotations:
           summary: "{{ $labels.switch }}: port {{ $labels.ifName }} changed state in the last hour"
