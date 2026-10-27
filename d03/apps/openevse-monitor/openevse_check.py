@@ -55,6 +55,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 DATA = Path(os.environ.get("OPENEVSE_DATA", "/data"))
 CONFIG = Path(os.environ.get("OPENEVSE_CONFIG", Path(__file__).with_name("openevse-monitor.toml")))
 NAME = "EV charger (openevse01)"
+CHARGER = "openevse01"   # the label on every openevse.prom line (operator 2026-10-27; theOrg's Done when)
 EVENTS_KEPT = 50
 STATES = {0: "unknown", 1: "A: not connected", 2: "B: connected, ready", 3: "C: charging",
           4: "D: vent required", 5: "diode check failed", 6: "GFCI fault", 7: "no ground",
@@ -302,16 +303,22 @@ def summary(st: dict | None, took: float | None, state: dict) -> dict:
 
 def prom(ok: bool, t: dt.datetime, st: dict | None, took: float | None, problems: list,
          state: dict | None = None) -> str:
-    """Prometheus text, names as in the theOrg hand-off; one instance label, added by the scrape.
-    openevse_wifi_restarts_total counts from state.json's start (a lost state.json is a counter reset)."""
-    out = ["# EV charger readings (asyla-hosts d03/apps/openevse-monitor/openevse_check.py); times are the checker's",
-           f"openevse_up {int(ok)}", f"openevse_check_timestamp_seconds {int(t.timestamp())}"]
+    """Prometheus text, names as in the theOrg hand-off; every line carries charger="openevse01", and the
+    scrape adds d03's instance. openevse_wifi_restarts_total counts from state.json's start (a lost
+    state.json is a counter reset)."""
+    out = ["# EV charger readings (asyla-hosts d03/apps/openevse-monitor/openevse_check.py); times are the checker's"]
+
+    def line(name: str, v, labels: str = "") -> None:
+        out.append(f'{name}{{charger="{CHARGER}"{labels}}} {v}')
+
+    line("openevse_up", int(ok))
+    line("openevse_check_timestamp_seconds", int(t.timestamp()))
     for sev in ("urgent", "warn"):
-        out.append(f'openevse_problems{{severity="{sev}"}} {sum(1 for p in problems if p["severity"] == sev)}')
+        line("openevse_problems", sum(1 for p in problems if p["severity"] == sev), f',severity="{sev}"')
     if state is not None:
-        out.append(f"openevse_wifi_restarts_total {state.get('wifi_restarts', 0)}")
+        line("openevse_wifi_restarts_total", state.get("wifi_restarts", 0))
     if took is not None:
-        out.append(f"openevse_poll_seconds {took}")
+        line("openevse_poll_seconds", took)
     if not st:
         return "\n".join(out) + "\n"
 
@@ -319,7 +326,7 @@ def prom(ok: bool, t: dt.datetime, st: dict | None, took: float | None, problems
         v = num(v)
         if v is not None:
             v = round(v * scale, 3)   # repr, not :g, which cuts a lifetime Wh count to 6 digits
-            out.append(f"{name}{labels} {int(v) if v == int(v) else v}")
+            line(name, int(v) if v == int(v) else v, labels)
 
     put("openevse_state", st.get("state"))
     put("openevse_charge_current_amps", st.get("amp"), 1 / 1000)
@@ -328,9 +335,9 @@ def prom(ok: bool, t: dt.datetime, st: dict | None, took: float | None, problems
     put("openevse_session_seconds", st.get("elapsed"))
     put("openevse_energy_wh_total", st.get("watthour"))
     for i in (1, 2, 3):
-        put("openevse_temperature_celsius", st.get(f"temp{i}"), 1 / 10, f'{{sensor="{i}"}}')
+        put("openevse_temperature_celsius", st.get(f"temp{i}"), 1 / 10, f',sensor="{i}"')
     for field, key, _ in FAULTS:
-        put("openevse_faults_total", st.get(field), 1, f'{{kind="{key}"}}')
+        put("openevse_faults_total", st.get(field), 1, f',kind="{key}"')
     put("openevse_rapi_connected", st.get("rapi_connected"))
     sent, good = num(st.get("comm_sent")), num(st.get("comm_success"))
     if sent:

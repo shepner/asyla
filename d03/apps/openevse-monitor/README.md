@@ -22,7 +22,9 @@ theOrg's trends Prometheus collects the same readings.
     the WiFi restart count (`wifi_restarts`, `wifi_last_restart`).
   - `openevse.prom`: the same readings in Prometheus text format (`openevse_*`), for theOrg's trends
     Prometheus (theOrg backlog `2026-10-25-observability-asyla-openevse-charger-openevse01-into-the-trends-prometheus`),
-    served with d03's other `.prom` files once that path exists.
+    served by d03's node exporter textfile collector (job `asyla-d03-node`, so `instance` is d03). Every
+    line carries `charger="openevse01"` (operator, 2026-10-27), so the charger stays identifiable if the
+    file moves hosts.
   - `state.json`: what one cycle hands the next (fault counters, the RAPI count, confirm counts, the
     open outage, events). Rebuilt in one cycle if lost (the first values are then recorded, not reported).
 - **Time:** the controller's clock battery is dead and stays dead (operator, 2026-10-26), so no

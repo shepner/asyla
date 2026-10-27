@@ -203,23 +203,29 @@ class Output(unittest.TestCase):
     def test_prom_units_and_no_voltage(self):
         p = oc.prom(True, T, status(amp=31500), 1.5, [])
         lines = dict(l.rsplit(" ", 1) for l in p.splitlines() if not l.startswith("#"))
-        self.assertEqual(lines["openevse_up"], "1")
-        self.assertEqual(lines["openevse_charge_current_amps"], "31.5")
-        self.assertEqual(lines['openevse_temperature_celsius{sensor="1"}'], "27.2")
-        self.assertNotIn('openevse_temperature_celsius{sensor="2"}', lines)
-        self.assertEqual(lines["openevse_energy_wh_total"], "5217395")
-        self.assertEqual(lines['openevse_faults_total{kind="no_ground"}'], "2")
-        self.assertEqual(lines["openevse_rapi_success_ratio"], "1")
+        self.assertEqual(lines['openevse_up{charger="openevse01"}'], "1")
+        self.assertEqual(lines['openevse_charge_current_amps{charger="openevse01"}'], "31.5")
+        self.assertEqual(lines['openevse_temperature_celsius{charger="openevse01",sensor="1"}'], "27.2")
+        self.assertNotIn('openevse_temperature_celsius{charger="openevse01",sensor="2"}', lines)
+        self.assertEqual(lines['openevse_energy_wh_total{charger="openevse01"}'], "5217395")
+        self.assertEqual(lines['openevse_faults_total{charger="openevse01",kind="no_ground"}'], "2")
+        self.assertEqual(lines['openevse_rapi_success_ratio{charger="openevse01"}'], "1")
         self.assertFalse(any("voltage" in k for k in lines))
 
     def test_prom_down(self):
         p = oc.prom(False, T, None, None, [{"severity": "urgent"}], {"wifi_restarts": 3})
-        self.assertIn("openevse_up 0", p)
-        self.assertIn('openevse_problems{severity="urgent"} 1', p)
-        self.assertIn("openevse_wifi_restarts_total 3", p)
+        self.assertIn('openevse_up{charger="openevse01"} 0', p)
+        self.assertIn('openevse_problems{charger="openevse01",severity="urgent"} 1', p)
+        self.assertIn('openevse_wifi_restarts_total{charger="openevse01"} 3', p)
+
+    def test_prom_every_line_names_the_charger(self):
+        for p in (oc.prom(True, T, status(), 1.0, [], {}), oc.prom(False, T, None, None, [], {})):
+            for l in p.splitlines():
+                if not l.startswith("#"):
+                    self.assertIn('{charger="openevse01"', l)
 
     def test_prom_restarts_start_at_zero(self):
-        self.assertIn("openevse_wifi_restarts_total 0", oc.prom(True, T, status(), 1.0, [], {}))
+        self.assertIn('openevse_wifi_restarts_total{charger="openevse01"} 0', oc.prom(True, T, status(), 1.0, [], {}))
 
     def test_summary(self):
         s = oc.summary(status(), 2.0, {})
@@ -235,7 +241,7 @@ class Output(unittest.TestCase):
         self.assertEqual(oc.main(), 0)
         s = json.loads((oc.DATA / "status.json").read_text())
         self.assertEqual((s["checker"], s["ok"], s["problems"]), ("openevse-monitor", False, []))
-        self.assertIn("openevse_up 0", (oc.DATA / "openevse.prom").read_text())
+        self.assertIn('openevse_up{charger="openevse01"} 0', (oc.DATA / "openevse.prom").read_text())
 
 
 if __name__ == "__main__":
