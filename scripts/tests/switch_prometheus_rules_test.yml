@@ -41,6 +41,9 @@ tests:
         values: '1x20'
       - series: 'ifLastChange{job="asyla-switch-snmp",switch="switch2",instance="10.0.0.41",ifIndex="129",ifName="gigabitethernet0/1/0",ifAlias="uplink"}'
         values: '100x10 999x10'
+      # A steady port re-reads 100 ticks apart: no SwitchWatchedPortChangedState for switch3.
+      - series: 'ifLastChange{job="asyla-switch-snmp",switch="switch3",instance="10.0.0.42",ifIndex="129",ifName="gigabitethernet0/1/0",ifAlias="uplink"}'
+        values: '18300 18400 18300 18400 18300 18400 18300 18400 18300 18400 18300 18400 18300 18400 18300 18400 18300 18400 18300 18400 18300'
       - series: 'ifOperStatus{job="asyla-switch-snmp",switch="switch3",instance="10.0.0.42",ifIndex="129",ifName="gigabitethernet0/1/0",ifAlias="uplink"}'
         values: '2x20'
       - series: 'ifAdminStatus{job="asyla-switch-snmp",switch="switch3",instance="10.0.0.42",ifIndex="129",ifName="gigabitethernet0/1/0",ifAlias="uplink"}'

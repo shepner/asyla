@@ -39,7 +39,7 @@ can reach d03 (section theOrg below).
   | snmp-exporter not answering | warn, urgent from the 3rd check in a row |
   | Restarted (SNMP uptime under 24 h) | warn |
   | Errors (in + out) over 10/h on any port; discards over 1000/h on a watched port | warn, held 24 h |
-  | A watched port went down and up between two checks (MikroTik link-down counter; elsewhere ifLastChange) | warn, held 24 h |
+  | A watched port went down and up between two checks (MikroTik link-down counter; elsewhere ifLastChange moved over 5 s) | warn, held 24 h |
   | Temperature 65 C or more | warn |
   | Optic on a watched port: rx under -10 dBm, tx under -6 dBm, over 70 C, or a transmit fault | warn |
   | switch1: a newer RouterOS in its channel (long-term), first seen 7 days ago or more | warn |

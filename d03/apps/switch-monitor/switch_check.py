@@ -36,6 +36,7 @@ DATA = Path(os.environ.get("SWITCH_DATA", "/data"))
 CONFIG = Path(os.environ.get("SWITCH_CONFIG", Path(__file__).with_name("switch-monitor.toml")))
 EXPORTER_FAILS_URGENT = 3   # cycles in a row with the exporter itself not answering
 UP = 1                      # IF-MIB ifAdminStatus / ifOperStatus up(1)
+LAST_CHANGE_JITTER = 500    # ticks (5 s): an Aruba re-reads a steady ifLastChange 100 ticks apart
 GAUGE_UNITS = {1: "temp", 2: "fan", 6: "state"}   # mtxrGaugeUnit; dV, dA, dW are not watched
 ARUBA_ACTIVE = 1               # WLSX-SYSTEMEXT-MIB ArubaActiveState: 1 active, 2 inactive
 ARUBA_POE_HARDWARE_ERROR = 6   # WLSX-POE-MIB wlsxPsePortStatus offHardwareError
@@ -190,7 +191,9 @@ def evaluate(cfg: dict, name: str, scfg: dict, rows: list, prev: dict, t: dt.dat
                              f"(over {limit}/h), last seen {iso(t)}"))
         if p in label:
             downs = st.get("downs", 0) - was.get("downs", 0) if "downs" in st and "downs" in was else 0
-            moved = "downs" not in st and st.get("last_change") != was.get("last_change")
+            lc, was_lc = st.get("last_change"), was.get("last_change")
+            moved = ("downs" not in st and lc is not None and was_lc is not None
+                     and abs(lc - was_lc) > LAST_CHANGE_JITTER)
             if downs > 0 or moved:
                 held.append((f"{name}:port:{p}:flap", "warn",
                              f"{name}: port {what} " + (f"went down {downs:.0f} time(s)" if downs else "changed state")

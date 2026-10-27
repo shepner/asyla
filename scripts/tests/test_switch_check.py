@@ -302,6 +302,18 @@ class Aruba(unittest.TestCase):
         found = two(aruba_scrape(ports=[port("gigabitethernet0/0/0"), port(UPLINK2)]), later, scfg=S2)
         self.assertEqual(list(found), [f"switch1:port:{UPLINK2}:flap"])
 
+    def test_last_change_jitter_is_not_a_flap(self):
+        # switch2 2026-10-27: a steady, up uplink read ifLastChange 2124378100 then 2124378000.
+        for a, b in ((2124378100, 2124378000), (18300, 18400), (18300, 18800)):
+            found = two(aruba_scrape(ports=[port("gigabitethernet0/0/0"), port(UPLINK2, last_change=a)]),
+                        aruba_scrape(ports=[port("gigabitethernet0/0/0"), port(UPLINK2, last_change=b)]), scfg=S2)
+            self.assertEqual(found, {}, f"{a} -> {b}")
+
+    def test_last_change_past_jitter_is_a_flap(self):
+        found = two(aruba_scrape(ports=[port("gigabitethernet0/0/0"), port(UPLINK2, last_change=18300)]),
+                    aruba_scrape(ports=[port("gigabitethernet0/0/0"), port(UPLINK2, last_change=18801)]), scfg=S2)
+        self.assertEqual(list(found), [f"switch1:port:{UPLINK2}:flap"])
+
     def test_fan_or_psu_inactive_is_urgent(self):
         found, *_ = run(aruba_scrape(fans=[1, 2, 1, 1], psus=[2]), scfg=S2)
         self.assertEqual(found, {"switch1:health:fan1": ("urgent", "switch1: fan 1 is not active (value 2)"),
