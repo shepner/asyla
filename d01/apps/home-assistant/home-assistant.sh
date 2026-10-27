@@ -1,6 +1,8 @@
 #!/bin/bash
 # Home Assistant on d01. Usage: home-assistant.sh [switch ...] e.g. backup|up|down|logs|refresh|update|restart|verify
 # Switches can be combined (e.g. down backup up). Run from anywhere; loads ~/scripts/docker/common.env.
+# up also sets HA's proxy trust (http-trust-proxy.py, with HA stopped), so internal-access works
+# without an admin promoting anything.
 # The config folder holds the integration logins (asyla decisions/home-assistant-integration-logins.md):
 # up keeps it mode 700, and the backup mirror leaves .storage out (HA's own encrypted backups carry it).
 
@@ -28,8 +30,7 @@ APP_ROOT="${DOCKER_DL}/${APP_NAME}"
 CONFIG_DIR="${APP_ROOT}/config"
 BACKUP_DIR="${DOCKER_D1}/${APP_NAME}/mirror"
 NET_NAME="home_assistant_net"
-NET_SUBNET="172.31.240.0/24"   # HA trusts it as the proxy (Settings > System > Network); internal-access d01 networks.txt
-HA_ADDR="172.31.240.10"        # fixed in compose.yml: the README's setup tunnel targets it
+NET_SUBNET="172.31.240.0/24"   # HA trusts it as the proxy through http-trust-proxy.py; internal-access d01 networks.txt sets the same subnet
 PROXY_NAME="homeassistant.asyla.org"
 
 # Not in the mirror: .storage (integration logins and tokens, users, the access token theOrg
@@ -66,7 +67,7 @@ ensure_network() {
 # configuration.yaml comes from this repo on every start. It has no http block: in 2026.10 HA
 # imports http YAML only as a pending trial that reverts to the default after 5 minutes unless an
 # admin promotes it (core homeassistant/components/http/config.py, AUTO_REVERT_DELAY), and there is
-# no admin on a first start. The proxy trust is set in the UI instead (README, First-time setup).
+# no admin on a first start. trust_proxy writes the stable config instead.
 install_config() {
   mkdir -p "$CONFIG_DIR"
   chmod 700 "$APP_ROOT" "$CONFIG_DIR"
@@ -77,6 +78,27 @@ install_config() {
   [ -e "$CONFIG_DIR/scripts.yaml" ] || install -m 600 /dev/null "$CONFIG_DIR/scripts.yaml"
   [ -e "$CONFIG_DIR/scenes.yaml" ] || install -m 600 /dev/null "$CONFIG_DIR/scenes.yaml"
   mkdir -p "$CONFIG_DIR/themes"
+}
+
+# Write the proxy trust into the stable half of config/.storage/http, with HA stopped so it does not
+# overwrite the file. Runs http-trust-proxy.py in the pinned image (its python3, no network); the
+# script prints only set or unchanged. Nothing else under .storage is read or printed.
+trust_proxy() {
+  local image rc=0
+  image=$(run_compose config --images | head -1)
+  if [ -z "$image" ]; then
+    echo "[ERROR] no image in $COMPOSE_FILE" >&2
+    return 1
+  fi
+  echo "[INFO] Stopping Home Assistant to set the proxy trust ($NET_SUBNET)"
+  run_compose stop 2>/dev/null || true
+  remove_stale_container
+  docker run --rm -i --network none -v "$CONFIG_DIR:/config" --entrypoint python3 "$image" \
+    - "$NET_SUBNET" < "$SCRIPT_DIR/http-trust-proxy.py" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "[ERROR] http-trust-proxy.py failed (exit $rc); HA's proxy trust is not set" >&2
+  fi
+  return "$rc"
 }
 
 do_backup() {
@@ -90,10 +112,30 @@ do_update() {
   run_compose pull
 }
 
+# A store that exists gets the trust before the start. Without one (fresh install, or a restore
+# without .storage), HA writes it on its first start: wait for it, set the trust, start again.
 do_up() {
+  local store="$CONFIG_DIR/.storage/http" had_store=0 waited=0
   install_config
   ensure_network
+  if [ -e "$store" ]; then
+    had_store=1
+    trust_proxy
+  fi
   remove_stale_container
+  echo "[INFO] Starting Home Assistant"
+  run_compose up -d
+  [ "$had_store" -eq 1 ] && return 0
+  echo "[INFO] Waiting up to 300 s for HA's first start to write its HTTP config"
+  while [ ! -e "$store" ]; do
+    if [ "$waited" -ge 300 ]; then
+      echo "[ERROR] $store did not appear in 300 s; HA does not trust the proxy (run up again)" >&2
+      return 1
+    fi
+    sleep 5
+    waited=$((waited + 5))
+  done
+  trust_proxy
   echo "[INFO] Starting Home Assistant"
   run_compose up -d
 }
@@ -115,7 +157,7 @@ do_verify() {
   case "$code" in
     200|302) echo "[INFO] https://$PROXY_NAME/ -> $code through internal-access" ;;
     400)
-      echo "[WARN] https://$PROXY_NAME/ -> 400: HA does not trust the proxy; set it in Settings > System > Network (README)"
+      echo "[WARN] https://$PROXY_NAME/ -> 400: HA does not trust the proxy; run up again (README)"
       rc=1
       ;;
     *)
@@ -131,7 +173,8 @@ run_cmd() {
   case "$cmd" in
     backup)  do_backup ;;
     # Rebuilt host only: refuses unless APP_ROOT is empty and the mirror's last backup is OK.
-    # .storage is not in the mirror: restore HA's own backup from config/backups in the UI (README).
+    # .storage is not in the mirror: run up, then restore HA's own backup from config/backups in
+    # onboarding (README).
     restore) do_rsync_mirror_restore "$BACKUP_DIR" "$APP_ROOT" ;;
     update)  do_update ;;
     up)      do_up ;;
@@ -166,7 +209,7 @@ if [ $# -eq 0 ]; then
   echo "  restore  - rebuilt host: $BACKUP_DIR back to an empty $APP_ROOT" >&2
   echo "  update   - Pull the pinned image (no restart); use up/restart to start" >&2
   echo "  refresh  - Pull the pinned image + start" >&2
-  echo "  up       - Install configuration.yaml, start the container" >&2
+  echo "  up       - Install configuration.yaml, set the proxy trust, start the container" >&2
   echo "  down     - Stop and remove the container" >&2
   echo "  restart  - Down then up" >&2
   echo "  verify   - Health, folder modes, HA trusts the proxy" >&2
