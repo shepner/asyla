@@ -1,0 +1,37 @@
+# Home Assistant Container on d01: reads the Ecobee and Cielo thermostats and serves them at
+# /api/prometheus for theOrg's trends Prometheus (asyla backlog
+# 2026-10-26-home-automation-home-assistant-container-on-d01-deploy).
+# Integration logins live in ./config/.storage under asyla decisions/home-assistant-integration-logins.md.
+# Access via internal-access only; no published ports.
+# Run: ~/scripts/d01/apps/home-assistant/home-assistant.sh up
+# Ref: https://www.home-assistant.io/installation/linux (Docker Compose). Its example adds
+# privileged, host network and /run/dbus for local discovery; Ecobee and Cielo are cloud polling and
+# need none of them, so they are left out until an integration does.
+
+networks:
+  home_assistant_net:
+    external: true
+    name: home_assistant_net
+
+services:
+  home-assistant:
+    # Pinned: update by changing the tag here, after reading the release notes. 2026.10.4 was the
+    # latest release on 2026-10-26 (published 2026-10-24).
+    image: ghcr.io/home-assistant/home-assistant:2026.10.4
+    container_name: home-assistant
+    restart: unless-stopped
+    # Healthcheck: asyla backlog 2026-10-20-hosts-observability-through-theorg (operator, 2026-10-20).
+    # python3 is in the image; curl is not known to be.
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 300s
+    environment:
+      - TZ=${LOCAL_TZ:-America/Chicago}
+    volumes:
+      - ./config:/config
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - home_assistant_net

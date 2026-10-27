@@ -1,0 +1,25 @@
+# Home Assistant on d01. home-assistant.sh up installs this file as config/configuration.yaml on every
+# start: edit it here, never on the host. Integrations (Ecobee, Cielo) are added in the UI.
+
+# Home Assistant's own default set (homeassistant/config.py DEFAULT_CONFIG).
+default_config:
+
+frontend:
+  themes: !include_dir_merge_named themes
+
+automation: !include automations.yaml
+script: !include scripts.yaml
+scene: !include scenes.yaml
+
+# Kept short: the trends Prometheus is the store for anything read over months (asyla ASY-TRD-1).
+recorder:
+  purge_keep_days: 3
+
+# /api/prometheus for theOrg's trends Prometheus (ASY-TRD-2). Needs a long-lived access token
+# (requires_auth defaults to true). https://www.home-assistant.io/integrations/prometheus/
+prometheus:
+  filter:
+    include_domains:
+      - climate
+      - sensor
+      - binary_sensor
