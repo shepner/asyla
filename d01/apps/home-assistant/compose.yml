@@ -34,4 +34,6 @@ services:
       - ./config:/config
       - /etc/localtime:/etc/localtime:ro
     networks:
-      - home_assistant_net
+      home_assistant_net:
+        # Fixed so the first-time setup tunnel (README) has one address to target.
+        ipv4_address: 172.31.240.10

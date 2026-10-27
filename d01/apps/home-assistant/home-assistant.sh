@@ -28,7 +28,9 @@ APP_ROOT="${DOCKER_DL}/${APP_NAME}"
 CONFIG_DIR="${APP_ROOT}/config"
 BACKUP_DIR="${DOCKER_D1}/${APP_NAME}/mirror"
 NET_NAME="home_assistant_net"
-NET_SUBNET="172.31.240.0/24"   # http-first-start.yaml trusts this subnet; change both together
+NET_SUBNET="172.31.240.0/24"   # HA trusts it as the proxy (Settings > System > Network); internal-access d01 networks.txt
+HA_ADDR="172.31.240.10"        # fixed in compose.yml: the README's setup tunnel targets it
+PROXY_NAME="homeassistant.asyla.org"
 
 # Not in the mirror: .storage (integration logins and tokens, users, the access token theOrg
 # scrapes with), the YAML secrets file, the recorder database (3 days of history, not the trend
@@ -61,16 +63,14 @@ ensure_network() {
   fi
 }
 
-# configuration.yaml comes from this repo on every start. The http block goes in only until HA has
-# migrated it into .storage/http on its first start; after that HA ignores http YAML.
+# configuration.yaml comes from this repo on every start. It has no http block: in 2026.10 HA
+# imports http YAML only as a pending trial that reverts to the default after 5 minutes unless an
+# admin promotes it (core homeassistant/components/http/config.py, AUTO_REVERT_DELAY), and there is
+# no admin on a first start. The proxy trust is set in the UI instead (README, First-time setup).
 install_config() {
   mkdir -p "$CONFIG_DIR"
   chmod 700 "$APP_ROOT" "$CONFIG_DIR"
   install -m 600 "$SCRIPT_DIR/configuration.yaml" "$CONFIG_DIR/configuration.yaml"
-  if [ ! -e "$CONFIG_DIR/.storage/http" ]; then
-    cat "$SCRIPT_DIR/http-first-start.yaml" >> "$CONFIG_DIR/configuration.yaml"
-    echo "[INFO] First start: http proxy settings added for HA to migrate"
-  fi
   # The includes in configuration.yaml need these; HA writes the same defaults on a bare first start.
   [ -e "$CONFIG_DIR/automations.yaml" ] || install -m 600 /dev/null "$CONFIG_DIR/automations.yaml"
   [ -s "$CONFIG_DIR/automations.yaml" ] || printf '[]' > "$CONFIG_DIR/automations.yaml"
@@ -98,9 +98,10 @@ do_up() {
   run_compose up -d
 }
 
-# Read-only checks: the container is healthy, the folder modes hold, and the proxy settings landed.
+# Read-only checks: the container is healthy, the folder modes hold, and HA trusts the proxy (a
+# request through internal-access gets 400 while it does not).
 do_verify() {
-  local rc=0 state mode
+  local rc=0 state mode code
   state=$(docker inspect -f '{{.State.Health.Status}}' home-assistant 2>/dev/null || echo missing)
   echo "[INFO] container health: $state"
   [ "$state" = healthy ] || rc=1
@@ -109,12 +110,19 @@ do_verify() {
     echo "[INFO] $d mode $mode"
     [ "$mode" = 700 ] || rc=1
   done
-  if [ -e "$CONFIG_DIR/.storage/http" ]; then
-    echo "[INFO] .storage/http present (proxy settings migrated)"
-  else
-    echo "[WARN] .storage/http missing: HA has not migrated the http settings yet"
-    rc=1
-  fi
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+    --resolve "$PROXY_NAME:443:127.0.0.1" "https://$PROXY_NAME/" || true)
+  case "$code" in
+    200|302) echo "[INFO] https://$PROXY_NAME/ -> $code through internal-access" ;;
+    400)
+      echo "[WARN] https://$PROXY_NAME/ -> 400: HA does not trust the proxy; set it in Settings > System > Network (README)"
+      rc=1
+      ;;
+    *)
+      echo "[WARN] https://$PROXY_NAME/ -> ${code:-no answer} through internal-access"
+      rc=1
+      ;;
+  esac
   return "$rc"
 }
 
@@ -161,7 +169,7 @@ if [ $# -eq 0 ]; then
   echo "  up       - Install configuration.yaml, start the container" >&2
   echo "  down     - Stop and remove the container" >&2
   echo "  restart  - Down then up" >&2
-  echo "  verify   - Health, folder modes, proxy settings migrated" >&2
+  echo "  verify   - Health, folder modes, HA trusts the proxy" >&2
   echo "  logs     - Follow logs" >&2
   echo "" >&2
   echo "Access: https://homeassistant.asyla.org via internal-access (no published ports)" >&2
