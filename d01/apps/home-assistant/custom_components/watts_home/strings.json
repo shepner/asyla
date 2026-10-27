@@ -1,0 +1,88 @@
+{
+  "entity": {
+    "number": {
+      "dehumidifier_setpoint": {
+        "name": "Dehumidifier Setpoint"
+      }
+    },
+    "sensor": {
+      "temperature": {
+        "name": "Temperature"
+      },
+      "outdoor_temperature": {
+        "name": "Outdoor Temperature"
+      },
+      "humidity": {
+        "name": "Humidity"
+      },
+      "floor_temperature": {
+        "name": "Floor Temperature"
+      },
+      "floor_max": {
+        "name": "Floor Max"
+      },
+      "energy_heat_today": {
+        "name": "Heat Today"
+      },
+      "energy_cool_today": {
+        "name": "Cool Today"
+      }
+    },
+    "binary_sensor": {
+      "fan_running": {
+        "name": "Fan Running"
+      },
+      "radiant_heating": {
+        "name": "Radiant Heating"
+      },
+      "humidifier_running": {
+        "name": "Humidifier Running"
+      },
+      "cold_weather_shutdown": {
+        "name": "Cold Weather Shutdown"
+      }
+    },
+    "climate": {
+      "floor": {
+        "name": "Floor"
+      }
+    },
+    "switch": {
+      "away": {
+        "name": "Away"
+      },
+      "emergency_heat": {
+        "name": "Emergency Heat"
+      }
+    }
+  },
+  "config": {
+    "step": {
+      "user": {
+        "title": "Watts Home (Tekmar)",
+        "description": "Enter your Watts Home account credentials.",
+        "data": {
+          "username": "Email address",
+          "password": "Password",
+          "scan_interval": "Polling interval (seconds)"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Reauthenticate Watts Home (Tekmar)",
+        "description": "The stored credentials for {username} are no longer accepted. Enter the password again.",
+        "data": {
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid email or password.",
+      "unknown": "Unexpected error. Check the logs for details."
+    },
+    "abort": {
+      "already_configured": "This Watts Home account is already configured.",
+      "reauth_successful": "Re-authentication was successful.",
+      "unique_id_mismatch": "These credentials are for a different Watts Home account."
+    }
+  }
+}
