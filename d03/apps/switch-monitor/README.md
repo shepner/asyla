@@ -38,7 +38,7 @@ can reach d03 (section theOrg below).
   | Aruba health: a fan or power supply not active; temperature 75 C or more | urgent, after 2 checks in a row |
   | snmp-exporter not answering | warn, urgent from the 3rd check in a row |
   | Restarted (SNMP uptime under 24 h) | warn |
-  | Errors (in + out) over 10/h on any port; discards over 1000/h on a watched port | warn, held 24 h |
+  | Errors (in + out) over 10/h on any port (on an Aruba these are octets of bad frames: one 1522-octet giant is over); discards over 1000/h on a watched port | warn, held 24 h |
   | A watched port went down and up between two checks (MikroTik link-down counter; elsewhere ifLastChange moved over 5 s) | warn, held 24 h |
   | Temperature 65 C or more | warn |
   | Optic on a watched port: rx under -10 dBm, tx under -6 dBm, over 70 C, or a transmit fault | warn |

@@ -180,7 +180,11 @@ def evaluate(cfg: dict, name: str, scfg: dict, rows: list, prev: dict, t: dt.dat
         if not hours or not was:
             continue
         what = f"{p} ({label[p]})" if p in label else p
-        for field, limit, words in (("errors", cfg["errors_per_hour"], "errors"),
+        # An Aruba's ifInErrors/ifOutErrors count the octets of bad frames, not frames (switch2 CLI
+        # 2026-10-27: 4686238 error octets = 3079 giants x 1522): same limit, words that say so.
+        errors = ("error octets (bad frames' bytes; which kind: switch_snmp.py --show)"
+                  if scfg.get("kind") == "aruba" else "errors")
+        for field, limit, words in (("errors", cfg["errors_per_hour"], errors),
                                     ("discards", cfg["discards_per_hour"], "discards")):
             if field == "discards" and p not in label:
                 continue   # edge ports drop on purpose (a sleeping PC): watched ports only

@@ -112,7 +112,7 @@ tests:
         exp_alerts:
           - exp_labels: {severity: warning, job: asyla-switch-snmp, switch: switch1, instance: 192.168.88.1,
                          ifIndex: "2", ifName: ether2}   # an empty ifAlias is no label
-            exp_annotations: {summary: "switch1: port ether2: 60 errors in an hour (over 10)"}
+            exp_annotations: {summary: "switch1: port ether2: 60 errors in an hour (over 10; octets on switch2/switch3)"}
       - eval_time: 15m
         alertname: SwitchRouterboardFirmwareBehind
         exp_alerts:

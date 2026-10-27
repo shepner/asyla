@@ -302,6 +302,17 @@ class Aruba(unittest.TestCase):
         found = two(aruba_scrape(ports=[port("gigabitethernet0/0/0"), port(UPLINK2)]), later, scfg=S2)
         self.assertEqual(list(found), [f"switch1:port:{UPLINK2}:flap"])
 
+    def test_errors_are_octets_and_still_warn(self):
+        # switch2 2026-10-27: one 1522-octet giant in a cycle. Same limit as frames; the words say octets.
+        found = two(aruba_scrape(ports=[port("gigabitethernet0/0/0"), port(UPLINK2, errors=4684716)]),
+                    aruba_scrape(ports=[port("gigabitethernet0/0/0"), port(UPLINK2, errors=4686238)]), scfg=S2)
+        self.assertEqual(list(found), [f"switch1:port:{UPLINK2}:errors"])
+        self.assertIn("1522 error octets (bad frames' bytes; which kind: switch_snmp.py --show) in",
+                      found[f"switch1:port:{UPLINK2}:errors"][1])
+        small = two(aruba_scrape(ports=[port("gigabitethernet0/0/0"), port(UPLINK2, errors=0)]),
+                    aruba_scrape(ports=[port("gigabitethernet0/0/0"), port(UPLINK2, errors=64)]), scfg=S2)
+        self.assertEqual(list(small), [f"switch1:port:{UPLINK2}:errors"], "one bad 64-byte frame still warns")
+
     def test_last_change_jitter_is_not_a_flap(self):
         # switch2 2026-10-27: a steady, up uplink read ifLastChange 2124378100 then 2124378000.
         for a, b in ((2124378100, 2124378000), (18300, 18400), (18300, 18800)):

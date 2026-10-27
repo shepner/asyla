@@ -93,13 +93,14 @@ groups:
         annotations:
           summary: "{{ $labels.switch }}: restarted (SNMP uptime {{ $value | humanizeDuration }})"
 
+      # On the Arubas (switch2, switch3) these counters are octets of bad frames, not frames.
       - alert: SwitchPortErrors
         expr: >
           increase(ifInErrors{job="asyla-switch-snmp"}[1h])
           + increase(ifOutErrors{job="asyla-switch-snmp"}[1h]) > 10
         labels: {severity: warning}
         annotations:
-          summary: "{{ $labels.switch }}: port {{ $labels.ifName }}: {{ $value | humanize }} errors in an hour (over 10)"
+          summary: "{{ $labels.switch }}: port {{ $labels.ifName }}: {{ $value | humanize }} errors in an hour (over 10; octets on switch2/switch3)"
 
       - alert: SwitchWatchedPortDiscards
         expr: >
