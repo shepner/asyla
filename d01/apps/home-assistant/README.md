@@ -27,8 +27,8 @@ with conditions: asyla `decisions/home-assistant-integration-logins.md`.
 ## Commands
 
 ```bash
-~/scripts/d01/apps/home-assistant/home-assistant.sh up       # install configuration.yaml, trust the proxy, start
-~/scripts/d01/apps/home-assistant/home-assistant.sh verify   # health, folder modes, proxy trusted
+~/scripts/d01/apps/home-assistant/home-assistant.sh up       # install configuration.yaml and custom_components, trust the proxy, start
+~/scripts/d01/apps/home-assistant/home-assistant.sh verify   # health, folder modes, proxy trusted, custom_components match
 ~/scripts/d01/apps/home-assistant/home-assistant.sh down     # stop
 ~/scripts/d01/apps/home-assistant/home-assistant.sh logs     # follow logs
 ~/scripts/d01/apps/home-assistant/home-assistant.sh backup   # mirror to the NAS, without .storage
@@ -52,9 +52,43 @@ Order per ASY-HST-2: push, `./update_scripts.sh` on d01, then:
 3. Open `https://homeassistant.asyla.org` and create the owner account (the operator). Turn on
    automatic backups with encryption, and store the backup encryption key in OpenBao.
 4. `home-assistant.sh verify` (health, modes, and a request through the proxy that is not 400).
-5. Add integrations in the UI: Ecobee, then Cielo. The operator types each login; no session does.
+5. Add integrations in the UI: Ecobee, then Cielo, then Watts Home (below). The operator types each
+   login; no session does.
 6. Create a long-lived access token for the trends Prometheus (a dedicated user), store it in
    OpenBao, and hand theOrg the target `https://homeassistant.asyla.org/api/prometheus`.
+
+## Watts Home
+
+The Watts tekmar 562 boiler thermostat has no core integration. `custom_components/watts_home/` is
+[ha-watts-home](https://github.com/bhamiltoncx/ha-watts-home) (Apache-2.0, upstream `LICENSE` kept),
+vendored at one reviewed commit; no HACS. `PIN.txt` records the commit, version and archive sha256.
+
+- **One local change:** `manifest.json` requires `curl_cffi==0.16.3` instead of upstream's
+  `curl_cffi>=0.7.0`: 0.17.0 needs `cffi>=2.1.1` and Home Assistant 2026.10.4 constrains
+  `cffi==2.0.0`. Home Assistant installs that one PyPI package into the container when it loads the
+  integration, and again after each container recreate.
+- **Install:** `up` mirrors each folder in `custom_components/` into `config/custom_components/`
+  (folders 700, files 600, files no longer shipped removed, `__pycache__` left alone); `verify`
+  checks the copy matches this folder. Home Assistant loads custom integrations only at start; `up`
+  copies first and then stops and starts Home Assistant to set the proxy trust, so `up` is the
+  restart it needs.
+- **Add it:** Settings → Devices & services → Add integration → "Watts Home (Tekmar)". The operator types the
+  Watts Home app login. It stays in Home Assistant storage like the Ecobee login (asyla
+  `decisions/home-assistant-integration-logins.md`).
+- **What it gives:** controls, not only readings: a climate entity per thermostat (mode, setpoints;
+  emergency heat shows as heat), an away switch per location, numbers and sensors. It polls the
+  Watts cloud.
+
+### Bump the pin
+
+1. Read the new commit's `custom_components/watts_home` in full. It must contact only
+   `https://login.watts.io` and `https://home.watts.com/api`, with no subprocess, eval, file writes
+   or telemetry.
+2. Recheck `curl_cffi` against Home Assistant's `cffi` constraint for the image in `compose.yml`
+   (`homeassistant/package_constraints.txt`), and pick the newest release that fits.
+3. On WS01: `python3 -I scripts/vendor_ha_watts_home.py FULL_SHA --curl-cffi VERSION`. It refuses a
+   short SHA, an archive that is not that commit, and any other upstream requirement.
+4. Review `git diff`, commit, push; then `update_scripts.sh`, `up` and `verify` on d01.
 
 ## Restore
 

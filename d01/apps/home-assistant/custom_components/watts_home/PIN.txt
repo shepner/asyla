@@ -1,0 +1,13 @@
+Vendored by asyla-hosts scripts/vendor_ha_watts_home.py. Do not edit by hand.
+
+upstream:  https://github.com/bhamiltoncx/ha-watts-home
+commit:    4c00cf2c7f3fc2f978bedb96d4b00e1b424c6a16
+date:      2026-10-20T14:42:37Z (commit time, from the archive)
+version:   1.2.0
+archive:   https://codeload.github.com/bhamiltoncx/ha-watts-home/tar.gz/4c00cf2c7f3fc2f978bedb96d4b00e1b424c6a16
+sha256:    523986b696b5e3bc05d49b0acf4d5257b98d140ffcf1407c9175e5c932f9d961 (archive as downloaded when vendored)
+license:   Apache-2.0 (LICENSE, upstream's)
+
+Changed from upstream: manifest.json requirements ['curl_cffi>=0.7.0'] -> ['curl_cffi==0.16.3']
+(pins the one PyPI package Home Assistant installs for this integration).
+Every other file is upstream's at the commit above.

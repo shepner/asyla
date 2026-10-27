@@ -5,6 +5,7 @@
 # without an admin promoting anything.
 # The config folder holds the integration logins (asyla decisions/home-assistant-integration-logins.md):
 # up keeps it mode 700, and the backup mirror leaves .storage out (HA's own encrypted backups carry it).
+# up also installs the vendored custom integrations in custom_components/ (README, "Watts Home").
 
 set -euo pipefail
 
@@ -78,6 +79,37 @@ install_config() {
   [ -e "$CONFIG_DIR/scripts.yaml" ] || install -m 600 /dev/null "$CONFIG_DIR/scripts.yaml"
   [ -e "$CONFIG_DIR/scenes.yaml" ] || install -m 600 /dev/null "$CONFIG_DIR/scenes.yaml"
   mkdir -p "$CONFIG_DIR/themes"
+  install_custom_components
+}
+
+# Each folder in ./custom_components (vendored at one reviewed commit, PIN.txt) is mirrored into
+# config/custom_components/<name>: folders 700, files 600, files no longer shipped removed. Python's
+# __pycache__ (written by HA as root) is left alone. Integrations not shipped here are not touched.
+install_custom_components() {
+  local src_root="$SCRIPT_DIR/custom_components" dest_root="$CONFIG_DIR/custom_components"
+  local src name dest rel
+  [ -d "$src_root" ] || return 0
+  mkdir -p "$dest_root"
+  chmod 700 "$dest_root"
+  for src in "$src_root"/*/; do
+    [ -d "$src" ] || continue
+    src="${src%/}"
+    name="${src##*/}"
+    dest="$dest_root/$name"
+    mkdir -p "$dest"
+    while IFS= read -r rel; do
+      mkdir -p "$dest/$rel"
+      chmod 700 "$dest/$rel"
+    done < <(cd "$src" && find . -type d)
+    while IFS= read -r rel; do
+      cmp -s "$src/$rel" "$dest/$rel" || install -m 600 "$src/$rel" "$dest/$rel"
+      chmod 600 "$dest/$rel"
+    done < <(cd "$src" && find . -type f)
+    while IFS= read -r rel; do
+      [ -e "$src/$rel" ] || rm -f "$dest/$rel"
+    done < <(cd "$dest" && find . -name __pycache__ -prune -o -type f -print)
+    echo "[INFO] custom integration $name: $(sed -n 's/^commit: *//p' "$src/PIN.txt" 2>/dev/null || echo unpinned)"
+  done
 }
 
 # Write the proxy trust into the stable half of config/.storage/http, with HA stopped so it does not
@@ -165,6 +197,17 @@ do_verify() {
       rc=1
       ;;
   esac
+  # The vendored integrations match this repo's copy (names of differing files only).
+  for d in "$SCRIPT_DIR"/custom_components/*/; do
+    [ -d "$d" ] || continue
+    d="${d%/}"
+    if diff -rq -x __pycache__ "$d" "$CONFIG_DIR/custom_components/${d##*/}" >/dev/null 2>&1; then
+      echo "[INFO] custom integration ${d##*/} matches the repo"
+    else
+      echo "[WARN] custom integration ${d##*/} differs from the repo or is missing; run up"
+      rc=1
+    fi
+  done
   return "$rc"
 }
 
@@ -209,10 +252,10 @@ if [ $# -eq 0 ]; then
   echo "  restore  - rebuilt host: $BACKUP_DIR back to an empty $APP_ROOT" >&2
   echo "  update   - Pull the pinned image (no restart); use up/restart to start" >&2
   echo "  refresh  - Pull the pinned image + start" >&2
-  echo "  up       - Install configuration.yaml, set the proxy trust, start the container" >&2
+  echo "  up       - Install configuration.yaml and custom integrations, set the proxy trust, start" >&2
   echo "  down     - Stop and remove the container" >&2
   echo "  restart  - Down then up" >&2
-  echo "  verify   - Health, folder modes, HA trusts the proxy" >&2
+  echo "  verify   - Health, folder modes, HA trusts the proxy, custom integrations match" >&2
   echo "  logs     - Follow logs" >&2
   echo "" >&2
   echo "Access: https://homeassistant.asyla.org via internal-access (no published ports)" >&2
