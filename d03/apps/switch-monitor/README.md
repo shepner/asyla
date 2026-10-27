@@ -101,9 +101,20 @@ instance that the emporia data is going to"), not its operations one. theOrg's d
 asyla lists. The trends instance finds targets by Docker label on its own host only, so d03 needs a
 static job there: asked in theOrg's backlog (hand-off of 2026-10-26). When it can take it:
 
-1. Publish the exporter: add `ports: ["9116:9116"]` to `snmp-exporter` in `compose.yml`, and allow
-   the trends Prometheus's host (the Mini today, d06 later) to d03:9116 only. Nothing secret is served: the exporter's `/config`
-   shows the passwords as `<secret>` (read 2026-10-25 against v0.30.1).
+1. Publish the exporter to the trends Prometheus's host only (operator, 2026-10-27): `compose.yml`
+   publishes it on `127.0.0.1:19116`, and d03's `[[port_proxy]] switch-snmp` in `host.toml`
+   (`build/setup/port_proxy.sh`) proxies d03:9116 to it, open to localhost and 10.0.0.150 (the Mini;
+   d06 after the move: change `allow` and rerun the step). d03 has no host firewall, and a
+   Docker-published port bypasses host rules anyway, so a plain `9116:9116` would be open to the LAN,
+   and anyone reaching it could have d03 walk a target of their choosing with asyla's SNMPv3 user.
+   Nothing secret is served: the exporter's `/config` shows the passwords as `<secret>` (read
+   2026-10-25 against v0.30.1). Install on the running host (operator; no credentials needed):
+
+   ```bash
+   cd ~/local/asyla && python3 projects/asyla-hosts/scripts/build_host.py d03 build --only setup --step port_proxy.sh --apply
+   ```
+
+   then recreate the app so the loopback port exists (the credentialed start above).
 2. Hand theOrg this scrape job (the exporter's multi-target pattern; `instance` is the switch):
 
    ```yaml

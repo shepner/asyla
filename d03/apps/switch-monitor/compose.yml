@@ -25,8 +25,10 @@ services:
       - --config.expand-environment-variables
     volumes:
       - ./snmp:/etc/asyla:ro
-    # Not published: only the checker reaches it, on this project's network. theOrg's trends Prometheus
-    # scrapes it once it can reach d03 (README.md, "theOrg"): publish 9116 then, not before.
+    # On loopback only: the checker reaches it on this project's network, and theOrg's trends
+    # Prometheus through d03:9116, the host.toml [[port_proxy]] switch-snmp (build/setup/port_proxy.sh),
+    # open to the trends host only. d03 has no host firewall, so a LAN-published port would be open.
+    ports: ["127.0.0.1:19116:9116"]
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9116/"]
       interval: 60s

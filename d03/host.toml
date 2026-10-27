@@ -18,7 +18,7 @@ startup = "order=15"       # set at create, checked by verify
 
 # build/setup/, as d04 and test01: d03 left build_host.py's LEGACY_HOSTS and has no setup/ of its own.
 [setup]
-steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "bashrc.sh", "node_exporter.sh"]   # no SMB media mount on d03 (live, 2026-10-07)
+steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "bashrc.sh", "node_exporter.sh", "port_proxy.sh"]   # no SMB media mount on d03 (live, 2026-10-07)
 
 # Node exporter (build/setup/node_exporter.sh) for theOrg's trends Prometheus (asyla standard
 # ASY-TRD): port 9100 from these addresses only, and the .prom files it serves. theOrg's job
@@ -31,6 +31,15 @@ textfile_sources = [
   "/mnt/docker/att-monitor/att.prom",
   "/mnt/docker/openevse-monitor/openevse.prom",
 ]
+
+# Port proxies (build/setup/port_proxy.sh): a host port to a loopback-published container port, open
+# to `allow` only (systemd socket filter; d03 runs no host firewall). Operator, 2026-10-27: 9116 for
+# theOrg's job asyla-switch-snmp this way (asyla backlog 2026-10-27-hosts-trends-sources-...).
+[[port_proxy]]
+name = "switch-snmp"
+listen = 9116
+target = "127.0.0.1:19116"   # switch-monitor's snmp-exporter (compose.yml publishes it on loopback only)
+allow = ["10.0.0.150"]       # the trends Prometheus's host (the Mini; d06 after the move)
 
 [[secret]]
 var = "D03_BREEDING_RESEARCH_ENV"

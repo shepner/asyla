@@ -1841,6 +1841,18 @@ def verify(spec: dict) -> int:
         bad_src = [l.split('file="', 1)[1].split('"', 1)[0] for l in out if l.startswith("asyla_textfile_source_ok{") and l.endswith(" 0")]
         check("node exporter (node_exporter.sh): active, 9100 filtered, textfiles parse", ok, " ".join(out[:3]))
         check("textfile sources copied", ok and not bad_src, ", ".join(bad_src))
+    if "port_proxy.sh" in spec.get("setup", {}).get("steps", []):
+        # Each proxy's socket is filtered, and an HTTP GET through it reaches the container (every
+        # proxied target today is an exporter's web page).
+        for p in spec.get("port_proxy", []):
+            unit = f"asyla-proxy-{p['name']}.socket"
+            r = ssh(host, f"systemctl is-active {unit}; systemctl show -p IPAddressDeny --value {unit}; "
+                          f"curl -fsS -m 10 -o /dev/null -w '%{{http_code}}' http://127.0.0.1:{int(p['listen'])}/",
+                    check=False)
+            out = r.stdout.split("\n")
+            ok = out[:1] == ["active"] and out[1:2] != [""] and out[2:3] == ["200"]
+            check(f"port proxy {p['name']} (port_proxy.sh): :{p['listen']} filtered, reaches {p['target']}",
+                  ok, " ".join(out[:3]))
     if spec["vm"].get("data_disk"):
         r = ssh(host, "findmnt -no SOURCE /; findmnt -no SOURCE /mnt/docker", check=False)
         src = r.stdout.split()
