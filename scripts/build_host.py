@@ -8,6 +8,7 @@ Usage:
   build_host.py HOST plan                      # read-only: spec, live VM, gaps
   build_host.py HOST build [--apply] [--from PHASE] [--only PHASE] [--recreate [--confirm HOST]]
   build_host.py HOST build --only apps|late --app NAME [--app NAME...] [--apply]   # those apps only
+  build_host.py HOST build --only setup --step SCRIPT [--step SCRIPT...] [--apply]  # those setup steps only
                            [--node NODE] [--gitea-host HOST]
   build_host.py HOST verify                    # read-only
   build_host.py HOST token [--apply]           # TOKEN_FILE_HOSTS: deploy token file, then a GitLab read check;
@@ -969,6 +970,19 @@ def phase_disk(spec: dict, apply: bool) -> None:
             build_step(host, "data_disk.sh", f"scsi2 /mnt/docker {shlex.quote(owner)}")
 
 
+def select_steps(spec: dict, steps: list[str]) -> None:
+    """--step: keep only these setup steps in SPEC. One step on a running host (d03's node exporter,
+    2026-10-27): the other steps are not re-run (docker.sh stops on a host with containers), nor the
+    host-maintenance key set unless it is named."""
+    known = spec.get("setup", {}).get("steps", []) + ([HM_SCRIPT] if spec.get("host_maintenance") else [])
+    unknown = sorted(set(steps) - set(known))
+    if unknown:
+        raise Fail(f"--step {', '.join(unknown)}: not in {spec['host']}'s [setup].steps")
+    spec["setup"]["steps"] = [s for s in spec["setup"]["steps"] if s in steps]
+    if HM_SCRIPT not in steps:
+        spec.pop("host_maintenance", None)
+
+
 def phase_setup(spec: dict, apply: bool) -> None:
     host = spec["host"]
     for s in spec.get("setup", {}).get("steps", []):
@@ -1817,6 +1831,16 @@ def verify(spec: dict) -> int:
         r = ssh(host, "test -f /usr/local/share/asyla/docker_bashrc_additions.sh && "
                       "grep -qF /usr/local/share/asyla/docker_bashrc_additions.sh ~/.bashrc", check=False)
         check("bash additions installed (bashrc.sh)", r.returncode == 0)
+    if "node_exporter.sh" in spec.get("setup", {}).get("steps", []):
+        r = ssh(host, "systemctl is-active prometheus-node-exporter asyla-textfile-sources.timer; "
+                      "systemctl show -p IPAddressDeny --value prometheus-node-exporter; "
+                      "curl -fsS -m 10 http://127.0.0.1:9100/metrics | grep -E '^node_textfile_scrape_error |^asyla_textfile_source_ok'",
+                check=False)
+        out = r.stdout.split("\n")
+        ok = out[:2] == ["active", "active"] and out[2:3] != [""] and "node_textfile_scrape_error 0" in out
+        bad_src = [l.split('file="', 1)[1].split('"', 1)[0] for l in out if l.startswith("asyla_textfile_source_ok{") and l.endswith(" 0")]
+        check("node exporter (node_exporter.sh): active, 9100 filtered, textfiles parse", ok, " ".join(out[:3]))
+        check("textfile sources copied", ok and not bad_src, ", ".join(bad_src))
     if spec["vm"].get("data_disk"):
         r = ssh(host, "findmnt -no SOURCE /; findmnt -no SOURCE /mnt/docker", check=False)
         src = r.stdout.split()
@@ -1908,6 +1932,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--only", choices=PHASES)
     ap.add_argument("--app", dest="apps", action="append", metavar="NAME",
                     help="with --only apps or late: start only these [[app]]s (one new app on a running host)")
+    ap.add_argument("--step", dest="steps", action="append", metavar="SCRIPT",
+                    help="with --only setup: run only these [setup].steps (one new step on a running host; "
+                         "host_maintenance_keys.sh only when named)")
     ap.add_argument("--recreate", action="store_true")
     ap.add_argument("--confirm")
     ap.add_argument("--node", choices=NODES, help="create the VM on this node (a disposable spec only)")
@@ -1922,6 +1949,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ap.error("--keys is for secrets check only")
     if a.apps and (a.action != "build" or a.only not in ("apps", "late")):
         ap.error("--app is for build --only apps or --only late")
+    if a.steps and (a.action != "build" or a.only != "setup"):
+        ap.error("--step is for build --only setup")
     if a.gitea_host is not None:
         if a.action != "build":
             ap.error(f"--gitea-host is for build (its runner phase), not {a.action}")
@@ -1988,6 +2017,8 @@ def main() -> int:
             if unknown:
                 raise Fail(f"--app {', '.join(unknown)}: not an [[app]] of {a.host}")
             spec["app"] = [x for x in spec["app"] if x["name"] in a.apps]
+        if a.steps:
+            select_steps(spec, a.steps)
         phases = list(PHASES)
         if a.only:
             phases = [a.only]

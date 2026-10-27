@@ -30,7 +30,7 @@ build_host.subprocess.run = _no_contact
 build_host.urllib.request.urlopen = _no_contact
 
 DEFAULTS = {"args": [], "apply": False, "keys": False, "start": None, "only": None, "recreate": False, "confirm": None,
-            "node": None, "gitea_host": None, "apps": None}
+            "node": None, "gitea_host": None, "apps": None, "steps": None}
 
 
 def parse(line: str) -> dict | str:
@@ -651,6 +651,24 @@ results = [
     refused("--app without --only apps", "d03 build --app unifi-monitor", "--app is for build --only apps"),
     refused("--app with another phase", "d03 build --only verify --app unifi-monitor", "--app is for build --only apps"),
     refused("--app with another action", "d03 verify --app unifi-monitor", "--app is for build --only apps"),
+    # --step: one new setup step on a running host, without re-running the others.
+    documented("usage, --step", "build_host.py HOST build --only setup --step SCRIPT"),
+    same("build --only setup --step", {"host": "d03", "action": "build", "only": "setup", "apply": True,
+                                       "steps": ["node_exporter.sh"]},
+         "d03 build --only setup --step node_exporter.sh --apply",
+         "--step node_exporter.sh d03 build --apply --only setup"),
+    refused("--step without --only setup", "d03 build --step node_exporter.sh", "--step is for build --only setup"),
+    refused("--step with another phase", "d03 build --only apps --step node_exporter.sh", "--step is for build --only setup"),
+    check("--step node_exporter.sh: that step alone, no key set",
+          (lambda s: (build_host.select_steps(s, ["node_exporter.sh"]), s["setup"]["steps"], "host_maintenance" in s)[1:])(
+              build_host.load_spec("d03")) == (["node_exporter.sh"], False)),
+    check("--step with the key set named keeps it",
+          (lambda s: (build_host.select_steps(s, ["nfs.sh", build_host.HM_SCRIPT]), s["setup"]["steps"], "host_maintenance" in s)[1:])(
+              build_host.load_spec("d03")) == (["nfs.sh"], True)),
+    fails("--step not in the spec is refused", "not in d03's [setup].steps",
+          lambda: build_host.select_steps(build_host.load_spec("d03"), ["smb.sh"])),
+    check("d03's [node_exporter]: only the trends Prometheus's host may scrape",
+          build_host.load_spec("d03")["node_exporter"]["allow"] == ["10.0.0.150"]),
     check("d03's unifi-monitor: its key over SSH stdin only, no restore",
           (lambda a: (a.get("start_env"), a.get("restore")) == (["UNIFI_SITE_MANAGER_API_KEY"], False))(
               next(x for x in build_host.load_spec("d03")["app"] if x["name"] == "unifi-monitor"))),

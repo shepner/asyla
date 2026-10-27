@@ -1,0 +1,12 @@
+# asyla textfile sources (build/setup/node_exporter/asyla-textfile-sources; installed by
+# build/setup/node_exporter.sh). Run by asyla-textfile-sources.timer. The script gives up on a
+# source after 10 s; TimeoutStartSec is the backstop, and systemd kills a read left stuck on a dead
+# share when the unit ends.
+[Unit]
+Description=asyla textfile sources (copy .prom files for node exporter, each read under a 10 s limit)
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/asyla-textfile-sources
+TimeoutStartSec=30

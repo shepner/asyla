@@ -18,7 +18,13 @@ disposable = true          # build_host.py may destroy and recreate it without -
 startup = "order=90"       # after every production VM when a node boots; set at create, checked by verify
 
 [setup]
-steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "bashrc.sh"]   # build/setup/, sent by the build
+steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "bashrc.sh", "node_exporter.sh"]   # build/setup/, sent by the build
+
+# Node exporter as on d03 (build/setup/node_exporter.sh); nothing scrapes test01. Its one source is
+# d03's NAS one, read-only here, so a build proves the copy over NFS.
+[node_exporter]
+allow = ["10.0.0.150"]
+textfile_sources = ["/mnt/nas/data1/docker/nas01-smart/smart.prom"]
 
 [[secret]]
 var = "TEST01_HELLO_ENV"

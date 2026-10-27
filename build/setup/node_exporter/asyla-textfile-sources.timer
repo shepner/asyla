@@ -1,0 +1,11 @@
+# Runs asyla-textfile-sources.service every minute (build/setup/node_exporter.sh enables it).
+[Unit]
+Description=asyla textfile sources, every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=60s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

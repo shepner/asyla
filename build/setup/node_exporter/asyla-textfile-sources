@@ -1,0 +1,134 @@
+#!/bin/bash
+# asyla-textfile-sources: copy each .prom file the host's spec lists ([node_exporter]
+# textfile_sources, written to /etc/asyla/textfile-sources by build/setup/node_exporter.sh) into
+# node exporter's textfile directory. Run every 60 s by asyla-textfile-sources.timer.
+#
+# Why a copy: the textfile collector reads its directory during each scrape, so a file on a hung
+# NFS share (nas01's smart.prom; d03 mounts the share `hard`) would stall every metric of the
+# host. Here, as in asyla-nfs-check, each source is read in the background, all at once, waited
+# for at most LIMIT seconds; one that has not answered by then is counted down, sent SIGKILL and
+# left (systemd kills what is left of the unit's cgroup). The last good copy stays in place, and
+# its node_textfile_mtime_seconds (the source's own mtime, kept by the copy) shows its age.
+#
+# Per source, written atomically (a temp file without .prom in the same folder, then mv):
+#   <dir>/<basename of the source>        the copy, mode 644, the source's mtime
+#   <dir>/asyla_textfile_sources.prom
+#     asyla_textfile_source_ok{file,source}            1 copied this run, 0 not
+#     asyla_textfile_source_copy_seconds{file,source}  time taken (LIMIT if no answer)
+#     asyla_textfile_sources_last_run_timestamp_seconds
+# A source that is not there (an app not started yet) has its copy removed, so nothing stale is
+# served for it; a source that errs or does not answer keeps its last copy. A journal line on a
+# change (state under /run):
+#   <4>TEXTFILE_SOURCE_DOWN file=F source=S reason=missing|error|no_answer
+#   <5>TEXTFILE_SOURCE_UP file=F source=S
+# Exits 0 whatever it finds: the metrics and the journal carry the result.
+
+set -u
+
+LIMIT=10
+LIST=/etc/asyla/textfile-sources
+PROM_DIR=/var/lib/node_exporter/textfile_collector
+PROM="$PROM_DIR/asyla_textfile_sources.prom"
+STATE_DIR=/run/asyla-textfile-sources
+WORK=$(mktemp -d "$STATE_DIR.XXXXXX") || exit 0
+trap 'rm -rf "$WORK"' EXIT
+
+now() { date +%s.%N; }
+
+mkdir -p "$PROM_DIR" "$STATE_DIR"
+
+sources=()
+while read -r src; do
+    case "$src" in ''|'#'*) continue ;; esac
+    sources+=("$src")
+done < <(cat "$LIST" 2>/dev/null)
+
+# One reader per source: exit 3 when the source is not there, else cp's status. The copy goes to a
+# temp name in the textfile directory (no .prom suffix, so the collector never reads it half done).
+read_one() {   # read_one SOURCE TEMP
+    [ -e "$1" ] || return 3
+    cp --preserve=timestamps -- "$1" "$2"
+}
+
+n=${#sources[@]}
+pids=()
+start=$(now)
+for ((i = 0; i < n; i++)); do
+    tmp="$PROM_DIR/.$(basename "${sources[i]}").tmp"
+    rm -f "$tmp"
+    ( read_one "${sources[i]}" "$tmp"; echo $? > "$WORK/$i" ) &
+    pids[i]=$!
+done
+
+# Wait for the readers together, at most LIMIT seconds in all.
+deadline=$(awk -v s="$start" -v l="$LIMIT" 'BEGIN { printf "%.3f", s + l }')
+while :; do
+    running=0
+    for ((i = 0; i < n; i++)); do
+        [ -s "$WORK/$i" ] || running=1
+    done
+    [ "$running" -eq 0 ] && break
+    awk -v t="$(now)" -v d="$deadline" 'BEGIN { exit !(t >= d) }' && break
+    sleep 0.1
+done
+
+ok=()
+reason=()
+secs=()
+for ((i = 0; i < n; i++)); do
+    src="${sources[i]}"
+    name=$(basename "$src")
+    tmp="$PROM_DIR/.$name.tmp"
+    took=$(awk -v s="$start" -v t="$(now)" 'BEGIN { printf "%.3f", t - s }')
+    if [ -s "$WORK/$i" ]; then
+        rc=$(cat "$WORK/$i")
+        if [ "$rc" = 0 ]; then
+            chmod 644 "$tmp" && mv -f "$tmp" "$PROM_DIR/$name"
+            ok[i]=1; reason[i]=""
+        elif [ "$rc" = 3 ]; then
+            rm -f "$tmp" "$PROM_DIR/$name"
+            ok[i]=0; reason[i]=missing
+        else
+            rm -f "$tmp"
+            ok[i]=0; reason[i]=error
+        fi
+        secs[i]=$took
+    else
+        pkill -KILL -P "${pids[i]}" 2>/dev/null
+        kill -KILL "${pids[i]}" 2>/dev/null
+        ok[i]=0; reason[i]=no_answer; secs[i]=$LIMIT
+    fi
+done
+
+esc() { local s=${1//\\/\\\\}; printf '%s' "${s//\"/\\\"}"; }
+{
+    echo "# HELP asyla_textfile_source_ok 1 if the source was copied into the textfile directory this run, 0 if not."
+    echo "# TYPE asyla_textfile_source_ok gauge"
+    for ((i = 0; i < n; i++)); do
+        echo "asyla_textfile_source_ok{file=\"$(esc "$(basename "${sources[i]}")")\",source=\"$(esc "${sources[i]}")\"} ${ok[i]}"
+    done
+    echo "# HELP asyla_textfile_source_copy_seconds Seconds the source took to copy (the limit if it did not answer)."
+    echo "# TYPE asyla_textfile_source_copy_seconds gauge"
+    for ((i = 0; i < n; i++)); do
+        echo "asyla_textfile_source_copy_seconds{file=\"$(esc "$(basename "${sources[i]}")")\",source=\"$(esc "${sources[i]}")\"} ${secs[i]}"
+    done
+    echo "# HELP asyla_textfile_sources_last_run_timestamp_seconds When the copy last ran."
+    echo "# TYPE asyla_textfile_sources_last_run_timestamp_seconds gauge"
+    echo "asyla_textfile_sources_last_run_timestamp_seconds $(date +%s)"
+} > "$PROM_DIR/.asyla_textfile_sources.prom.tmp" && mv -f "$PROM_DIR/.asyla_textfile_sources.prom.tmp" "$PROM"
+
+# A journal line when a source's state changes.
+for ((i = 0; i < n; i++)); do
+    key=$(printf '%s' "${sources[i]}" | md5sum | cut -c1-16)
+    was=$(cat "$STATE_DIR/$key" 2>/dev/null || echo new)
+    now_state=${reason[i]:-up}
+    [ "$was" = "$now_state" ] && continue
+    printf '%s' "$now_state" > "$STATE_DIR/$key"
+    name=$(basename "${sources[i]}")
+    if [ "$now_state" = up ]; then
+        [ "$was" = new ] || echo "<5>TEXTFILE_SOURCE_UP file=$name source=${sources[i]}"
+    else
+        echo "<4>TEXTFILE_SOURCE_DOWN file=$name source=${sources[i]} reason=$now_state"
+    fi
+done
+exit 0

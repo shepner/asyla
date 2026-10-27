@@ -18,7 +18,19 @@ startup = "order=15"       # set at create, checked by verify
 
 # build/setup/, as d04 and test01: d03 left build_host.py's LEGACY_HOSTS and has no setup/ of its own.
 [setup]
-steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "bashrc.sh"]   # no SMB media mount on d03 (live, 2026-10-07)
+steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "bashrc.sh", "node_exporter.sh"]   # no SMB media mount on d03 (live, 2026-10-07)
+
+# Node exporter (build/setup/node_exporter.sh) for theOrg's trends Prometheus (asyla standard
+# ASY-TRD): port 9100 from these addresses only, and the .prom files it serves. theOrg's job
+# asyla-d03-node scrapes d03.asyla.org:9100 every 5 min (observability trends/scrape/).
+[node_exporter]
+allow = ["10.0.0.150"]     # the trends Prometheus's host (the Mini; d06 after the move)
+textfile_sources = [
+  "/mnt/nas/data1/docker/nas01-smart/smart.prom",   # nas01 SMART, written every 6 h by nas01's cron job
+  "/mnt/docker/unifi-monitor/unifi.prom",
+  "/mnt/docker/att-monitor/att.prom",
+  "/mnt/docker/openevse-monitor/openevse.prom",
+]
 
 [[secret]]
 var = "D03_BREEDING_RESEARCH_ENV"
