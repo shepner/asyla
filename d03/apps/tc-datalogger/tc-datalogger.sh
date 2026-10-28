@@ -28,7 +28,8 @@ DOCKER_D1="${DOCKER_D1:-/mnt/nas/data1/docker}"
 APP_NAME="tc-datalogger"
 APP_ROOT="$DOCKER_DL/$APP_NAME"
 BACKUP_DIR="$DOCKER_D1/$APP_NAME/mirror"
-export DOCKER_DL DOCKER_D1 TC_REGISTRY TC_IMAGE_TAG DASHBOARD_SECRET_KEY DASHBOARD_MODE LOCAL_TZ
+# DOCKER_UID/DOCKER_GID (common.env): tc-log-rotate runs as the owner of the cron.log files.
+export DOCKER_DL DOCKER_D1 TC_REGISTRY TC_IMAGE_TAG DASHBOARD_SECRET_KEY DASHBOARD_MODE LOCAL_TZ DOCKER_UID DOCKER_GID
 
 # Doltgres. The password is a file next to this script (host.toml [[secret]]
 # D03_TC_DATALOGGER_DB_PASSWORD; *secret* is gitignored, so update_scripts.sh keeps it), mounted
