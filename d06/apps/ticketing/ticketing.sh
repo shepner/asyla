@@ -6,7 +6,7 @@
 # (TICKETING_DEPLOY_DEX_CLIENT_SECRET, TICKETING_MCP_DEX_CLIENT_SECRET; asyla hub, the d06 item).
 # Data under /mnt/docker/Ticketing; backup = theOrg's one-shot backup image into
 # /mnt/docker/Ticketing/backup, then a mirror of that to /mnt/nas/data1/docker/Ticketing/mirror.
-# Start order and commands: theOrg ticketing DEPLOY.md (main 041215a, the #19 merge), "Start order".
+# Start order and commands: theOrg ticketing DEPLOY.md (main 3318188, the #20 merge), "Start order".
 
 set -euo pipefail
 
@@ -29,9 +29,10 @@ APP_ROOT="$DOCKER_DL/Ticketing"
 BACKUP_DIR="$DOCKER_D1/Ticketing/mirror"
 
 # The theOrg ticketing commit whose images run here: one sha for every ticketing image
-# (DEPLOY.md, Images). 041215a is theOrg main, the #19 merge (publish-images run 14199,
-# linux/amd64 and linux/arm64). Change it here, commit, then `backup update up verify`.
-TICKETING_TAG="${TICKETING_TAG_OVERRIDE:-041215a96ae3bbe5ec12fc661fe1476dabe35c02}"
+# (DEPLOY.md, Images). 3318188 is theOrg main, the #20 merge (configure `accounts`, the last
+# step of converge; publish-images run 14817, all four images). Change it here, commit, then
+# `backup update up verify`.
+TICKETING_TAG="${TICKETING_TAG_OVERRIDE:-33181888dce924112e0b3f11e7c4e77f5f32caac}"
 TICKETING_ROOT="$APP_ROOT"
 REGISTRY="gitea.asyla.org"
 
