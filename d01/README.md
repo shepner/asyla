@@ -44,6 +44,10 @@ Requires:
   repo into `~/scripts/d01/` and `~/scripts/docker/`: files the repo no longer has are **deleted** on the host unless a
   repo `.gitignore` matches them (secrets such as `*.env`, and the foreign app folders in `apps/.gitignore`).
   `~/update_scripts.sh --dry-run` lists what would be deleted and what is preserved.
+  It takes its GitLab read credential on stdin and the host stores none: host-maintenance's nightly
+  `scripts` task hands its job token. A run from a terminal refuses before anything changes; out of
+  cycle, run `build_host.py d01 build --only bootstrap --apply` from the workstation through the
+  credentials capability (the deploy token on the updater's stdin; operator-approved, ASY-HST-5).
 
 ## Application storage (`/mnt/docker`)
 

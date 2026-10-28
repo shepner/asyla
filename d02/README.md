@@ -38,6 +38,10 @@ Requires:
   repo into `~/scripts/d02/` and `~/scripts/docker/`: files the repo no longer has are **deleted** on the
   host unless a repo `.gitignore` matches them. `~/update_scripts.sh --dry-run` lists what would be deleted
   and what is preserved.
+  It takes its GitLab read credential on stdin and the host stores none: host-maintenance's nightly
+  `scripts` task hands its job token. A run from a terminal refuses before anything changes; out of
+  cycle, run `build_host.py d02 build --only bootstrap --apply` from the workstation through the
+  credentials capability (the deploy token on the updater's stdin; operator-approved, ASY-HST-5).
 
 Backups: host-maintenance runs `plex.sh backup` nightly at 00:00 Chicago (asyla/host-maintenance
 `setup/schedules.py`); the new d02 has no crontab of its own (VM 102's `backup_all.sh` at 04:00 was a

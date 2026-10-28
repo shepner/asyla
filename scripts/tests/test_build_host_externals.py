@@ -11,9 +11,9 @@ cutover's two verify FAILs, 2026-10-17).
    before any phase (names only), and the external phase refuses one unset.
 2. Every host that is not in LEGACY_HOSTS and has an update_scripts.sh runs test01's updater: its
    lines, comments aside, are test01's, so the build files (build_only_paths) are removed after
-   the copy. TOKEN_FILE_HOSTS (d01, d03 here) differ only where the credential comes from: the
-   file there, stdin in test01's (test_update_scripts_stdin_auth.py); both set aside. d03's own updater copied the whole tree, so its verify failed "no build files on the
-   host". scripts/tests/test_update_scripts_build_files_test01.sh runs that updater on test01.
+   the copy, and the GitLab credential comes on stdin (test_update_scripts_stdin_auth.py; d01-d03
+   read a token file until 2026-10-27). d03's own updater copied the whole tree, so its verify
+   failed "no build files on the host". scripts/tests/test_update_scripts_build_files_test01.sh runs that updater on test01.
 
 Nothing reaches GitLab or a host: ssh is a stub here, and subprocess and urlopen are replaced so
 that a stray call fails the test. Exit 0 when every case passes.
@@ -187,34 +187,14 @@ check("test01's updater removes the build files",
       and any("docker/setup\"" in l for l in want))
 
 
-def without_credential(path: Path) -> list[str]:
-    """code() less where the credential comes from: test01's "# >>> credential" block, or the old
-    file check through its helper line; also blank lines, the DEPLOY_ENV line, the clone's log line
-    (it sits on either side of that part) and --help's line range (the headers differ in length)."""
-    out, skip = [], False
-    for l in path.read_text().splitlines():
-        if l.startswith("# >>> credential") or l.startswith('if [ ! -r "$DEPLOY_ENV" ]'):
-            skip = True
-        if not skip and l.strip() and not l.lstrip().startswith("#") and not l.startswith("DEPLOY_ENV=") \
-                and "Cloning repository" not in l and "-h|--help)" not in l:
-            out.append(l)
-        if l == "# <<< credential" or l.startswith("export GIT_CONFIG_VALUE_1="):
-            skip = False
-    return out
-
-
 hosts = sorted(p.parent.name for p in build_host.REPO.glob("*/update_scripts.sh")
                if p.parent.name not in build_host.LEGACY_HOSTS and (p.parent / "host.toml").is_file())
 check("d03 is among the hosts with the new-host updater", "d03" in hosts, str(hosts))
-rest = without_credential(build_host.REPO / "test01" / "update_scripts.sh")
-check("setting the credential part aside leaves most of the updater", len(rest) > 100, str(len(rest)))
+check("d01, d02 and d03 are among them", {"d01", "d02", "d03"} <= set(hosts), str(hosts))
 for h in hosts:
-    if h in build_host.TOKEN_FILE_HOSTS:
-        have, against, what = without_credential(build_host.REPO / h / "update_scripts.sh"), rest, "credential aside"
-    else:
-        have, against, what = code(build_host.REPO / h / "update_scripts.sh"), want, "comments aside"
-    diff = [l for l in have if l not in against] + [l for l in against if l not in have]
-    check(f"{h}/update_scripts.sh is test01's ({what})", have == against, f"{diff[:3]}")
+    have = code(build_host.REPO / h / "update_scripts.sh")
+    diff = [l for l in have if l not in want] + [l for l in want if l not in have]
+    check(f"{h}/update_scripts.sh is test01's (comments aside)", have == want, f"{diff[:3]}")
 
 print(f"\n{sum(results)}/{len(results)} passed")
 sys.exit(0 if all(results) else 1)

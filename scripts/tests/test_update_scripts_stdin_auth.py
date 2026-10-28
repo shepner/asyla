@@ -1,24 +1,30 @@
 #!/usr/bin/env python3
-"""Offline test: no deploy token file outside TOKEN_FILE_HOSTS (asyla hub d06 item, action 4).
+"""Offline test: no host keeps a deploy token file (asyla hub d06 item, action 4; d01-d03 item).
 
     python3 scripts/tests/test_update_scripts_stdin_auth.py
 
-The operator's rule: no secret in any file. d04, d06, ns02 and test01's update_scripts.sh take their
-GitLab read credential on stdin ("username=" and "password=" lines: host-maintenance's job token,
-or the bootstrap's deploy token) and keep none; build_host.py's bootstrap hands the deploy token
-that way and removes an old /etc/asyla/asyla-hosts.env; verify checks the file is absent.
+The operator's rule: no secret in any file. Every host's update_scripts.sh (d01-d04, d06, ns01,
+ns02, test01) takes its GitLab read credential on stdin ("username=" and "password=" lines:
+host-maintenance's job token, or the bootstrap's deploy token) and keeps none; build_host.py's
+bootstrap hands the deploy token that way and removes an old /etc/asyla/asyla-hosts.env; verify
+checks the file is absent; `token --apply` removes it only once the host's installed updater reads
+no file (d01-d03 kept theirs until their stdin updater was installed).
 
 Cases: each updater's credential block (between its "# >>> credential" and "# <<< credential"
 lines) run alone in bash: a credential on stdin is what `git credential fill` then answers, with
-or without a final newline; none, or half of one, exits 1 before git. Every updater outside
-TOKEN_FILE_HOSTS has the block and names no token file; those inside still read it. The bootstrap
-and the token check with ssh replaced: the credential goes only on stdin, never in a command; no
-command writes the file; a dry run calls nothing. build_host.GIT_STDIN_AUTH run in bash answers
+or without a final newline; none, or half of one, exits 1 before git. Every updater has the block
+and names no token file; build_host.py has no TOKEN_FILE_HOSTS and no code that writes the file.
+The bootstrap (of d06 and of each of d01-d03) and the token action with ssh replaced: the
+credential goes only on stdin, never in a command; no command writes the file; a dry run calls
+nothing; `token --apply` refuses, before any removal, on a host whose installed updater still has
+its DEPLOY_ENV= line or cannot be read. build_host.GIT_STDIN_AUTH run in bash answers
 the credential it was handed. Runs bash and git locally only; no host and no GitLab. Exit 0 when
 every case passes.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import os
 import subprocess
 import sys
@@ -41,9 +47,8 @@ def check(name: str, good: bool, detail: str = "") -> None:
 
 
 def stdin_hosts() -> list[str]:
-    """Hosts with a spec and an updater, outside TOKEN_FILE_HOSTS."""
-    return sorted(p.parent.name for p in REPO.glob("*/update_scripts.sh")
-                  if (p.parent / "host.toml").is_file() and p.parent.name not in build_host.TOKEN_FILE_HOSTS)
+    """Hosts with a spec and an updater: all of them take the credential on stdin."""
+    return sorted(p.parent.name for p in REPO.glob("*/update_scripts.sh") if (p.parent / "host.toml").is_file())
 
 
 def block(host: str) -> str:
@@ -65,7 +70,8 @@ def run_block(host: str, stdin: str) -> subprocess.CompletedProcess:
 
 def updater_cases() -> None:
     hosts = stdin_hosts()
-    check("the stdin hosts are d04, d06, ns01, ns02 and test01", hosts == ["d04", "d06", "ns01", "ns02", "test01"], str(hosts))
+    check("the stdin hosts are d01-d04, d06, ns01, ns02 and test01",
+          hosts == ["d01", "d02", "d03", "d04", "d06", "ns01", "ns02", "test01"], str(hosts))
     for host in hosts:
         text = (REPO / host / "update_scripts.sh").read_text()
         code = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
@@ -88,10 +94,9 @@ def updater_cases() -> None:
         allf = (REPO / host / "update_all.sh").read_text()
         check(f"{host}: update_all.sh goes on when the scripts are not updated",
               '"$HOME_DIR/update_scripts.sh" || log_warn' in allf)
-    for host in build_host.TOKEN_FILE_HOSTS:
-        f = REPO / host / "update_scripts.sh"
-        check(f"{host} (TOKEN_FILE_HOSTS): its updater still reads the file",
-              f.is_file() and 'DEPLOY_ENV="/etc/asyla/asyla-hosts.env"' in f.read_text())
+    src = (REPO / "scripts" / "build_host.py").read_text()
+    check("build_host.py: no TOKEN_FILE_HOSTS, no install_token or check_token",
+          not any(n in src for n in ("TOKEN_FILE_HOSTS", "def install_token", "def check_token", "GIT_DEPLOY_AUTH")))
 
 
 class R:
@@ -132,11 +137,15 @@ def bootstrap_cases() -> None:
     check("bootstrap: the updater is the master file", len(upd) == 1 and "| base64 -d > /tmp/update_scripts.sh" in upd[0][0])
     check("bootstrap: no other call gets the credential", sum(1 for _, _, i in calls if i == CRED) == 1)
 
-    def file_host(c):
-        return R(0, "root:root 600 0123456789abcdef refs/heads/master") if "stat -c" in c else R(0)
-    calls = with_fakes(file_host, lambda: build_host.phase_bootstrap({"host": "d03"}, True))
-    check("bootstrap of d03 (TOKEN_FILE_HOSTS): still installs the file",
-          any(f"cat > {build_host.DEPLOY_ENV}.tmp" in c for _, c, _ in calls))
+    for host in ("d01", "d02", "d03"):
+        calls = with_fakes(lambda c: R(0), lambda: build_host.phase_bootstrap({"host": host}, True))
+        cmds = [c for _, c, _ in calls]
+        upd = [i for _, c, i in calls if "sudo bash /tmp/update_scripts.sh" in c]
+        check(f"bootstrap of {host}: removes the old file, writes none, the credential on the updater's stdin only",
+              any(c.startswith(f"sudo rm -f {build_host.DEPLOY_ENV}") for c in cmds)
+              and not any(build_host.DEPLOY_ENV in c and ("cat >" in c or "mv " in c) for c in cmds)
+              and all("example_value" not in c for c in cmds) and upd == [CRED]
+              and sum(1 for _, _, i in calls if i == CRED) == 1, str(cmds))
 
 
 def check_cases() -> None:
@@ -152,6 +161,17 @@ def check_cases() -> None:
     calls = with_fakes(lambda c: R(0), lambda: build_host.remove_token_file("d06", False))
     check("token dry run: no call to the host", calls == [])
 
+    got = []
+    for rc in (1, 0, 2, 255):
+        with_fakes(lambda c, rc=rc: R(rc), lambda: got.append(build_host.updater_takes_stdin("d01")))
+    check("updater_takes_stdin: only when grep finds no DEPLOY_ENV= line (1); not 0, 2 or 255",
+          got == [True, False, False, False], str(got))
+    calls = with_fakes(lambda c: R(0), lambda: build_host.updater_takes_stdin("d01"))
+    check("updater_takes_stdin: reads the installed ~/update_scripts.sh, no sudo, no credential",
+          len(calls) == 1 and "~/update_scripts.sh" in calls[0][1] and "DEPLOY_ENV=" in calls[0][1]
+          and calls[0][2] is None, str(calls))
+    token_action_cases()
+
     # GIT_STDIN_AUTH as the remote bash runs it, locally.
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     script = build_host.GIT_STDIN_AUTH + "; printf $'protocol=https\\nhost=gitlab.com\\n\\n' | git credential fill"
@@ -159,6 +179,46 @@ def check_cases() -> None:
     check("GIT_STDIN_AUTH: git gets the handed credential", r.returncode == 0 and
           "username=example_user" in r.stdout.splitlines() and "password=example_value" in r.stdout.splitlines(),
           f"exit {r.returncode}: {r.stderr.strip()[-200:]}")
+
+
+def token_main(host: str, apply: bool, answers):
+    """build_host.main() for `HOST token [--apply]` with ssh replaced: (exit, calls)."""
+    out = []
+    argv = sys.argv
+    sys.argv = ["build_host.py", host, "token"] + (["--apply"] if apply else [])
+    try:
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            calls = with_fakes(answers, lambda: out.append(build_host.main()))
+    finally:
+        sys.argv = argv
+    return out[0], calls
+
+
+def token_action_cases() -> None:
+    sha = R(0, "0123456789abcdef\trefs/heads/master\n")
+
+    def old_updater(c):          # grep finds the DEPLOY_ENV= line
+        return R(0) if c.startswith("grep ") else sha
+    code, calls = token_main("d01", True, old_updater)
+    check("token --apply on d01 with the old updater: refuses, removes nothing",
+          code == 1 and not any(c.startswith("sudo rm") for _, c, _ in calls), str(calls))
+
+    def new_updater(c):          # grep: no DEPLOY_ENV= line; test -e: file gone (1)
+        if c.startswith("grep "):
+            return R(1)
+        if c.startswith("sudo test -e"):
+            return R(1)
+        return sha if "ls-remote" in c else R(0)
+    code, calls = token_main("d01", True, new_updater)
+    cmds = [c for _, c, _ in calls]
+    check("token --apply on d01 with the stdin updater: removes the file, reads GitLab with the credential on stdin",
+          code == 0 and any(c.startswith(f"sudo rm -f {build_host.DEPLOY_ENV}") for c in cmds)
+          and any(i == CRED for _, _, i in calls) and all("example_value" not in c for c in cmds), str(cmds))
+
+    code, calls = token_main("d01", False, old_updater)
+    check("token dry run on d01: no grep, no removal; the stdin read check only",
+          code == 0 and [c for c in (c for _, c, _ in calls) if c.startswith(("grep ", "sudo rm"))] == []
+          and len(calls) == 1 and calls[0][2] == CRED, str(calls))
 
 
 if __name__ == "__main__":

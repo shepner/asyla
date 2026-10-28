@@ -51,13 +51,16 @@ scripts/build_host.py d03 verify    # read-only
 # Update the system
 ./update.sh
 
-# Update scripts from repository
-./update_scripts.sh
+# Update scripts from repository: not from a terminal (no credential on stdin); see below
 ```
 
 `update_scripts.sh` mirrors the repo into `~/scripts/d03/` and `~/scripts/docker/`: files the repo no longer has
 are **deleted** on the host unless a repo `.gitignore` matches them (secrets such as `*.env`, and the foreign app
 folders in `apps/.gitignore`). `~/update_scripts.sh --dry-run` lists what would be deleted and what is preserved.
+It takes its GitLab read credential on stdin and the host stores none: host-maintenance's nightly
+`scripts` task hands its job token. A run from a terminal refuses before anything changes; out of cycle,
+run `build_host.py d03 build --only bootstrap --apply` from the workstation through the credentials
+capability (the deploy token on the updater's stdin; operator-approved, ASY-HST-5).
 It is test01's and d04's updater: it then removes the build files (`d03/setup/`, `d03/host.toml`,
 `docker/setup/`), which the build sends only when it needs them (`build_host.py` `build_only_paths`).
 

@@ -7,8 +7,9 @@
 #
 # It sends this checkout's d03/, docker/ and .gitignore files to a temp dir on test01, commits them
 # to a local git repo there (the updater clones it over file://, so no token and no GitLab), and
-# runs a copy of d03/update_scripts.sh as root with three lines changed, each checked to match
-# once: TARGET_HOME and DEPLOY_ENV point into the temp dir, and `hostname` on PATH answers d03.
+# runs a copy of d03/update_scripts.sh as root with TARGET_HOME pointed into the temp dir (the line
+# checked to match once), `hostname` on PATH answering d03, and a stand-in credential on stdin (the
+# updater refuses without one; a file:// clone never asks for it).
 # The temp home starts as the old updater left d03 (the whole tree, plus a d03/setup/ file, a
 # stray app, an app .env, a foreign internal-access/ folder and ~/setup_manual.sh). Cases: a dry
 # run changes nothing; a run removes exactly the build files and the stray app; a second run finds
@@ -58,17 +59,14 @@ git -C "$SRC" config uploadpack.allowFilter true
 
 # The updater, pointed into $D. Each changed line must match exactly once.
 cp "$SRC/d03/update_scripts.sh" "$U"
-for line in 'TARGET_HOME="/home/$TARGET_USER"' 'DEPLOY_ENV="/etc/asyla/asyla-hosts.env"'; do
-  n=$(grep -cxF -- "$line" "$U")
-  [ "$n" -eq 1 ] || { echo "expected one line '$line' in d03/update_scripts.sh, found $n: refusing" >&2; exit 2; }
-done
-sed -i -e "s|^TARGET_HOME=\"/home/\$TARGET_USER\"\$|TARGET_HOME=\"$H\"|" \
-       -e "s|^DEPLOY_ENV=\"/etc/asyla/asyla-hosts.env\"\$|DEPLOY_ENV=\"$D/deploy.env\"|" "$U"
+line='TARGET_HOME="/home/$TARGET_USER"'
+n=$(grep -cxF -- "$line" "$U")
+[ "$n" -eq 1 ] || { echo "expected one line '$line' in d03/update_scripts.sh, found $n: refusing" >&2; exit 2; }
+sed -i -e "s|^TARGET_HOME=\"/home/\$TARGET_USER\"\$|TARGET_HOME=\"$H\"|" "$U"
 left=$(grep -v '^[[:space:]]*#' "$U" | grep -nE '/home/|/etc/asyla' || true)
 [ -z "$left" ] || { echo "the updater copy still names a real path: $left" >&2; exit 2; }
-# The updater only needs the file to be readable: a file:// clone asks no credential helper.
-echo '# no deploy credential: the test clones over file://' > "$D/deploy.env"
-chmod 600 "$D/deploy.env"
+# A stand-in credential: the updater needs both lines on stdin, and a file:// clone never uses them.
+STANDIN_USER=example_user STANDIN_VALUE=example_value
 mkdir -p "$D/bin"
 printf '#!/bin/sh\necho d03\n' > "$D/bin/hostname"
 chmod 755 "$D/bin/hostname"
@@ -84,7 +82,8 @@ echo caddy > "$S/d03/apps/internal-access/Caddyfile"
 ln -s "$S/d03/setup/old_step.sh" "$H/setup_manual.sh"
 
 run_updater() {   # sets RC and OUT
-  OUT=$(env PATH="$D/bin:$PATH" ASYLA_HOSTS_REPO_URL="file://$SRC" bash "$U" "$@" 2>&1)
+  OUT=$(printf 'username=%s\npassword=%s\n' "$STANDIN_USER" "$STANDIN_VALUE" |
+        env PATH="$D/bin:$PATH" ASYLA_HOSTS_REPO_URL="file://$SRC" bash "$U" "$@" 2>&1)
   RC=$?
 }
 gone() { [ ! -e "$1" ] && [ ! -L "$1" ]; }
