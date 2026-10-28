@@ -1,6 +1,9 @@
 #!/bin/bash
 # tc-datalogger on d03. Usage: tc-datalogger.sh [up|down|restart|verify|pull|backup|restore|logs|...]
 # The store is Doltgres (tc-doltgres, database torn_data; tc-datalogger docs/d03-cutover.md).
+# up, restart and refresh pass TC_API_KEY_FFSCOUTER (build_host.py start_env, over SSH stdin; in no
+# file) to tc-user-events-pipeline for the Event Targets step; without it they warn and start anyway.
+# targets-config show|on NAME|off reads or switches that step in TC_user_events' config.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -42,6 +45,9 @@ DB_RESTORE_CHECK="${DB_NAME}_restore_check"
 PIPELINES=(tc-faction-crimes tc-faction-members tc-items tc-user-events tc-faction-chains)
 # A tc-datalogger checkout for backfill and parity (`src` puts one here).
 TC_SRC="${TC_SRC:-$APP_ROOT/src}"
+# The config targets-config edits (mounted read-only into tc-user-events-pipeline; it holds the
+# Torn key in api_keys). TC_TARGETS_CONFIG overrides it, for tests.
+TARGETS_CONFIG="${TC_TARGETS_CONFIG:-$APP_ROOT/TC_user_events/config/TC_API_config.json}"
 
 run_compose() {
   docker compose -f "$COMPOSE_FILE" --project-directory "$SCRIPT_DIR" "$@"
@@ -213,15 +219,126 @@ do_verify() {
   echo "[INFO] $DB_SERVICE: $DB_NAME head $(db_sql "$DB_NAME" "SELECT hashof('main')"), $(db_sql "$DB_NAME" "SELECT count(*) FROM dolt_log") commits"
 }
 
+# A warning, not a refusal: the key is optional, and update_all.sh's refresh fallback must still
+# start the stack. Without it the Event Targets step runs and skips FFScouter.
+warn_ffscouter() {
+  if [ -z "${TC_API_KEY_FFSCOUTER:-}" ]; then
+    echo "[WARN] $1 without TC_API_KEY_FFSCOUTER: Event Targets runs without FFScouter estimates. With the key:" >&2
+    echo "       cd ~/local/asyla && python3 core/tools/credentials.py exec TC_API_KEY_FFSCOUTER -- python3 projects/asyla-hosts/scripts/build_host.py d03 build --only apps --app tc-datalogger --apply" >&2
+  fi
+}
+
+# targets-config show|on NAME|off: the "targets" block of $TARGETS_CONFIG. show prints the api_keys
+# names and the block; on NAME sets the block (NAME must be an api_keys name); off sets enabled to
+# false. Values are never printed: a block field that names a key is shown only when it is a known
+# name. A write goes through the existing file (same inode, owner and mode) and only when the
+# content changes; no backup copy is made, as the file holds the Torn key. The pipeline reads the
+# file when it starts, so recreate the stack (build_host.py, warn_ffscouter) to apply a change.
+do_targets_config() {
+  local action="${1:-}"
+  case "$action" in
+    show) [ $# -eq 1 ] || { echo "[ERROR] targets-config show takes no argument" >&2; return 1; } ;;
+    off) [ $# -eq 1 ] || { echo "[ERROR] targets-config off takes no argument" >&2; return 1; } ;;
+    on) [ $# -eq 2 ] && [ -n "$2" ] || { echo "[ERROR] targets-config on needs one api_keys NAME (targets-config show lists them)" >&2; return 1; } ;;
+    *) echo "[ERROR] targets-config show|on NAME|off" >&2; return 1 ;;
+  esac
+  [ -f "$TARGETS_CONFIG" ] || { echo "[ERROR] No config at $TARGETS_CONFIG" >&2; return 1; }
+  python3 - "$TARGETS_CONFIG" "$@" <<'PY'
+import json, os, re, sys
+
+path, action, args = sys.argv[1], sys.argv[2], sys.argv[3:]
+FFSCOUTER = "ffscouter"   # targets.ffscouter_api_key: the step reads env TC_API_KEY_FFSCOUTER
+ON = {"enabled": True, "api_key": None, "ffscouter_api_key": FFSCOUTER, "frequency": "PT1H"}
+
+
+def fail(msg):
+    print(f"[ERROR] {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+try:
+    with open(path, encoding="utf-8") as f:
+        text = f.read()
+    cfg = json.loads(text)
+except (OSError, ValueError) as e:   # neither message quotes the file's content
+    fail(f"cannot read {path} as JSON: {type(e).__name__}")
+if not isinstance(cfg, dict):
+    fail(f"{path}: not a JSON object")
+keys = cfg.get("api_keys")
+names = sorted(keys) if isinstance(keys, dict) else []
+
+
+def shown(block):
+    """The block with every field that could hold a value reduced to what is safe to print."""
+    if not isinstance(block, dict):
+        return f"<not an object: {type(block).__name__}>"
+    out = {}
+    for k, v in block.items():
+        if k == "enabled" and isinstance(v, bool):
+            out[k] = v
+        elif k == "frequency" and isinstance(v, str) and re.fullmatch(r"P[0-9A-Z]{1,15}", v):
+            out[k] = v
+        elif k in ("api_key", "ffscouter_api_key") and isinstance(v, str) and (v in names or v == FFSCOUTER):
+            out[k] = v
+        else:
+            out[k] = f"<{type(v).__name__}, not shown>"
+    return out
+
+
+def report(block, verb):
+    print(f"api_keys names: {names}")
+    print(f"targets ({verb}): " + ("absent (the step is off)" if block is None else json.dumps(shown(block))))
+
+
+block = cfg.get("targets")
+if action == "show":
+    report(block, "current")
+    sys.exit(0)
+if action == "on":
+    # The name is checked, never echoed: a key pasted by mistake must not reach the output.
+    if args[0] not in names:
+        fail(f"that NAME is not an api_keys name in {path}; names: {names}")
+    new = dict(block) if isinstance(block, dict) else {}
+    new.update(ON, api_key=args[0])
+elif action == "off":
+    if block is None:
+        report(block, "unchanged")
+        sys.exit(0)
+    if not isinstance(block, dict):
+        fail(f"{path}: targets is not an object; not changed")
+    new = dict(block, enabled=False)
+if new == block:   # already so: no write, so the file's own formatting stays as it is
+    report(new, "unchanged")
+    sys.exit(0)
+cfg["targets"] = new
+
+# Keep the file's indent (its first indented line; 2 if none) and its final newline.
+m = re.search(r"^([ \t]+)\S", text, re.M)
+indent = (m.group(1) if m and "\t" in m.group(1) else len(m.group(1))) if m else 2
+out = json.dumps(cfg, indent=indent, ensure_ascii=False) + ("\n" if text.endswith("\n") else "")
+if out == text:
+    report(new, "unchanged")
+    sys.exit(0)
+# In place: r+ keeps the inode, owner and mode; one write, then truncate and fsync.
+with open(path, "r+", encoding="utf-8") as f:
+    f.write(out)
+    f.truncate()
+    f.flush()
+    os.fsync(f.fileno())
+report(new, "written")
+PY
+}
+
 run_cmd() {
   case "$1" in
     pull) run_compose pull ;;
     up) [ -s "$DB_PASSWORD_FILE" ] || { echo "[ERROR] No password at $DB_PASSWORD_FILE" >&2; return 1; }
         mkdir -p "$APP_ROOT/doltgres" "$APP_ROOT/doltgres-backup" || return 1
+        warn_ffscouter up
         run_compose pull; run_compose up -d ;;
     down) run_compose down ;;
-    restart) run_compose down; run_compose up -d ;;
-    refresh) run_compose pull; run_compose up -d ;;
+    restart) warn_ffscouter restart; run_compose down; run_compose up -d ;;
+    refresh) warn_ffscouter refresh; run_compose pull; run_compose up -d ;;
     # Pull only, like the other d03 apps; use up or restart to apply the new image.
     update) echo "[INFO] Pulling latest images (not starting app; use up or restart to start)"; run_compose pull ;;
     verify) do_verify ;;
@@ -242,11 +359,13 @@ run_cmd() {
 if [ $# -eq 0 ]; then
   echo "Usage: $0 pull|up|down|restart|refresh|update|verify|dbup|gc|dbbackup|backup|restore|logs" >&2
   echo "       $0 src <rev> < bundle | backfill [backfill_from_bigquery.sh args] | parity [sql_parity.sh args]" >&2
+  echo "       $0 targets-config show | on NAME | off   (Event Targets in TC_user_events' config; NAME: an api_keys name)" >&2
   exit 1
 fi
 [ "$1" = "logs" ] && { run_compose logs -f "${@:2}"; exit 0; }
 # These take arguments, so they are not in the command loop; each exits with its own code.
 case "$1" in
+  targets-config) do_targets_config "${@:2}"; exit $? ;;
   src) do_src "${@:2}"; exit $? ;;
   backfill) run_tc_script backfill_from_bigquery.sh "${@:2}"; exit $? ;;
   parity) run_tc_script sql_parity.sh "${@:2}"; exit $? ;;

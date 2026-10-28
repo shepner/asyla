@@ -122,8 +122,13 @@ self_address = "10.0.0.62"
 name = "breeding-research"
 start = ["up"]   # pulls BREEDING_RESEARCH_IMAGE from Gitea's registry on d04 (.env: PULL=1; gap G7)
 verify = ["verify"]
+# tc-datalogger's Event Targets step reads the FFScouter key from TC_API_KEY_FFSCOUTER in
+# tc-user-events-pipeline. It is resolved from OpenBao on the workstation and sent over SSH stdin
+# (no file on d03); a plain up without it warns and runs without FFScouter:
+#   cd ~/local/asyla && python3 core/tools/credentials.py exec TC_API_KEY_FFSCOUTER -- python3 projects/asyla-hosts/scripts/build_host.py d03 build --only apps --app tc-datalogger --apply
 [[app]]
 name = "tc-datalogger"
+start_env = ["TC_API_KEY_FFSCOUTER"]
 verify = ["verify"]
 [[app]]
 name = "ms-procedural-backup"   # no container: nightly pull of ms-procedural (Mini) into the NAS mirror

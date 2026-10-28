@@ -147,6 +147,10 @@ services:
       - TC_DB_HOST=tc-doltgres
       - TC_DB_PORT=5432
       - TC_DB_NAME=torn_data
+      # The FFScouter key for the Event Targets step (targets.ffscouter_api_key = "ffscouter"). It is
+      # in no file: build_host.py start_env hands it to tc-datalogger.sh up; the empty default lets
+      # a start without it run (the step then skips FFScouter and says so).
+      - TC_API_KEY_FFSCOUTER=${TC_API_KEY_FFSCOUTER:-}
     volumes:
       - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_user_events/config/TC_API_config.json:/app/config/TC_API_config.json:ro
       - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_user_events/logs:/app/logs
