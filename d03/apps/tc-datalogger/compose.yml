@@ -6,6 +6,12 @@
 # /run/secrets/tc_db_password in every container. Cutover: tc-datalogger docs/d03-cutover.md.
 # Run: ~/scripts/d03/apps/tc-datalogger/tc-datalogger.sh up
 
+# Container output: the `local` driver, which rotates (json-file, the daemon default on d03, never
+# does; build/setup/docker.sh). tc-doltgres wrote 4.7 MB in its first 36 h on d03 (2026-10-27).
+x-logging: &logging
+  driver: local
+  options: {max-size: "20m", max-file: "5", compress: "true"}
+
 networks:
   tc_datalogger_net:
     name: tc_datalogger_net
@@ -15,6 +21,7 @@ services:
   tc-doltgres:
     image: dolthub/doltgresql:1.3.3
     container_name: tc-doltgres
+    logging: *logging
     restart: unless-stopped
     # The image takes DOLTGRES_PASSWORD only when it initialises an empty data dir; an empty or
     # missing secret refuses to start rather than initialise without the provisioned password.
@@ -48,6 +55,7 @@ services:
   tc-faction-crimes:
     image: ${TC_REGISTRY:-gitea.asyla.org/personal}/tc-datalogger-faction-crimes:${TC_IMAGE_TAG}
     container_name: tc-faction-crimes-pipeline
+    logging: *logging
     restart: unless-stopped
     # Healthcheck: asyla backlog 2026-10-20-hosts-observability-through-theorg (operator, 2026-10-20).
     # A pipeline serves nothing: healthy while its cron log was written in the last 45 min (it
@@ -78,6 +86,7 @@ services:
   tc-faction-members:
     image: ${TC_REGISTRY:-gitea.asyla.org/personal}/tc-datalogger-faction-members:${TC_IMAGE_TAG}
     container_name: tc-faction-members-pipeline
+    logging: *logging
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", 'import os, sys, time; sys.exit(time.time() - os.path.getmtime("/app/logs/cron.log") > 2700)']
@@ -104,6 +113,7 @@ services:
   tc-items:
     image: ${TC_REGISTRY:-gitea.asyla.org/personal}/tc-datalogger-items:${TC_IMAGE_TAG}
     container_name: tc-items-pipeline
+    logging: *logging
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", 'import os, sys, time; sys.exit(time.time() - os.path.getmtime("/app/logs/cron.log") > 2700)']
@@ -130,6 +140,7 @@ services:
   tc-user-events:
     image: ${TC_REGISTRY:-gitea.asyla.org/personal}/tc-datalogger-user-events:${TC_IMAGE_TAG}
     container_name: tc-user-events-pipeline
+    logging: *logging
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", 'import os, sys, time; sys.exit(time.time() - os.path.getmtime("/app/logs/cron.log") > 2700)']
@@ -160,6 +171,7 @@ services:
   tc-faction-chains:
     image: ${TC_REGISTRY:-gitea.asyla.org/personal}/tc-datalogger-faction-chains:${TC_IMAGE_TAG}
     container_name: tc-faction-chains-pipeline
+    logging: *logging
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", 'import os, sys, time; sys.exit(time.time() - os.path.getmtime("/app/logs/cron.log") > 10800)']
@@ -183,9 +195,46 @@ services:
     networks:
       - tc_datalogger_net
 
+  # The pipelines append to cron.log on the data disk and never rotate it (254M for faction_chains on
+  # 2026-10-20). rotate-logs.sh cuts each above 20 MiB in place, keeping the last 1 MiB and one
+  # whole previous copy as cron.log.1.gz, and keeps the mtime the healthchecks above read (asyla
+  # backlog 2026-10-20-asyla-hosts-tc-datalogger-log-rotation-and-heartbeat). It runs as the files'
+  # owner (common.env) with no network. Healthy while a pass succeeded in the last 130 min.
+  tc-log-rotate:
+    image: busybox:1.37
+    container_name: tc-log-rotate
+    restart: unless-stopped
+    user: "${DOCKER_UID:-1003}:${DOCKER_GID:-1000}"
+    network_mode: none
+    command:
+      - sh
+      - /rotate-logs.sh
+      - /logs/faction_crimes/cron.log
+      - /logs/faction_members/cron.log
+      - /logs/items/cron.log
+      - /logs/user_events/cron.log
+      - /logs/faction_chains/cron.log
+    healthcheck:
+      test: ["CMD-SHELL", "[ -n \"$$(find /tmp/rotate-pass -mmin -130 2>/dev/null)\" ]"]
+      interval: 5m
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: local
+      options: {max-size: "1m", max-file: "3"}
+    volumes:
+      - ./rotate-logs.sh:/rotate-logs.sh:ro
+      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_faction_crimes/logs:/logs/faction_crimes
+      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_faction_members/logs:/logs/faction_members
+      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_items/logs:/logs/items
+      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_user_events/logs:/logs/user_events
+      - ${DOCKER_DL:-/mnt/docker}/tc-datalogger/TC_faction_chains/logs:/logs/faction_chains
+
   tc-dashboard:
     image: ${TC_REGISTRY:-gitea.asyla.org/personal}/tc-datalogger-dashboard:${TC_IMAGE_TAG}
     container_name: tc-dashboard
+    logging: *logging
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8080/health", timeout=4)']
