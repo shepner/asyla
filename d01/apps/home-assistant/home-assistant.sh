@@ -37,12 +37,15 @@ PROXY_NAME="homeassistant.asyla.org"
 # Not in the mirror: .storage (integration logins and tokens, users, the access token theOrg
 # scrapes with), the YAML secrets file, the recorder database (3 days of history, not the trend
 # store) and logs. HA's encrypted backups in config/backups are mirrored and carry .storage.
+# Also not: __pycache__, which HA (root in the container) compiles mode 600 into custom_components
+# and rebuilds at start; the backup user cannot read it (rsync exit 23, 2026-10-28).
 BACKUP_EXCLUDES=(
   --exclude=/config/.storage/
   --exclude=/config/secrets.yaml
   --exclude="/config/home-assistant_v2.db*"
   --exclude="*.log"
   --exclude="*.log.*"
+  --exclude=__pycache__/
 )
 
 run_compose() {
