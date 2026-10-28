@@ -8,34 +8,71 @@ other name server and also the LAN's DHCP server; this copy never serves DHCP (b
 - `~/scripts/docker/common.env` (DOCKER_DL, DOCKER_D1, DOCKER_D2, DOCKER_UID, DOCKER_GID, LOCAL_TZ)
   and `~/scripts/docker/backup_lib.sh`, installed by the updater
 - `/mnt/docker`: the host's data disk (the build's `disk` phase)
-- `/mnt/nas/data2/docker/pihole/hosts` (NFS, `nfs.sh`): the LAN hosts file. **`up` refuses to start
-  without it.** It stays on the NAS by design: central, snapshotted, reachable when everything else
-  is down, and never in a repo (it is a map of the network).
+- `/mnt/nas/data2/docker/pihole/hosts` (NFS, `nfs.sh`): the LAN hosts file. It stays on the NAS by
+  design: central, snapshotted, reachable when everything else is down, and never in a repo (it is a
+  map of the network). `up`, `restart` and `reload` copy it to `/mnt/docker/pihole-ns02/hosts`, which
+  the container mounts; with the NAS down they keep the last copy. **`up` refuses to start only when
+  there is neither the NAS file nor a local copy.**
 - `/mnt/nas/data2/docker/pihole/03-lan-dns.conf` (optional): copied into `etc-dnsmasq.d` at `up`
 - Port 53 free on the host (`build/setup/dns_port.sh`, a setup step in `ns02/host.toml`)
 
 ## Layout
 
 - **Config/data:** `/mnt/docker/pihole-ns02/etc-pihole`, `/mnt/docker/pihole-ns02/etc-dnsmasq.d`
-- **Hosts file:** `/mnt/nas/data2/docker/pihole/hosts`, mounted read-only as the container's `/etc/hosts`
+- **Hosts file:** edited at `/mnt/nas/data2/docker/pihole/hosts`; the local copy
+  `/mnt/docker/pihole-ns02/hosts` is mounted read-only as the container's `/etc/hosts` (below)
 - **Backup:** one rsync mirror at `/mnt/nas/data1/docker/pihole-ns02/mirror` (`docker/backup_lib.sh`):
   `etc-pihole/` and `etc-dnsmasq.d/` only, without `pihole-FTL.db` (query history). History is the
   NAS's ZFS snapshots of that share.
 
 ## Commands
 
-- `pihole.sh up`: check the NAS hosts file, create the data dirs, copy `03-lan-dns.conf`, start
+- `pihole.sh up`: copy the NAS hosts file to local disk (or keep the last copy), create the data
+  dirs, copy `03-lan-dns.conf`, start
 - `pihole.sh down` / `restart`
+- `pihole.sh reload`: re-read the hosts file without a restart, after an edit (below)
 - `pihole.sh backup`: mirror the data to the NAS (in screen when run from a terminal); refused on
   any host but ns02, so a replica never writes ns02's mirror
 - `pihole.sh restore`: from the mirror into an empty data dir (stop the app first); refuses over data
-- `pihole.sh verify`: the container healthy, the NAS hosts file mounted, a CNAME and a hosts-file
+- `pihole.sh verify`: the container healthy, the local hosts copy mounted (a warning when the NAS
+  file has changed since: run `reload`), a CNAME and a hosts-file
   name answering, the host's own name answering its address (not 0.0.0.0), an outside name answering
   (not on a replica), `dhcp.active` as the host should have
   it, `wpad`, the allowlist; warns when no admin password is set
 - `pihole.sh password`: set the admin password from stdin (below)
 - `pihole.sh update` (pull only) / `refresh` (pull, then up)
 - `pihole.sh logs`
+
+## Hosts file
+
+Each NAS read (`mountpoint`, the hosts file, `03-lan-dns.conf`) runs under `timeout`
+(`PIHOLE_NAS_TIMEOUT`, default 10 s): the NFS mounts are `hard`, so a plain read hangs while the
+NAS is down (nas01 outage, 2026-10-20). The copy is rewritten in place, because a single-file bind
+mount keeps pointing at the old inode after a rename. With no copy and no NAS, `up` stops before
+any docker call: Docker would make a directory at a missing bind-mount source.
+
+**After editing the hosts file**, reload ns02 first, check it, then ns01:
+
+```bash
+~/scripts/ns02/apps/pihole/pihole.sh reload   # on ns02
+~/scripts/ns01/apps/pihole/pihole.sh reload   # then on ns01
+```
+
+`reload` refreshes the local copy and runs `pihole reloaddns` in the container, printing and
+returning its exit code. Before and after, the first IPv4 name in the copy must answer with its
+address on 127.0.0.1, and the container's start time, restart count and pid must not change (it
+prints no name or address). Do not use `refresh` for this: it pulls the image and restarts.
+A container started before the local copy existed still mounts the NAS file: `reload` warns, and
+one `restart` switches it.
+
+Any config write through the Pi-hole API (a CNAME from the asyla/pihole pipeline) also re-reads
+`/etc/hosts`, which is the local copy: a NAS edit reaches Pi-hole at the next `reload`, not then.
+
+`pihole reloaddns` in Pi-hole Core v6.4.2 prints `local: FTL_PID_FILE: readonly variable`
+(`/opt/pihole/utils.sh` line 100). It is harmless: `/usr/local/bin/pihole` sets
+`readonly FTL_PID_FILE="/run/pihole-FTL.pid"` (line 20), and `getFTLPID` in `utils.sh` declares
+`local FTL_PID_FILE="${1}"`; Bash refuses to shadow a readonly name, so the function keeps the
+global, which is the path it was passed (read in pihole-ns02, 2026-10-27).
 
 ## Configuration
 

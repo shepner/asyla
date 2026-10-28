@@ -1,6 +1,7 @@
 #!/bin/bash
 # ns02/apps/pihole/pihole.sh and ns01/apps/pihole/pihole.sh against stubs (docker, hostname,
-# mountpoint, sudo, ss, ip): the DHCP guard, the NAS hosts-file refusal, the backup filter and host guard,
+# mountpoint, sudo, ss, ip, timeout): the DHCP guard, the local hosts copy (NAS down: the last copy;
+# no copy and no NAS: refused), reload (no restart, reloaddns's exit code, a name answers), the backup filter and host guard,
 # restore, verify's checks (its own name not 0.0.0.0; ns01: the udp/67 listener), the force4 pin, the admin password (stdin only; the value
 # never in a docker argument) and the allowlist; ns01's copy against ns02's (only DHCP may differ).
 # Nothing here reaches a host, the NAS or a registry.
@@ -45,7 +46,7 @@ printf 'domain=example.org\n' > "$T/d2/pihole/03-lan-dns.conf"
 
 # docker: logs each call with the DHCP value it was given and whether a password is in its
 # environment (pw=set:LENGTH, never the value); inspect prints STUB_STATE; exec answers
-# cat /etc/hosts (STUB_HOSTS_IN), pihole-FTL --config (STUB_CNAMES, STUB_DHCP), the domainlist query
+# cat /etc/hosts (STUB_HOSTS_IN, default the local copy), pihole-FTL --config (STUB_CNAMES, STUB_DHCP), the domainlist query
 # (STUB_ALLOWED), an API login (true when stdin is STUB_PW_OK) and dig (STUB_ANSWERS: "name answer"
 # lines; example.com answers unless STUB_NO_OUTSIDE). An up with a non-empty password writes a hash
 # into pihole.toml, as Pi-hole does.
@@ -59,7 +60,12 @@ case "$*" in
     if [ -n "${FTLCONF_webserver_api_password:-}" ]; then
       mkdir -p "$STUB_DL/$STUB_APP/etc-pihole"; printf '    pwhash = "$BALLOON-SHA256$stub"\n' > "$STUB_DL/$STUB_APP/etc-pihole/pihole.toml"
     fi ;;
+  "inspect -f {{range .Mounts}}"*) echo "${STUB_MOUNT:-$STUB_DL/$STUB_APP/hosts}" ;;
+  "inspect -f {{.State.StartedAt}}"*) cat "$STUB_CSTATE" ;;
   inspect*) echo "${STUB_STATE:-running healthy}" ;;
+  "exec $STUB_APP pihole reloaddns")
+    [ -n "${STUB_RESTART:-}" ] && echo "2026-10-27T00:00:09Z 1 999" > "$STUB_CSTATE"
+    exit "${STUB_RELOAD_RC:-0}" ;;
   "exec -i $STUB_APP sh -c "*) [ "$(cat)" = "${STUB_PW_OK:-}" ] && echo true || echo false ;;
   "exec $STUB_APP pihole-FTL sqlite3 "*) printf '%s\n' "${STUB_ALLOWED-trace.svc.ui.com metrics.icloud.com}" | tr ' ' '\n' ;;
   "exec $STUB_APP cat /etc/hosts") cat "${STUB_HOSTS_IN:?}" ;;
@@ -86,6 +92,14 @@ src="${STUB_SRC-198.51.100.53}"
 [ -n "$src" ] || { echo "RTNETLINK answers: Network is unreachable" >&2; exit 2; }
 echo "10.0.0.1 via 198.51.100.1 dev eth0 src $src uid 1000 \\    cache "
 EOF
+# timeout: STUB_NAS_DOWN set: every NAS read times out (124), as a read of a hard NFS mount would.
+cat > "$T/bin/timeout" <<'EOF'
+#!/bin/bash
+[ -n "${STUB_NAS_DOWN:-}" ] && exit 124
+while [ "$1" = -k ]; do shift 2; done
+shift
+exec "$@"
+EOF
 cat > "$T/bin/hostname" <<'EOF'
 #!/bin/bash
 echo "$STUB_HOST"
@@ -111,8 +125,8 @@ run() {
   local on=; [ "$1" = ns01 ] && on=1
   OUT="$(printf '%s' "${STDIN:-}" | env HOME="$T/home" PATH="$T/bin:$PATH" STUB_LOG="$T/log" STUB_HOST="$1" STUB_MOUNTED="${STUB_MOUNTED-$T/d2}" \
     STUB_APP="$CT" STUB_DHCP="${STUB_DHCP-$([ -n "$on" ] && echo true || echo false)}" STUB_SS67="${STUB_SS67-$on}" \
-    STUB_HOSTS_IN="${STUB_HOSTS_IN:-$T/d2/pihole/hosts}" STUB_ANSWERS="$T/answers" STUB_DL="$T/dl" BACKUP_LOCK_DIR="$T" \
-    PIHOLE_VERIFY_WAIT_S=0 bash "$APP/pihole.sh" "${@:2}" 2>"${RUN_ERR:-/dev/stdout}")"
+    STUB_HOSTS_IN="${STUB_HOSTS_IN:-$T/dl/$CT/hosts}" STUB_ANSWERS="$T/answers" STUB_DL="$T/dl" BACKUP_LOCK_DIR="$T" \
+    STUB_CSTATE="$T/cstate" PIHOLE_VERIFY_WAIT_S=0 PIHOLE_RELOAD_SETTLE_S=0 bash "$APP/pihole.sh" "${@:2}" 2>"${RUN_ERR:-/dev/stdout}")"
 }
 
 # The DHCP guard: true on ns01 only, whatever common.env or the caller's environment says.
@@ -137,14 +151,64 @@ else
 fi
 [ -f "$T/dl/$CT/etc-dnsmasq.d/03-lan-dns.conf" ] && ok "up copies 03-lan-dns.conf from the NAS" || bad "dnsmasq copy"
 
-# The NAS hosts file: up refuses without it, before any docker call.
+# The hosts file: up copies it to local disk; the container mounts the copy.
+L="$T/dl/$CT/hosts"
+cmp -s "$L" "$T/d2/pihole/hosts" && ok "up copies the NAS hosts file to local disk" || bad "hosts copy"
+grep -qxF -- "      - \${DOCKER_DL:-/mnt/docker}/$CT/hosts:/etc/hosts:ro" "$REPO/$TREE/apps/pihole/compose.yml" \
+  && ok "compose mounts the local copy as /etc/hosts" || bad "compose hosts mount"
+ino() { ls -i "$1" | awk '{print $1}'; }
+i0=$(ino "$L"); cp "$T/d2/pihole/hosts" "$T/hosts.keep"
+printf '192.0.2.12 host-c\n' >> "$T/d2/pihole/hosts"
+run $TREE up; rc=$?
+[ "$rc" -eq 0 ] && grep -q host-c "$L" && [ "$(ino "$L")" = "$i0" ] \
+  && ok "up picks up a changed NAS file, rewriting the copy in place (same inode)" || bad "hosts update" "rc=$rc; $OUT"
+cp "$T/hosts.keep" "$T/d2/pihole/hosts"
+# NAS down (a read times out) or the share not mounted: start on the last copy, with a warning.
+STUB_NAS_DOWN=1 run $TREE up; rc=$?
+[ "$rc" -eq 0 ] && grep -q host-c "$L" && echo "$OUT" | grep -q 'using the last local copy' && grep -q ' up -d ' "$T/log" \
+  && ok "up with the NAS down: starts on the last local copy, warns" || bad "up nas down" "rc=$rc; $OUT; $(cat "$T/log")"
 STUB_MOUNTED="" run $TREE up; rc=$?
-[ "$rc" -ne 0 ] && echo "$OUT" | grep -q 'not mounted' && [ ! -s "$T/log" ] \
-  && ok "up with the NAS share not mounted: refused before any docker call" || bad "up unmounted" "rc=$rc; $OUT; $(cat "$T/log")"
+[ "$rc" -eq 0 ] && grep -q host-c "$L" && echo "$OUT" | grep -q 'using the last local copy' \
+  && ok "up with the NAS share not mounted: starts on the last local copy" || bad "up unmounted copy" "rc=$rc; $OUT"
+# No copy and no NAS: refused before any docker call (Docker would make a directory at the source).
+rm -f "$L"
+STUB_MOUNTED="" run $TREE up; rc=$?
+[ "$rc" -ne 0 ] && echo "$OUT" | grep -q 'not mounted?) and there is no local copy' && [ ! -s "$T/log" ] && [ ! -e "$L" ] \
+  && ok "up with the share not mounted and no local copy: refused before any docker call" || bad "up unmounted" "rc=$rc; $OUT; $(cat "$T/log")"
 mv "$T/d2/pihole/hosts" "$T/hosts.away"
 run $TREE up; rc=$?
-[ "$rc" -ne 0 ] && [ ! -s "$T/log" ] && ok "up with the share mounted but no hosts file: refused" || bad "up no hosts" "rc=$rc; $OUT"
+[ "$rc" -ne 0 ] && [ ! -s "$T/log" ] && ok "up with the share mounted but no hosts file and no copy: refused" || bad "up no hosts" "rc=$rc; $OUT"
 mv "$T/hosts.away" "$T/d2/pihole/hosts"
+STUB_NAS_DOWN=1 run $TREE up; rc=$?
+[ "$rc" -ne 0 ] && [ ! -s "$T/log" ] && ok "up with the NAS down and no copy: refused" || bad "up nas down no copy" "rc=$rc; $OUT"
+run $TREE up
+cmp -s "$L" "$T/d2/pihole/hosts" && ok "up with the NAS back: the copy made again" || bad "hosts recopy"
+
+# reload: refresh the copy, reloaddns (exit code returned), a hosts-file name answers before and
+# after, the container not restarted, no compose call.
+echo "2026-10-27T00:00:00Z 0 123" > "$T/cstate"
+printf '192.0.2.12 host-c\n' >> "$T/d2/pihole/hosts"
+run $TREE reload; rc=$?
+[ "$rc" -eq 0 ] && grep -q host-c "$L" && grep -q "exec $CT pihole reloaddns" "$T/log" && ! grep -qE 'compose|rm -f' "$T/log" \
+  && echo "$OUT" | grep -q 'reloaddns exit code 0' && echo "$OUT" | grep -q '^\[OK\] reload' \
+  && ok "reload: copy refreshed, reloaddns, no restart, a hosts-file name answers" || bad "reload" "rc=$rc; $OUT; $(cat "$T/log")"
+cp "$T/hosts.keep" "$T/d2/pihole/hosts"
+! echo "$OUT" | grep -q 'host-a\|192.0.2' && ok "reload prints no name or address from the hosts file" || bad "reload leaks" "$OUT"
+STUB_RELOAD_RC=3 run $TREE reload; rc=$?
+[ "$rc" -eq 3 ] && echo "$OUT" | grep -q 'exit code 3' && ok "reload: reloaddns's failure returned (3)" || bad "reload rc" "rc=$rc; $OUT"
+STUB_RESTART=1 run $TREE reload; rc=$?
+[ "$rc" -ne 0 ] && echo "$OUT" | grep -q 'the container restarted' && ok "reload with the container restarted: FAIL" || bad "reload restart" "rc=$rc; $OUT"
+echo "2026-10-27T00:00:00Z 0 123" > "$T/cstate"
+cp "$T/answers" "$T/answers.keep0"; grep -v '^host-a' "$T/answers.keep0" > "$T/answers"
+run $TREE reload; rc=$?
+[ "$rc" -ne 0 ] && echo "$OUT" | grep -q 'before the reload; not reloading' && ! grep -q reloaddns "$T/log" \
+  && ok "reload with a hosts-file name not answering: refused before reloaddns" || bad "reload no answer" "rc=$rc; $OUT"
+cp "$T/answers.keep0" "$T/answers"
+STUB_MOUNT="$T/d2/pihole/hosts" run $TREE reload; rc=$?
+[ "$rc" -eq 0 ] && echo "$OUT" | grep -q 'run restart once' && ok "reload with the NAS file still mounted: a warning to restart once" || bad "reload mount" "rc=$rc; $OUT"
+STUB_NAS_DOWN=1 run $TREE reload; rc=$?
+[ "$rc" -eq 0 ] && echo "$OUT" | grep -q 'using the last local copy' && ok "reload with the NAS down: the last copy, still reloads" || bad "reload nas down" "rc=$rc; $OUT"
+run $TREE up
 
 # Backup: only the tree's host writes its mirror.
 run test01 backup; rc=$?
@@ -222,8 +286,13 @@ if [ "$TREE" = ns01 ]; then
 fi
 printf '192.0.2.99 other\n' > "$T/other-hosts"
 STUB_HOSTS_IN="$T/other-hosts" run $TREE verify; rc=$?
-[ "$rc" -ne 0 ] && echo "$OUT" | grep -q 'not the NAS hosts file' && ok "verify with another /etc/hosts in the container: FAIL" \
+[ "$rc" -ne 0 ] && echo "$OUT" | grep -q 'not the local hosts copy' && ok "verify with another /etc/hosts in the container: FAIL" \
   || bad "verify hosts mismatch" "rc=$rc; $OUT"
+printf '192.0.2.13 host-d\n' >> "$T/d2/pihole/hosts"
+run $TREE verify; rc=$?
+[ "$rc" -eq 0 ] && echo "$OUT" | grep -q 'differs from the local copy (pihole.sh reload)' \
+  && ok "verify with the NAS file changed since the copy: a warning, not a failure" || bad "verify nas changed" "rc=$rc; $OUT"
+cp "$T/hosts.keep" "$T/d2/pihole/hosts"
 STUB_CNAMES="[]" run $TREE verify; rc=$?
 [ "$rc" -ne 0 ] && echo "$OUT" | grep -q 'no CNAME' && ok "verify with no CNAME (not restored): FAIL" || bad "verify no cname" "rc=$rc; $OUT"
 STUB_NO_OUTSIDE=1 run $TREE verify; rc=$?

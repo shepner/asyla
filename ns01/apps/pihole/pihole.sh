@@ -1,10 +1,13 @@
 #!/bin/bash
-# Pi-hole DNS server on ns01. Usage: pihole.sh [switch ...]  (up|down|restart|backup|restore|verify|password|update|refresh|logs)
+# Pi-hole DNS server on ns01. Usage: pihole.sh [switch ...]  (up|down|restart|reload|backup|restore|verify|password|update|refresh|logs)
 # Switches can be combined (e.g. down backup up). Loads ~/scripts/docker/common.env.
 #
 # Data: ${DOCKER_DL}/pihole-ns01/{etc-pihole,etc-dnsmasq.d}. From the NAS, by design (central,
-# snapshotted, reachable when all else is down; never in a repo): ${DOCKER_D2}/pihole/hosts,
-# mounted as the container's /etc/hosts, and 03-lan-dns.conf, copied into etc-dnsmasq.d at up.
+# snapshotted, reachable when all else is down; never in a repo): ${DOCKER_D2}/pihole/hosts and
+# 03-lan-dns.conf. up, restart and reload copy the hosts file to ${DOCKER_DL}/pihole-ns01/hosts, the
+# container's /etc/hosts, and up copies 03-lan-dns.conf into etc-dnsmasq.d, each NAS read under a
+# timeout (the NFS mounts are hard): with the NAS down, Pi-hole starts on the last local copy
+# (operator, 2026-10-20). reload re-reads the hosts file without a restart.
 # Backup: one rsync mirror at ${DOCKER_D1}/pihole-ns01/mirror (docker/backup_lib.sh) of
 # etc-pihole/ and etc-dnsmasq.d/ only, without pihole-FTL.db (query history: a live SQLite file,
 # not needed to rebuild); only ns01 itself writes it. Restore: from that mirror, into an empty
@@ -45,6 +48,8 @@ APP_ROOT="$DOCKER_DL/$APP"
 BACKUP_DIR="$DOCKER_D1/$APP/mirror"
 NAS_DIR="$DOCKER_D2/pihole"
 HOSTS_FILE="$NAS_DIR/hosts"
+LOCAL_HOSTS="$APP_ROOT/hosts"     # the copy the container mounts as /etc/hosts
+NAS_TIMEOUT="${PIHOLE_NAS_TIMEOUT:-10}"
 THIS_HOST="$(hostname -s)"
 if [ "$THIS_HOST" = "ns01" ]; then PIHOLE_DHCP_ACTIVE=true; else PIHOLE_DHCP_ACTIVE=false; fi
 export DOCKER_DL DOCKER_D1 DOCKER_D2 LOCAL_TZ DOCKER_UID DOCKER_GID PIHOLE_DHCP_ACTIVE
@@ -92,23 +97,85 @@ remove_stale_container() {
   docker rm -f "$APP" 2>/dev/null || true
 }
 
-# The NAS hosts file must be there before the container starts: if the share is not mounted,
-# Docker makes a directory at the bind-mount source and the container does not start.
-require_nas_hosts() {
-  if ! mountpoint -q "$DOCKER_D2" || [ ! -f "$HOSTS_FILE" ]; then
-    echo "[ERROR] $HOSTS_FILE is not there (NAS share $DOCKER_D2 not mounted?); not starting Pi-hole" >&2
-    return 1
+# A NAS read under a timeout: the NFS mounts are hard, so a plain read hangs while the NAS is down.
+nas() {
+  timeout -k 2 "$NAS_TIMEOUT" "$@"
+}
+
+# Copies the NAS hosts file to $LOCAL_HOSTS; with the NAS down or unmounted, keeps the last copy. The
+# copy must exist before the container starts: Docker would make a directory at a missing bind-mount
+# source. Rewritten in place (same inode): a single-file bind mount keeps the old inode after a rename.
+sync_hosts() {
+  local tmp="$LOCAL_HOSTS.new"
+  mkdir -p "$APP_ROOT"
+  if nas mountpoint -q "$DOCKER_D2" && nas cat "$HOSTS_FILE" > "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
+    if [ -f "$LOCAL_HOSTS" ] && cmp -s "$tmp" "$LOCAL_HOSTS"; then
+      echo "[INFO] hosts file: local copy current"
+    else
+      cat "$tmp" > "$LOCAL_HOSTS"
+      echo "[INFO] hosts file: copied from the NAS"
+    fi
+    rm -f "$tmp"
+    return 0
   fi
+  rm -f "$tmp"
+  if [ -s "$LOCAL_HOSTS" ]; then
+    echo "[WARN] hosts file: $HOSTS_FILE not read within ${NAS_TIMEOUT}s (NAS down or $DOCKER_D2 not mounted); using the last local copy" >&2
+    return 0
+  fi
+  echo "[ERROR] $HOSTS_FILE is not there (NAS share $DOCKER_D2 not mounted?) and there is no local copy; not starting Pi-hole" >&2
+  return 1
+}
+
+# The first IPv4 entry of the local copy as "address name" (verify and reload ask the name).
+hosts_entry() {
+  awk '$1 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ && $1 !~ /^127\./ && NF >= 2 {print $1, $2; exit}' "$LOCAL_HOSTS" 2>/dev/null || true
+}
+
+# reload: refresh the local copy and have Pi-hole re-read it (pihole reloaddns) without a restart.
+# Before and after, a hosts-file name must answer with its address; the container's start time,
+# restart count and pid must not change. reloaddns's exit code is printed and returned. Run it on
+# ns02, check, then on ns01. Pi-hole Core v6.4.2's reloaddns prints "local: FTL_PID_FILE: readonly
+# variable": harmless (the pihole script makes it readonly, utils.sh's getFTLPID declares it local
+# and keeps the global, the same path).
+do_reload() {
+  local line ip name mounted before after rc=0 i
+  cstate() { docker inspect -f '{{.State.StartedAt}} {{.RestartCount}} {{.State.Pid}}' "$APP"; }
+  answers() { docker exec "$APP" dig +short +time=2 +tries=1 "$name" @127.0.0.1 2>/dev/null | grep -qxF "$ip"; }
+  mounted=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/etc/hosts"}}{{.Source}}{{end}}{{end}}' "$APP") || return 1
+  [ "$mounted" = "$LOCAL_HOSTS" ] \
+    || echo "[WARN] reload: the container mounts another file as /etc/hosts (started before the local copy?); run restart once" >&2
+  line=$(hosts_entry); ip=${line%% *}; name=${line#* }
+  [ -n "$line" ] || { echo "[ERROR] reload: no IPv4 entry in $LOCAL_HOSTS" >&2; return 1; }
+  answers || { echo "[ERROR] reload: a hosts-file name does not answer with its address before the reload; not reloading" >&2; return 1; }
+  before=$(cstate) || return 1
+  sync_hosts || return 1
+  docker exec "$APP" pihole reloaddns || rc=$?
+  echo "[INFO] reload: pihole reloaddns exit code $rc"
+  sleep "${PIHOLE_RELOAD_SETTLE_S:-2}"
+  after=$(cstate) || return 1
+  [ "$before" = "$after" ] || { echo "[ERROR] reload: the container restarted ($before -> $after)" >&2; return 1; }
+  line=$(hosts_entry); ip=${line%% *}; name=${line#* }
+  for i in 1 2 3 4 5; do
+    if answers; then
+      [ "$rc" -eq 0 ] && echo "[OK] reload: hosts file re-read; a hosts-file name answers; container not restarted"
+      return "$rc"
+    fi
+    sleep 1
+  done
+  echo "[ERROR] reload: a hosts-file name does not answer with its address after the reload" >&2
+  return 1
 }
 
 do_up() {
-  require_nas_hosts
+  sync_hosts || return 1
   mkdir -p "$APP_ROOT/etc-pihole" "$APP_ROOT/etc-dnsmasq.d"
   sudo chown -R "${DOCKER_UID:-1003}:${DOCKER_GID:-1000}" "$APP_ROOT/etc-pihole" "$APP_ROOT/etc-dnsmasq.d" 2>/dev/null || true
-  if [ -f "$NAS_DIR/03-lan-dns.conf" ]; then
+  if nas test -f "$NAS_DIR/03-lan-dns.conf"; then
     echo "[INFO] Copying 03-lan-dns.conf from the NAS"
-    cp "$NAS_DIR/03-lan-dns.conf" "$APP_ROOT/etc-dnsmasq.d/" 2>/dev/null \
-      || sudo cp "$NAS_DIR/03-lan-dns.conf" "$APP_ROOT/etc-dnsmasq.d/"
+    nas cp "$NAS_DIR/03-lan-dns.conf" "$APP_ROOT/etc-dnsmasq.d/" 2>/dev/null \
+      || nas sudo cp "$NAS_DIR/03-lan-dns.conf" "$APP_ROOT/etc-dnsmasq.d/" \
+      || echo "[WARN] 03-lan-dns.conf not copied from the NAS; keeping the copy in etc-dnsmasq.d" >&2
   fi
   remove_stale_container
   echo "[INFO] Starting Pi-hole (DHCP: $PIHOLE_DHCP_ACTIVE)"
@@ -183,7 +250,8 @@ do_update() {
   run_compose pull
 }
 
-# verify: the container healthy, the NAS hosts file mounted as its /etc/hosts, local answers (one
+# verify: the container healthy, the local hosts copy mounted as its /etc/hosts (a warning when the
+# NAS file has changed since: run reload), local answers (one
 # CNAME from Pi-hole's own config, one hosts-file name with its address, its own name with this
 # host's address, not 0.0.0.0), an outside name (not on a replica:
 # its egress is blocked), dhcp.active as this host should have it and a udp/67 listener
@@ -194,10 +262,12 @@ do_verify() {
   fail() { echo "[FAIL] pihole: $1" >&2; bad=1; }
   ask() { docker exec "$APP" dig +short +time=2 +tries=1 "$1" @127.0.0.1 2>/dev/null; }
   wait_started || { echo "[FAIL] pihole: container $APP is '$st'" >&2; return 1; }
-  if ! mountpoint -q "$DOCKER_D2" || [ ! -f "$HOSTS_FILE" ]; then
-    fail "the NAS hosts file $HOSTS_FILE is not there"
-  elif ! docker exec "$APP" cat /etc/hosts 2>/dev/null | cmp -s - "$HOSTS_FILE"; then
-    fail "the container's /etc/hosts is not the NAS hosts file"
+  if [ ! -s "$LOCAL_HOSTS" ]; then
+    fail "the local hosts copy $LOCAL_HOSTS is not there"
+  elif ! docker exec "$APP" cat /etc/hosts 2>/dev/null | cmp -s - "$LOCAL_HOSTS"; then
+    fail "the container's /etc/hosts is not the local hosts copy"
+  elif ! nas mountpoint -q "$DOCKER_D2" || ! nas cat "$HOSTS_FILE" 2>/dev/null | cmp -s - "$LOCAL_HOSTS"; then
+    echo "[WARN] pihole: the NAS hosts file is unreadable or differs from the local copy (pihole.sh reload)"
   fi
   alias=$(docker exec "$APP" pihole-FTL --config dns.cnameRecords 2>/dev/null | tr -d '[]' | sed 's/, /\n/g' \
             | sed 's/^ *//' | grep . | head -1 | cut -d, -f1 || true)
@@ -206,10 +276,10 @@ do_verify() {
   elif [ -z "$(ask "$alias")" ]; then
     fail "a CNAME from its config gets no answer"
   fi
-  line=$(awk '$1 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ && $1 !~ /^127\./ && NF >= 2 {print $1, $2; exit}' "$HOSTS_FILE" 2>/dev/null || true)
+  line=$(hosts_entry)
   ip=${line%% *}; name=${line#* }
   if [ -z "$line" ]; then
-    fail "no IPv4 entry in the NAS hosts file"
+    fail "no IPv4 entry in the hosts file"
   elif ! ask "$name" | grep -qxF "$ip"; then
     fail "a hosts-file name does not answer with its address"
   fi
@@ -242,15 +312,16 @@ do_verify() {
   # stdout, before the [OK] line: build_host.py's verify line shows stdout, and stderr arrives apart.
   password_is_set || echo "[WARN] pihole: no admin password set (pihole.sh password)"
   [ "$bad" -eq 0 ] || return 1
-  echo "[OK] pihole: $APP $st; NAS hosts file mounted; CNAME, hosts-file and own-name answers$([ "$THIS_HOST" = "$TREE_HOST" ] && echo ", outside answer"); dhcp.active $dhcp, udp/67 $([ "$l67" = true ] && echo listening || echo closed); wpad; allowlist"
+  echo "[OK] pihole: $APP $st; hosts file mounted; CNAME, hosts-file and own-name answers$([ "$THIS_HOST" = "$TREE_HOST" ] && echo ", outside answer"); dhcp.active $dhcp, udp/67 $([ "$l67" = true ] && echo listening || echo closed); wpad; allowlist"
 }
 
-[ $# -gt 0 ] || { echo "Usage: $0 up|down|restart|backup|restore|verify|password|update|refresh|logs ..." >&2; exit 1; }
+[ $# -gt 0 ] || { echo "Usage: $0 up|down|restart|reload|backup|restore|verify|password|update|refresh|logs ..." >&2; exit 1; }
 for sw in "$@"; do
   case "$sw" in
     up) do_up ;;
     down) run_compose down; remove_stale_container ;;
     restart) run_compose down; remove_stale_container; do_up ;;
+    reload) do_reload ;;
     backup) run_detached_if_interactive backup do_backup ;;
     _backup) do_backup ;;
     restore) do_rsync_mirror_restore "$BACKUP_DIR" "$APP_ROOT" ;;

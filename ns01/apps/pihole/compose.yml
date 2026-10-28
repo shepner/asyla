@@ -62,7 +62,8 @@ services:
       - ${DOCKER_DL:-/mnt/docker}/pihole-ns01/etc-dnsmasq.d:/etc/dnsmasq.d
       # On the NAS by design (central, snapshotted, reachable when all else is down; never in a
       # repo). pihole.sh up refuses to start when it is missing: Docker would make a directory here.
-      - ${DOCKER_D2:-/mnt/nas/data2/docker}/pihole/hosts:/etc/hosts:ro
+      # pihole.sh copies the NAS hosts file here (up, restart, reload): a NAS outage cannot hang a start
+      - ${DOCKER_DL:-/mnt/docker}/pihole-ns01/hosts:/etc/hosts:ro
     cap_add:
       - NET_ADMIN
       - SYS_NICE
