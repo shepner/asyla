@@ -33,6 +33,7 @@ BACKUP_DIR="${DOCKER_D1}/${APP_NAME}/mirror"
 NET_NAME="home_assistant_net"
 NET_SUBNET="172.31.240.0/24"   # HA trusts it as the proxy through http-trust-proxy.py; internal-access d01 networks.txt sets the same subnet
 PROXY_NAME="homeassistant.asyla.org"
+REPO_TREES="packages asyla"   # mirrored whole from this folder into config/ by up, compared by verify
 
 # Not in the mirror: .storage (integration logins and tokens, users, the access token theOrg
 # scrapes with), the YAML secrets file, the recorder database (3 days of history, not the trend
@@ -73,6 +74,7 @@ ensure_network() {
 # admin promotes it (core homeassistant/components/http/config.py, AUTO_REVERT_DELAY), and there is
 # no admin on a first start. trust_proxy writes the stable config instead.
 install_config() {
+  local d
   mkdir -p "$CONFIG_DIR"
   chmod 700 "$APP_ROOT" "$CONFIG_DIR"
   install -m 600 "$SCRIPT_DIR/configuration.yaml" "$CONFIG_DIR/configuration.yaml"
@@ -83,14 +85,37 @@ install_config() {
   [ -e "$CONFIG_DIR/scenes.yaml" ] || install -m 600 /dev/null "$CONFIG_DIR/scenes.yaml"
   mkdir -p "$CONFIG_DIR/themes"
   install_custom_components
+  # packages/ (YAML packages, configuration.yaml includes them) and asyla/ (scripts they run, such
+  # as report_hvac_cycles.py) come from this repo the same way: HA's copy is never edited.
+  for d in $REPO_TREES; do
+    mirror_tree "$SCRIPT_DIR/$d" "$CONFIG_DIR/$d"
+    echo "[INFO] $d/ installed"
+  done
+}
+
+# Mirror SRC into DEST: folders 700, files 600, files no longer shipped removed. Python's
+# __pycache__ (written by HA as root) is left alone.
+mirror_tree() {
+  local src="$1" dest="$2" rel
+  mkdir -p "$dest"
+  while IFS= read -r rel; do
+    mkdir -p "$dest/$rel"
+    chmod 700 "$dest/$rel"
+  done < <(cd "$src" && find . -type d)
+  while IFS= read -r rel; do
+    cmp -s "$src/$rel" "$dest/$rel" || install -m 600 "$src/$rel" "$dest/$rel"
+    chmod 600 "$dest/$rel"
+  done < <(cd "$src" && find . -type f)
+  while IFS= read -r rel; do
+    [ -e "$src/$rel" ] || rm -f "$dest/$rel"
+  done < <(cd "$dest" && find . -name __pycache__ -prune -o -type f -print)
 }
 
 # Each folder in ./custom_components (vendored at one reviewed commit, PIN.txt) is mirrored into
-# config/custom_components/<name>: folders 700, files 600, files no longer shipped removed. Python's
-# __pycache__ (written by HA as root) is left alone. Integrations not shipped here are not touched.
+# config/custom_components/<name>. Integrations not shipped here are not touched.
 install_custom_components() {
   local src_root="$SCRIPT_DIR/custom_components" dest_root="$CONFIG_DIR/custom_components"
-  local src name dest rel
+  local src name
   [ -d "$src_root" ] || return 0
   mkdir -p "$dest_root"
   chmod 700 "$dest_root"
@@ -98,19 +123,7 @@ install_custom_components() {
     [ -d "$src" ] || continue
     src="${src%/}"
     name="${src##*/}"
-    dest="$dest_root/$name"
-    mkdir -p "$dest"
-    while IFS= read -r rel; do
-      mkdir -p "$dest/$rel"
-      chmod 700 "$dest/$rel"
-    done < <(cd "$src" && find . -type d)
-    while IFS= read -r rel; do
-      cmp -s "$src/$rel" "$dest/$rel" || install -m 600 "$src/$rel" "$dest/$rel"
-      chmod 600 "$dest/$rel"
-    done < <(cd "$src" && find . -type f)
-    while IFS= read -r rel; do
-      [ -e "$src/$rel" ] || rm -f "$dest/$rel"
-    done < <(cd "$dest" && find . -name __pycache__ -prune -o -type f -print)
+    mirror_tree "$src" "$dest_root/$name"
     echo "[INFO] custom integration $name: $(sed -n 's/^commit: *//p' "$src/PIN.txt" 2>/dev/null || echo unpinned)"
   done
 }
@@ -208,6 +221,14 @@ do_verify() {
       echo "[INFO] custom integration ${d##*/} matches the repo"
     else
       echo "[WARN] custom integration ${d##*/} differs from the repo or is missing; run up"
+      rc=1
+    fi
+  done
+  for d in $REPO_TREES; do
+    if diff -rq -x __pycache__ "$SCRIPT_DIR/$d" "$CONFIG_DIR/$d" >/dev/null 2>&1; then
+      echo "[INFO] $d/ matches the repo"
+    else
+      echo "[WARN] $d/ differs from the repo or is missing; run up"
       rc=1
     fi
   done

@@ -9,8 +9,8 @@ asyla backlog `2026-10-26-home-automation-home-assistant-container-on-d01-deploy
   host network: the cloud integrations in use need neither.
 - **Network:** `home_assistant_net`, subnet `172.31.240.0/24`, created by `up`; no fixed address,
   no published ports.
-- **Storage:** `${DOCKER_DL}/home-assistant/config` → `/config`. `configuration.yaml` comes from
-  this folder on every `up`; edit it here.
+- **Storage:** `${DOCKER_DL}/home-assistant/config` → `/config`. `configuration.yaml`, `packages/`
+  and `asyla/` come from this folder on every `up`; edit them here.
 
 ## The config folder is a secret
 
@@ -27,8 +27,8 @@ with conditions: asyla `decisions/home-assistant-integration-logins.md`.
 ## Commands
 
 ```bash
-~/scripts/d01/apps/home-assistant/home-assistant.sh up       # install configuration.yaml and custom_components, trust the proxy, start
-~/scripts/d01/apps/home-assistant/home-assistant.sh verify   # health, folder modes, proxy trusted, custom_components match
+~/scripts/d01/apps/home-assistant/home-assistant.sh up       # install configuration.yaml, packages/, asyla/ and custom_components, trust the proxy, start
+~/scripts/d01/apps/home-assistant/home-assistant.sh verify   # health, folder modes, proxy trusted, packages/, asyla/ and custom_components match
 ~/scripts/d01/apps/home-assistant/home-assistant.sh down     # stop
 ~/scripts/d01/apps/home-assistant/home-assistant.sh logs     # follow logs
 ~/scripts/d01/apps/home-assistant/home-assistant.sh backup   # mirror to the NAS, without .storage
@@ -89,6 +89,39 @@ vendored at one reviewed commit; no HACS. `PIN.txt` records the commit, version 
 3. On WS01: `python3 -I scripts/vendor_ha_watts_home.py FULL_SHA --curl-cffi VERSION`. It refuses a
    short SHA, an archive that is not that commit, and any other upstream requirement.
 4. Review `git diff`, commit, push; then `update_scripts.sh`, `up` and `verify` on d01.
+
+## HVAC cold-spell report
+
+asyla backlog `2026-10-27-home-automation-hvac-schedule-optimiser-lowest-energy-heating-and-cooling-sc`:
+the HVAC run report is re-run when the weather turns cold, triggered by Home Assistant's own weather
+data (operator, 2026-10-28). Read-only: nothing here changes a thermostat.
+
+- `packages/hvac.yaml` (loaded through `homeassistant: packages:` in `configuration.yaml`):
+  - `sensor.mke_temperature_24_h_minimum`: a `statistics` sensor, the lowest
+    `sensor.mke_temperature` (Ambient Weather station, °C) over the last 24 h.
+  - `shell_command.hvac_cycle_report`: `python3 /config/asyla/report_hvac_cycles.py --days 7`.
+  - Automation "HVAC cold-spell report": daily at 09:00, when that minimum is below 0 °C and the
+    automation last ran 7 or more days ago (by date; `last_triggered` moves only when it runs). It
+    runs the report, puts it in a persistent notification, then mails it to `notify.hvac_report`.
+- `asyla/report_hvac_cycles.py`: the report (standard library only). This is its only copy; the
+  asyla hub's `tools/report_hvac_cycles.py` runs this file from the hub's clone of this repo. It
+  reads theOrg's trends Prometheus at `http://10.0.0.150:9107` with GET only (reached from this
+  container: HTTP 200, 2026-10-29T00:00Z). It must finish within `shell_command`'s 60 s.
+- Test on WS01: `python3 scripts/tests/test_home_assistant_hvac.py` (with the image in
+  `compose.yml` pulled, it also runs Home Assistant's `check_config` and the templates in it).
+
+**Mail (operator, once).** The SMTP integration is set up in the UI (Home Assistant 2026.10 has a
+config flow for it), so its login is an integration login under asyla
+`decisions/home-assistant-integration-logins.md`: the operator types it, and it is the narrowest
+one available, a Google app password made for Home Assistant alone (revocable on its own; not
+host-maintenance's).
+
+1. Settings → Devices & services → Add integration → SMTP: server `smtp.gmail.com`, port 587,
+   STARTTLS, the sending address and its app password.
+2. On the SMTP entry, add a recipient (the operator's address). Open its notify entity and set the
+   entity ID to `notify.hvac_report`.
+3. Settings → Automations → "HVAC cold-spell report" → Run actions: sends one report now (this
+   skips the conditions and sets `last_triggered`, so the next cold-spell report is 7 days later).
 
 ## Restore
 

@@ -1,0 +1,70 @@
+# HVAC cold-spell report (asyla backlog
+# 2026-10-27-home-automation-hvac-schedule-optimiser-lowest-energy-heating-and-cooling-sc).
+# home-assistant.sh up installs this folder as config/packages/ on every start: edit it here.
+# Read-only: it reports, it changes no thermostat. At a cold spell (24 h low below 0 °C at the
+# Ambient Weather station) Home Assistant runs asyla/report_hvac_cycles.py --days 7 and mails the
+# report, at most once in 7 days, so through a cold winter it is the weekly report.
+
+sensor:
+  # Lowest outdoor temperature over the last 24 h. Samples are state changes of the station sensor;
+  # keep_last_sample keeps a value through a day with no change.
+  - platform: statistics
+    name: "MKE temperature 24 h minimum"
+    unique_id: asyla_hvac_mke_temperature_min_24h
+    entity_id: sensor.mke_temperature
+    state_characteristic: value_min
+    max_age:
+      hours: 24
+    keep_last_sample: true
+    precision: 1
+
+# No template in the command, so Home Assistant runs it through the shell. It must finish within
+# shell_command's 60 s (a 7-day report took 0.5 s from WS01 on 2026-10-28).
+shell_command:
+  hvac_cycle_report: python3 /config/asyla/report_hvac_cycles.py --days 7
+
+automation:
+  - id: asyla_hvac_cold_spell_report
+    alias: "HVAC cold-spell report"
+    description: >-
+      At 09:00, when the 24 h outdoor low is below 0 °C and the last report is at least 7 days
+      old (by date), run report_hvac_cycles.py --days 7 and mail its output to notify.hvac_report.
+      Run actions from the UI to send one now (that skips the conditions).
+    mode: single
+    triggers:
+      - trigger: time
+        at: "09:00:00"
+    conditions:
+      - condition: numeric_state
+        entity_id: sensor.mke_temperature_24_h_minimum
+        below: 0
+      # last_triggered is set only when the actions run, so a day that fails the cold test does
+      # not restart the 7 days. By date, so a report at 09:00:00.2 does not block the next one.
+      - condition: template
+        value_template: >-
+          {% set last = this.attributes.last_triggered %}
+          {{ last is none or (now().date() - as_local(last).date()).days >= 7 }}
+    actions:
+      - action: shell_command.hvac_cycle_report
+        response_variable: report
+        continue_on_error: true
+      - variables:
+          low: "{{ states('sensor.mke_temperature_24_h_minimum') }}"
+          body: >-
+            {% if report is defined and report.returncode == 0 %}{{ report.stdout }}
+            {%- elif report is defined %}report_hvac_cycles.py failed (exit {{ report.returncode }}):
+            {{ report.stderr }}
+            {%- else %}report_hvac_cycles.py did not finish (shell_command error or 60 s timeout; see the Home Assistant log).{% endif %}
+      # The UI copy first, so a mail failure still leaves the report in Home Assistant.
+      - action: persistent_notification.create
+        data:
+          notification_id: asyla_hvac_cold_spell_report
+          title: "HVAC cold-spell report (24 h low {{ low }} °C)"
+          message: "{{ body }}"
+      # notify.hvac_report: the SMTP integration's recipient entity, renamed to this id (README).
+      - action: notify.send_message
+        target:
+          entity_id: notify.hvac_report
+        data:
+          title: "HVAC cold-spell report (24 h low {{ low }} °C)"
+          message: "{{ body }}"

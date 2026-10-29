@@ -1,6 +1,11 @@
 # Home Assistant on d01. home-assistant.sh up installs this file as config/configuration.yaml on every
 # start: edit it here, never on the host. Integrations (Ecobee, Cielo) are added in the UI.
 
+# Packages: one file per job in packages/, installed by home-assistant.sh up (packages/hvac.yaml:
+# the HVAC cold-spell report). Only packages here: location, units and time zone stay in the UI.
+homeassistant:
+  packages: !include_dir_named packages
+
 # Home Assistant's own default set (homeassistant/config.py DEFAULT_CONFIG).
 default_config:
 
