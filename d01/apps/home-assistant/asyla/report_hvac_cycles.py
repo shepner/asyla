@@ -29,7 +29,9 @@ Assistant's climate action minutes per entity and the outdoor temperature (senso
 are added. Every series is fetched on the same minute grid (separate queries otherwise return
 different grids), with a 59 s lookback so a minute never borrows its neighbour's value.
 
-Exit 0 report printed, 2 the Prometheus query failed.
+Exit 0 report printed, 2 the Prometheus query failed or the run passed its deadline. Each request
+waits at most 10 s and the whole run at most 45 s from its start, so under shell_command's 60 s
+Home Assistant mails this script's own [ERROR] line instead of "did not finish".
 
 This copy in asyla-hosts d01/apps/home-assistant/asyla/ is the only one: Home Assistant runs it at a
 cold spell (packages/hvac.yaml), and the asyla hub's tools/report_hvac_cycles.py runs it from the
@@ -42,6 +44,7 @@ import datetime as dt
 import json
 import statistics
 import sys
+import time
 import urllib.parse
 import urllib.request
 from collections import defaultdict
@@ -61,11 +64,33 @@ SHORT_MIN = 5
 OVERRUN_MAX = 2
 CLASSES = ["heat_pump", "outdoor", "air_handler", "boiler"]
 QUIET = {"idle", "off"}
+REQUEST_TIMEOUT = 10.0  # s per Prometheus request
+DEADLINE = 45.0         # s for the whole run, from the script's start; shell_command allows 60
+STARTED = time.monotonic()
+
+
+class DeadlinePassed(Exception):
+    pass
+
+
+def fetch_json(url: str, timeout: float) -> dict:
+    with urllib.request.urlopen(url, timeout=timeout) as r:
+        return json.load(r)
+
+
+def deadline_get(deadline: float, clock=time.monotonic, fetch=fetch_json):
+    """A get(url) that waits at most REQUEST_TIMEOUT per request and refuses to start past deadline."""
+    def get(url: str) -> dict:
+        left = deadline - clock()
+        if left <= 0:
+            raise DeadlinePassed(f"Prometheus did not answer within the {DEADLINE:g} s deadline "
+                                 f"(each request waits at most {REQUEST_TIMEOUT:g} s)")
+        return fetch(url, min(REQUEST_TIMEOUT, left))
+    return get
 
 
 def http_get(url: str) -> dict:
-    with urllib.request.urlopen(url, timeout=60) as r:
-        return json.load(r)
+    return deadline_get(STARTED + DEADLINE)(url)
 
 
 def query_range(base: str, expr: str, start: int, end: int, get=http_get) -> list[dict]:
@@ -272,6 +297,23 @@ def selftest() -> int:
         ("outdoor min/max", (day["outdoor_c"]["min"], day["outdoor_c"]["max"]) == (6.5, 8.5)),
         ("missing minute splits a run", runs([1, 2, None, 4]) == [(1, 2), (4, 1)]),
     ]
+    # The deadline: a request near it waits only what is left; past it, none is sent.
+    sent: list[float] = []
+    near = deadline_get(100.0, clock=lambda: 97.5, fetch=lambda u, t: sent.append(t) or {})
+    near("http://stub")
+    late = deadline_get(100.0, clock=lambda: 100.0, fetch=lambda u, t: sent.append(t) or {})
+    try:
+        late("http://stub")
+        refused = False
+    except DeadlinePassed:
+        refused = True
+    far = deadline_get(100.0, clock=lambda: 0.0, fetch=lambda u, t: sent.append(t) or {})
+    far("http://stub")
+    checks += [
+        ("request near the deadline waits only what is left", sent[:1] == [2.5]),
+        ("no request past the deadline", refused and len(sent) == 2),
+        ("a request waits at most REQUEST_TIMEOUT", sent[1:] == [REQUEST_TIMEOUT]),
+    ]
     bad = [name for name, ok in checks if not ok]
     for name, ok in checks:
         print(f"{'ok  ' if ok else 'FAIL'} {name}")
@@ -293,8 +335,8 @@ def main() -> int:
     start = minute(a.start) if a.start else end - a.days * 86400 + STEP
     try:
         r = report(start, end, base=a.url.rstrip("/"))
-    except (OSError, RuntimeError, ValueError) as e:
-        print(f"[FAIL] {a.url}: {e}", file=sys.stderr)
+    except (DeadlinePassed, OSError, RuntimeError, ValueError) as e:
+        print(f"[ERROR] {a.url}: {e}", file=sys.stderr)
         return 2
     if a.json:
         print(json.dumps(r, indent=1))

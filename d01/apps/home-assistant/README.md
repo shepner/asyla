@@ -100,13 +100,22 @@ data (operator, 2026-10-28). Read-only: nothing here changes a thermostat.
   - `sensor.mke_temperature_24_h_minimum`: a `statistics` sensor, the lowest
     `sensor.mke_temperature` (Ambient Weather station, °C) over the last 24 h.
   - `shell_command.hvac_cycle_report`: `python3 /config/asyla/report_hvac_cycles.py --days 7`.
-  - Automation "HVAC cold-spell report": daily at 09:00, when that minimum is below 0 °C and the
-    automation last ran 7 or more days ago (by date; `last_triggered` moves only when it runs). It
-    runs the report, puts it in a persistent notification, then mails it to `notify.hvac_report`.
+  - `input_datetime.hvac_cold_spell_report_last_success`: when the last successful report ran
+    (local date and time). It has no `initial`, so Home Assistant restores it at every start. With
+    nothing to restore it starts as today 00:00:00, which the automation reads as never set.
+  - Automation "HVAC cold-spell report": daily at 09:00, when that minimum is below 0 °C (the gate
+    assumes `sensor.mke_temperature` is in °C) and the last successful report is 7 or more days
+    old by local date, or never happened (unknown, unavailable or the 00:00:00 start value). It
+    runs the report and, only when the script exits 0, sets the `input_datetime` to now. A failed
+    run (Prometheus down, a timeout) leaves it alone, so the report is tried again at 09:00 the
+    next day. Either way it puts the output, or the failure, in a persistent notification, then
+    mails it to `notify.hvac_report`.
 - `asyla/report_hvac_cycles.py`: the report (standard library only). This is its only copy; the
   asyla hub's `tools/report_hvac_cycles.py` runs this file from the hub's clone of this repo. It
   reads theOrg's trends Prometheus at `http://10.0.0.150:9107` with GET only (reached from this
-  container: HTTP 200, 2026-10-29T00:00Z). It must finish within `shell_command`'s 60 s.
+  container: HTTP 200, 2026-10-29T00:00Z). It must finish within `shell_command`'s 60 s: each
+  request waits at most 10 s and the run at most 45 s, then it exits 2 with an `[ERROR]` line,
+  which the mail carries.
 - Test on WS01: `python3 scripts/tests/test_home_assistant_hvac.py` (with the image in
   `compose.yml` pulled, it also runs Home Assistant's `check_config` and the templates in it).
 
@@ -121,7 +130,9 @@ host-maintenance's).
 2. On the SMTP entry, add a recipient (the operator's address). Open its notify entity and set the
    entity ID to `notify.hvac_report`.
 3. Settings → Automations → "HVAC cold-spell report" → Run actions: sends one report now (this
-   skips the conditions and sets `last_triggered`, so the next cold-spell report is 7 days later).
+   skips the conditions; when the report succeeds it sets
+   `input_datetime.hvac_cold_spell_report_last_success`, so the next cold-spell report is 7 days
+   later).
 
 ## Restore
 

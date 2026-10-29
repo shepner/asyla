@@ -94,9 +94,11 @@ install_config() {
 }
 
 # Mirror SRC into DEST: folders 700, files 600, files no longer shipped removed. Python's
-# __pycache__ (written by HA as root) is left alone.
+# __pycache__ (written by HA as root) is left alone. A missing SRC fails up: without the check,
+# the failed cd in the process substitutions would read as an empty SRC and empty DEST.
 mirror_tree() {
   local src="$1" dest="$2" rel
+  [ -d "$src" ] || { echo "[ERROR] $src missing" >&2; return 1; }
   mkdir -p "$dest"
   while IFS= read -r rel; do
     mkdir -p "$dest/$rel"

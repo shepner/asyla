@@ -5,11 +5,13 @@
 
 1. home-assistant.sh up and verify against stubs (docker, curl, stat): up installs packages/ and
    asyla/ as exact copies (folders 700, files 600), removes a file no longer shipped, keeps
-   __pycache__; verify passes, then fails once the installed package is edited.
+   __pycache__; verify passes, then fails once the installed package is edited; up from a copy
+   of the app folder without packages/ fails and leaves the installed files alone.
 2. With docker and the image pinned in compose.yml present (docker pull it first), in that image
    with no network: Home Assistant's check_config accepts the installed config (it exits 0 even on
    errors, so its output is read), report_hvac_cycles.py --selftest passes on the image's python3,
-   and the automation's templates render as intended (Jinja2 with stand-ins for now, as_local, this).
+   and the automation's templates render as intended (Jinja2 with stand-ins for now, states and
+   strptime).
    Without them those cases say skip.
 Nothing reaches a host, Home Assistant or Prometheus.
 """
@@ -59,8 +61,8 @@ def in_image(cfg: Path, *args: str, stdin: str | None = None) -> subprocess.Comp
 class Stage:
     """A d01 home folder with backup_lib.sh, DOCKER_DL in a temp dir and stub commands."""
 
-    def __init__(self, tmp: Path):
-        self.tmp = tmp
+    def __init__(self, tmp: Path, app: Path = APP):
+        self.tmp, self.app = tmp, app
         home, bindir = tmp / "home", tmp / "bin"
         (home / "scripts" / "docker").mkdir(parents=True)
         shutil.copy(REPO / "docker" / "backup_lib.sh", home / "scripts" / "docker")
@@ -77,7 +79,7 @@ class Stage:
                                  "STUB_LOG": str(tmp / "docker.log")}
 
     def run(self, *cmd: str) -> subprocess.CompletedProcess:
-        return subprocess.run(["bash", str(APP / "home-assistant.sh"), *cmd], env=self.env,
+        return subprocess.run(["bash", str(self.app / "home-assistant.sh"), *cmd], env=self.env,
                               capture_output=True, text=True, timeout=60)
 
 
@@ -124,29 +126,77 @@ class UpAndVerify(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("packages/ differs from the repo", r.stdout)
 
+    def test_up_fails_when_a_tree_is_missing(self):
+        self.assertEqual(self.s.run("up").returncode, 0)
+        before = {p: p.read_bytes() for p in self.s.config.rglob("*") if p.is_file()}
+        app = self.s.tmp / "app"
+        shutil.copytree(APP, app, ignore=lambda d, names: ["packages"] if Path(d) == APP else [])
+        log = self.s.tmp / "docker.log"
+        log.write_text("")
+        self.s.app = app
+        r = self.s.run("up")
+        self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn(f"[ERROR] {app}/packages missing", r.stderr)
+        self.assertNotIn("packages/ installed", r.stdout)
+        self.assertNotIn("up -d", log.read_text())
+        after = {p: p.read_bytes() for p in self.s.config.rglob("*") if p.is_file()}
+        self.assertEqual(after, before)
+
 
 TEMPLATES = r'''
-import datetime as dt, sys, jinja2, yaml
-from types import SimpleNamespace
+import datetime as dt, sys, yaml
+from jinja2.sandbox import ImmutableSandboxedEnvironment
+from homeassistant.helpers import config_validation as cv
 pkg = yaml.safe_load(open("/config/packages/hvac.yaml"))
 auto = pkg["automation"][0]
+ENTITY = "input_datetime.hvac_cold_spell_report_last_success"
+helper = pkg["input_datetime"][ENTITY.split(".")[1]]
 cond = [c for c in auto["conditions"] if c["condition"] == "template"][0]["value_template"]
-body = [a for a in auto["actions"] if "variables" in a][0]["variables"]["body"]
+acts = auto["actions"]
+body = [a for a in acts if "variables" in a][0]["variables"]["body"]
 tz = dt.timezone(dt.timedelta(hours=-6))
-env = jinja2.Environment()
-def gate(now, last):
-    g = {"now": lambda: now, "as_local": lambda d: d.astimezone(tz),
-         "this": SimpleNamespace(attributes={"last_triggered": last})}
+env = ImmutableSandboxedEnvironment()  # Home Assistant's TemplateEnvironment is one
+def strptime(s, fmt, default):  # as Home Assistant's: the default on a string that does not parse
+    try:
+        return dt.datetime.strptime(s, fmt)
+    except (ValueError, AttributeError, TypeError):
+        return default
+# The state as input_datetime writes it (has_date and has_time): local "%Y-%m-%d %H:%M:%S".
+def gate(now, state):
+    g = {"now": lambda: now, "strptime": strptime,
+         "states": lambda e: state if e == ENTITY else "unknown"}
     return env.from_string(cond).render(**g).strip()
 now = dt.datetime(2026, 12, 8, 9, 0, 0, 100000, tzinfo=tz)
-utc = dt.timezone.utc
+fmt = lambda d: d.strftime("%Y-%m-%d %H:%M:%S")
 cases = [
-    ("never ran", gate(now, None), "True"),
-    ("6 days ago", gate(now, (now - dt.timedelta(days=6)).astimezone(utc)), "False"),
-    ("yesterday", gate(now, (now - dt.timedelta(days=1)).astimezone(utc)), "False"),
-    ("7 days ago, 0.2 s later in the day", gate(now, (now - dt.timedelta(days=7) + dt.timedelta(seconds=0.2)).astimezone(utc)), "True"),
-    ("7 days ago at 23:30 local (05:30 UTC next day)", gate(now, dt.datetime(2026, 12, 1, 23, 30, tzinfo=tz).astimezone(utc)), "True"),
-    ("6 days ago at 23:30 local", gate(now, dt.datetime(2026, 12, 2, 23, 30, tzinfo=tz).astimezone(utc)), "False"),
+    ("helper: date and time, no initial (restored at start)",
+     (helper.get("has_date"), helper.get("has_time"), "initial" in helper), (True, True, False)),
+    ("unknown", gate(now, "unknown"), "True"),
+    ("unavailable", gate(now, "unavailable"), "True"),
+    ("never set (today 00:00:00, input_datetime's start value)", gate(now, "2026-12-08 00:00:00"), "True"),
+    ("6 days ago", gate(now, fmt(now - dt.timedelta(days=6))), "False"),
+    ("yesterday", gate(now, fmt(now - dt.timedelta(days=1))), "False"),
+    ("today", gate(now, "2026-12-08 09:00:00"), "False"),
+    ("7 days ago, 0.2 s later in the day", gate(now, fmt(now - dt.timedelta(days=7) + dt.timedelta(seconds=0.2))), "True"),
+    ("7 days ago at 23:30 local", gate(now, "2026-12-01 23:30:00"), "True"),
+    ("6 days ago at 23:30 local", gate(now, "2026-12-02 23:30:00"), "False"),
+]
+# Right after the shell_command: set the helper only on success, in an `if` that does not end the run.
+shell = [i for i, a in enumerate(acts) if a.get("action") == "shell_command.hvac_cycle_report"][0]
+step = acts[shell + 1]
+ok_if = step["if"][0]["value_template"]
+then = step["then"][0]
+r = lambda **kw: env.from_string(ok_if).render(**kw).strip()
+cases += [
+    ("set step follows the shell_command", (list(step), then["action"], then["target"]["entity_id"]),
+     (["if", "then"], "input_datetime.set_datetime", ENTITY)),
+    ("notifications are not inside the if", [a.get("action") for a in acts[shell + 2:] if "action" in a],
+     ["persistent_notification.create", "notify.send_message"]),
+    ("set: report ok", r(report={"returncode": 0, "stdout": "x", "stderr": ""}), "True"),
+    ("set: report failed", r(report={"returncode": 2, "stdout": "", "stderr": "[ERROR] x"}), "False"),
+    ("set: no response", r(), "False"),
+    ("set: datetime is now(), valid for the service",
+     cv.datetime(env.from_string(then["data"]["datetime"]).render(now=lambda: now)), now),
 ]
 r = lambda **kw: env.from_string(body).render(**kw).strip()
 cases += [
@@ -186,7 +236,8 @@ class InPinnedImage(unittest.TestCase):
         self.assertNotRegex(out, r"Incorrect config|Failed config|Invalid config|Error", out)
         for want in ("platform: statistics", "state_characteristic: value_min", "id: asyla_hvac_cold_spell_report",
                      "hvac_cycle_report: python3 /config/asyla/report_hvac_cycles.py --days 7",
-                     "- sensor.mke_temperature_24_h_minimum", "- notify.hvac_report", "- 09:00:00"):
+                     "- sensor.mke_temperature_24_h_minimum", "- notify.hvac_report", "- 09:00:00",
+                     "hvac_cold_spell_report_last_success:", "input_datetime.set_datetime"):
             self.assertIn(want, out)
 
     def test_report_selftest_on_image_python(self):

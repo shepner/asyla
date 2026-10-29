@@ -3,7 +3,8 @@
 # home-assistant.sh up installs this folder as config/packages/ on every start: edit it here.
 # Read-only: it reports, it changes no thermostat. At a cold spell (24 h low below 0 °C at the
 # Ambient Weather station) Home Assistant runs asyla/report_hvac_cycles.py --days 7 and mails the
-# report, at most once in 7 days, so through a cold winter it is the weekly report.
+# report, at most once in 7 days after a successful one, so through a cold winter it is the weekly
+# report. A failed run (Prometheus down) does not count: the next day's 09:00 tries again.
 
 sensor:
   # Lowest outdoor temperature over the last 24 h. Samples are state changes of the station sensor;
@@ -19,17 +20,29 @@ sensor:
     precision: 1
 
 # No template in the command, so Home Assistant runs it through the shell. It must finish within
-# shell_command's 60 s (a 7-day report took 0.5 s from WS01 on 2026-10-28).
+# shell_command's 60 s (a 7-day report took 0.5 s from WS01 on 2026-10-28); the script gives each
+# request 10 s and itself 45 s, then exits 2 with its own [ERROR] line.
 shell_command:
   hvac_cycle_report: python3 /config/asyla/report_hvac_cycles.py --days 7
+
+# When the last report succeeded (local time). No `initial`, so Home Assistant restores it at start
+# (input_datetime is a RestoreEntity). With nothing to restore it starts as today 00:00:00, which the
+# gate reads as never set: a report sets it at 09:00 or whenever it is run, never at 00:00:00.
+input_datetime:
+  hvac_cold_spell_report_last_success:
+    name: "HVAC cold-spell report last success"
+    has_date: true
+    has_time: true
 
 automation:
   - id: asyla_hvac_cold_spell_report
     alias: "HVAC cold-spell report"
     description: >-
-      At 09:00, when the 24 h outdoor low is below 0 °C and the last report is at least 7 days
-      old (by date), run report_hvac_cycles.py --days 7 and mail its output to notify.hvac_report.
-      Run actions from the UI to send one now (that skips the conditions).
+      At 09:00, when the 24 h outdoor low is below 0 °C and the last successful report is at
+      least 7 days old (by date), run report_hvac_cycles.py --days 7 and mail its output to
+      notify.hvac_report. Only a successful run sets input_datetime.hvac_cold_spell_report_last_success,
+      so a failed one is retried the next day. Run actions from the UI to send one now (that skips
+      the conditions).
     mode: single
     triggers:
       - trigger: time
@@ -37,17 +50,29 @@ automation:
     conditions:
       - condition: numeric_state
         entity_id: sensor.mke_temperature_24_h_minimum
-        below: 0
-      # last_triggered is set only when the actions run, so a day that fails the cold test does
-      # not restart the 7 days. By date, so a report at 09:00:00.2 does not block the next one.
+        below: 0  # assumes sensor.mke_temperature reports °C
+      # The last successful report, by local date, so a report at 09:00:00.2 does not block the
+      # next one. Unknown, unavailable or the 00:00:00 start value (never set) count as no report.
       - condition: template
         value_template: >-
-          {% set last = this.attributes.last_triggered %}
-          {{ last is none or (now().date() - as_local(last).date()).days >= 7 }}
+          {% set s = states('input_datetime.hvac_cold_spell_report_last_success') %}
+          {% set last = strptime(s, '%Y-%m-%d %H:%M:%S', none) %}
+          {{ last is none or s.endswith(' 00:00:00') or (now().date() - last.date()).days >= 7 }}
     actions:
       - action: shell_command.hvac_cycle_report
         response_variable: report
         continue_on_error: true
+      # Only a run that printed its report counts for the 7 days; a false `if` goes on to the
+      # notifications, so a failure is still reported.
+      - if:
+          - condition: template
+            value_template: "{{ report is defined and report.returncode == 0 }}"
+        then:
+          - action: input_datetime.set_datetime
+            target:
+              entity_id: input_datetime.hvac_cold_spell_report_last_success
+            data:
+              datetime: "{{ now() }}"
       - variables:
           low: "{{ states('sensor.mke_temperature_24_h_minimum') }}"
           body: >-
