@@ -35,6 +35,9 @@ The script automatically sources `~/scripts/docker/common.env` if it exists.
 - `media.sh logs [service]` — follow logs
 - `media.sh refresh` — pull latest images and start
 - `media.sh update` — pull latest images and start (same as refresh)
+- `media.sh reset-auth sonarr|radarr [--apply]` — forgotten login (no default exists; v4 requires one):
+  stops the app, deletes `AuthenticationMethod` from its `config.xml` (copy kept as `config.xml.<stamp>.bak`),
+  starts it; its page then asks for a new login. Dry without `--apply`. Servarr FAQ, "Help I have locked myself out".
 
 ## References
 

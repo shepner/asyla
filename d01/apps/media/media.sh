@@ -102,6 +102,49 @@ do_restore() {
   done
 }
 
+# Forgotten login (Servarr FAQ "Help I have locked myself out"): stop the service, delete the
+# AuthenticationMethod line from its config.xml, start it; the UI then asks for a new login. Dry unless
+# --apply. The copy kept beside it is named *.bak so the backup mirror leaves it out (it holds the API key).
+do_reset_auth() {
+  local service="$1" apply="$2" cfg count stamp
+  case "$service" in
+    sonarr|radarr) ;;
+    *) echo "[ERROR] reset-auth takes sonarr or radarr, not '$service'" >&2; return 1 ;;
+  esac
+  cfg="${DOCKER_DL}/${service}/config/config.xml"
+  if [ ! -f "$cfg" ]; then
+    echo "[ERROR] reset-auth: no $cfg" >&2
+    return 1
+  fi
+  count=$(grep -c '<AuthenticationMethod>' "$cfg" || true)
+  echo "[INFO] $service: $count AuthenticationMethod line(s) in $cfg"
+  if [ "$count" -eq 0 ]; then
+    echo "[INFO] $service: nothing to delete; open its page to set a login"
+    return 0
+  fi
+  if [ "$apply" != "--apply" ]; then
+    echo "[DRY] would stop $service, copy config.xml to config.xml.<stamp>.bak, delete the line(s), start $service"
+    echo "[DRY] run again with --apply to do it"
+    return 0
+  fi
+  stamp=$(date +%Y%m%d-%H%M%S)
+  run_compose stop "$service"
+  cp -p "$cfg" "$cfg.$stamp.bak"
+  if ! sed -i '/<AuthenticationMethod>/d' "$cfg"; then
+    cp -p "$cfg.$stamp.bak" "$cfg"
+    run_compose start "$service"
+    echo "[ERROR] reset-auth: could not edit $cfg; put the copy back and started $service" >&2
+    return 1
+  fi
+  run_compose start "$service"
+  count=$(grep -c '<AuthenticationMethod>' "$cfg" || true)
+  if [ "$count" -ne 0 ]; then
+    echo "[ERROR] reset-auth: $count AuthenticationMethod line(s) still in $cfg" >&2
+    return 1
+  fi
+  echo "[OK] $service: login removed (copy at $cfg.$stamp.bak); open its page and set a new login"
+}
+
 do_update() {
   echo "[INFO] Pulling latest images (not starting app; use up or restart to start)"
   run_compose pull
@@ -155,11 +198,17 @@ if [ $# -eq 0 ]; then
   echo "  down     - Stop and remove containers" >&2
   echo "  restart  - Down then up" >&2
   echo "  logs     - Follow logs (optionally for one service)" >&2
+  echo "  reset-auth sonarr|radarr [--apply] - forgotten login: delete it so the UI asks for a new one" >&2
   exit 1
 fi
 
 if [ "$1" = "logs" ]; then
   run_compose logs -f "${@:2}"
+  exit 0
+fi
+
+if [ "$1" = "reset-auth" ]; then
+  do_reset_auth "${2:-}" "${3:-}"
   exit 0
 fi
 
