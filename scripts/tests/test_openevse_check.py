@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline test of d03/apps/openevse-monitor/openevse_check.py: what it calls a problem (stdlib unittest).
+"""Offline test of d07/apps/openevse-monitor/openevse_check.py: what it calls a problem (stdlib unittest).
 
     python3 scripts/tests/test_openevse_check.py
 
@@ -16,7 +16,7 @@ import tomllib
 import unittest
 from pathlib import Path
 
-APP = Path(__file__).resolve().parents[2] / "d03" / "apps" / "openevse-monitor"
+APP = Path(__file__).resolve().parents[2] / "d07" / "apps" / "openevse-monitor"
 _spec = importlib.util.spec_from_file_location("openevse_check", APP / "openevse_check.py")
 oc = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(oc)
@@ -76,7 +76,7 @@ class Unreachable(unittest.TestCase):
         self.assertEqual(r.cycle(error="GET /status: TimeoutError"), {})
         f = r.cycle(error="GET /status: TimeoutError")
         self.assertEqual(f["unreachable"][0], "urgent")
-        self.assertIn("not answering from d03", f["unreachable"][1])
+        self.assertIn("not answering from d07", f["unreachable"][1])
 
     def test_one_miss_then_back_is_quiet(self):
         r = Run()

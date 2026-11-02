@@ -1,8 +1,8 @@
-# promtool unit test of d03/apps/switch-monitor/prometheus-rules.yml (README.md there, "Tests"):
+# promtool unit test of d07/apps/switch-monitor/prometheus-rules.yml (README.md there, "Tests"):
 #   docker run --rm -v "$PWD:/r:ro" -w /r --entrypoint promtool prom/prometheus:v2.48.1 test rules scripts/tests/switch_prometheus_rules_test.yml
 # Series in the label shapes of snmp_exporter v0.30.1's stock modules, as theOrg's job would label them.
 rule_files:
-  - ../../d03/apps/switch-monitor/prometheus-rules.yml
+  - ../../d07/apps/switch-monitor/prometheus-rules.yml
 evaluation_interval: 1m
 tests:
   - interval: 1m

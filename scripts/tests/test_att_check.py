@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline test of d03/apps/att-monitor/att_check.py: what it calls a problem (stdlib unittest).
+"""Offline test of d07/apps/att-monitor/att_check.py: what it calls a problem (stdlib unittest).
 
     python3 scripts/tests/test_att_check.py
 
@@ -17,7 +17,7 @@ import tomllib
 import unittest
 from pathlib import Path
 
-APP = Path(__file__).resolve().parents[2] / "d03" / "apps" / "att-monitor"
+APP = Path(__file__).resolve().parents[2] / "d07" / "apps" / "att-monitor"
 _spec = importlib.util.spec_from_file_location("att_check", APP / "att_check.py")
 ac = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ac)
@@ -133,7 +133,7 @@ class Conditions(unittest.TestCase):
         run()
         self.assertEqual(run(error="GET sysinfo.ha: URLError: timed out"), {})
         found = run(error="GET sysinfo.ha: URLError: timed out")
-        self.assertIn("not answering from d03 (GET sysinfo.ha: URLError: timed out)", found["unreachable"][1])
+        self.assertIn("not answering from d07 (GET sysinfo.ha: URLError: timed out)", found["unreachable"][1])
         self.assertTrue(any(k.startswith("outage:") for k in run()))
 
     def test_optics_alarm_and_low_rx(self):

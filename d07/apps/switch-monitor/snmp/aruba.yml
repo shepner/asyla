@@ -1,0 +1,71 @@
+# Health and PoE of the Aruba S2500s (switch2, switch3), from Aruba's own MIBs: WLSX-SYSTEMEXT-MIB
+# (wlsxSystemExtGroup 1.3.6.1.4.1.14823.2.2.1.2.1) and WLSX-POE-MIB (wlsxPoEMIB 1.3.6.1.4.1.14823.2.2.1.18),
+# as listed at mibs.observium.org. Not in snmp_exporter's stock snmp.yml, so written by hand here in its
+# format. The S2500 does not answer the standard POWER-ETHERNET-MIB: a walk of it returned nothing (2026-10-26).
+modules:
+  aruba:
+    walk:
+    - 1.3.6.1.4.1.14823.2.2.1.2.1.10    # wlsxSysExtInternalTemparature
+    - 1.3.6.1.4.1.14823.2.2.1.2.1.17    # wlsxSysExtFanTable
+    - 1.3.6.1.4.1.14823.2.2.1.2.1.18    # wlsxSysExtPowerSupplyTable
+    - 1.3.6.1.4.1.14823.2.2.1.18.1.1    # wlsxPsePortTable
+    - 1.3.6.1.4.1.14823.2.2.1.18.1.2    # wlsxPseSlotTable
+    metrics:
+    - name: wlsxSysExtInternalTemparature
+      oid: 1.3.6.1.4.1.14823.2.2.1.2.1.10
+      type: DisplayString
+      help: Internal temperature of the switch, degrees C (the switch sends text, "52.000000 C") - 1.3.6.1.4.1.14823.2.2.1.2.1.10
+      regex_extracts:
+        '':
+        - regex: '([0-9.]+) C'
+          value: '$1'
+    - name: sysExtFanStatus
+      oid: 1.3.6.1.4.1.14823.2.2.1.2.1.17.1.2
+      type: gauge
+      help: Fan status (1 active, 2 inactive) - 1.3.6.1.4.1.14823.2.2.1.2.1.17.1.2
+      indexes:
+      - labelname: sysExtFanIndex
+        type: gauge
+    - name: sysExtPowerSupplyStatus
+      oid: 1.3.6.1.4.1.14823.2.2.1.2.1.18.1.2
+      type: gauge
+      help: Power supply status (1 active, 2 inactive) - 1.3.6.1.4.1.14823.2.2.1.2.1.18.1.2
+      indexes:
+      - labelname: sysExtPowerSupplyIndex
+        type: gauge
+    - name: wlsxPsePortStatus
+      oid: 1.3.6.1.4.1.14823.2.2.1.18.1.1.1.4
+      type: gauge
+      help: PoE port status (1 unknown, 2 offAdmin, 3 offPowerManagement, 4 offIllegalClass, 5 offDetectionProgress,
+        6 offHardwareError, 7 offNonStandardPd) - 1.3.6.1.4.1.14823.2.2.1.18.1.1.1.4
+      indexes:
+      - labelname: wlsxPsePortIndex
+        type: gauge
+    - name: wlsxPsePortState
+      oid: 1.3.6.1.4.1.14823.2.2.1.18.1.1.1.3
+      type: gauge
+      help: PoE port power (1 on, 2 off) - 1.3.6.1.4.1.14823.2.2.1.18.1.1.1.3
+      indexes:
+      - labelname: wlsxPsePortIndex
+        type: gauge
+    - name: wlsxPsePortPowerConsumed
+      oid: 1.3.6.1.4.1.14823.2.2.1.18.1.1.1.12
+      type: gauge
+      help: Power drawn on the PoE port, milliwatts - 1.3.6.1.4.1.14823.2.2.1.18.1.1.1.12
+      indexes:
+      - labelname: wlsxPsePortIndex
+        type: gauge
+    - name: wlsxPseSlotPowerAvailable
+      oid: 1.3.6.1.4.1.14823.2.2.1.18.1.2.1.2
+      type: gauge
+      help: PoE power budget of the slot, watts - 1.3.6.1.4.1.14823.2.2.1.18.1.2.1.2
+      indexes:
+      - labelname: wlsxPseSlotIndex
+        type: gauge
+    - name: wlsxPseSlotPowerConsumption
+      oid: 1.3.6.1.4.1.14823.2.2.1.18.1.2.1.3
+      type: gauge
+      help: PoE power drawn from the slot, watts - 1.3.6.1.4.1.14823.2.2.1.18.1.2.1.3
+      indexes:
+      - labelname: wlsxPseSlotIndex
+        type: gauge

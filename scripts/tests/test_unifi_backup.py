@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline test of d03/apps/unifi-backup/unifi_backup.py: the decrypt, the check, the copy cycle (stdlib unittest).
+"""Offline test of d07/apps/unifi-backup/unifi_backup.py: the decrypt, the check, the copy cycle (stdlib unittest).
 
     python3 scripts/tests/test_unifi_backup.py
 
@@ -24,7 +24,7 @@ import urllib.error
 import zipfile
 from pathlib import Path
 
-APP = Path(__file__).resolve().parents[2] / "d03" / "apps" / "unifi-backup"
+APP = Path(__file__).resolve().parents[2] / "d07" / "apps" / "unifi-backup"
 _spec = importlib.util.spec_from_file_location("unifi_backup", APP / "unifi_backup.py")
 ub = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ub)

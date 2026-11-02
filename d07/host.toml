@@ -1,0 +1,92 @@
+# d07 build spec, read by scripts/build_host.py: the network monitors' host, VM 107 on vmh03 (asyla
+# hub backlog 2026-11-02-hosts-hosts-monitor-vm-d07-on-vmh03, design approved by the operator). It
+# carries the five monitors moved from d03 (unifi-monitor, unifi-backup, switch-monitor, att-monitor,
+# openevse-monitor) as vmh03's resident guest: vmh03 is the canary node and the cluster's third vote
+# (asyla hub decisions/vmc01-quorum-third-vote.md), and d07 is a plain Docker host built like the
+# others (decisions/host-layout.md). d07 is not disposable: a build or a destroy needs --confirm d07
+# and the operator's approval of the exact action.
+# Nothing on d07 serves people: no runner, no GitLab runner, no proxy, no tunnel, no internal names.
+# nas01's SMART textfile stays on d03, whose NFS mount it uses.
+
+# The hub item's "The VM" table. order=10: vmh03's only guest.
+[vm]
+node = "vmh03"
+vmid = 107
+sockets = 1
+cores = 2
+memory_mb = 2048           # the apps use about 58 MiB; Debian plus Docker about 0.5 GiB
+ip = "10.0.0.66/24"
+os_disk = { storage = "local-lvm", size = "32G" }
+data_disk = { storage = "local-lvm", size = "8G" }   # /mnt/docker
+cloudinit_storage = "local-lvm"
+startup = "order=10"       # set at create, checked by verify
+bridge = "vmbr0"           # vmh03's only bridge, untagged (vlan 0): no host network change on a node
+vlan = 0                   # with no console (10.0.0.0/24 untagged, vmh03's own segment)
+
+[setup]
+steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "bashrc.sh", "node_exporter.sh", "port_proxy.sh"]   # build/setup/, sent by the build
+
+# Node exporter (build/setup/node_exporter.sh) for theOrg's trends Prometheus (asyla standard
+# ASY-TRD): port 9100 from these addresses only, and the .prom files it serves. theOrg's job
+# asyla-d07-node scrapes d07.asyla.org:9100 every 5 min after the cutover (a hand-off to theOrg).
+[node_exporter]
+allow = ["10.0.0.150"]     # the trends Prometheus's host (the Mini; d06 after the move)
+textfile_sources = [
+  "/mnt/docker/unifi-monitor/unifi.prom",
+  "/mnt/docker/att-monitor/att.prom",
+  "/mnt/docker/openevse-monitor/openevse.prom",
+]
+
+# Port proxies (build/setup/port_proxy.sh): a host port to a loopback-published container port, open
+# to `allow` only (systemd socket filter; d07 runs no host firewall). 9116 for theOrg's job
+# asyla-switch-snmp, as on d03 (operator, 2026-10-27; asyla backlog 2026-10-27-hosts-trends-sources-...).
+[[port_proxy]]
+name = "switch-snmp"
+listen = 9116
+target = "127.0.0.1:19116"   # switch-monitor's snmp-exporter (compose.yml publishes it on loopback only)
+allow = ["10.0.0.150"]       # the trends Prometheus's host (the Mini; d06 after the move)
+
+# No [[secret]]: d07 keeps no secret on disk, like d06. Its images are Docker Hub's, so no registry
+# login; every credential is a start_env value, resolved from OpenBao on the workstation and sent over
+# SSH stdin at use (build_host.py, App environment).
+
+# UniFi Site Manager check every 5 min (DAY and MKE); host-maintenance's monitor reads its status.json.
+# The key is resolved from OpenBao on the workstation and sent over SSH stdin (no file on d07):
+#   credentials.py exec UNIFI_SITE_MANAGER_API_KEY -- build_host.py d07 build --only apps --app unifi-monitor
+[[app]]
+name = "unifi-monitor"
+start_env = ["UNIFI_SITE_MANAGER_API_KEY"]
+restore = false                 # its state rebuilds in one check (firmware first-seen times restart)
+verify = ["verify"]
+# UniFi Network autobackups (MKE, DAY) copied hourly to /mnt/nas/data1/docker/unifi-backup, each
+# checked to open; host-maintenance's monitor reads its status.json. Same key, same delivery:
+#   credentials.py exec UNIFI_SITE_MANAGER_API_KEY -- build_host.py d07 build --only apps --app unifi-backup
+[[app]]
+name = "unifi-backup"
+start_env = ["UNIFI_SITE_MANAGER_API_KEY"]
+restore = false                 # its data is the copies on the NAS; its state rebuilds in one cycle
+verify = ["verify"]
+# Switch check every 5 min over SNMPv3 (snmp_exporter + switch_check.py); host-maintenance's monitor
+# reads its status.json. The two SNMPv3 passwords are resolved from OpenBao on the workstation and
+# sent over SSH stdin (no file on d07):
+#   credentials.py exec SWITCH_SNMP_AUTH_PASSWORD SWITCH_SNMP_PRIV_PASSWORD -- build_host.py d07 build --only apps --app switch-monitor
+[[app]]
+name = "switch-monitor"
+start_env = ["SWITCH_SNMP_AUTH_PASSWORD", "SWITCH_SNMP_PRIV_PASSWORD"]
+restore = false                 # its state rebuilds in one check (a release's 7-day wait restarts)
+verify = ["verify"]
+# AT&T gateway (BGW320) check every 5 min from its status pages; host-maintenance's monitor reads
+# its status.json. No key: the pages need no login.
+[[app]]
+name = "att-monitor"
+restore = false                 # its state rebuilds in one check (the first values are recorded, not reported)
+verify = ["verify"]
+# EV charger (OpenEVSE openevse01) check every 5 min from its /status; host-maintenance's monitor
+# reads its status.json. Its web login is resolved from OpenBao on the workstation and sent over SSH
+# stdin (no file on d07):
+#   credentials.py exec OPENEVSE_WWW_USER OPENEVSE_WWW_PASSWORD -- build_host.py d07 build --only apps --app openevse-monitor
+[[app]]
+name = "openevse-monitor"
+start_env = ["OPENEVSE_WWW_USER", "OPENEVSE_WWW_PASSWORD"]
+restore = false                 # its state rebuilds in one check (the first counters are recorded, not reported)
+verify = ["verify"]

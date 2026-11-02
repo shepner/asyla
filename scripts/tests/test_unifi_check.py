@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline test of d03/apps/unifi-monitor/unifi_check.py: what it calls a problem (stdlib unittest).
+"""Offline test of d07/apps/unifi-monitor/unifi_check.py: what it calls a problem (stdlib unittest).
 
     python3 scripts/tests/test_unifi_check.py
 
@@ -16,7 +16,7 @@ import tomllib
 import unittest
 from pathlib import Path
 
-APP = Path(__file__).resolve().parents[2] / "d03" / "apps" / "unifi-monitor"
+APP = Path(__file__).resolve().parents[2] / "d07" / "apps" / "unifi-monitor"
 _spec = importlib.util.spec_from_file_location("unifi_check", APP / "unifi_check.py")
 uc = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(uc)
