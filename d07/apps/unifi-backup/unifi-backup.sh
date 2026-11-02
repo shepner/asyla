@@ -120,7 +120,10 @@ run_cmd() {
     status) do_status ;;
     unstage) rm -f "$UNIFI_ROOT/stage.json"; echo "[INFO] staged test alert removed" ;;
     # The copies are written on the NAS already; state.json rebuilds in one cycle. Nothing to back up.
-    backup|_backup) echo "[INFO] $APP_NAME: copies are on the NAS ($UNIFI_COPIES_DIR); nothing to back up" ;;
+    # One pattern per line: host-maintenance runs `backup` only when a line starts `backup)`
+    # (maint_host.py script_supports); `backup|_backup)` was skipped and never recorded (2026-11-02).
+    backup) echo "[INFO] $APP_NAME: copies are on the NAS ($UNIFI_COPIES_DIR); nothing to back up" ;;
+    _backup) echo "[INFO] $APP_NAME: copies are on the NAS ($UNIFI_COPIES_DIR); nothing to back up" ;;
     restore) echo "[INFO] $APP_NAME: nothing to restore; the next cycle rebuilds its state" ;;
     logs) run_compose logs -f ;;
     *) return 1 ;;

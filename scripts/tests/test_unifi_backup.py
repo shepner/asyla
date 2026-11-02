@@ -364,5 +364,14 @@ class Cycle(unittest.TestCase):
             self.assertEqual(ub.main(["--check-newest"]), 1)
 
 
+class AppScript(unittest.TestCase):
+    def test_backup_is_seen_by_host_maintenance(self):
+        # host-maintenance remote/maint_host.py script_supports: a `backup` it cannot see is never
+        # run nor recorded, and the monitor then warns "no successful backup recorded yet".
+        import re
+        text = (APP / "unifi-backup.sh").read_text()
+        self.assertRegex(text, re.compile(r"^\s*backup\)", re.M))
+
+
 if __name__ == "__main__":
     unittest.main()
