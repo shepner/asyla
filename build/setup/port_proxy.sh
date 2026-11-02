@@ -15,7 +15,8 @@
 # BPF filter on the socket's listening and connection sockets, systemd.resource-control(5)), as
 # node_exporter.sh limits 9100; no host firewall rule. systemd-socket-proxyd (in systemd) runs on
 # the first connection, as a dynamic user, and may connect to localhost only. A proxy dropped from
-# host.toml has its units stopped and removed.
+# host.toml has its units stopped and removed; a spec with no [[port_proxy]] left removes them all
+# (d03's switch-snmp, when the switch monitor moved to d07).
 #
 # --units DIR: write the unit files into DIR and stop (no root, no systemctl; for tests).
 
@@ -44,9 +45,9 @@ PROXYD=/usr/lib/systemd/systemd-socket-proxyd
 # [[port_proxy]] from the spec, checked: one "NAME LISTEN TARGET ALLOW,ALLOW" line each.
 spec_lines=$(python3 - "$SPEC" <<'PY'
 import ipaddress, re, sys, tomllib
-proxies = tomllib.load(open(sys.argv[1], "rb")).get("port_proxy")
-if not isinstance(proxies, list) or not proxies:
-    sys.exit(f"{sys.argv[1]}: no [[port_proxy]] tables")
+proxies = tomllib.load(open(sys.argv[1], "rb")).get("port_proxy", [])
+if not isinstance(proxies, list):
+    sys.exit(f"{sys.argv[1]}: port_proxy must be [[port_proxy]] tables")
 names, ports = set(), set()
 for p in proxies:
     unknown = set(p) - {"name", "listen", "target", "allow"}
@@ -72,9 +73,11 @@ for p in proxies:
 PY
 ) || { log_error "Bad [[port_proxy]] in $SPEC"; exit 1; }
 
+[ -n "$spec_lines" ] || log_info "No [[port_proxy]] in $SPEC: any asyla-proxy unit here is removed"
 mkdir -p "$UNIT_DIR"
 wanted=""
 while read -r name listen target allow; do
+    [ -n "$name" ] || continue   # no tables: one empty line
     unit="asyla-proxy-$name"
     wanted="$wanted $unit"
     log_info "Writing $unit.socket (port $listen from localhost and: ${allow//,/ }) -> $target..."
@@ -143,6 +146,7 @@ done
 # Check: each socket is listening with its filter set. The target container may not be up yet
 # (a fresh build starts apps later), so the path through is checked by build_host.py verify.
 while read -r name listen target allow; do
+    [ -n "$name" ] || continue   # no tables: one empty line
     unit="asyla-proxy-$name"
     systemctl is-active --quiet "$unit.socket" || { log_error "$unit.socket is not active"; exit 1; }
     [ "$(systemctl show -p IPAddressDeny --value "$unit.socket")" != "" ] || { log_error "$unit.socket has no IPAddressDeny"; exit 1; }

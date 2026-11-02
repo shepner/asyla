@@ -13,10 +13,10 @@ fail=0
 ok()  { echo "ok   $1"; }
 bad() { echo "FAIL $1${2:+: $2}"; fail=1; }
 
-# d03's own spec: the switch-snmp proxy as deployed.
-if HOST_SPEC="$REPO/d03/host.toml" bash "$STEP" --units "$T/d03" >"$T/out" 2>&1; then ok "d03 host.toml is accepted"
-else bad "d03 host.toml is accepted" "$(cat "$T/out")"; fi
-S="$T/d03/asyla-proxy-switch-snmp.socket"; V="$T/d03/asyla-proxy-switch-snmp.service"
+# d07's own spec: the switch-snmp proxy as deployed (on d03 until the monitors moved to d07).
+if HOST_SPEC="$REPO/d07/host.toml" bash "$STEP" --units "$T/d07" >"$T/out" 2>&1; then ok "d07 host.toml is accepted"
+else bad "d07 host.toml is accepted" "$(cat "$T/out")"; fi
+S="$T/d07/asyla-proxy-switch-snmp.socket"; V="$T/d07/asyla-proxy-switch-snmp.service"
 grep -qx "ListenStream=9116" "$S" 2>/dev/null && ok "socket listens on 9116" || bad "socket listens on 9116"
 grep -qx "IPAddressDeny=any" "$S" 2>/dev/null && ok "socket denies by default" || bad "socket denies by default"
 allows=$(grep '^IPAddressAllow=' "$S" 2>/dev/null | tr '\n' ' ')
@@ -27,7 +27,7 @@ grep -qx "ExecStart=/usr/lib/systemd/systemd-socket-proxyd --connections-max=16 
 [ "$(grep '^IPAddress' "$V" 2>/dev/null | tr '\n' ' ')" = "IPAddressDeny=any IPAddressAllow=localhost " ] \
   && ok "proxy may connect to localhost only" || bad "proxy may connect to localhost only"
 grep -qx "DynamicUser=yes" "$V" 2>/dev/null && ok "proxy runs as a dynamic user" || bad "proxy runs as a dynamic user"
-grep -qF '"127.0.0.1:19116:9116"' "$REPO/d03/apps/switch-monitor/compose.yml" \
+grep -qF '"127.0.0.1:19116:9116"' "$REPO/d07/apps/switch-monitor/compose.yml" \
   && ok "compose publishes the exporter on loopback only" || bad "compose publishes the exporter on loopback only"
 
 # Bad tables are refused, and nothing is written for them.
@@ -41,7 +41,13 @@ refused() {  # NAME TOML
 P='[[port_proxy]]
 name = "x"
 listen = 9116'
-refused "no tables" '[vm]'
+refused "port_proxy not tables" 'port_proxy = "x"'
+
+# No tables (d03 once its proxy moved to d07): accepted, and no unit is written.
+printf '[vm]\n' > "$T/none.toml"
+if HOST_SPEC="$T/none.toml" bash "$STEP" --units "$T/none" >"$T/out" 2>&1; then ok "no tables is accepted"
+else bad "no tables is accepted" "$(cat "$T/out")"; fi
+ls "$T/none"/* >/dev/null 2>&1 && bad "no tables writes no unit" "$(ls "$T/none")" || ok "no tables writes no unit"
 refused "target off loopback" "$P"$'\ntarget = "10.0.0.62:19116"\nallow = ["10.0.0.150"]'
 refused "target is the listen port" "$P"$'\ntarget = "127.0.0.1:9116"\nallow = ["10.0.0.150"]'
 refused "empty allow" "$P"$'\ntarget = "127.0.0.1:19116"\nallow = []'
