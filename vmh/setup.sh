@@ -14,11 +14,12 @@
 #   canary-list              read-only (vmh03): "package version soak-start-epoch source
 #                            source-version" per installed package (kernel, ZFS, QEMU: from a boot)
 #   health                   read-only: the health checks (vmh/health.sh), as host-maintenance runs them
-#   crashtest [--console|--clean]   vmh03 only: a sysrq crash, to prove kdump saves a vmcore and the
-#                            node reboots by itself; refused unless the other members keep quorum
-#                            without it. --console: the crash kernel prints everything and waits
-#                            120 s before its reboot, for someone at the screen. --clean: remove the
-#                            dumps and restore the normal crash kernel cmdline
+#   crashtest [--console] [--with-guests] | --clean   vmh03 only: a sysrq crash, to prove kdump
+#                            saves a vmcore and the node reboots by itself; refused unless the other
+#                            members keep quorum without it, and while a guest runs unless
+#                            --with-guests (they go down with the node). --console: the crash kernel
+#                            prints everything and waits 120 s before its reboot, for someone at the
+#                            screen. --clean: remove the dumps and restore the normal crash kernel cmdline
 # Parts:
 #   repos          pve-no-subscription; pve-enterprise and ceph disabled
 #   updates        unattended-upgrades: vmh03 all origins (the canary), production Debian-Security
@@ -837,13 +838,22 @@ crashtest() {
             for d in /var/crash/2*; do [ -d "$d" ] || continue; rm -rf "$d"; say "changed removed $d"; done
             part_crash   # the normal crash kernel cmdline again, after --console
             return ;;
-        ''|--console) ;;
-        *) die "crashtest [--console|--clean]" ;;
     esac
+    ct_console=0 ct_guests=0
+    for ct_a in "$@"; do
+        case "$ct_a" in
+            --console) ct_console=1 ;;
+            --with-guests) ct_guests=1 ;;
+            *) die "crashtest [--console] [--with-guests] | --clean" ;;
+        esac
+    done
     [ "$ROLE" = canary ] || die "crashtest runs on vmh03 only (a production crash test is a decision step)"
     [ "$(cat /sys/kernel/kexec_crash_loaded 2>/dev/null)" = 1 ] || die "kdump is not loaded"
     running=$( { qm list 2>/dev/null; pct list 2>/dev/null; } | awk '$0 ~ / running / { n++ } END { print n + 0 }')
-    [ "$running" = 0 ] || die "$running guest(s) running"
+    if [ "$running" != 0 ]; then
+        [ "$ct_guests" = 1 ] || die "$running guest(s) running"
+        say "warning $running guest(s) running: they go down with the node (--with-guests)"
+    fi
     if [ -f /etc/pve/corosync.conf ]; then
         # A member's crash costs the cluster its vote: the others must keep quorum without it.
         q=$(pvecm status 2>/dev/null) || die "pvecm status failed"
@@ -857,7 +867,7 @@ crashtest() {
             || die "without this node the cluster has $((total - mine)) of $need votes needed: a crash would cost it quorum"
         say "ok      without $node: $((total - mine)) votes, quorum $need"
     fi
-    if [ "${1:-}" = --console ]; then
+    if [ "$ct_console" = 1 ]; then
         sed -i '/^[[:space:]]*#*[[:space:]]*KDUMP_CMDLINE_APPEND=/d' "$KDUMP_DEFAULTS"
         printf 'KDUMP_CMDLINE_APPEND="%s loglevel=7"\n' "$(printf '%s' "$KDUMP_APPEND" | sed 's/panic=10/panic=120/')" \
             >>"$KDUMP_DEFAULTS"
@@ -892,5 +902,5 @@ case "$mode" in
     canary-list) canary_list ;;
     health) payload HEALTH_B64 | sh -s -- "$@" ;;
     crashtest) crashtest "$@" ;;
-    *) die "unknown mode $mode: check | setup [PART...] | patch [--dry-run] | kernel VERSION|none [--next-boot] | cleanup [--dry-run] | canary-list | health | crashtest [--console|--clean]" ;;
+    *) die "unknown mode $mode: check | setup [PART...] | patch [--dry-run] | kernel VERSION|none [--next-boot] | cleanup [--dry-run] | canary-list | health | crashtest [--console] [--with-guests] | --clean" ;;
 esac

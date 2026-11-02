@@ -555,6 +555,95 @@ def bundle_case() -> bool:
     return good
 
 
+VMH03_IMG = build_host.NODE_IMAGE["vmh03"]
+
+
+def phase_vm_dry(spec: dict, sums: dict[str, str | None]) -> tuple[str, list[str], str]:
+    """phase_vm(spec, apply=False) with no VM and a silent address. SUMS maps a path to the
+    sha256 its node reports (None: missing). run and every other subprocess raise: a dry run
+    runs nothing. Returns (Fail message or "", the ssh commands asked, the printed output)."""
+    asked = []
+
+    def fake_ssh(t, c):
+        asked.append(c)
+        if "sha256sum" in c:
+            have = next((s for p, s in sums.items() if p in c), None)
+            return Done(0, f"{have}  x\n") if have else Done(1)
+        raise AssertionError(f"dry phase_vm asked {t}: {c}")
+
+    def fake_subprocess_run(argv, *a, **kw):
+        if argv[:1] == ["ping"]:
+            return Done(1)
+        raise AssertionError(f"dry phase_vm ran {argv[:3]}")
+
+    def fake_run(argv, *a, **kw):
+        raise AssertionError(f"dry phase_vm ran {argv[:3]}")
+
+    real = build_host.find_vm, build_host.subprocess.run, build_host.run
+    build_host.find_vm, build_host.subprocess.run, build_host.run = (lambda vmid: None), fake_subprocess_run, fake_run
+    try:
+        def call():
+            try:
+                build_host.phase_vm(spec, False, False, None)
+                return ""
+            except build_host.Fail as e:
+                return str(e)
+        err, out = with_ssh(fake_ssh, call)
+    finally:
+        build_host.find_vm, build_host.subprocess.run, build_host.run = real
+    return err, asked, out
+
+
+def node_image_cases() -> list[bool]:
+    """vmh03 (asyla hub backlog, d07): untagged vmbr0, and a local copy of IMAGE synced by sha256
+    from vmh01 before qm create. Dry runs only: nothing runs, ssh is a stand-in."""
+    v3 = temp_specs({"x": VM.replace('node = "vmh01"', 'node = "vmh03"') + 'bridge = "vmbr0"\nvlan = 0\n'})("x")
+    v1 = temp_specs({"x": VM})("x")
+    want = "a" * 64
+    out = []
+    err, asked, printed = phase_vm_dry(v3, {build_host.IMAGE: want, VMH03_IMG: want})
+    common = (not err and "--net0 virtio,bridge=vmbr0,firewall=1 --onboot" in printed
+              and f"import-from={VMH03_IMG}," in printed
+              and f"qemu-img convert -n -S 0 -f qcow2 -O raw {VMH03_IMG} " in printed
+              and f"qemu-img compare -f qcow2 -F raw {VMH03_IMG} " in printed)
+    out.append(check("phase_vm dry, vmh03, image matches: untagged vmbr0, its local copy, no copy listed",
+                     common and "matches vmh01's" in printed and "copy vmh01" not in printed
+                     and len([c for c in asked if "sha256sum" in c]) == 2, repr((err, asked, printed))))
+    for label, sums in (("differs", {build_host.IMAGE: want, VMH03_IMG: "b" * 64}), ("is missing", {build_host.IMAGE: want})):
+        err, asked, printed = phase_vm_dry(v3, sums)
+        common = (not err and "--net0 virtio,bridge=vmbr0,firewall=1 --onboot" in printed
+                  and f"import-from={VMH03_IMG}," in printed and f"-O raw {VMH03_IMG} " in printed)
+        out.append(check(f"phase_vm dry, vmh03, image {label}: the copy steps listed, nothing run",
+                         common and f"{VMH03_IMG} {label}; copy vmh01 -> workstation -> vmh03" in printed
+                         and all(f"  {s}: " in printed for s in ("prepare", "fetch", "send", "check and rename"))
+                         and f"echo '{want}  {VMH03_IMG}.part'" in printed, repr((err, asked, printed))))
+    err, asked, printed = phase_vm_dry(v1, {})
+    out.append(check("phase_vm dry, vmh01: tagged vmbr1, IMAGE from the NAS, no image sync",
+                     not err and "--net0 virtio,bridge=vmbr1,firewall=1,tag=100 --onboot" in printed
+                     and f"import-from={build_host.IMAGE}," in printed and VMH03_IMG not in printed
+                     and not any("sha256sum" in c for c in asked), repr((err, asked, printed))))
+    return out
+
+
+def image_sync_case() -> bool:
+    cmds = build_host.image_sync_cmds("vmh03", "/tmp/x.qcow2")
+    labels = [label for label, _ in cmds]
+    argv = dict(cmds)
+    part = f"{VMH03_IMG}.part"
+    chk = argv["check and rename"][-1]
+    return check("image_sync_cmds: prepare, fetch from vmh01, send to a .part, check the sum and rename",
+                 labels == ["prepare", "fetch", "send", "check and rename"]
+                 and argv["fetch"][0] == "scp" and argv["fetch"][-2:] == [f"root@vmh01:{build_host.IMAGE}", "/tmp/x.qcow2"]
+                 and argv["send"][0] == "scp" and argv["send"][-2:] == ["/tmp/x.qcow2", f"root@vmh03:{part}"]
+                 and argv["prepare"][-2] == "root@vmh03" and f"rm -f {part}" in argv["prepare"][-1]
+                 and argv["check and rename"][-2] == "root@vmh03"
+                 and "sha256sum -c" in chk and "{sha}" in chk and f"mv -f {part} {VMH03_IMG}" in chk
+                 and f"|| {{ rm -f {part}; exit 1; }}" in chk, repr(cmds))
+
+
+NET_LINE = "virtio=BC:24:11:00:00:01,bridge={b},firewall=1{t}"
+
+
 results = [
     # The secrets line, with --apply before and after the VAR names.
     documented("usage", "build_host.py HOST secrets check|push|install [--apply] [VAR ...]"),
@@ -688,6 +777,41 @@ results = [
     spec_case("test01 on the other node", "test01", "vmh02", "vmh02"),
     spec_case("a production host keeps its node", "d03", "vmh02", "is not disposable", refused=True),
     spec_case("a production host, its own node named", "d03", "vmh01", "vmh01"),
+    # vmh03 (d07): a production spec may name it; --node never moves the test host there (no local-data2).
+    refused("--node vmh03 (not a disposable node)", "test01 build --node vmh03", "invalid choice"),
+    spec_case("test01 is not moved to vmh03", "test01", "vmh03", "not in ('vmh01', 'vmh02')", refused=True),
+    spec_case("a production host on vmh03 is still not disposable", "d03", "vmh03", "is not disposable", refused=True),
+    check("a production spec on vmh03 loads",
+          temp_specs({"x": VM.replace('node = "vmh01"', 'node = "vmh03"')})("x")["vm"]["node"] == "vmh03"),
+    # [vm].bridge and [vm].vlan make net0 (default vmbr1, VLAN 100; 0 = untagged).
+    check("net0 defaults: vmbr1, tag 100",
+          build_host.net0_arg(temp_specs({"x": VM})("x")["vm"]) == "virtio,bridge=vmbr1,firewall=1,tag=100"),
+    check("net0 vmbr0, vlan 0: untagged, no tag=",
+          build_host.net0_arg(temp_specs({"x": VM + 'bridge = "vmbr0"\nvlan = 0\n'})("x")["vm"])
+          == "virtio,bridge=vmbr0,firewall=1"),
+    fails("bridge with a shell character is refused", "[vm].bridge must be",
+          lambda: temp_specs({"x": VM + 'bridge = "vmbr0;x"\n'})("x")),
+    fails("bridge that is not vmbrN is refused", "[vm].bridge must be",
+          lambda: temp_specs({"x": VM + 'bridge = "eth0"\n'})("x")),
+    fails("vlan as a string is refused", "[vm].vlan must be", lambda: temp_specs({"x": VM + 'vlan = "100"\n'})("x")),
+    fails("vlan as a boolean is refused", "[vm].vlan must be", lambda: temp_specs({"x": VM + 'vlan = true\n'})("x")),
+    fails("vlan 4095 is refused", "[vm].vlan must be", lambda: temp_specs({"x": VM + 'vlan = 4095\n'})("x")),
+    fails("vlan -1 is refused", "[vm].vlan must be", lambda: temp_specs({"x": VM + 'vlan = -1\n'})("x")),
+    check("net0 read back: untagged vmbr0 matches vmbr0/0",
+          build_host.net0_matches(NET_LINE.format(b="vmbr0", t=""), {"bridge": "vmbr0", "vlan": 0})),
+    check("net0 read back: a tag where the spec has none does not match",
+          not build_host.net0_matches(NET_LINE.format(b="vmbr0", t=",tag=100"), {"bridge": "vmbr0", "vlan": 0})),
+    check("net0 read back: vmbr1 tag 100 matches the defaults",
+          build_host.net0_matches(NET_LINE.format(b="vmbr1", t=",tag=100"), temp_specs({"x": VM})("x")["vm"])),
+    check("net0 read back: no net0 does not match", not build_host.net0_matches("", {"bridge": "vmbr1", "vlan": 100})),
+    check("net0 read back: tag 200 is not tag 100",
+          not build_host.net0_matches(NET_LINE.format(b="vmbr1", t=",tag=200"), {"bridge": "vmbr1", "vlan": 100})),
+    # vmh03 mounts no NAS storage: it builds from its own copy of IMAGE.
+    check("vm_image: vmh03 reads its local copy, vmh01 and vmh02 the NAS IMAGE",
+          build_host.vm_image("vmh03") == "/var/lib/vz/import/debian-13-generic-amd64.qcow2"
+          and build_host.vm_image("vmh01") == build_host.IMAGE and build_host.vm_image("vmh02") == build_host.IMAGE),
+    image_sync_case(),
+    *node_image_cases(),
     # The test role is test01's alone: no other spec may be recreated or destroyed without --confirm.
     check("only test01 is disposable",
           sorted(p.parent.name for p in build_host.REPO.glob("*/host.toml")

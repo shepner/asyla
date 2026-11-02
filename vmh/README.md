@@ -30,6 +30,7 @@ vmh/apply.sh kernel vmh03 VERSION --next-boot --production   # one trial boot; a
 vmh/apply.sh kernel vmh03 VERSION|none --production   # pin for every boot, or remove the pin
 vmh/apply.sh cleanup vmh03 [--dry-run] --production   # old kernels by PVE's own keep list, apt cache
 vmh/apply.sh crashtest vmh03 [--clean] --production   # vmh03 only: sysrq crash; did kdump save a vmcore?
+vmh/apply.sh crashtest vmh03 --with-guests --production   # refused (exit 3) while a guest runs, unless this: they go down too
 vmh/usage.py [--node vmh01] [--window 2]  # read-only: guest load by hour of week, quietest windows
 ```
 

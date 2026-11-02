@@ -13,7 +13,7 @@
 #   vmh/apply.sh kernel NODE VERSION|none [--next-boot]   pin a kernel ABI for the next boot(s)
 #   vmh/apply.sh cleanup NODE [--dry-run] old kernels (PVE's keep list), old kdump initrds, apt cache, May leftovers
 #   vmh/apply.sh health NODE              read-only: vmh/health.sh, as host-maintenance runs it
-#   vmh/apply.sh crashtest vmh03 [--console|--clean]   sysrq crash: does kdump save a vmcore?
+#   vmh/apply.sh crashtest vmh03 [--console] [--with-guests] | --clean   sysrq crash: kdump's vmcore?
 # All three are production since vmh03 joined vmc01 on 2026-10-23 (asyla critical-infra, CRI-1): any
 # mode other than survey, check, health and patch --plan also needs --production, given only after
 # the operator approved that exact command. vmh03 stays the canary: patched first, the crash tests.
@@ -75,6 +75,34 @@ case "$mode" in
         fi ;;
     *) usage ;;
 esac
+
+# A crash takes vmh03's guests down with the node (d07 runs the network monitors). Read which run
+# first and refuse while any does, unless --with-guests (asyla hub backlog, the d07 item, fail-safe
+# rule 6); setup.sh's crashtest counts them again on the node and takes the same flag.
+if [ "$mode" = crashtest ] && [ "${1:-}" != --clean ]; then
+    with_guests=0
+    for a in "$@"; do [ "$a" != --with-guests ] || with_guests=1; done
+    read -r -d '' guest_read <<'GUESTS' || true
+set -e
+vms=$(qm list)
+cts=$(pct list)
+printf '%s\n' "$vms" | awk 'NR > 1 && $3 == "running" { print "VM " $1 " (" $2 ")" }'
+printf '%s\n' "$cts" | awk 'NR > 1 && $2 == "running" { print "CT " $1 }'
+GUESTS
+    guests=$(printf '%s\n' "$guest_read" | "${SSH[@]}" "root@$addr" sh -s) \
+        || { echo "apply.sh: cannot read the running guests on $node; refusing the crash test" >&2; exit 1; }
+    if [ -n "$guests" ]; then
+        if [ "$with_guests" != 1 ]; then
+            {
+                echo "apply.sh: guests run on $node, and a crash takes them down with it (d07 runs the network monitors):"
+                printf '%s\n' "$guests" | sed 's/^/  /'
+                echo "Stop them first, or add --with-guests once the operator has approved taking them down too."
+            } >&2
+            exit 3
+        fi
+        echo "apply.sh: --with-guests: these go down with $node: $(printf '%s\n' "$guests" | paste -sd ' ' -)" >&2
+    fi
+fi
 
 # setup.sh gets its payloads as shell variables in front of it (base64, one line each).
 b64() { base64 <"$1" | tr -d '\n'; }
