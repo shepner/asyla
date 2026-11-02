@@ -7,12 +7,17 @@ host-maintenance when a copy is missed (asyla backlog item
 
 - **How it reaches the files:** Ubiquiti's Site Manager connector,
   `https://api.ui.com/v1/connector/consoles/{id}/proxy/network/dl/autobackup/`: `autobackup_meta.json`
-  (each file's name, time, version and size), then each `.unf` by name. The connector passes
-  `/proxy/network/` only; UniFi OS paths answer 403 (2026-10-23). The Cloud Key's SSH is off and stays
+  (each file's name, time, version and size), then each `.unf` by name, newest first. The connector
+  passes `/proxy/network/` only; UniFi OS paths answer 403 (2026-10-23). It gives up on a request
+  after about 25 s (HTTP 408 `DeviceTimeout`; a Range header does not help, 2026-11-02): DAY's
+  8.5-9.5 MB files of 2026-05 to 2026-09 never come through. An older file that cannot be fetched is
+  listed under `not_fetched` in `status.json` and tried each cycle until it ages off the console;
+  only the newest file's failure alerts. The Cloud Key's SSH is off and stays
   off. DAY's LAN collides with the home 192.168.1.0/24, so the connector is the one path to both.
 - **What it copies:** the Network application's autobackups (Settings > Control Plane > Backups),
-  monthly on both consoles: MKE 00:30 on the 1st America/Chicago (settings only, about 83 KB), DAY
-  00:00 on the 1st America/New_York (180 days of statistics, 2-15 MB). The operator keeps that
+  monthly on both consoles: MKE 00:30 on the 1st America/Chicago (settings only, about 83 KB; 260 KB
+  from Network 11.0), DAY 00:00 on the 1st America/New_York (180 days of statistics, 2-15 MB under
+  Network 10.x; 434 KB from 11.0). The operator keeps that
   schedule (2026-10-23: "Its not like these configs change very often"). The weekly UniFi OS console
   backups stay on the Cloud Key: the connector cannot reach them.
 - **Where:** `/mnt/nas/data1/docker/unifi-backup/<console>/autobackup_*.unf` (folder mode 700,
@@ -24,16 +29,25 @@ host-maintenance when a copy is missed (asyla backlog item
   fetched to `FILE.part`, checked, then renamed; a name already there is skipped.
 - **The check (each copy, and `check`):** the size the console listed; AES-128-CBC decrypt with
   the key and IV every `.unf` uses (github.com/zhangyoufu/unifi-backup-decrypt `decrypt.sh`); the
-  zip inside opens, every member's CRC holds, it has `version` and `db.gz`, and `db.gz`
-  decompresses. That is the file Network > Settings > Control Plane > Backups > Restore takes.
+  zip inside opens, every member's CRC holds, it has `version`, `format` and its format's database,
+  and every `.gz` member decompresses. That is the file Network > Settings > Control Plane > Backups
+  > Restore takes. Read from the consoles' own files on 2026-11-02:
+  - Network 10.x writes format `bson` (database `db.gz`) and drops the zip's last part block when
+    it encrypts, so the 22-byte end record is cut to 8-19 bytes. That is why `decrypt.sh` runs
+    `zip -FF`. The check rebuilds the end record from the central directory, which is whole.
+  - Network 11.0 writes format `postgres_v1` (database `db-config.jsonl.gz`, beside other
+    `db-*.jsonl.gz` and schema dumps; no `db.gz`), zero-padded to the block.
+  - A format the check does not know is kept when the rest holds, with a warning: add its
+    database to `DB_MEMBER` in `unifi_backup.py`.
 - **Alerts:** `/mnt/docker/unifi-backup/status.json`, read by host-maintenance's monitor
   (`[[status]]` unifi-backup in its `config/maintenance.toml`; stale after 150 minutes is urgent).
 
   | Problem | Severity |
   | --- | --- |
   | The console's newest autobackup not on the NAS 24 h after it was made (`copy_grace_hours`) | urgent |
-  | A console cannot be read or a file fetched | warn, urgent from the 3rd cycle in a row |
+  | A console's list cannot be read, or its newest file fetched | warn, urgent from the 3rd cycle in a row |
   | A copy fetched but its check fails (it is not kept) | warn |
+  | A copy in a format the check does not know (it is kept) | warn |
   | The console's newest autobackup older than `max_age_days` (32: autobackup off or failing) | warn |
   | The console lists no autobackup | warn |
   | A staged test alert (`stage`) | urgent |

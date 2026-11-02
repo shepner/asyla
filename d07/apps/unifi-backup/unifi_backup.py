@@ -2,7 +2,7 @@
 """Copy the UniFi Network autobackups of each console to the NAS, and check each copy opens. GET only.
 
     unifi_backup.py                 # one cycle (the unifi-backup container runs it every hour)
-    unifi_backup.py --check FILE    # does this .unf open: decrypt, zip CRCs, db.gz; no key, no network
+    unifi_backup.py --check FILE    # does this .unf open: decrypt, zip CRCs, its database; no key, no network
     unifi_backup.py --check-newest  # the same for each console's newest copy
 
 The unifi-backup container (compose.yml) runs one cycle every UNIFI_INTERVAL seconds, a fresh process
@@ -10,7 +10,11 @@ each time, so a script update from the nightly scripts task applies at the next 
 https://api.ui.com/ with the Site Manager key: GET v1/hosts (each console's id), then per console
 through the connector GET .../proxy/network/dl/autobackup/autobackup_meta.json (the console's list
 of autobackups: filename, datetime, version, size) and GET .../dl/autobackup/FILE for each file not
-yet copied. The connector passes /proxy/network/ only (UniFi OS paths answer 403, 2026-10-23), so the
+yet copied, newest first. The connector gives up on a request after about 25 s (HTTP 408
+DeviceTimeout, 2026-11-02; a Range header does not help), so a file the console cannot send in that
+time is never fetched: DAY's 8.5-9.5 MB files of 2026-05 to 2026-09 (180 days of statistics). Such
+an older file is listed under not_fetched in status.json; only the newest file's failure is a
+problem. The connector passes /proxy/network/ only (UniFi OS paths answer 403, 2026-10-23), so the
 weekly UniFi OS console backups are out of reach; these are the Network application's own (Settings >
 Control Plane > Backups; monthly on both consoles, operator 2026-10-23: kept).
 
@@ -18,9 +22,11 @@ A file is copied to COPIES/<console>/FILE.part, checked, then renamed to FILE (m
 exists was checked, so the cycle skips it. Nothing is ever deleted here; history is nas01's daily
 ZFS snapshots of data1/docker. The check: the size the console reported; AES-128-CBC decrypt with
 the fixed key and IV every UniFi .unf uses (github.com/zhangyoufu/unifi-backup-decrypt decrypt.sh:
-openssl enc -d -aes-128-cbc -nopad, then zip -FF); the zip inside opens and every member's CRC
-holds; it has `version` and `db.gz`, and db.gz decompresses whole. A .unf holds WLAN passphrases and
-admin password hashes (the fixed key is public): nothing of its content is printed or kept outside
+openssl enc -d -aes-128-cbc -nopad, then zip -FF); the zip inside opens (its end record rebuilt when
+the encryption cut it short, which is what zip -FF repairs) and every member's CRC holds; it has
+`version`, `format` and the database its format keeps (DB_MEMBER), and every .gz member decompresses
+whole. A format the check does not know is kept when the rest holds, with a warning. A .unf holds
+WLAN passphrases and admin password hashes (the fixed key is public): nothing of its content is printed or kept outside
 COPIES.
 
 Writes, in UNIFI_DATA (/data, the host's /mnt/docker/unifi-backup):
@@ -43,12 +49,14 @@ import io
 import json
 import os
 import re
+import struct
 import sys
 import tomllib
 import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
+import zlib
 from pathlib import Path
 
 API = "https://api.ui.com/"
@@ -60,6 +68,11 @@ AUTOBACKUP = "v1/connector/consoles/{id}/proxy/network/dl/autobackup/"
 NAME = re.compile(r"autobackup_[0-9A-Za-z._-]+\.unf")   # a name from the console: no path in it
 # Every UniFi .unf is encrypted with this one public cipher setting (decrypt.sh, cited above).
 UNF_AES = (b"bcyangkmluohmars", b"ubntenterpriseap")
+# The database member of each backup format (the zip's `format` member), read from the consoles'
+# files on 2026-11-02: Network 10.x writes bson (a MongoDB dump, db.gz); 11.0 writes postgres_v1
+# (one db-<name>.jsonl.gz per database plus schema dumps; db-config holds the settings).
+DB_MEMBER = {"bson": "db.gz", "postgres_v1": "db-config.jsonl.gz"}
+EOCD, CDH = b"PK\x05\x06", b"PK\x01\x02"
 
 
 class ApiError(Exception):
@@ -198,29 +211,57 @@ def aes128_cbc_decrypt(data: bytes, key: bytes, iv: bytes) -> bytes:
 
 # --- the check of one .unf -------------------------------------------------------------------------
 
+def mend_end(raw: bytes) -> bytes:
+    """The zip with its end record rebuilt, or raw as it is when that cannot be done.
+
+    A console encrypts without padding and drops the last part block, so a 10.x file's 22-byte end
+    record lost its last 1-15 bytes (8 to 19 of 22 left in the eight files read on 2026-11-02); the
+    central directory before it is whole. Its start is the one central header from which the records
+    run back to back to the cut record, the first naming the member at offset 0.
+    """
+    e = raw.rfind(EOCD)
+    if e < 0 or len(raw) - e >= 22:
+        return raw
+    c = raw.find(CDH)
+    while 0 <= c < e:
+        i, n = c, 0
+        while i + 46 <= e and raw[i:i + 4] == CDH:
+            nl, el, cl = struct.unpack("<HHH", raw[i + 28:i + 34])
+            i, n = i + 46 + nl + el + cl, n + 1
+        if i == e and struct.unpack("<I", raw[c + 42:c + 46])[0] == 0:
+            return raw[:e] + struct.pack("<4s4H2LH", EOCD, 0, 0, n, n, e - c, c, 0)
+        c = raw.find(CDH, c + 1)
+    return raw
+
+
 def check_unf(blob: bytes) -> dict:
-    """Decrypt and open a .unf in memory; raise BadCopy, else {version, members, db_bytes}."""
+    """Decrypt and open a .unf in memory; raise BadCopy, else {version, format, known, members, db_bytes}."""
     raw = aes128_cbc_decrypt(blob, *UNF_AES)
     if not raw.startswith(b"PK\x03\x04"):
         raise BadCopy("does not decrypt to a zip archive")
     try:
-        z = zipfile.ZipFile(io.BytesIO(raw))   # trailing cipher padding after the end record is fine
+        z = zipfile.ZipFile(io.BytesIO(mend_end(raw)))   # zero padding after the end record (11.x) is fine
         names = z.namelist()
         bad = z.testzip()
-    except (zipfile.BadZipFile, OSError, EOFError, ValueError) as e:
+    except (zipfile.BadZipFile, zlib.error, OSError, EOFError, ValueError) as e:   # zlib: a member's data broken
         raise BadCopy(f"zip does not open: {type(e).__name__}") from None
     if bad:
         raise BadCopy(f"zip member {bad} fails its CRC")
-    for need in ("version", "db.gz"):
+    for need in ("version", "format"):
         if need not in names:
             raise BadCopy(f"zip has no {need}")
-    try:
-        with gzip.GzipFile(fileobj=z.open("db.gz")) as g:
-            db = sum(len(b) for b in iter(lambda: g.read(1 << 20), b""))
-    except (OSError, EOFError) as e:
-        raise BadCopy(f"db.gz does not decompress: {type(e).__name__}") from None
+    fmt = z.read("format").decode("ascii", "replace").strip()
+    if fmt in DB_MEMBER and DB_MEMBER[fmt] not in names:
+        raise BadCopy(f"zip has no {DB_MEMBER[fmt]} (format {fmt})")
+    db = 0
+    for n in (n for n in names if n.endswith(".gz")):
+        try:
+            with gzip.GzipFile(fileobj=z.open(n)) as g:
+                db += sum(len(b) for b in iter(lambda: g.read(1 << 20), b""))
+        except (OSError, EOFError, zlib.error) as e:
+            raise BadCopy(f"{n} does not decompress: {type(e).__name__}") from None
     version = z.read("version").decode("ascii", "replace").strip()
-    return {"version": version, "members": len(names), "db_bytes": db}
+    return {"version": version, "format": fmt, "known": fmt in DB_MEMBER, "members": len(names), "db_bytes": db}
 
 
 # --- the cycle -------------------------------------------------------------------------------------
@@ -230,7 +271,9 @@ def request(rel: str, key: str, timeout: int = 60):
     try:
         return urllib.request.urlopen(req, timeout=timeout)
     except urllib.error.HTTPError as e:   # the code only: a body is not ours to print
-        raise ApiError(f"GET {rel.split('?')[0]}: HTTP {e.code}") from None
+        e.close()
+        why = " (the connector's limit of about 25 s)" if e.code == 408 else ""
+        raise ApiError(f"GET {rel.split('?')[0]}: HTTP {e.code}{why}") from None
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         raise ApiError(f"GET {rel.split('?')[0]}: {type(e).__name__}: {getattr(e, 'reason', e)}") from None
 
@@ -246,7 +289,7 @@ def get_json(rel: str, key: str):
 def download(rel: str, key: str, dest: Path) -> int:
     n = 0
     try:
-        with request(rel, key, timeout=600) as r, open(dest, "wb") as f:
+        with request(rel, key, timeout=120) as r, open(dest, "wb") as f:   # the connector stops at ~25 s
             for chunk in iter(lambda: r.read(1 << 20), b""):
                 f.write(chunk)
                 n += len(chunk)
@@ -278,8 +321,13 @@ def write_atomic(path: Path, text: str) -> None:
     tmp.replace(path)
 
 
-def copy_console(name: str, cid: str, key: str, ccfg: dict, cfg: dict, t: dt.datetime) -> tuple[list, dict]:
-    """Copy what is missing for one console; (findings, summary). Raises ApiError on a failed read."""
+def copy_console(name: str, cid: str, key: str, ccfg: dict, cfg: dict,
+                 t: dt.datetime) -> tuple[list, dict, ApiError | None]:
+    """Copy what is missing for one console; (findings, summary, the newest file's fetch error).
+
+    Raises ApiError when the list cannot be read. Newest first, and a file that cannot be fetched
+    does not stop the others: an older one goes to summary["not_fetched"] and is tried again next cycle.
+    """
     found = []
     base = AUTOBACKUP.format(id=urllib.parse.quote(cid, safe=""))
     meta = get_json(base + "autobackup_meta.json", key)
@@ -287,8 +335,10 @@ def copy_console(name: str, cid: str, key: str, ccfg: dict, cfg: dict, t: dt.dat
              if isinstance(m, dict) and NAME.fullmatch(str(m.get("filename", "")))]
     folder = COPIES / name
     folder.mkdir(mode=0o700, parents=True, exist_ok=True)
-    copied = []
-    for m in sorted(files, key=lambda m: m.get("datetime") or ""):
+    copied, not_fetched, newest_err = [], {}, None
+    files.sort(key=lambda m: m.get("datetime") or "", reverse=True)
+    newest = files[0] if files else None
+    for m in files:
         fn = m["filename"]
         final = folder / fn
         if final.exists():
@@ -298,16 +348,25 @@ def copy_console(name: str, cid: str, key: str, ccfg: dict, cfg: dict, t: dt.dat
             got = download(base + urllib.parse.quote(fn), key, part)
             if isinstance(m.get("size"), int) and got != m["size"]:
                 raise BadCopy(f"{got} bytes, the console lists {m['size']}")
-            check_unf(part.read_bytes())
+            r = check_unf(part.read_bytes())
             part.chmod(0o600)
             part.replace(final)
             copied.append(fn)
+            if not r["known"]:
+                found.append((f"format:{name}", "warn",
+                              f"UniFi backup {name}: {fn} is format {r['format']!r}, which the check does not "
+                              f"know; it opens and its .gz members decompress, so it is kept (add its "
+                              f"database to DB_MEMBER)"))
         except BadCopy as e:
             found.append((f"copy:{name}:{fn}", "warn", f"UniFi backup {name}: {fn} copied but does not check: {e}"))
+        except ApiError as e:
+            if m is newest:
+                newest_err = e
+            else:
+                not_fetched[fn] = str(e).rsplit(": ", 1)[-1]
         finally:
             part.unlink(missing_ok=True)
     have = sorted(p.name for p in folder.glob("autobackup_*.unf"))
-    newest = max(files, key=lambda m: m.get("datetime") or "", default=None)
     newest_t = parse(newest.get("datetime")) if newest else None
     if newest is None:
         found.append((f"none:{name}", "warn", f"UniFi backup {name}: the console lists no autobackup"))
@@ -320,9 +379,9 @@ def copy_console(name: str, cid: str, key: str, ccfg: dict, cfg: dict, t: dt.dat
             found.append((f"stale:{name}", "warn",
                           f"UniFi backup {name}: the console's newest autobackup is from {iso(newest_t)}, "
                           f"older than {ccfg['max_age_days']} days (autobackup off or failing?)"))
-    summary = {"console_files": len(files), "copies": len(have), "copied_now": copied,
+    summary = {"console_files": len(files), "copies": len(have), "copied_now": copied, "not_fetched": not_fetched,
                "newest": newest["filename"] if newest else None, "newest_copy": have[-1] if have else None}
-    return found, summary
+    return found, summary, newest_err
 
 
 def staged(t: dt.datetime) -> list:
@@ -358,8 +417,10 @@ def cycle() -> int:
             cid = ids.get(name.lower())
             if not cid:
                 raise ApiError(f"console {name} not listed in Site Manager v1/hosts")
-            f, summary[name] = copy_console(name, cid, key, ccfg, cfg, t)
+            f, summary[name], err = copy_console(name, cid, key, ccfg, cfg, t)
             found += f
+            if err:
+                raise err
             fails[name] = 0
         except ApiError as e:
             fails[name] = fails.get(name, 0) + 1
@@ -385,7 +446,9 @@ def check_files(paths: list[Path]) -> int:
     for p in paths:
         try:
             r = check_unf(p.read_bytes())
-            print(f"OK {p}: opens; Network {r['version']}, {r['members']} members, db {r['db_bytes']} bytes")
+            print(f"OK {p}: opens; Network {r['version']}, format {r['format']}"
+                  f"{'' if r['known'] else ' (not known to the check)'}, {r['members']} members, "
+                  f".gz members {r['db_bytes']} bytes")
         except (BadCopy, OSError) as e:
             print(f"FAIL {p}: {e}")
             rc = 1

@@ -4,8 +4,10 @@
     python3 scripts/tests/test_unifi_backup.py
 
 The connector's answers are built here in the shapes read on 2026-10-23 (v1/hosts,
-dl/autobackup/autobackup_meta.json); nothing reaches the network. The .unf stand-ins are small zips
-encrypted with the system's openssl (its tests skip without one); they hold no real configuration.
+dl/autobackup/autobackup_meta.json) and 2026-11-02 (HTTP 408 DeviceTimeout on a large file); nothing
+reaches the network. The .unf stand-ins are small zips encrypted with the system's openssl (its tests
+skip without one), built in the shapes of the consoles' files read on 2026-11-02 (member names, data
+descriptors, the end record cut short by 10.x, zero padding by 11.0); they hold no real configuration.
 """
 from __future__ import annotations
 
@@ -15,6 +17,7 @@ import importlib.util
 import io
 import json
 import os
+import random
 import shutil
 import subprocess
 import tempfile
@@ -34,19 +37,73 @@ OPENSSL = shutil.which("openssl")
 API_VALUE = "stand-in-api-value"   # what the fake API checks the header against; not a real one
 
 
-def unf(members: dict[str, bytes] | None = None, tail: bytes = b"") -> bytes:
-    """A .unf as a console writes it: a zip, zero-filled to the block size, AES-128-CBC with the fixed setting."""
-    if members is None:
-        members = {"version": b"10.6.106\n", "format": b"bson\n", "db.gz": gzip.compress(b"\x00" * 5000)}
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+def bson(**extra) -> dict[str, bytes]:
+    """The members of a Network 10.x (format bson) autobackup, in its order; made-up content."""
+    return {"version": b"10.6.106", "timestamp": b"1790832600037", "backup.json": b'{"type":"autobackup"}',
+            "format": b"bson", "db_stat.gz": gzip.compress(b"\x00" * 900), "sites/": b"",
+            "system.properties": b"# stand-in\n", "db.gz": gzip.compress(b"\x00" * 5000), **extra}
+
+
+def postgres_v1(**extra) -> dict[str, bytes]:
+    """The members of a Network 11.0 (format postgres_v1) autobackup (some of its 19); made-up content."""
+    m = {"backup.json": b'{"type":"autobackup"}', "format": b"postgres_v1",
+         "system.properties": b"# stand-in\n", "timestamp": b"1793511000025", "version": b"11.0.97"}
+    for db in ("audit", "config", "logs", "stats"):
+        m[f"db-{db}.schema.pre.sql.gz"] = gzip.compress(b"-- stand-in schema\n")
+    m["db-config.jsonl.gz"] = gzip.compress(b'{"stand":"in"}\n' * 300)
+    return {**m, **extra}
+
+
+class Unseekable(io.RawIOBase):
+    """A stream zipfile cannot seek back in, so it writes data descriptors as the consoles do (flag 0x08)."""
+
+    def __init__(self):
+        self.buf = bytearray()
+
+    def writable(self):
+        return True
+
+    def write(self, b):
+        self.buf += b
+        return len(b)
+
+
+def zip_bytes(members: dict[str, bytes], filler: int = 0) -> bytes:
+    out = Unseekable()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         for n, b in members.items():
             z.writestr(n, b)
-    raw = buf.getvalue() + tail
-    raw += b"\x00" * (-len(raw) % 16)
+        if filler:   # incompressible: the zip grows by one byte per byte
+            z.writestr("filler", random.Random(1).randbytes(filler))
+    return bytes(out.buf)
+
+
+def unf(members: dict[str, bytes] | None = None, end_left: int | None = 9, tail: bytes = b"") -> bytes:
+    """A .unf as a console writes it, AES-128-CBC with the fixed setting.
+
+    end_left: like 10.x, the zip's last part block is dropped, leaving this many of the end record's
+    22 bytes (7-21; the consoles' files left 8-19). None: like 11.0, zero-filled to the block size.
+    """
+    members = bson() if members is None else members
+    if end_left is None:
+        raw = zip_bytes(members) + tail
+        raw += b"\x00" * (-len(raw) % 16)
+    else:
+        want = 22 - end_left
+        raw = next(r for r in (zip_bytes(members, n) for n in range(0, 64)) if len(r) % 16 == want)
+        raw = raw[:len(raw) - want]
+    return seal(raw)
+
+
+def seal(raw: bytes) -> bytes:
     k, iv = ub.UNF_AES
     return subprocess.run([OPENSSL, "enc", "-aes-128-cbc", "-nopad", "-K", k.hex(), "-iv", iv.hex()],
                           input=raw, capture_output=True, check=True).stdout
+
+
+class TimeoutBody(io.BytesIO):
+    def close(self):   # what the connector sends with its 408
+        pass
 
 
 class Resp(io.BytesIO):
@@ -63,6 +120,7 @@ class FakeApi:
     def __init__(self, consoles: dict[str, dict[str, bytes]], times: dict[str, str] | None = None):
         self.consoles, self.times = consoles, times or {}
         self.sizes: dict[str, int] = {}   # a listed size that differs from the file
+        self.slow: set[str] = set()       # files the connector gives up on (HTTP 408 DeviceTimeout)
         self.down = False
         self.calls: list[str] = []
 
@@ -87,6 +145,8 @@ class FakeApi:
                                             "version": "10.6.106", "format": "bson",
                                             "size": self.sizes.get(f, len(b))}
                                         for f, b in files.items()}).encode())
+            if fn in self.slow:
+                raise urllib.error.HTTPError(url, 408, "Request Timeout", {}, TimeoutBody(b'{"code":"DeviceTimeout"}'))
             if fn in files:
                 return Resp(files[fn])
         raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
@@ -105,27 +165,70 @@ class Check(unittest.TestCase):
                              input=data, capture_output=True, check=True).stdout
         self.assertEqual(ub.aes128_cbc_decrypt(enc, k, iv), data)
 
-    def test_a_good_unf_opens(self):
-        r = ub.check_unf(unf())
-        self.assertEqual((r["version"], r["members"], r["db_bytes"]), ("10.6.106", 3, 5000))
+    def test_a_10x_file_with_its_end_record_cut_opens(self):
+        for left in (7, 8, 9, 14, 15, 18, 19, 21):
+            with self.subTest(left=left):
+                blob = unf(end_left=left)
+                raw = ub.aes128_cbc_decrypt(blob, *ub.UNF_AES)
+                self.assertEqual(len(raw) - raw.rfind(ub.EOCD), left)
+                with self.assertRaises(zipfile.BadZipFile):   # what failed on d07, 2026-11-02
+                    zipfile.ZipFile(io.BytesIO(raw))
+                r = ub.check_unf(blob)
+                self.assertEqual((r["version"], r["format"], r["known"], r["members"]), ("10.6.106", "bson", True, 9))
+                self.assertEqual(r["db_bytes"], 5900)
 
-    def test_trailing_bytes_after_the_zip_are_fine(self):
-        self.assertEqual(ub.check_unf(unf(tail=b"\x00" * 40))["version"], "10.6.106")
+    def test_a_11x_postgres_file_opens(self):
+        r = ub.check_unf(unf(postgres_v1(), end_left=None))
+        self.assertEqual((r["version"], r["format"], r["known"], r["members"]), ("11.0.97", "postgres_v1", True, 10))
+
+    def test_zero_padding_after_the_zip_is_fine(self):
+        self.assertEqual(ub.check_unf(unf(end_left=None, tail=b"\x00" * 40))["version"], "10.6.106")
+
+    def test_a_central_header_inside_a_member_is_not_taken_for_the_directory(self):
+        m = bson(**{"sites/default/x": b"PK\x01\x02" + bytes(60)})
+        out = Unseekable()
+        with zipfile.ZipFile(out, "w") as z:   # stored, so the signature stays in the file as written
+            for n, b in m.items():
+                z.writestr(n, b)
+        raw = bytes(out.buf)
+        self.assertGreater(raw.count(ub.CDH), len(m))
+        cut = len(raw) % 16 or 16
+        mended = ub.mend_end(raw[:-cut])
+        self.assertEqual(zipfile.ZipFile(io.BytesIO(mended)).namelist(), list(m))
+
+    def test_an_unknown_format_is_kept_and_named(self):
+        r = ub.check_unf(unf({"version": b"12.0.1", "format": b"sqlite_v2", "db.sqlite.gz": gzip.compress(b"x")}))
+        self.assertEqual((r["format"], r["known"]), ("sqlite_v2", False))
 
     def test_refusals(self):
+        cut = unf()
         cases = {
-            "not a whole number of AES blocks": unf()[:-3],
+            "not a whole number of AES blocks": cut[:-3],
             "does not decrypt to a zip": os.urandom(256),
-            "zip has no db.gz": unf({"version": b"10.6.106"}),
-            "db.gz does not decompress": unf({"version": b"1", "db.gz": b"not gzip at all"}),
+            "zip does not open": cut[:-64],   # the central directory itself is gone
+            "zip has no format": unf({"version": b"10.6.106", "db.gz": gzip.compress(b"x")}),
+            "zip has no db.gz (format bson)": unf({k: v for k, v in bson().items() if k != "db.gz"}),
+            "zip has no db-config.jsonl.gz (format postgres_v1)":
+                unf({k: v for k, v in postgres_v1().items() if k != "db-config.jsonl.gz"}, end_left=None),
+            "db.gz does not decompress": unf(bson(**{"db.gz": b"not gzip at all"})),
+            "db_stat.gz does not decompress": unf(bson(**{"db_stat.gz": b"not gzip either"})),
         }
         for want, blob in cases.items():
             with self.subTest(want), self.assertRaises(ub.BadCopy) as e:
                 ub.check_unf(blob)
-            self.assertIn(want.split()[-1], str(e.exception))
+            self.assertIn(want, str(e.exception))
+
+    def test_broken_deflate_data_is_a_bad_copy_not_a_crash(self):
+        raw = bytearray(zip_bytes(bson()))
+        at = raw.find(b"db.gz") + len(b"db.gz")   # its local header's name; the deflate data follows
+        raw[at] = 0xFF   # block type 3 does not exist: zlib.error, not BadZipFile
+        raw += b"\x00" * (-len(raw) % 16)
+        with self.assertRaises(ub.BadCopy) as e:
+            ub.check_unf(seal(bytes(raw)))
+        self.assertIn("zip does not open: error", str(e.exception))
 
     def test_a_flipped_byte_is_caught(self):
-        blob = bytearray(unf({"version": b"1", "db.gz": gzip.compress(os.urandom(3000))}))
+        blob = bytearray(unf(bson(**{"db.gz": gzip.compress(os.urandom(3000))})))
         blob[200] ^= 0xFF
         with self.assertRaises(ub.BadCopy):
             ub.check_unf(bytes(blob))
@@ -219,6 +322,39 @@ class Cycle(unittest.TestCase):
         s = self.run_cycle()
         self.assertEqual(self.keys(s), {"staged": "urgent"})
         self.assertNotIn(API_VALUE, (ub.DATA / "status.json").read_text())
+
+    def test_newest_first_and_an_older_file_that_times_out_is_listed_not_alerted(self):
+        self.api.slow.add(self.MKE1)
+        s = self.run_cycle()
+        self.assertEqual(self.keys(s), {})
+        self.assertTrue(s["ok"])
+        self.assertEqual(s["consoles"]["MKE"]["copied_now"], [self.MKE2])
+        self.assertIn("HTTP 408", s["consoles"]["MKE"]["not_fetched"][self.MKE1])
+        fetched = [u.rsplit("/", 1)[-1] for u in self.api.calls if u.endswith(".unf")]
+        self.assertEqual(fetched[:2], [self.MKE2, self.MKE1])
+        self.api.slow.clear()   # tried again next cycle
+        s = self.run_cycle()
+        self.assertEqual((s["consoles"]["MKE"]["copied_now"], s["consoles"]["MKE"]["not_fetched"]), ([self.MKE1], {}))
+
+    def test_the_newest_timing_out_is_an_api_problem_but_older_files_are_copied(self):
+        self.api.slow.add(self.MKE2)
+        self.at(dt.datetime(2026, 10, 1, 12, 0, tzinfo=dt.timezone.utc))   # 6.5 h after it was made
+        for sev in ("warn", "warn", "urgent"):
+            s = self.run_cycle()
+            self.assertEqual(self.keys(s), {"api:MKE": sev})
+            self.assertFalse(s["ok"])
+        self.assertIn("HTTP 408", s["problems"][0]["message"])
+        self.assertEqual(s["consoles"]["MKE"]["newest_copy"], self.MKE1)
+        self.at(dt.datetime(2026, 10, 2, 6, 0, tzinfo=dt.timezone.utc))   # 24.5 h after it was made
+        self.assertEqual(self.keys(self.run_cycle()), {"api:MKE": "urgent", "missed:MKE": "urgent"})
+
+    def test_both_formats_are_copied_and_an_unknown_one_is_kept_with_a_warning(self):
+        self.api.consoles["DAY"][self.DAY1] = unf(postgres_v1(), end_left=None)
+        self.api.consoles["MKE"][self.MKE2] = unf({"version": b"12.0.1", "format": b"sqlite_v2"})
+        s = self.run_cycle()
+        self.assertEqual(self.keys(s), {"format:MKE": "warn"})
+        self.assertTrue((ub.COPIES / "DAY" / self.DAY1).exists())
+        self.assertTrue((ub.COPIES / "MKE" / self.MKE2).exists())
 
     def test_check_newest(self):
         self.run_cycle()

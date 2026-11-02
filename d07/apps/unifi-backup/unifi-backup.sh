@@ -79,6 +79,8 @@ s = json.load(open(sys.argv[1]))
 print(s["time"], "ok" if s["ok"] else "API failing")
 for n, c in s["consoles"].items():
     print(f"  {n}: {c['copies']} copies, {c['console_files']} on the console, newest {c['newest']}")
+    for f, why in (c.get("not_fetched") or {}).items():
+        print(f"    not fetched (older; tried each cycle): {f}: {why}")
 for p in s["problems"]:
     print(f"  [{p['severity']}] {p['message']}")
 EOF
