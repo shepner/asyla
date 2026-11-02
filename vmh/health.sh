@@ -6,6 +6,38 @@
 # Exit 0 always (the caller reads the lines); 2 if this is not a Proxmox node.
 set -u
 
+r() { printf '%s\t%s\t%s\n' "$1" "$2" "$3"; }
+has() { command -v "$1" >/dev/null 2>&1; }
+one() { tr '\n' ' ' | sed -e 's/[[:space:]]\{1,\}/ /g' -e 's/^ //' -e 's/ $//'; }
+
+# The last real unattended-upgrades run in LOG: "START<TAB>OUTCOME LINE", START as YYYY-MM-DD HH:MM:SS.
+# A --dry-run also logs "All upgrades installed" (vmh02, 2026-10-24); apt-daily's download-only run
+# logs "Starting" and no outcome (vmh01, 2026-11-02 03:36). Only runs with an outcome count.
+uu_last_run() {
+    awk '/INFO Starting unattended upgrades script/ { dry = 0; st = $1 " " substr($2, 1, 8) }
+        /Option --dry-run given/ { dry = 1 }
+        !dry && /INFO (No packages found|All upgrades installed)|ERROR/ { s = st; l = $0 }
+        END { if (l != "") printf "%s\t%s\n", s, l }' "$1" 2>/dev/null
+}
+
+# The apt line. Security packages pending on production warn only once the last unattended-upgrades
+# run started after the lists that offer them were fetched: until then they are waiting for the
+# morning run, not missed by it (vmh01/vmh02, 2026-11-02: vim-common, vim-tiny, xxd fetched 03:36,
+# installed 06:37). With no run in 36 hours they warn anyway.
+# Args: ROLE N SECURITY LISTS_FRESH(0|1) RUN_EPOCH(empty: none) FETCHED_EPOCH NOW_EPOCH RUN_START
+apt_verdict() {
+    local role="$1" n="$2" s="$3" fresh="$4" run="$5" fetched="${6:-0}" now="$7" when="$8"
+    if [ "$fresh" -eq 0 ]; then r warn apt "package lists older than 3 days"
+    elif [ "$s" -eq 0 ] || [ "$role" != production ]; then r ok apt "$n upgradable, $s security"
+    elif [ -z "$run" ]; then r warn apt "$n upgradable, $s from security; no unattended-upgrades run logged"
+    elif [ $((now - run)) -gt 129600 ]; then r warn apt "$n upgradable, $s from security; no unattended-upgrades run since $when"
+    elif [ "$fetched" -gt "$run" ]; then r ok apt "$n upgradable, $s security, fetched after the $when run: for the next unattended-upgrades run"
+    else r warn apt "$n upgradable, $s from security, still pending after the $when unattended-upgrades run"; fi
+}
+
+# Tests source this file for the functions above only (scripts/tests/test_vmh_health_sh.sh).
+[ "${ASYLA_VMH_HEALTH_FUNCTIONS_ONLY:-}" = 1 ] && return 0
+
 [ "$(id -u)" = 0 ] || { echo "asyla-vmh-health: run as root" >&2; exit 2; }
 command -v pveversion >/dev/null 2>&1 || { echo "asyla-vmh-health: not a Proxmox VE host" >&2; exit 2; }
 
@@ -15,10 +47,6 @@ case "$node" in
     vmh03) role=canary; nc_to= ;;
     *) role=unknown; nc_to= ;;
 esac
-
-r() { printf '%s\t%s\t%s\n' "$1" "$2" "$3"; }
-has() { command -v "$1" >/dev/null 2>&1; }
-one() { tr '\n' ' ' | sed -e 's/[[:space:]]\{1,\}/ /g' -e 's/^ //' -e 's/ $//'; }
 
 r ok node "$node $role pve $(pveversion | sed 's#^pve-manager/##; s#/.*##') up $(awk '{ printf "%d", $1 / 86400 }' /proc/uptime)d"
 
@@ -120,10 +148,9 @@ fi
 
 # ---- updates
 up=$(sed -n 's/^Start-Date: \([0-9-]*\).*/\1/p' /var/log/unattended-upgrades/unattended-upgrades-dpkg.log 2>/dev/null | tail -n1)
-# A --dry-run also logs "All upgrades installed" (vmh02, 2026-10-24); only real runs count.
-last=$(awk '/INFO Starting unattended upgrades script/ { dry = 0 } /Option --dry-run given/ { dry = 1 }
-    !dry && /INFO (No packages found|All upgrades installed)|ERROR/ { l = $0 } END { print l }' \
-    /var/log/unattended-upgrades/unattended-upgrades.log 2>/dev/null)
+uu=$(uu_last_run /var/log/unattended-upgrades/unattended-upgrades.log)
+start=$(printf '%s' "$uu" | cut -f1)
+last=$(printf '%s' "$uu" | cut -f2-)
 case "$last" in
     *ERROR*) r warn unattended-upgrades "last run: $last" ;;
     "") has unattended-upgrade && r warn unattended-upgrades "no run logged yet" ;;
@@ -133,9 +160,12 @@ sim=$(apt-get -s -o Debug::NoLocking=1 dist-upgrade 2>/dev/null)
 n=$(printf '%s\n' "$sim" | grep -c '^Inst ')
 s=$(printf '%s\n' "$sim" | grep '^Inst ' | grep -c -- '-security')
 lists=$(find /var/lib/apt/lists -maxdepth 1 -name '*_InRelease' -mtime -3 2>/dev/null | wc -l)
-if [ "$lists" -eq 0 ]; then r warn apt "package lists older than 3 days"
-elif [ "$s" -gt 0 ] && [ "$role" = production ]; then r warn apt "$n upgradable, $s from security (unattended-upgrades should have taken these)"
-else r ok apt "$n upgradable, $s security"; fi
+# Fetched = ctime: apt sets an index's mtime to the server's Last-Modified (vmh01 2026-11-02, the
+# security InRelease: mtime 11-01 14:43, fetched 11-02 03:36).
+fetched=$(find /var/lib/apt/lists -maxdepth 1 -name '*security*_InRelease' -printf '%C@\n' 2>/dev/null | sort -n | tail -n1)
+[ -n "$fetched" ] || fetched=$(find /var/lib/apt/lists -maxdepth 1 -name '*_InRelease' -printf '%C@\n' 2>/dev/null | sort -n | tail -n1)
+run=; [ -n "$start" ] && run=$(date -d "$start" +%s 2>/dev/null)
+apt_verdict "$role" "$n" "$s" "$([ "$lists" -gt 0 ] && echo 1 || echo 0)" "$run" "${fetched%.*}" "$(date +%s)" "$(printf '%s' "$start" | cut -c1-16)"
 
 # ---- clock
 [ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" = yes ] && r ok time "NTP synchronized" || r warn time "clock not NTP-synchronized"

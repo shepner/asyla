@@ -16,6 +16,9 @@ them as "not yet booted into" (asyla decision `hypervisor-maintenance`, 2026-11-
 joined vmc01): every changing mode needs the operator's approval of the exact command, and then
 `--production`. `crashtest` runs on vmh03 only, and only while vmh01 and vmh02 keep quorum without it.
 `health` reports `members` (every node in corosync.conf online, and the nodelist is vmh01 vmh02 vmh03).
+Its `apt` line warns on vmh01/vmh02 only for a security package still pending after the last
+unattended-upgrades run that saw it, or after no run in 36 hours, never one the overnight list refresh
+fetched for the morning run (test: `scripts/tests/test_vmh_health_sh.sh`).
 
 ## Commands (from the repo root)
 
