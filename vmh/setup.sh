@@ -6,12 +6,13 @@
 #   check [PART...]          read-only: does the node match the parts (default all)? non-zero if not
 #   setup [PART...]          converge the parts (default all, in this order), then check those parts
 #   patch [--dry-run|--plan] apt upgrade, no reboot. vmh03: everything. Production: only packages at
-#                            the version vmh03 has run for SOAK_DAYS (CANARY_B64); the rest is listed.
+#                            the version vmh03 has run for SOAK_DAYS (CANARY_B64; a kernel, ZFS and
+#                            QEMU count from vmh03's boot into them); the rest is listed.
 #                            --plan is read-only: no apt-get update, the lists as they are, simulation
 #   kernel VERSION|none [--next-boot]   pin a kernel ABI (e.g. 6.14.11-9-pve) for the next boots
 #   cleanup [--dry-run]      old kernels (PVE's own keep list), old kdump initrds, apt cache, May leftovers
-#   canary-list              read-only (vmh03): "package version first-installed-epoch source
-#                            source-version" per installed package
+#   canary-list              read-only (vmh03): "package version soak-start-epoch source
+#                            source-version" per installed package (kernel, ZFS, QEMU: from a boot)
 #   health                   read-only: the health checks (vmh/health.sh), as host-maintenance runs them
 #   crashtest [--console|--clean]   vmh03 only: a sysrq crash, to prove kdump saves a vmcore and the
 #                            node reboots by itself; refused unless the other members keep quorum
@@ -558,16 +559,34 @@ check() {   # check [PART...]: only those parts' lines (default all), so a one-p
 }
 
 # ---- patch
-canary_list() {   # package version first-installed-epoch source source-version, per installed package
+UNBOOTED=9999999999   # canary-list's soak start for a boot-class package vmh03 has not booted into yet
+
+canary_list() {   # package version soak-start-epoch source source-version, per installed package
+    # Soak start is the first install (dpkg log). Boot-class packages only count once running
+    # (operator, 2026-11-02): a kernel from vmh03's first boot into that kernel; ZFS (source
+    # zfs-linux) and QEMU (pve-qemu-kvm) from its first boot after the install, when the module
+    # loads and onboot guests start under it. Not booted yet: UNBOOTED, which no cutoff passes.
     zcat -f $(ls -tr /var/log/dpkg.log*) 2>/dev/null | awk '$3 == "status" && $4 == "installed" {
         sub(/:.*/, "", $5); k = $5 " " $6
         if (!(k in first)) { cmd = "date -d \"" $1 " " $2 "\" +%s"; cmd | getline t; close(cmd); first[k] = t }
     } END { for (k in first) print k, first[k] }' >/tmp/asyla-canary-seen.$$
+    # "kernel boot-epoch" per boot wtmpdb recorded (vmh03's history starts 2026-10-23 09:51).
+    wtmpdb last --time-format iso reboot 2>/dev/null | awk '$1 == "reboot" && $3 == "boot" { print $4, $5 }' \
+        | while read -r kv when; do printf '%s %s\n' "$kv" "$(date -d "$when" +%s)"; done >/tmp/asyla-canary-boots.$$
     dpkg-query -W -f='${db:Status-Abbrev} ${Package} ${Version} ${source:Package} ${source:Version}\n' \
-        | awk -v seen=/tmp/asyla-canary-seen.$$ '
-        BEGIN { while ((getline l < seen) > 0) { split(l, a, " "); t[a[1] " " a[2]] = a[3] } }
-        $1 ~ /^ii/ { k = $2 " " $3; print $2, $3, (k in t ? t[k] : 0), $4, $5 }'
-    rm -f /tmp/asyla-canary-seen.$$
+        | awk -v seen=/tmp/asyla-canary-seen.$$ -v boots=/tmp/asyla-canary-boots.$$ -v unbooted="$UNBOOTED" '
+        BEGIN { while ((getline l < seen) > 0) { split(l, a, " "); t[a[1] " " a[2]] = a[3] }
+                while ((getline l < boots) > 0) { split(l, a, " "); n++; bk[n] = a[1]; bt[n] = a[2] } }
+        function booted(kv, since,   i, e) {   # first boot at or after since (into kv, if given)
+            e = unbooted
+            for (i = 1; i <= n; i++) if (bt[i] >= since && bt[i] < e && (kv == "" || bk[i] == kv)) e = bt[i]
+            return e }
+        $1 ~ /^ii/ { k = $2 " " $3; e = (k in t ? t[k] : 0); kv = $2
+            if (kv ~ /^proxmox-kernel-[0-9.]+-[0-9]+-pve(-signed)?$/) { sub(/^proxmox-kernel-/, "", kv); sub(/-signed$/, "", kv); e = booted(kv, e) }
+            else if (kv ~ /^proxmox-kernel-[0-9]+\.[0-9]+$/) e = booted($3 "-pve", e)   # the meta package names its kernel by version
+            else if ($4 == "zfs-linux" || $2 == "pve-qemu-kvm") e = booted("", e)
+            print $2, $3, e, $4, $5 }'
+    rm -f /tmp/asyla-canary-seen.$$ /tmp/asyla-canary-boots.$$
 }
 
 apt_upgrade() {   # apt_upgrade ARGS...: non-interactive, keep local conffiles
@@ -607,17 +626,20 @@ patch() {
             /^$/ { if (p != "") print p, v, (s == "" ? p : s), (sv == "" ? v : sv); p = "" }
             END { if (p != "") print p, v, (s == "" ? p : s), (sv == "" ? v : sv) }' >"$canary.src"
         # Verdict per candidate: allow (vmh03 has had this version, or a sibling of the same source
-        # version, for SOAK_DAYS), soak (it has, for less), new (it has neither).
-        awk -v cutoff="$cutoff" '
+        # version, for SOAK_DAYS), soak (it has, for less), unbooted (installed there, not yet run:
+        # canary_list), new (it has neither).
+        awk -v cutoff="$cutoff" -v unbooted="$UNBOOTED" '
             FILENAME == ARGV[1] { k = $1 " " $2; t[k] = $3; if ($4 != "") { s = $4 " " $5; if (!(s in st) || $3 < st[s]) st[s] = $3 }; next }
             FILENAME == ARGV[2] { src[$1 " " $2] = $3 " " $4; next }
             { k = $1 " " $2; how = ""
               if (k in t) e = t[k]; else if ((k in src) && (src[k] in st)) { e = st[src[k]]; how = " (source " src[k] " on vmh03)" } else e = ""
-              if (e == "") print "new", $1, $2; else if (e <= cutoff) print "allow", $1, $2 how; else print "soak", $1, $2 how }' \
+              if (e == "") print "new", $1, $2; else if (e + 0 >= unbooted) print "unbooted", $1, $2 how
+              else if (e <= cutoff) print "allow", $1, $2 how; else print "soak", $1, $2 how }' \
             "$canary" "$canary.src" "$canary.plan" >"$canary.verdict"
         allow=$(awk '$1 == "allow" { printf "%s=%s ", $2, $3 }' "$canary.verdict")
         awk '$1 == "allow" { $1 = "allow  "; print }
              $1 == "soak" { print "held    " $2 " " $3 " (on vmh03 under '"$SOAK_DAYS"' days)" }
+             $1 == "unbooted" { print "held    " $2 " " $3 " (on vmh03, not yet booted into; the soak starts at that boot)" }
              $1 == "new"  { print "held    " $2 " " $3 " (neither this version nor its source on vmh03)" }' "$canary.verdict"
         say "patch: $(grep -c '^allow' "$canary.verdict") allowed, $(grep -c -v '^allow' "$canary.verdict") held"
         if [ -z "$allow" ]; then rm -f "$canary" "$canary".*; say "patch: nothing to do"; return 0; fi

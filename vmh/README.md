@@ -10,7 +10,9 @@ workstation over root SSH (asyla decision `hypervisor-scripts`).
 | vmh03 | production, cluster vmc01 (since 2026-10-23); testbed and canary | 10.0.0.37 | LVM root, plain GRUB (UEFI), USB NIC, no serial (`vmh03/`) |
 
 vmh03 runs every new version first. A production `patch` installs a package only at a version vmh03
-has run for `SOAK_DAYS` (7). All three are critical infrastructure (asyla CRI-1; vmh03 since it
+has run for `SOAK_DAYS` (7). For a kernel the 7 days start at vmh03's first boot into it, and for ZFS
+(`zfs-linux`) and QEMU (`pve-qemu-kvm`) at its first boot after the install; until then `--plan` holds
+them as "not yet booted into" (asyla decision `hypervisor-maintenance`, 2026-11-02). All three are critical infrastructure (asyla CRI-1; vmh03 since it
 joined vmc01): every changing mode needs the operator's approval of the exact command, and then
 `--production`. `crashtest` runs on vmh03 only, and only while vmh01 and vmh02 keep quorum without it.
 `health` reports `members` (every node in corosync.conf online, and the nodelist is vmh01 vmh02 vmh03).
