@@ -27,7 +27,7 @@ data in BigQuery (GCP project `breeding-program`), sign-in by **Cloudflare Acces
 
 ```bash
 # workstation
-~/local/personal/projects/asyla/d01/apps/breeding-program/push-source.sh
+~/local/asyla/projects/asyla-hosts/d01/apps/breeding-program/push-source.sh
 # d01
 ~/scripts/d01/apps/breeding-program/breeding-program.sh init build
 # service-account key (breeding-program-app@breeding-program.iam.gserviceaccount.com) -> secrets/gcp-sa.json, chmod 600

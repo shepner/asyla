@@ -1,11 +1,11 @@
 #!/bin/bash
 # Workstation side: ship the committed HEAD of the breeding-program repo to d01 for a native build.
 # d01 holds no Gitea credentials, so the source travels as a git archive over ssh.
-# Usage: push-source.sh [path-to-breeding-program-repo]   (default ~/local/asyla/projects/breeding-program)
+# Usage: push-source.sh [path-to-breeding-program-repo]   (default ~/local/personal/projects/breeding-program)
 # Then on d01: ~/scripts/d01/apps/breeding-program/breeding-program.sh build restart verify
 set -euo pipefail
 
-REPO="${1:-$HOME/local/asyla/projects/breeding-program}"
+REPO="${1:-$HOME/local/personal/projects/breeding-program}"
 HOST="${D01_SSH:-d01}"
 DEST="${DEST:-/mnt/docker/breeding-program/src}"
 

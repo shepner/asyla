@@ -115,6 +115,12 @@ public_ip() {
   echo "$ip"
 }
 
+# "<code> <redirect URL>" with the URL cut to scheme, host and path: an Access login URL's query carries a meta= JWT.
+no_query() {
+  local s="${1%%\?*}"
+  echo "${s%%#*}"
+}
+
 do_verify() {
   local status code i ip lan_ip
   # Right after a restart the app is still loading its data from BigQuery: wait up to 60 s before failing.
@@ -138,6 +144,7 @@ do_verify() {
   else
     code="$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 20 \
       --resolve "$PUBLIC_HOST:443:$ip" "$PUBLIC_URL/" || true)"
+    code="$(no_query "$code")"
     echo "[INFO] public $PUBLIC_URL/ via $ip -> $code"
     case "$code" in
       30[27]\ *cloudflareaccess.com*) echo "[INFO] public path is behind Cloudflare Access" ;;
@@ -148,6 +155,7 @@ do_verify() {
   # the request in as LAN_TRUST_EMAIL, so 200 is expected.
   lan_ip="$(getent ahostsv4 "$PUBLIC_HOST" 2>/dev/null | awk 'NR == 1 {print $1}' || true)"
   code="$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 20 "$PUBLIC_URL/" || true)"
+  code="$(no_query "$code")"
   echo "[INFO] LAN $PUBLIC_URL/ via ${lan_ip:-?} -> $code"
   case "$code" in
     200\ *) echo "[INFO] LAN path signed in through caddy-internal-d01" ;;
