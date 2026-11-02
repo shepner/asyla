@@ -27,19 +27,11 @@ steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "bashrc.sh", "node_exporter.s
 allow = ["10.0.0.150"]     # the trends Prometheus's host (the Mini; d06 after the move)
 textfile_sources = [
   "/mnt/nas/data1/docker/nas01-smart/smart.prom",   # nas01 SMART, written every 6 h by nas01's cron job
-  "/mnt/docker/unifi-monitor/unifi.prom",
-  "/mnt/docker/att-monitor/att.prom",
-  "/mnt/docker/openevse-monitor/openevse.prom",
-]
+]   # the unifi, att and openevse .prom files moved to d07 with their monitors (asyla backlog, d07 on vmh03)
 
-# Port proxies (build/setup/port_proxy.sh): a host port to a loopback-published container port, open
-# to `allow` only (systemd socket filter; d03 runs no host firewall). Operator, 2026-10-27: 9116 for
-# theOrg's job asyla-switch-snmp this way (asyla backlog 2026-10-27-hosts-trends-sources-...).
-[[port_proxy]]
-name = "switch-snmp"
-listen = 9116
-target = "127.0.0.1:19116"   # switch-monitor's snmp-exporter (compose.yml publishes it on loopback only)
-allow = ["10.0.0.150"]       # the trends Prometheus's host (the Mini; d06 after the move)
+# Port proxies (build/setup/port_proxy.sh): none since switch-snmp (9116) moved to d07 with
+# switch-monitor. port_proxy.sh stays in [setup].steps: with no [[port_proxy]] it removes every
+# asyla-proxy unit, so `build_host.py d03 build --only setup --step port_proxy.sh` drops the old one.
 
 [[secret]]
 var = "D03_BREEDING_RESEARCH_ENV"
@@ -111,6 +103,8 @@ known_hosts = [
   "10.0.0.11 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINhiWkuYKzYbIHSyB6GNXFDkOKuR5jT3fj42XAGJEMNX",
   # 10.0.0.10: the new ns01 (VM 310, built 2026-10-19); keyscan from d03 = its own /etc/ssh key.
   "10.0.0.10 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIJMVQ2YlCOlx/1LVb7D6fAH+Ze6ecbBBXMLiIG0oRUe",
+  # 10.0.0.66: d07 (VM 107 on vmh03, built 2026-11-02); keyscan from d03 = its own /etc/ssh key.
+  "10.0.0.66 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEYR3lSE35BqGd/wKl+qc/UPqwlYNxBAfKrG4o/Tcvpe",
 ]
 self_address = "10.0.0.62"
 
@@ -140,46 +134,8 @@ name = "ms-chronicle-backup"    # no container: nightly pull of ms-chronicle's v
 start = []
 restore = false                 # its data is a copy of the Mini's; the next backup re-pulls it
 verify = ["verify"]
-# UniFi Site Manager check every 5 min (DAY and MKE); host-maintenance's monitor reads its status.json.
-# The key is resolved from OpenBao on the workstation and sent over SSH stdin (no file on d03):
-#   credentials.py exec UNIFI_SITE_MANAGER_API_KEY -- build_host.py d03 build --only apps --app unifi-monitor
-[[app]]
-name = "unifi-monitor"
-start_env = ["UNIFI_SITE_MANAGER_API_KEY"]
-restore = false                 # its state rebuilds in one check (firmware first-seen times restart)
-verify = ["verify"]
-# UniFi Network autobackups (MKE, DAY) copied hourly to /mnt/nas/data1/docker/unifi-backup, each
-# checked to open; host-maintenance's monitor reads its status.json. Same key, same delivery:
-#   credentials.py exec UNIFI_SITE_MANAGER_API_KEY -- build_host.py d03 build --only apps --app unifi-backup
-[[app]]
-name = "unifi-backup"
-start_env = ["UNIFI_SITE_MANAGER_API_KEY"]
-restore = false                 # its data is the copies on the NAS; its state rebuilds in one cycle
-verify = ["verify"]
-# Switch check every 5 min over SNMPv3 (snmp_exporter + switch_check.py); host-maintenance's monitor
-# reads its status.json. The two SNMPv3 passwords are resolved from OpenBao on the workstation and
-# sent over SSH stdin (no file on d03):
-#   credentials.py exec SWITCH_SNMP_AUTH_PASSWORD SWITCH_SNMP_PRIV_PASSWORD -- build_host.py d03 build --only apps --app switch-monitor
-[[app]]
-name = "switch-monitor"
-start_env = ["SWITCH_SNMP_AUTH_PASSWORD", "SWITCH_SNMP_PRIV_PASSWORD"]
-restore = false                 # its state rebuilds in one check (a release's 7-day wait restarts)
-verify = ["verify"]
-# AT&T gateway (BGW320) check every 5 min from its status pages; host-maintenance's monitor reads
-# its status.json. No key: the pages need no login.
-[[app]]
-name = "att-monitor"
-restore = false                 # its state rebuilds in one check (the first values are recorded, not reported)
-verify = ["verify"]
-# EV charger (OpenEVSE openevse01) check every 5 min from its /status; host-maintenance's monitor
-# reads its status.json. Its web login is resolved from OpenBao on the workstation and sent over SSH
-# stdin (no file on d03):
-#   credentials.py exec OPENEVSE_WWW_USER OPENEVSE_WWW_PASSWORD -- build_host.py d03 build --only apps --app openevse-monitor
-[[app]]
-name = "openevse-monitor"
-start_env = ["OPENEVSE_WWW_USER", "OPENEVSE_WWW_PASSWORD"]
-restore = false                 # its state rebuilds in one check (the first counters are recorded, not reported)
-verify = ["verify"]
+# The network monitors (unifi-monitor, unifi-backup, switch-monitor, att-monitor, openevse-monitor)
+# run on d07 since 2026-11 (d07/host.toml; asyla backlog, d07 on vmh03).
 
 [[external]]
 name = "internal-access"

@@ -733,13 +733,13 @@ results = [
     refused("an unknown node", "test01 build --node vmh09", "invalid choice"),
     # --app: one new app on a running host, without re-running every app's start commands.
     documented("usage, --app", "build_host.py HOST build --only apps|late --app NAME"),
-    same("build --only apps --app", {"host": "d03", "action": "build", "only": "apps", "apply": True,
+    same("build --only apps --app", {"host": "d07", "action": "build", "only": "apps", "apply": True,
                                      "apps": ["unifi-monitor"]},
-         "d03 build --only apps --app unifi-monitor --apply",
-         "--app unifi-monitor d03 build --apply --only apps"),
-    refused("--app without --only apps", "d03 build --app unifi-monitor", "--app is for build --only apps"),
-    refused("--app with another phase", "d03 build --only verify --app unifi-monitor", "--app is for build --only apps"),
-    refused("--app with another action", "d03 verify --app unifi-monitor", "--app is for build --only apps"),
+         "d07 build --only apps --app unifi-monitor --apply",
+         "--app unifi-monitor d07 build --apply --only apps"),
+    refused("--app without --only apps", "d07 build --app unifi-monitor", "--app is for build --only apps"),
+    refused("--app with another phase", "d07 build --only verify --app unifi-monitor", "--app is for build --only apps"),
+    refused("--app with another action", "d07 verify --app unifi-monitor", "--app is for build --only apps"),
     # --step: one new setup step on a running host, without re-running the others.
     documented("usage, --step", "build_host.py HOST build --only setup --step SCRIPT"),
     same("build --only setup --step", {"host": "d03", "action": "build", "only": "setup", "apply": True,
@@ -758,21 +758,28 @@ results = [
           lambda: build_host.select_steps(build_host.load_spec("d03"), ["smb.sh"])),
     check("d03's [node_exporter]: only the trends Prometheus's host may scrape",
           build_host.load_spec("d03")["node_exporter"]["allow"] == ["10.0.0.150"]),
-    check("d03's unifi-monitor: its key over SSH stdin only, no restore",
+    check("d07's unifi-monitor: its key over SSH stdin only, no restore",
           (lambda a: (a.get("start_env"), a.get("restore")) == (["UNIFI_SITE_MANAGER_API_KEY"], False))(
-              next(x for x in build_host.load_spec("d03")["app"] if x["name"] == "unifi-monitor"))),
-    check("d03's unifi-backup: the same key over SSH stdin only, no restore",
+              next(x for x in build_host.load_spec("d07")["app"] if x["name"] == "unifi-monitor"))),
+    check("d07's unifi-backup: the same key over SSH stdin only, no restore",
           (lambda a: (a.get("start_env"), a.get("restore")) == (["UNIFI_SITE_MANAGER_API_KEY"], False))(
-              next(x for x in build_host.load_spec("d03")["app"] if x["name"] == "unifi-backup"))),
-    check("d03's switch-monitor: its two SNMPv3 passwords over SSH stdin only, no restore",
+              next(x for x in build_host.load_spec("d07")["app"] if x["name"] == "unifi-backup"))),
+    check("d07's switch-monitor: its two SNMPv3 passwords over SSH stdin only, no restore",
           (lambda a: (a.get("start_env"), a.get("restore")) == (["SWITCH_SNMP_AUTH_PASSWORD", "SWITCH_SNMP_PRIV_PASSWORD"], False))(
-              next(x for x in build_host.load_spec("d03")["app"] if x["name"] == "switch-monitor"))),
-    check("d03's att-monitor: no key, no restore",
+              next(x for x in build_host.load_spec("d07")["app"] if x["name"] == "switch-monitor"))),
+    check("d07's att-monitor: no key, no restore",
           (lambda a: (a.get("start_env"), a.get("restore")) == (None, False))(
-              next(x for x in build_host.load_spec("d03")["app"] if x["name"] == "att-monitor"))),
-    check("d03's openevse-monitor: the charger's web login over SSH stdin only, no restore",
+              next(x for x in build_host.load_spec("d07")["app"] if x["name"] == "att-monitor"))),
+    check("d07's openevse-monitor: the charger's web login over SSH stdin only, no restore",
           (lambda a: (a.get("start_env"), a.get("restore")) == (["OPENEVSE_WWW_USER", "OPENEVSE_WWW_PASSWORD"], False))(
-              next(x for x in build_host.load_spec("d03")["app"] if x["name"] == "openevse-monitor"))),
+              next(x for x in build_host.load_spec("d07")["app"] if x["name"] == "openevse-monitor"))),
+    check("d03 no longer carries the network monitors (moved to d07)",
+          not {"unifi-monitor", "unifi-backup", "switch-monitor", "att-monitor", "openevse-monitor"}
+          & {a["name"] for a in build_host.load_spec("d03")["app"]}),
+    check("d03: no port proxy, and only nas01's SMART textfile",
+          "port_proxy" not in build_host.load_spec("d03")
+          and build_host.load_spec("d03")["node_exporter"]["textfile_sources"]
+          == ["/mnt/nas/data1/docker/nas01-smart/smart.prom"]),
     spec_case("test01 defaults to its spec's node", "test01", None, "vmh01"),
     spec_case("test01 on the other node", "test01", "vmh02", "vmh02"),
     spec_case("a production host keeps its node", "d03", "vmh02", "is not disposable", refused=True),

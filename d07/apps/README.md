@@ -1,8 +1,8 @@
 # d07 apps
 
 d07 carries the network monitors, moved from d03 (asyla hub backlog
-`2026-11-02-hosts-hosts-monitor-vm-d07-on-vmh03`). Each is a copy of d03's; both hosts run them side
-by side until d07's are proven and host-maintenance reads them here, then d03's are removed.
+`2026-11-02-hosts-hosts-monitor-vm-d07-on-vmh03`). Both hosts ran them side by side until d07's were
+proven and host-maintenance read them here; then d03's copies were stopped and removed from this repo.
 
 All d07 apps use the same management pattern as d03's: a script accepting **up**, **down**,
 **restart**, **backup**, **update**, **refresh**, and **logs**. `~/update_all.sh` discovers every
