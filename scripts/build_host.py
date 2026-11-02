@@ -83,9 +83,18 @@ before the name moves or forgotten after it, stops there.
 Start order: an optional [vm].startup (Proxmox's form, "order=N[,up=S][,down=S]") is set when the
 VM is created and checked by verify.
 
-Node: [vm].node is where the VM is created. --node NODE overrides it for a spec with
-disposable = true only (the test host may run on either node); a production host's node is its
-spec's. Hold: a spec with a top-level hold = "reason" is not built or destroyed.
+Node: [vm].node (NODES: vmh01, vmh02, vmh03) is where the VM is created. --node NODE overrides it
+for a spec with disposable = true only, and only to DISPOSABLE_NODES (vmh01, vmh02: the test host's
+storage is local-data2); a production host's node is its spec's. Hold: a spec with a top-level
+hold = "reason" is not built or destroyed.
+
+Network: [vm].bridge (default vmbr1) and [vm].vlan (default 100; 0 = untagged, no tag=) make
+net0; verify checks net0 against them. d07 on vmh03: vmbr0, untagged (vmh03's only bridge).
+
+Image: a node in NODE_IMAGE (vmh03, which mounts no NAS storage) builds from a local copy of IMAGE.
+Before qm create, the vm phase compares its sha256 with IMAGE's on IMAGE_NODE (vmh01) and only on
+a difference copies vmh01 -> workstation -> the node under a temp name, checks the sum there and
+renames it into place; import-from and the qemu-img rewrite then read that copy.
 
 Guests are reached as docker@HOST with ~/.ssh/docker_rsa, the user and key the vm phase gives
 them, so a host needs no entry in the workstation's ssh config.
@@ -168,6 +177,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 import time
 import tomllib
 import urllib.error
@@ -206,15 +216,23 @@ HM_PATH = re.compile(r"/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)+")
 HM_NAME = re.compile(r"[a-z_][a-z0-9_-]*")
 HM_HOST_KEY = "/etc/ssh/ssh_host_ed25519_key.pub"   # the host's own key, pinned at [host_maintenance].self_address
 GL_ONLINE_WAIT = 180           # seconds the runner phase waits for a new GitLab runner to be online
-NODES = ("vmh01", "vmh02")
+NODES = ("vmh01", "vmh02", "vmh03")
+# --node moves a disposable spec (test01) between these only: test01's storage is local-data2,
+# which vmh03 does not have (asyla hub backlog, the d07 item).
+DISPOSABLE_NODES = ("vmh01", "vmh02")
 # Proxmox's lowest guest id (inference from its tooling, not checked in its docs): load_spec
 # refuses a lower [vm].vmid, so a placeholder 0 can never build.
 MIN_VMID = 100
 IMAGE = "/mnt/nas/data1/iso/template/iso/debian-13-generic-amd64.qcow2"
+IMAGE_NODE = "vmh01"   # where IMAGE is read for a node that cannot mount it (NODE_IMAGE)
+# Nodes without the NAS iso storage (vmh03: no NFS storage, by design, since it has no local
+# console) build from a local copy of IMAGE, kept equal to vmh01's by sha256 (image_sync_cmds).
+NODE_IMAGE = {"vmh03": "/var/lib/vz/import/debian-13-generic-amd64.qcow2"}
 GATEWAY = "10.0.0.1"
 NAMESERVERS = "10.0.0.10 10.0.0.11"
 SEARCHDOMAIN = "asyla.org"
-BRIDGE, VLAN = "vmbr1", 100
+BRIDGE, VLAN = "vmbr1", 100   # [vm].bridge and [vm].vlan default to these; vlan = 0 is untagged
+BRIDGE_NAME = re.compile(r"vmbr\d+")
 SSH_KEY_PUB = Path.home() / ".ssh/docker_rsa.pub"
 SSH_KEY = SSH_KEY_PUB.with_suffix("")
 GUEST_USER = "docker"
@@ -379,11 +397,16 @@ def load_spec(host: str, node: str | None = None) -> dict:
     if vm["node"] not in NODES:
         raise Fail(f"{path}: node {vm['node']} not in {NODES}")
     if node and node != vm["node"]:
-        if node not in NODES:
-            raise Fail(f"--node {node} not in {NODES}")
         if not vm.get("disposable"):
             raise Fail(f"{host} is not disposable: its node is its spec's ({vm['node']}), not --node {node}")
+        if node not in DISPOSABLE_NODES:
+            raise Fail(f"--node {node} not in {DISPOSABLE_NODES} (a disposable spec's nodes)")
         vm["node"] = node
+    bridge, vlan = vm.setdefault("bridge", BRIDGE), vm.setdefault("vlan", VLAN)
+    if not (isinstance(bridge, str) and BRIDGE_NAME.fullmatch(bridge)):
+        raise Fail(f"{path}: [vm].bridge must be a bridge name (vmbrN), not {bridge!r}")
+    if not isinstance(vlan, int) or isinstance(vlan, bool) or not 0 <= vlan <= 4094:
+        raise Fail(f"{path}: [vm].vlan must be a VLAN tag 1-4094, or 0 for untagged, not {vlan!r}")
     if "startup" in vm and not (isinstance(vm["startup"], str) and STARTUP_FORM.fullmatch(vm["startup"])):
         raise Fail(f"{path}: [vm].startup must be order=N[,up=S][,down=S], not {vm['startup']!r}")
     labels = spec.get("runner", {}).get("labels", [])
@@ -705,6 +728,67 @@ def find_vm(vmid: int) -> dict | None:
     return next((v for v in cluster_vms() if v.get("vmid") == vmid), None)
 
 
+def net0_arg(vm: dict) -> str:
+    """qm's --net0 value: the spec's bridge, with its VLAN tag unless vlan = 0 (untagged)."""
+    return f"virtio,bridge={vm['bridge']},firewall=1" + (f",tag={vm['vlan']}" if vm["vlan"] else "")
+
+
+def net0_matches(line: str, vm: dict) -> bool:
+    """`qm config`'s net0 value (virtio=MAC,bridge=...,firewall=1[,tag=N]) has the spec's bridge and tag."""
+    kv = dict(p.split("=", 1) for p in line.split(",") if "=" in p)
+    return kv.get("bridge") == vm["bridge"] and kv.get("tag") == (str(vm["vlan"]) if vm["vlan"] else None)
+
+
+def vm_image(node: str) -> str:
+    """The image path qm and qemu-img read on NODE: IMAGE, or the node's local copy (NODE_IMAGE)."""
+    return NODE_IMAGE.get(node, IMAGE)
+
+
+def image_sync_cmds(node: str, local: str) -> list[tuple[str, list[str]]]:
+    """The copy that makes NODE_IMAGE[node] equal IMAGE on IMAGE_NODE, as (label, argv): vmh01 to
+    the workstation file LOCAL, then to a temp name on the node; the node checks the sum
+    ({sha} in its command, filled in at run time) and only then renames it into place."""
+    dst = NODE_IMAGE[node]
+    part = f"{dst}.part"
+    scp = ["scp", "-q", "-o", "BatchMode=yes"]
+    check = (f"echo '{{sha}}  {part}' | sha256sum -c --quiet - && mv -f {shlex.quote(part)} {shlex.quote(dst)}"
+             f" || {{ rm -f {shlex.quote(part)}; exit 1; }}")
+    return [
+        ("prepare", ssh_argv(root(node)) + [f"mkdir -p {shlex.quote(str(Path(dst).parent))} && rm -f {shlex.quote(part)}"]),
+        ("fetch", scp + [f"{root(IMAGE_NODE)}:{IMAGE}", local]),
+        ("send", scp + [local, f"{root(node)}:{part}"]),
+        ("check and rename", ssh_argv(root(node)) + [check]),
+    ]
+
+
+def image_sha(target: str, path: str) -> str | None:
+    """sha256 of PATH on a node, or None when the file is not there."""
+    r = ssh(target, f"test -f {shlex.quote(path)} && sha256sum {shlex.quote(path)}", timeout=600, check=False)
+    return r.stdout.split()[0] if r.returncode == 0 and r.stdout.split() else None
+
+
+def sync_node_image(node: str, apply: bool) -> None:
+    """Make NODE_IMAGE[node] equal IMAGE on IMAGE_NODE (sha256). Copies only on a difference."""
+    dst = NODE_IMAGE[node]
+    want = image_sha(root(IMAGE_NODE), IMAGE)
+    if not want:
+        raise Fail(f"{IMAGE} is not on {IMAGE_NODE}: no image to copy to {node}")
+    have = image_sha(root(node), dst)
+    if have == want:
+        print(f"image on {node}: {dst} matches {IMAGE_NODE}'s (sha256 {want[:12]})")
+        return
+    print(f"image on {node}: {dst} {'differs' if have else 'is missing'}; copy {IMAGE_NODE} -> workstation -> {node}:")
+    with tempfile.TemporaryDirectory(prefix="build-host-image-") as d:
+        local = str(Path(d) / Path(IMAGE).name)
+        for label, argv in image_sync_cmds(node, local):
+            argv = [a.replace("{sha}", want) for a in argv]
+            print(f"  {label}: {' '.join(argv)}")
+            if apply:
+                run(argv, timeout=3600)
+    if apply and image_sha(root(node), dst) != want:
+        raise Fail(f"{node}:{dst} does not match {IMAGE_NODE}'s image after the copy")
+
+
 def phase_vm(spec: dict, apply: bool, recreate: bool, confirm: str | None) -> None:
     vm, host = spec["vm"], spec["host"]
     node, vmid = vm["node"], vm["vmid"]
@@ -721,20 +805,20 @@ def phase_vm(spec: dict, apply: bool, recreate: bool, confirm: str | None) -> No
     elif subprocess.run(["ping", "-c", "2", "-t", "3", ip_only(spec)], capture_output=True).returncode == 0:
         raise Fail(f"{ip_only(spec)} answers ping but VMID {vmid} does not exist; refusing to create a duplicate")
 
-    d = vm["os_disk"]
+    d, img = vm["os_disk"], vm_image(node)
     q = f"qm set {vmid}"
     cmds = [
         f"qm create {vmid} --name {host} --sockets {vm['sockets']} --cores {vm['cores']} "
         f"--memory {vm['memory_mb']} --ostype l26 --scsihw virtio-scsi-pci --vga std "
-        f"--net0 virtio,bridge={BRIDGE},firewall=1,tag={VLAN} --onboot 1 "
+        f"--net0 {net0_arg(vm)} --onboot 1 "
         f"--agent 1,fstrim_cloned_disks=1" + (f" --startup {vm['startup']}" if vm.get("startup") else ""),
-        f"{q} --scsi0 {d['storage']}:0,import-from={IMAGE},discard=on,ssd=1",
+        f"{q} --scsi0 {d['storage']}:0,import-from={img},discard=on,ssd=1",
         # import-from skips the image's zero blocks (qemu zeroinit: lvmthin claims sparseinit), but the
         # nodes' thin pools do not zero new chunks, so those blocks keep a deleted volume's bytes; on
         # 2026-10-17 they broke test01's GPT and it never found its root. Rewrite with the zeros
         # (-S 0: fully allocated) and stop unless the disk now reads as the image.
         f"V=$(qm config {vmid} | sed -n 's/^scsi0: \\([^,]*\\),.*/\\1/p') && P=$(pvesm path \"$V\") && "
-        f"qemu-img convert -n -S 0 -f qcow2 -O raw {IMAGE} \"$P\" && qemu-img compare -f qcow2 -F raw {IMAGE} \"$P\"",
+        f"qemu-img convert -n -S 0 -f qcow2 -O raw {img} \"$P\" && qemu-img compare -f qcow2 -F raw {img} \"$P\"",
         f"qm resize {vmid} scsi0 {d['size']}",
         f"{q} --scsi1 {vm['cloudinit_storage']}:cloudinit",
         f"{q} --boot order=scsi0",
@@ -752,6 +836,8 @@ def phase_vm(spec: dict, apply: bool, recreate: bool, confirm: str | None) -> No
     print(f"create VM {vmid} {host} on {node}:")
     for c in cmds:
         print(f"  {c}")
+    if node in NODE_IMAGE:   # before qm create: a node without the NAS iso storage builds from its own copy
+        sync_node_image(node, apply)
     if not apply:
         return
     run(["scp", "-q", "-o", "BatchMode=yes", str(REPO / "scripts/cloud-init-vendor.yml"),
@@ -1798,11 +1884,15 @@ def verify(spec: dict) -> int:
         check("mount /mnt/nas/data1/media", "/mnt/nas/data1/media" in mounts)
     r = ssh(host, "command -v screen", check=False)   # host-maintenance runs its tasks in screen
     check("screen is installed", r.returncode == 0)
+    live = find_vm(spec["vm"]["vmid"])
+    r = ssh(root(live["node"]), f"qm config {spec['vm']['vmid']}", check=False) if live else None
+    conf = dict(l.split(": ", 1) for l in (r.stdout.splitlines() if r else []) if ": " in l)
     if spec["vm"].get("startup"):
-        live = find_vm(spec["vm"]["vmid"])
-        r = ssh(root(live["node"]), f"qm config {spec['vm']['vmid']}", check=False) if live else None
-        have = next((l.split(": ", 1)[1] for l in (r.stdout.splitlines() if r else []) if l.startswith("startup: ")), "none")
+        have = conf.get("startup", "none")
         check("VM start order is the spec's", have == spec["vm"]["startup"], f"{have} vs {spec['vm']['startup']}")
+    want_net = f"bridge={spec['vm']['bridge']}, " + (f"tag={spec['vm']['vlan']}" if spec["vm"]["vlan"] else "untagged")
+    check("VM network (net0) is the spec's", net0_matches(conf.get("net0", ""), spec["vm"]),
+          f"{conf.get('net0', 'none')} vs {want_net}")
     if spec.get("replica"):
         # GitLab is unreachable by design: the egress block is checked in place of the deploy token.
         r = ssh(host, "docker ps --format '{{.Names}}'", check=False)
@@ -1893,7 +1983,8 @@ def verify(spec: dict) -> int:
 def plan(spec: dict) -> int:
     host, vm = spec["host"], spec["vm"]
     print(f"{host}: VMID {vm['vmid']} on {vm['node']}, {vm['sockets']}x{vm['cores']} cores, "
-          f"{vm['memory_mb']} MB, {vm['ip']}, os {vm['os_disk']}, data {vm.get('data_disk', 'none')}")
+          f"{vm['memory_mb']} MB, {vm['ip']}, os {vm['os_disk']}, data {vm.get('data_disk', 'none')}, "
+          f"net {net0_arg(vm)}, image {vm_image(vm['node'])}")
     live = find_vm(vm["vmid"])
     if not live:
         print("  live: no such VM")
@@ -1949,7 +2040,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                          "host_maintenance_keys.sh only when named)")
     ap.add_argument("--recreate", action="store_true")
     ap.add_argument("--confirm")
-    ap.add_argument("--node", choices=NODES, help="create the VM on this node (a disposable spec only)")
+    ap.add_argument("--node", choices=DISPOSABLE_NODES, help="create the VM on this node (a disposable spec only)")
     ap.add_argument("--gitea-host", help=f"the host whose Gitea makes the runner registration token "
                                          f"(default {GITEA_TOKEN_HOST}); it must serve {GITEA_NAME}")
     # Intermixed: plain parse_args() fills `args` before the first option and then refuses a VAR
