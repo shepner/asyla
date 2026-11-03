@@ -66,10 +66,8 @@ tags
 !/.secret-scan-allow.toml
 # Exception: ticketing's Docker credential helper (a script that reads the environment; it holds no value)
 !/d06/apps/ticketing/docker-credential-ticketing-env
-# Exceptions: observability's credential helper (as ticketing's) and its in-memory volume override
-# (volume options and a holder container; no value)
+# Exception: observability's Docker credential helper (as ticketing's; it holds no value)
 !/d06/apps/observability/docker-credential-observability-env
-!/d06/apps/observability/compose.secret-volumes.yml
 *password*
 *.key
 *.pem

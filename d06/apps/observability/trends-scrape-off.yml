@@ -1,0 +1,5 @@
+# No scrape job. compose.yml mounts this file over two of the trends Prometheus's baked-in jobs
+# whose sources need a value d06 does not hold in any file: the Home Assistant job (its bearer is
+# read from a file) and emporia-collector's own job (the collector is not run here). Remove the
+# mount when theOrg's change for that piece lands (README.md, Off until theOrg ships).
+scrape_configs: []
