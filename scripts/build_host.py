@@ -130,7 +130,8 @@ boots) and checks that the host and each image cannot reach the internet; then
 [replica.gitea_config] (a table per app.ini section, e.g. "cron.update_mirrors" = {ENABLED = false})
 goes into the restored app.ini with Gitea's own environment-to-ini, and each key is read back.
 Any failure stops the build before an app starts. So a replica has no [runner] and no
-[gitlab_runner] (both need the internet; refused). verify, for a replica, never runs the
+[gitlab_runner] (both need the internet; refused), and its apps' start commands run without
+`pull` (d03's tc-datalogger and d06's ticketing start with `pull up`). verify, for a replica, never runs the
 source's app verify (it curls the source's public URLs): it checks that each app runs (not one
 with start = [], which runs no container), waits for each [replica.verify] URL
 ("http://{ip}:PORT/..." or "http://127.0.0.1:PORT/...", curled on the host), checks the egress block from the host and each running container (one with no shell
@@ -1537,6 +1538,10 @@ def phase_apps(spec: dict, apply: bool, late: bool = False) -> None:
         print("no app is marked after_external")
     for a in apps_in(spec, late):
         cmds = a.get("start", ["up"])
+        # A replica's egress is blocked: its images were pulled before the block, so `pull` would only fail.
+        if spec.get("replica") and "pull" in cmds:
+            cmds = [c for c in cmds if c != "pull"]
+            print(f"start {a['name']}: `pull` dropped on a replica (egress blocked; images pulled before the block)")
         if not cmds:
             print(f"start {a['name']}: nothing to start (spec)")
             continue

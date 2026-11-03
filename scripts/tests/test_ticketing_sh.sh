@@ -1,6 +1,6 @@
 #!/bin/bash
-# d06/apps/ticketing/ticketing.sh against stubs (docker, hostname, getent): the start order, the
-# replica mode, the restore refusal build_host.py reads as a skip, the seeded restore, and the backup host guard.
+# d06/apps/ticketing/ticketing.sh against stubs (docker, hostname, getent): the start order, the tag (latest) and
+# up pulling only missing images, the replica mode, the restore refusal build_host.py reads as a skip, the seeded restore, and the backup host guard.
 # Nothing here reaches a registry, the vault or a host. Run: bash scripts/tests/test_ticketing_sh.sh
 set -uo pipefail
 
@@ -31,7 +31,7 @@ PULL_NAME="TICKETING_REGISTRY_PULL_TOKEN"
 # --images` names one image; a pull logs its DOCKER_CONFIG and asks the credential helper there, as
 # Docker would; `exec -T vikunja-mcp` prints STUB_MCP ("200 401" by default). Like
 # compose, any compose call fails when a `${...:?}` the files use is empty: compose interpolates
-# the whole file, unused services included.
+# the whole file, unused services included. Each compose call also logs the tag it would use (TAG ...).
 cat > "$T/bin/docker" <<'EOF'
 #!/bin/bash
 echo "docker $*" | sed -E "s#-f [^ ]*/compose.yml#-f compose.yml#; s#-f [^ ]*/compose.vault.yml#-f compose.vault.yml#; s# --project-directory [^ ]*##; s#-c .*#-c PROBE#" >> "$STUB_LOG"
@@ -39,6 +39,7 @@ if [ "$1" = compose ]; then
   for v in TICKETING_ROOT TICKETING_TAG; do
     [ -n "${!v:-}" ] || { echo "required variable $v is missing a value" >&2; echo "INTERPOLATION $v" >> "$STUB_LOG"; exit 1; }
   done
+  echo "TAG $TICKETING_TAG" >> "$STUB_LOG"
 fi
 case "$*" in
   *"config --images"*) echo "img:1" ;;
@@ -83,6 +84,19 @@ up -d vikunja-mcp"
 [ "$rc" -eq 0 ] && [ "$calls" = "$want" ] && ok "up on d06: DEPLOY.md's start order, with compose.vault.yml" || bad "up on d06" "rc=$rc; $calls"
 echo "$OUT" | grep -q 'vector not started' && ok "up without Loki/chronicle addresses warns that vector is off" \
   || bad "vector warning" "$OUT"
+# That up had every image present: no pull (a rollback's re-tagged image stays), and the tag is latest.
+tags="$(awk '/^TAG / {print $2}' "$T/log" | sort -u)"
+! grep -q ' pull' "$T/log" && [ "$tags" = latest ] \
+  && ok "up with every image present: no pull; the default tag is latest" || bad "up no pull" "tags=[$tags]; $(cat "$T/log")"
+# The deploy's start (d06/host.toml: pull up): pulls through the helper first, then the start order.
+STUB_SET="$DEX_NAMES $PULL_NAME" STUB_IP=10.0.0.65 run d06 pull up; rc=$?
+first="$(grep -m1 -E ' pull$|run --rm configure|up -d' "$T/log" | sed -E 's/^docker compose -f compose.yml -f compose.vault.yml //')"
+[ "$rc" -eq 0 ] && [ "$first" = "--profile ops pull" ] && grep -q HELPER_OK "$T/log" && grep -q 'up -d vikunja-mcp' "$T/log" \
+  && ok "pull up on d06 (the deploy's start): pulls first, then starts" || bad "pull up" "rc=$rc; first=[$first]; $(cat "$T/log")"
+# A pin by hand: TICKETING_TAG_OVERRIDE is the tag of every compose call.
+TICKETING_TAG_OVERRIDE=pin0 STUB_SET="$DEX_NAMES" STUB_IP=10.0.0.65 run d06 up; rc=$?
+tags="$(awk '/^TAG / {print $2}' "$T/log" | sort -u)"
+[ "$rc" -eq 0 ] && [ "$tags" = pin0 ] && ok "TICKETING_TAG_OVERRIDE pins the tag" || bad "tag override" "rc=$rc; tags=[$tags]"
 
 # d06 without both Dex values in its environment: up, restart and configure refuse before any docker call.
 for sw in up restart configure; do

@@ -120,14 +120,21 @@ self_address = "10.0.0.62"
 # /mnt/nas/data1/docker/agent-commons/mirror.)
 [[app]]
 name = "breeding-research"
-start = ["up"]   # pulls BREEDING_RESEARCH_IMAGE from Gitea's registry on d04 (.env: PULL=1; gap G7)
+# Runs gitea.asyla.org/personal/breeding-research:latest from Gitea's registry on d04 (gap G7); up
+# pulls it only when it is not on the host, and host-maintenance's weekly apps run updates it
+# (breeding-research.sh refresh); a build leaves a running app on the image it has.
+start = ["up"]
 verify = ["verify"]
 # tc-datalogger's Event Targets step reads the FFScouter key from TC_API_KEY_FFSCOUTER in
 # tc-user-events-pipeline. It is resolved from OpenBao on the workstation and sent over SSH stdin
 # (no file on d03); a plain up without it warns and runs without FFScouter:
 #   cd ~/local/asyla && python3 core/tools/credentials.py exec TC_API_KEY_FFSCOUTER -- python3 projects/asyla-hosts/scripts/build_host.py d03 build --only apps --app tc-datalogger --apply
+# Its images follow `latest` (tc-datalogger.sh); up pulls only missing ones, so the start pulls first:
+# a deploy, by hand or by the workstation's weekly agent (asyla hub tools/redeploy_apps.py), moves
+# the running stack to the newest `latest`.
 [[app]]
 name = "tc-datalogger"
+start = ["pull", "up"]
 start_env = ["TC_API_KEY_FFSCOUTER"]
 verify = ["verify"]
 [[app]]

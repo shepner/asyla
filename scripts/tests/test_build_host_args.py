@@ -228,6 +228,32 @@ def replica_images_own_case() -> bool:
                  and bare == ["compose:1"] and not any(c.endswith(" images") for c in calls), str((own, own_cmd, bare)))
 
 
+def replica_start_drops_pull_case() -> bool:
+    """A start of `pull up` (d03's tc-datalogger, d06's ticketing) runs as is on the source; on a
+    replica, whose egress is blocked after its image pull, it runs as `up`, and says so."""
+    app = '[[app]]\nname = "pu"\nstart = ["pull", "up"]\n'
+    calls = []
+
+    def fake(t, c):
+        calls.append(c)
+        return Done(0)
+    prod = temp_specs({"x": VM + app})("x")
+    _, prod_out = with_ssh(fake, lambda: build_host.phase_apps(prod, True))
+    prod_calls = list(calls)
+    calls.clear()
+    rep = temp_specs({"d07": VM + app, "x": VM + '[replica]\nof = "d07"\n'})("x")
+    real_guard, build_host.replica_guard = build_host.replica_guard, (lambda spec, apply: None)
+    try:
+        _, rep_out = with_ssh(fake, lambda: build_host.phase_apps(rep, True))
+    finally:
+        build_host.replica_guard = real_guard
+    return check("replica start: `pull up` runs as is on the source, as `up` on a replica, with a note",
+                 prod_calls == ["~/scripts/x/apps/pu/pu.sh pull up"] and "dropped" not in prod_out
+                 and calls == ["~/scripts/d07/apps/pu/pu.sh up"]
+                 and "`pull` dropped on a replica" in rep_out and "start pu: up" in rep_out,
+                 repr((prod_calls, calls, rep_out)))
+
+
 ENV_APP = ('[[app]]\nname = "tk"\npull_token_env = "PULL_X"\nstart_env = ["START_A", "START_B"]\n')
 ENV_NAMES = ["PULL_X", "START_A", "START_B", "OPT_C"]
 ENV_OPT_APP = ENV_APP + 'start_env_optional = ["OPT_C"]\n'
@@ -1051,6 +1077,7 @@ results = [
     egress_case(),
     egress_no_shell_case(),
     replica_images_own_case(),
+    replica_start_drops_pull_case(),
     *app_env_cases(),
     egress_probe_case(),
     ini_read_case(),

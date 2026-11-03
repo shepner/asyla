@@ -1,6 +1,7 @@
 # breeding-research on d03 — app data under /mnt/docker/breeding-research (GCP key, etc.)
 # Run: ~/scripts/d03/apps/breeding-research/breeding-research.sh up
-# Image: local build from source (breeding-research:local), or a registry pull with BREEDING_RESEARCH_PULL=1.
+# Image: breeding-research.sh sets BREEDING_RESEARCH_IMAGE: the registry's latest by default, or a
+# local build from source (breeding-research:local) with BREEDING_RESEARCH_PULL_OVERRIDE=0.
 
 networks:
   breeding_research_net:
@@ -9,7 +10,7 @@ networks:
 
 services:
   breeding-research:
-    image: ${BREEDING_RESEARCH_IMAGE:-breeding-research:local}
+    image: ${BREEDING_RESEARCH_IMAGE:-gitea.asyla.org/personal/breeding-research:latest}
     container_name: breeding-research
     restart: unless-stopped
     # Healthcheck: asyla backlog 2026-10-20-hosts-observability-through-theorg (operator, 2026-10-20).

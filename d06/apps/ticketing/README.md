@@ -27,5 +27,9 @@ theOrg's own `deploy.yml` does not target d06.
   removes `SEED` after theOrg's restore passes; the next backup then writes the mirror.
 - Names (internal-access `hosts/d06`, LAN only, over `ticketing_net`): `vikunja.asyla.org` and
   `vikunja-mcp.asyla.org` (bearer-guarded).
-- Upgrade: change `TICKETING_TAG` in `ticketing.sh` to a theOrg `main` sha whose images are
-  published, commit, then `ticketing.sh backup update up verify`.
+- Images follow `latest` (`TICKETING_TAG` in `ticketing.sh`), which theOrg ticketing publishes from
+  `main` and rebuilds weekly. `up` pulls only missing images, so it never moves to a new image by
+  itself; a deploy does (`d06/host.toml` start: `pull up`), and the workstation's weekly agent
+  (asyla hub `tools/redeploy_apps.py`) runs that deploy. Pin by hand with
+  `TICKETING_TAG_OVERRIDE=<a theOrg main sha whose images are published>` in the call's environment,
+  then `ticketing.sh backup update up verify`.

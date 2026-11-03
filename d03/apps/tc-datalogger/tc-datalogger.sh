@@ -1,6 +1,9 @@
 #!/bin/bash
 # tc-datalogger on d03. Usage: tc-datalogger.sh [up|down|restart|verify|pull|backup|restore|logs|...]
 # The store is Doltgres (tc-doltgres, database torn_data; tc-datalogger docs/d03-cutover.md).
+# Images: tag `latest` (tc-datalogger's stack-build publishes it from main and rebuilds it weekly).
+# up and restart pull only missing images, so a running stack never moves to a new image by itself
+# (host-maintenance's rollback re-tags the old image, then runs up); pull, update and refresh pull.
 # up, restart and refresh pass TC_API_KEY_FFSCOUTER (build_host.py start_env, over SSH stdin; in no
 # file) to tc-user-events-pipeline for the Event Targets step; without it they warn and start anyway.
 # targets-config show|on NAME|off reads or switches that step in TC_user_events' config.
@@ -22,6 +25,10 @@ if [ -f "$SCRIPT_DIR/.env" ]; then
   . "$SCRIPT_DIR/.env"
   set +a
 fi
+# The script owns the image tag (asyla backlog 2026-11-03-hosts-apps-follow-latest-redeployed-weekly):
+# `latest`, or a pin by hand with TC_IMAGE_TAG_OVERRIDE, as d06's ticketing.sh. The .env's
+# TC_IMAGE_TAG (from GitLab variable D03_TC_DATALOGGER_ENV) is no longer read.
+TC_IMAGE_TAG="${TC_IMAGE_TAG_OVERRIDE:-latest}"
 
 DOCKER_DL="${DOCKER_DL:-/mnt/docker}"
 DOCKER_D1="${DOCKER_D1:-/mnt/nas/data1/docker}"
@@ -332,13 +339,14 @@ PY
 run_cmd() {
   case "$1" in
     pull) run_compose pull ;;
+    # Pulls only missing images: a new image comes by pull, update or refresh, never by up alone.
     up) [ -s "$DB_PASSWORD_FILE" ] || { echo "[ERROR] No password at $DB_PASSWORD_FILE" >&2; return 1; }
         mkdir -p "$APP_ROOT/doltgres" "$APP_ROOT/doltgres-backup" || return 1
         warn_ffscouter up
-        run_compose pull; run_compose up -d ;;
+        run_compose up -d --pull missing ;;
     down) run_compose down ;;
-    restart) warn_ffscouter restart; run_compose down; run_compose up -d ;;
-    refresh) warn_ffscouter refresh; run_compose pull; run_compose up -d ;;
+    restart) warn_ffscouter restart; run_compose down && run_compose up -d ;;
+    refresh) warn_ffscouter refresh; run_compose pull && run_compose up -d ;;
     # Pull only, like the other d03 apps; use up or restart to apply the new image.
     update) echo "[INFO] Pulling latest images (not starting app; use up or restart to start)"; run_compose pull ;;
     verify) do_verify ;;
@@ -352,14 +360,18 @@ run_cmd() {
     # Rebuilt host only: refuses unless APP_ROOT is empty and the mirror's last backup is OK.
     restore) do_restore ;;
     logs) run_compose logs -f ;;
-    *) return 1 ;;
+    *) echo "[ERROR] Unknown: $1" >&2; usage; return 2 ;;
   esac
 }
 
-if [ $# -eq 0 ]; then
-  echo "Usage: $0 pull|up|down|restart|refresh|update|verify|dbup|gc|dbbackup|backup|restore|logs" >&2
+usage() {
+  echo "Usage: $0 pull|up|down|restart|refresh|update|verify|dbup|gc|dbbackup|backup|restore|logs ..." >&2
   echo "       $0 src <rev> < bundle | backfill [backfill_from_bigquery.sh args] | parity [sql_parity.sh args]" >&2
   echo "       $0 targets-config show | on NAME | off   (Event Targets in TC_user_events' config; NAME: an api_keys name)" >&2
+}
+
+if [ $# -eq 0 ]; then
+  usage
   exit 1
 fi
 [ "$1" = "logs" ] && { run_compose logs -f "${@:2}"; exit 0; }
@@ -370,4 +382,9 @@ case "$1" in
   backfill) run_tc_script backfill_from_bigquery.sh "${@:2}"; exit $? ;;
   parity) run_tc_script sql_parity.sh "${@:2}"; exit $? ;;
 esac
-for c in "$@"; do run_cmd "$c" || { echo "Unknown: $c" >&2; exit 1; }; done
+# A switch that fails exits with its own status (an unknown one: 2, after the usage).
+for c in "$@"; do
+  rc=0
+  run_cmd "$c" || rc=$?
+  [ "$rc" -eq 0 ] || exit "$rc"
+done

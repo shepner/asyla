@@ -28,10 +28,12 @@ APP_NAME="Ticketing"
 APP_ROOT="$DOCKER_DL/Ticketing"
 BACKUP_DIR="$DOCKER_D1/Ticketing/mirror"
 
-# The theOrg ticketing commit whose images run here: one sha for every ticketing image
-# (DEPLOY.md, Images). 041215a is theOrg main, the #19 merge (publish-images run 14199,
-# linux/amd64 and linux/arm64). Change it here, commit, then `backup update up verify`.
-TICKETING_TAG="${TICKETING_TAG_OVERRIDE:-041215a96ae3bbe5ec12fc661fe1476dabe35c02}"
+# The tag of every ticketing image here: `latest`, which theOrg ticketing's publish-images pushes
+# from main and rebuilds weekly. The workstation's weekly agent (asyla hub tools/redeploy_apps.py)
+# redeploys it (d06/host.toml start: pull up); up alone pulls only missing images, so it never moves
+# to a new image by itself. Pin by hand with TICKETING_TAG_OVERRIDE=<a theOrg main sha whose images
+# are published>, then `backup update up verify` with it.
+TICKETING_TAG="${TICKETING_TAG_OVERRIDE:-latest}"
 TICKETING_ROOT="$APP_ROOT"
 REGISTRY="gitea.asyla.org"
 

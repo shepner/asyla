@@ -7,7 +7,7 @@
 # - only vikunja is published, on 127.0.0.1 (verify and the build's replica check run on the
 #   host); internal-access reaches both services over ticketing_net.
 # Run with ticketing.sh (it sets TICKETING_ROOT and TICKETING_TAG and keeps the start order).
-# Images: one theOrg commit sha for every ticketing image (TICKETING_TAG in ticketing.sh).
+# Images: one tag for every ticketing image (TICKETING_TAG in ticketing.sh: latest, or a pin).
 name: ticketing
 
 services:
