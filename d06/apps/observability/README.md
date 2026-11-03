@@ -76,8 +76,13 @@ cd ~/local/asyla && python3 core/tools/credentials.py exec THEORG_REGISTRY_PULL_
 
 It pulls first (`observability.sh images`), then mints the three wrapped tokens and starts the
 stack (`build_host.py d06 build --only apps --app observability --apply`, which runs
-`observability.sh up`); `deploy_role.py --dry-run` prints the plan and contacts nothing (its
-header has the steps). `up` never pulls while a wrapped token is in its environment, since a pull
+`observability.sh up`), then runs `observability.sh verify` on d06 (`--only apps` skips build_host's
+verify phase) and exits 1 when it fails; `deploy_role.py --dry-run` prints the plan and contacts
+nothing (its header has the steps). On a failure it says which step failed: the mint (nothing
+started) or the start (the stack may be partly recreated: run `observability.sh status` and
+`verify` on d06). If d06's installed `observability.sh` lists images of another tag, d06's
+scripts tree is not master yet: after the merge, install it with `build_host.py d06 build --only
+bootstrap --apply` (the error prints the whole command). `up` never pulls while a wrapped token is in its environment, since a pull
 could outlast the token: a missing image there is an error. `up` recreates each tokened container
 with its new token and leaves the others as they are unless their configuration changed.
 
@@ -98,6 +103,18 @@ deliveries fail, so no alert is filed or emailed, including the alerts about the
 Prometheus gets no Home Assistant or Emporia data meanwhile; emporia-collector backfills what
 Emporia still holds once it runs again. `verify` fails while any of the three loops. After any
 reboot or Docker restart on d06, run the deploy.
+
+A reboot comes without anyone deciding it: host-maintenance's `os` rota patches d06 on Fridays
+(host-maintenance `setup/schedules.py:75-77` at f7b027c, `config/maintenance.toml:55`) and reboots
+when the host says one is required (`remote/maint_host.py:301-306`). What notices the loop:
+
+- now: host-maintenance's restart count, a "container ... restarted Nx since last check" warning
+  for each of the three (`runner/maint.py:295-298`);
+- once the watchdog ping is on (`ALERT_WATCHDOG_PING`): the healthchecks.io dead-man, since
+  Alertmanager's Watchdog reaches it through alert-relay.
+
+The recovery is the deploy above (`deploy_role.py`), run by hand. Recovering on its own (a token
+the services can use again after a restart) is open with theOrg: it is their token convention.
 
 ## On, off, and what turns each on
 
@@ -132,14 +149,18 @@ check `compose.yml` against theOrg's `docker-compose.yml` at that sha, commit, t
 the tokened services move to the new images only through a deploy. `verify` checks the services
 are healthy, Prometheus is healthy with one Alertmanager, `docker_container_running` on `9099`,
 the trends retention is a size, the gateway's `/ready` over HTTP and a 401 or 403 on an
-unauthenticated push, and the three blackbox self-probes (it waits up to `VERIFY_WAIT_S`).
+unauthenticated push, and the three blackbox self-probes (it waits up to `VERIFY_WAIT_S`). For
+each tokened service whose container exists, it also checks that the service holds its secrets,
+waiting once more up to `VERIFY_WAIT_S` for the first scrape: the trends Prometheus (`9107`) reads
+`up{job="asyla-home-assistant"}` 1 (scrape-proxy) and `up{job="emporia"}` 1 (emporia-collector),
+the job names of theOrg `trends/scrape/asyla-home-assistant.yml` and `trends/scrape/emporia.yml`;
+alert-relay's own metrics (`9111`) read `alert_relay_secret_present{secret="smtp_username"}` and
+`{secret="smtp_password"}` 1 (theOrg `alert-relay/relay.py`).
 
 ## Known limits
 
 - No backup yet. A lost `/mnt/docker/Observability` is lost; the app has no `restore` switch
   (`restore = false` in `host.toml`).
-- `verify` proves the tokened services are healthy, not that each holds its secrets
-  (alert-relay's `alert_relay_secret_present`, the trends Home Assistant and `emporia` targets).
 - Reach from d06 was read from the host, not from inside a container (2026-11-03):
   `vault.asyla.org` and `homeassistant.asyla.org` answered 200, `smtp.gmail.com:587` was open.
 - The trends Prometheus starts empty on d06. theOrg re-runs its `emporia-history` to fill it.

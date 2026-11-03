@@ -112,7 +112,8 @@ host, never in a command line, a file or this output; an unset one fails, naming
                            neither read nor sent
   start_env_optional = ["NAME"...]  as start_env, but one that is unset is skipped, not fatal: the
                            app script decides what to start without it (d06's observability: the
-                           wrapped vault tokens its deploy_role.py mints, which a plain build lacks)
+                           wrapped vault tokens its deploy_role.py mints, which a plain build lacks);
+                           one app's only: no other [[app]] of the host may name it (single use)
 d06's ticketing: pull_token_env = "THEORG_REGISTRY_PULL_TOKEN", start_env = its two Dex client
 values (d06/apps/ticketing/README.md).
 
@@ -456,6 +457,7 @@ def load_spec(host: str, node: str | None = None) -> dict:
             raise Fail(f"{path}: bad secret var {s.get('var')!r}")
     for a in spec.get("app", []):
         check_app_env(path, a)
+    check_optional_env_once(path, spec.get("app", []))
     check_host_maintenance_spec(path, spec)
     if host not in LEGACY_HOSTS:
         own = REPO / host / "setup"
@@ -509,6 +511,23 @@ def check_app_env(path: Path, a: dict) -> None:
     rt = a.get("restore_timeout", RESTORE_TIMEOUT)
     if isinstance(rt, bool) or not isinstance(rt, int) or rt <= 0:
         raise Fail(f"{path}: [[app]] {name!r}: restore_timeout must be a whole number of seconds above 0, not {rt!r}")
+
+
+def check_optional_env_once(path: Path, apps: list[dict]) -> None:
+    """A start_env_optional name belongs to one [[app]] of the host: no other app names it in its
+    start_env or start_env_optional. Such a name carries a single-use value (d06 observability's
+    wrapped vault tokens): sent to two apps, one would spend it and the other would loop. A
+    start_env name may be shared (d07's unifi-monitor and unifi-backup take one reusable API key)."""
+    for a in apps:
+        for b in apps:
+            if b is a:
+                continue
+            both = set(a.get("start_env_optional", [])) & (set(b.get("start_env", []))
+                                                           | set(b.get("start_env_optional", [])))
+            if both:
+                raise Fail(f"{path}: {', '.join(sorted(both))}: start_env_optional of [[app]] "
+                           f"{a.get('name', '?')!r} and named again by [[app]] {b.get('name', '?')!r}; "
+                           f"a start_env_optional name is one app's (a single-use value)")
 
 
 def pull_env_name(app: str) -> str:

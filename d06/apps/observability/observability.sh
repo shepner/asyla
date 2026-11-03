@@ -340,9 +340,67 @@ check_self_probes() {
   return 1
 }
 
+# The trends Prometheus's up{job="$1"} values (space-separated), from its 127.0.0.1:9107.
+trends_up() {
+  curl -sf --max-time 10 -G http://127.0.0.1:9107/api/v1/query --data-urlencode "query=up{job=\"$1\"}" \
+    | python3 -c 'import json,sys; print(" ".join(sorted(r["value"][1] for r in json.load(sys.stdin)["data"]["result"])))'
+}
+
+# alert-relay's alert_relay_secret_present for its SMTP login, as "secret=value ..." (sorted), from
+# its own metrics on 127.0.0.1:9111 (theOrg alert-relay/relay.py; compose.yml publishes it there).
+relay_smtp_held() {
+  curl -sf --max-time 10 http://127.0.0.1:9111/metrics \
+    | python3 -c 'import re,sys; print(" ".join(sorted(m[0] + "=" + format(float(m[1]), "g") for m in re.findall(r"^alert_relay_secret_present\{secret=\"(smtp_username|smtp_password)\"\} (\S+)$", sys.stdin.read(), re.M))))'
+}
+
+# Waits until "$@" prints WANT ($1) or the shared deadline TOKENED_DEADLINE passes; the last
+# reading is in GOT.
+wait_reading() {
+  local want="$1"
+  shift
+  while :; do
+    GOT="$("$@" 2>/dev/null)" || GOT=""
+    [ "$GOT" = "$want" ] && return 0
+    [ "$(date +%s)" -lt "$TOKENED_DEADLINE" ] || return 1
+    sleep 5
+  done
+}
+
+# That each tokened service whose container exists holds its secrets, not only that it is
+# healthy: the trends jobs scrape-proxy and emporia-collector serve (theOrg trends/scrape/
+# asyla-home-assistant.yml and emporia.yml) read up 1, and alert-relay holds its SMTP login.
+# The first scrape comes within a minute (scrape_interval 60s): one wait of VERIFY_WAIT_S for all.
+check_tokened() {
+  local rc=0
+  TOKENED_DEADLINE=$(( $(date +%s) + VERIFY_WAIT_S ))
+  if [ "$(service_state scrape-proxy)" != missing ]; then
+    if wait_reading 1 trends_up asyla-home-assistant; then
+      info "scrape-proxy: trends up{job=\"asyla-home-assistant\"} 1 (it holds the Home Assistant token)"
+    else
+      echo "[ERROR] scrape-proxy: trends up{job=\"asyla-home-assistant\"} reads '${GOT:-nothing}', not 1" >&2; rc=1
+    fi
+  fi
+  if [ "$(service_state emporia-collector)" != missing ]; then
+    if wait_reading 1 trends_up emporia; then
+      info "emporia-collector: trends up{job=\"emporia\"} 1"
+    else
+      echo "[ERROR] emporia-collector: trends up{job=\"emporia\"} reads '${GOT:-nothing}', not 1" >&2; rc=1
+    fi
+  fi
+  if [ "$(service_state alert-relay)" != missing ] && [ -n "$ALERT_EMAIL_TO" ]; then
+    if wait_reading "smtp_password=1 smtp_username=1" relay_smtp_held; then
+      info "alert-relay: alert_relay_secret_present 1 for smtp_username and smtp_password"
+    else
+      echo "[ERROR] alert-relay: alert_relay_secret_present reads '${GOT:-nothing}', not smtp_password=1 smtp_username=1" >&2; rc=1
+    fi
+  fi
+  return "$rc"
+}
+
 # What runs: the services, Prometheus and its Alertmanager, docker-state-exporter, the trends
-# retention, the gateway (HTTP, failing closed) and the blackbox self-probes. The pieces that are
-# off (compose.yml's header) have nothing to check.
+# retention, the gateway (HTTP, failing closed), the blackbox self-probes and the tokened
+# services' secrets (check_tokened). The pieces that are off (compose.yml's header) have nothing
+# to check.
 do_verify() {
   local rc=0 svc state n body code off
   off="$(not_deployed)"
@@ -397,6 +455,7 @@ do_verify() {
   fi
 
   check_self_probes || rc=1
+  check_tokened || rc=1
 
   if [ "$rc" -eq 0 ]; then info "verify OK"; else echo "[ERROR] verify failed" >&2; fi
   return "$rc"

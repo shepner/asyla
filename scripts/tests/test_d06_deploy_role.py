@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Offline test of d06/apps/observability/deploy_role.py: the plan it builds, and what each step
 sends where. No SSH, no vault, no git: subprocess.run and build_host.ssh are replaced so that any
-contact fails the test.
+contact fails the test (run_start's own cases run a local python child, nothing else).
 
     python3 scripts/tests/test_d06_deploy_role.py
 
@@ -58,8 +58,9 @@ class Done:
 
 
 SPEC = {"host": "d06", "apps_tree": "d06",
-        "app": [{"name": "observability", "pull_token_env": "THEORG_REGISTRY_PULL_TOKEN",
+        "app": [{"name": "observability", "pull_token_env": "THEORG_REGISTRY_PULL_TOKEN", "verify": ["verify"],
                  "start_env_optional": list(OBS_TOKENS)}]}
+SCRIPT = "~/scripts/d06/apps/observability/observability.sh"
 
 
 def quiet(call):
@@ -107,6 +108,9 @@ def pull_cases() -> list[bool]:
     bh.ssh = fake(0, "reg.example/theorg/observability-loki-gateway:2144f83c\n")
     out.append(stops("images: a theOrg image of another tag stops before any mint", "not of",
                      lambda: with_pull_env(lambda: dr.pull_images(SPEC, TAG))))
+    out.append(stops("images: a stale scripts tree names the fix (merge, then install master with --only bootstrap)",
+                     "build_host.py d06 build --only bootstrap --apply",
+                     lambda: with_pull_env(lambda: dr.pull_images(SPEC, TAG))))
     bh.ssh = fake(0, "prom/prometheus:v3\n")
     out.append(stops("images: no theOrg image at all stops", "0 theOrg image(s)",
                      lambda: with_pull_env(lambda: dr.pull_images(SPEC, TAG))))
@@ -118,7 +122,67 @@ def pull_cases() -> list[bool]:
     out.append(got)
     out.append(check("images: a failed pull's output is shown with the token redacted",
                      PULL not in buf.getvalue() and "login failed for ..." in buf.getvalue(), buf.getvalue()))
+    # The value straddles the 2000-character cut: cut first, then redact, would leave its end.
+    bh.ssh = fake(1, "", "a" * 100 + PULL + "b" * 1995)
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(buf):
+            with_pull_env(lambda: dr.pull_images(SPEC, TAG))
+    except dr.Stop:
+        pass
+    out.append(check("images: a failed pull's output is redacted before it is cut (no part of the token)",
+                     PULL[-5:] not in buf.getvalue() and len(buf.getvalue().strip()) == 2000, repr(buf.getvalue()[:40])))
+
+    def timeout(target, cmd, **kw):
+        raise subprocess.TimeoutExpired(cmd, kw.get("timeout"))
+    bh.ssh = timeout
+    out.append(stops("images: no answer in time is one clear line, nothing minted", "nothing minted",
+                     lambda: with_pull_env(lambda: dr.pull_images(SPEC, TAG))))
     bh.ssh = _no_contact
+    return out
+
+
+def verify_cases() -> list[bool]:
+    out, calls = [], []
+
+    def fake(rc):
+        def f(target, cmd, **kw):
+            calls.append((target, cmd, kw))
+            return Done(rc)
+        return f
+
+    bh.ssh = fake(0)
+    dr.verify_app(SPEC)
+    out.append(check("verify: the app's own verify on d06, streamed, no token on stdin",
+                     calls == [("d06", f"{SCRIPT} verify", {"check": False, "stream": True,
+                                                            "timeout": dr.VERIFY_TIMEOUT})], repr(calls)))
+    bh.ssh = fake(1)
+    out.append(stops("verify: a failed verify stops", "does not verify", lambda: dr.verify_app(SPEC)))
+
+    def timeout(target, cmd, **kw):
+        raise subprocess.TimeoutExpired(cmd, kw.get("timeout"))
+    bh.ssh = timeout
+    out.append(stops("verify: no answer in time is one clear line", "no end in", lambda: dr.verify_app(SPEC)))
+    bh.ssh = _no_contact
+    out.append(stops("spec: an app without verify stops before anything runs", "has no verify",
+                     lambda: dr.check_spec({**SPEC, "app": [{k: v for k, v in SPEC["app"][0].items() if k != "verify"}]},
+                                           dr.IDENTITIES)))
+    return out
+
+
+def run_start_cases() -> list[bool]:
+    """run_start with a local child (no contact): lines pass through; an ::error:: line means the
+    start never ran."""
+    out = []
+    code = "import sys; print('minted'); print(sys.argv[1]); sys.exit(int(sys.argv[2]))"
+    for said, rc, started, name in (
+            ("::error::scrape-proxy: no vault identity minted", 1, False, "an ::error:: line: the mint failed"),
+            ("[ERROR] up failed", 1, True, "a failure without ::error::: the start ran"),
+            ("done", 0, True, "a clean run")):
+        with contextlib.redirect_stdout(io.StringIO()) as buf:
+            got = dr.run_start([sys.executable, "-c", code, said, str(rc)], dict(os.environ))
+        out.append(check(f"run_start: {name}", got == (rc, started) and f"minted\n{said}\n" == buf.getvalue(),
+                         repr((got, buf.getvalue()))))
     return out
 
 
@@ -126,26 +190,34 @@ def main_cases() -> list[bool]:
     out = []
     seen = {}
 
-    def fake_run(argv, env=None, **kw):
+    def fake_start(argv, env):
         seen["argv"], seen["env"] = argv, env
-        return Done(seen.get("rc", 0))
+        if seen.get("raise"):
+            raise seen["raise"]
+        return seen.get("rc", 0), seen.get("started", True)
 
-    real = (dr.unpack_tool, dr.pull_images, dr.hub_sign_in, dr.stack_tag, dr.has_tool, dr.build_host.load_spec)
+    def fake_verify(target, cmd, **kw):
+        seen["verify"] = (target, cmd)
+        return Done(seen.get("verify_rc", 0))
+
+    real = (dr.unpack_tool, dr.pull_images, dr.hub_sign_in, dr.stack_tag, dr.has_tool, dr.build_host.load_spec,
+            dr.run_start)
     dr.unpack_tool = lambda tag, into: None
     dr.pull_images = lambda spec, tag: None
     dr.hub_sign_in = lambda: HUB_STAND_IN
     dr.stack_tag = lambda script: TAG
     dr.has_tool = lambda tag: True
     dr.build_host.load_spec = lambda host: SPEC
-    dr.subprocess.run = fake_run
+    dr.run_start = fake_start
+    bh.ssh = fake_verify
     saved = {n: os.environ.get(n) for n in ("OPENBAO_TOKEN", "VAULT_TOKEN", "BAO_ROOT_TOKEN", OBS_TOKENS[0],
                                             "THEORG_REGISTRY_PULL_TOKEN")}
     os.environ.update(dict.fromkeys((*OTHER_VAULT_VARS, OBS_TOKENS[0]), OTHER_STAND_IN))
     try:
         rc, printed = quiet(lambda: with_pull_env(lambda: dr.main(["--dry-run"])))
-        out.append(check("dry run: prints the plan, runs nothing, exit 0",
+        out.append(check("dry run: prints the plan (with the verify step), runs nothing, exit 0",
                          rc == 0 and not seen and "DRY RUN" in printed and all(n in printed for n in OBS_TOKENS)
-                         and "stand-in" not in printed, printed))
+                         and f"5. d06: {SCRIPT} verify" in printed and "stand-in" not in printed, printed))
         rc, printed = quiet(lambda: with_pull_env(lambda: dr.main([])))
         env, argv = seen.get("env", {}), seen.get("argv", [])
         out.append(check("run: BAO_TOKEN is the hub token in the minting tool's env only; no other vault token, no stale wrapped one",
@@ -159,18 +231,42 @@ def main_cases() -> list[bool]:
                          and argv[argv.index("--") + 1:][1:] == [str(REPO / "scripts/build_host.py"), "d06", "build", "--only",
                                                                  "apps", "--app", "observability", "--apply"],
                          repr(argv)))
+        out.append(check("run: after a clean start, the app's verify runs on d06; exit 0",
+                         rc == 0 and seen.get("verify") == ("d06", f"{SCRIPT} verify") and "verifies" in printed,
+                         repr((rc, seen.get("verify"), printed))))
         seen.clear()
-        seen["rc"] = 1
+        seen.update(verify_rc=1)
         rc, printed = quiet(lambda: with_pull_env(lambda: dr.main([])))
-        out.append(check("run: a mint failure exits non-zero", rc == 1, printed))
+        out.append(check("run: a verify that fails exits 1", rc == 1 and "does not verify" in printed, printed))
+        seen.clear()
+        seen.update(rc=1, started=False)
+        rc, printed = quiet(lambda: with_pull_env(lambda: dr.main([])))
+        out.append(check("run: a mint failure says the mint failed, nothing started; no verify",
+                         rc == 1 and "the mint failed" in printed and "nothing started" in printed
+                         and "verify" not in seen, printed))
+        seen.clear()
+        seen.update(rc=1, started=True)
+        rc, printed = quiet(lambda: with_pull_env(lambda: dr.main([])))
+        out.append(check("run: a start failure says the stack may be partly recreated, names status and verify; no verify run",
+                         rc == 1 and "the start failed" in printed and "partly recreated" in printed
+                         and f"`{SCRIPT} status`" in printed and f"`{SCRIPT} verify`" in printed
+                         and "verify" not in seen, printed))
+        seen.clear()
+        seen.update(rc=0, started=True)
+        seen["raise"] = FileNotFoundError(2, "No such file or directory")
+        rc, printed = quiet(lambda: with_pull_env(lambda: dr.main([])))
+        out.append(check("run: a start that cannot run is one clear line, exit 1, no traceback",
+                         rc == 1 and "cannot run vault_identity.py: FileNotFoundError" in printed
+                         and "Traceback" not in printed, printed))
         seen.clear()
         os.environ.pop("THEORG_REGISTRY_PULL_TOKEN", None)
         rc, printed = quiet(lambda: dr.main([]))
         out.append(check("run: no pull token stops before anything runs", rc == 1 and not seen
                          and "THEORG_REGISTRY_PULL_TOKEN is not in the environment" in printed, printed))
     finally:
-        (dr.unpack_tool, dr.pull_images, dr.hub_sign_in, dr.stack_tag, dr.has_tool, dr.build_host.load_spec) = real
-        dr.subprocess.run = _no_contact
+        (dr.unpack_tool, dr.pull_images, dr.hub_sign_in, dr.stack_tag, dr.has_tool, dr.build_host.load_spec,
+         dr.run_start) = real
+        bh.ssh = _no_contact
         for n, v in saved.items():
             os.environ.pop(n, None)
             if v is not None:
@@ -201,7 +297,7 @@ results = [
     check("identities: every name and path is a plain path under the hub's KV",
           all(r and "#" not in r and "/" not in r for _, _, rs in dr.IDENTITIES for r in rs)),
     stops("spec: an identity whose variable build_host would not send stops", "start_env_optional lacks",
-          lambda: dr.check_spec({**SPEC, "app": [{"name": "observability", "start_env_optional": OBS_TOKENS[:2]}]},
+          lambda: dr.check_spec({**SPEC, "app": [{**SPEC["app"][0], "start_env_optional": OBS_TOKENS[:2]}]},
                                 dr.IDENTITIES)),
     stops("spec: two identities with one variable stop", "each component once",
           lambda: dr.check_spec(SPEC, [("a", OBS_TOKENS[0], ["r"]), ("b", OBS_TOKENS[0], ["r"])])),
@@ -210,6 +306,8 @@ results = [
           dr.start_argv(SPEC)[4:6] == ["--only", "apps"]
           and dr.start_argv({**SPEC, "app": [{**SPEC["app"][0], "after_external": True}]})[4:6] == ["--only", "late"]),
     *pull_cases(),
+    *verify_cases(),
+    *run_start_cases(),
     *main_cases(),
 ]
 print("all cases passed" if all(results) else f"{results.count(False)} case(s) failed")

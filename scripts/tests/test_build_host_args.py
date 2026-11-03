@@ -257,6 +257,16 @@ def app_env_cases() -> list[bool]:
               lambda: temp_specs({"x": VM + '[[app]]\nname = "a"\nstart_env = ["A"]\nstart_env_optional = ["A"]\n'})("x")),
         fails("app env: start_env_optional cannot carry the pull token's name", "which pull_token_env sets",
               lambda: temp_specs({"x": VM + '[[app]]\nname = "a"\npull_token_env = "P"\nstart_env_optional = ["A_REGISTRY_PULL_TOKEN"]\n'})("x")),
+        fails("app env: a start_env_optional name in two apps' start_env_optional is refused", "a start_env_optional name is one app's",
+              lambda: temp_specs({"x": VM + '[[app]]\nname = "a"\nstart_env_optional = ["W"]\n'
+                                  '[[app]]\nname = "b"\nstart_env_optional = ["W"]\n'})("x")),
+        fails("app env: a start_env_optional name in another app's start_env is refused", "a start_env_optional name is one app's",
+              lambda: temp_specs({"x": VM + '[[app]]\nname = "a"\nstart_env = ["W"]\n'
+                                  '[[app]]\nname = "b"\nstart_env_optional = ["W"]\n'})("x")),
+        check("app env: a start_env name shared by two apps loads (d07's reusable API key)",
+              [a["start_env"] for a in temp_specs({"x": VM + '[[app]]\nname = "a"\nstart_env = ["W"]\n'
+                                                   '[[app]]\nname = "b"\nstart_env = ["W"]\n'})("x")["app"]]
+              == [["W"], ["W"]]),
         check("app env: the pull token's name on the host", build_host.pull_env_name("my-app") == "MY_APP_REGISTRY_PULL_TOKEN"),
         fails("app restore_timeout: a string is refused", "restore_timeout must be",
               lambda: temp_specs({"x": VM + '[[app]]\nname = "a"\nrestore_timeout = "2h"\n'})("x")),

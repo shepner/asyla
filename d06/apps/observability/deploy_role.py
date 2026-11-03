@@ -19,7 +19,11 @@ Run on the workstation, from ~/local/asyla (asyla's hub token is the hub of the 
    which then runs `build_host.py d06 build --only apps --app observability --apply`: build_host
    sends each wrapping token to `observability.sh up` over SSH stdin, as a start_env_optional
    name of d06/host.toml. A mint that fails (a missing record, a policy that does not take) exits
-   1 before anything starts, and so does this script.
+   1 before anything starts, and so does this script. A start that fails may leave the stack
+   partly recreated: this script says which of the two it was.
+5. verify: the app's own `verify` on d06 (host.toml [[app]] verify, as build_host's verify phase
+   runs it; `--only apps` skips that phase). It needs no token and waits for the first scrapes.
+   A verify that fails makes this script exit 1.
 
 Never prints, logs or writes a token or a value; no file holds one. --dry-run prints the plan from
 local files only: it mints nothing and contacts nothing (no SSH, no vault, no fetch).
@@ -51,6 +55,8 @@ SECRETS_CLIENT = Path.home() / "local/theOrg/projects/secrets-vault/client"   # 
 TOOL_FILES = ("vault_identity.py", "openbao.py")
 CALLER_TOKENS = ("OPENBAO_TOKEN", "VAULT_TOKEN", "BAO_ROOT_TOKEN")
 TAG_LINE = re.compile(r'^OBSERVABILITY_TAG="\$\{OBSERVABILITY_TAG_OVERRIDE:-([0-9a-f]{7,40})\}"', re.M)
+IMAGES_TIMEOUT = 1800   # s: `images` pulls what is missing
+VERIFY_TIMEOUT = 1800   # s: verify waits up to VERIFY_WAIT_S (300 s) per wait, a few in a row
 
 # (component, the variable observability.sh up receives its wrapping token in, KV records under KV).
 # Plain paths: vault_identity.py kv= takes no #field. One line per component.
@@ -107,7 +113,10 @@ def app_of(spec: dict) -> dict:
 
 def check_spec(spec: dict, identities: list) -> None:
     """Each identity's env= is a start_env_optional name of the app (else build_host would not send
-    it), and no two identities share a component or an env=."""
+    it), no two identities share a component or an env=, and the app has a verify (run after the
+    start)."""
+    if not app_of(spec).get("verify"):
+        raise Stop(f"{HOST}/host.toml [[app]] {APP} has no verify: nothing would check the start")
     optional = set(app_of(spec).get("start_env_optional", []))
     envs = [e for _, e, _ in identities]
     comps = [c for c, _, _ in identities]
@@ -160,20 +169,64 @@ def pull_images(spec: dict, tag: str) -> None:
     """`observability.sh images` on the host with the pull token over stdin; its theOrg images
     must be of TAG (the installed script is this repo's)."""
     a = app_of(spec)
+    host = spec["host"]
     pairs = build_host.app_env(spec, a, start=False)
     cmd, stdin = build_host.env_command(pairs, f"{build_host.app_script(spec['apps_tree'], APP)} images")
-    r = build_host.ssh(spec["host"], cmd, stdin=stdin, check=False, timeout=1800)
+    try:
+        r = build_host.ssh(host, cmd, stdin=stdin, check=False, timeout=IMAGES_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        raise Stop(f"`{APP}.sh images` on {host}: no end in {IMAGES_TIMEOUT} s; nothing minted, nothing started")
     if r.returncode != 0:
-        tail = redact((r.stderr or "")[-2000:], [v for _, v in pairs])
+        tail = redact(r.stderr or "", [v for _, v in pairs])[-2000:]   # redact, then cut: no half value
         sys.stderr.write(tail + ("\n" if tail and not tail.endswith("\n") else ""))
-        raise Stop(f"`{APP}.sh images` on {spec['host']}: exit {r.returncode}; nothing minted, nothing started")
+        raise Stop(f"`{APP}.sh images` on {host}: exit {r.returncode}; nothing minted, nothing started")
     images = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
     theorg = [i for i in images if "/theorg/" in i]
     stale = [i for i in theorg if not i.endswith(f":{tag}")]
     if not theorg or stale:
-        raise Stop(f"{spec['host']}'s installed {APP}.sh lists {len(theorg)} theOrg image(s), "
-                   f"{len(stale)} not of {tag[:12]}: its scripts tree is not this repo's; nothing minted")
+        raise Stop(f"{host}'s installed {APP}.sh lists {len(theorg)} theOrg image(s), {len(stale)} not of "
+                   f"{tag[:12]}: {host}'s scripts tree is not this repo's master; nothing minted. Merge this "
+                   f"change to master, then install master on {host}: {bootstrap_hint(host)}; then run this again")
     print(f"  {len(images)} image(s) present, {len(theorg)} theOrg image(s) of {tag[:12]}")
+
+
+def bootstrap_hint(host: str) -> str:
+    """The command that installs master's scripts tree on HOST (its update_scripts.sh from GitLab
+    master, the deploy token over SSH stdin: build_host.py phase_bootstrap)."""
+    return (f"cd ~/local/asyla && python3 core/tools/credentials.py exec ASYLA_HOSTS_DEPLOY_USER "
+            f"ASYLA_HOSTS_DEPLOY_TOKEN -- python3 projects/asyla-hosts/scripts/build_host.py {host} build "
+            f"--only bootstrap --apply")
+
+
+def run_start(argv: list[str], env: dict) -> tuple[int, bool]:
+    """The mint and then the start (ARGV), their stdout passed through line by line. Returns
+    (exit, started). started is False when vault_identity.py printed an `::error::` line: it does
+    so for every failure, before it runs the start ("Any failure exits 1 before the command runs",
+    its header at the tag). build_host.py and observability.sh print no `::error::` line."""
+    said_error = False
+    env = {**env, "PYTHONUNBUFFERED": "1"}   # build_host's lines as they come (vault_identity.py flushes)
+    with subprocess.Popen(argv, env=env, stdout=subprocess.PIPE, text=True) as p:
+        for line in p.stdout:
+            sys.stdout.write(line)
+            sys.stdout.flush()
+            said_error = said_error or line.startswith("::error::")
+    return p.returncode, not said_error
+
+
+def verify_app(spec: dict) -> None:
+    """The app's own verify on the host, as build_host.py's verify phase runs it (no token, its
+    output shown as it comes). observability.sh verify waits for the services and the first
+    scrapes, up to its VERIFY_WAIT_S per wait."""
+    a, host = app_of(spec), spec["host"]
+    what = f"{build_host.app_script(spec['apps_tree'], APP)} {' '.join(a['verify'])}"
+    try:
+        r = build_host.ssh(host, what, check=False, stream=True, timeout=VERIFY_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        raise Stop(f"`{what}` on {host}: no end in {VERIFY_TIMEOUT} s; the stack started, its state is "
+                   f"not known: run it again on {host}")
+    if r.returncode != 0:
+        raise Stop(f"`{what}` on {host}: exit {r.returncode} (its lines are above): the stack started "
+                   f"but does not verify")
 
 
 def hub_sign_in() -> str:
@@ -211,6 +264,8 @@ def show_plan(spec: dict, tag: str, identities: list) -> None:
     start = start_argv(spec)
     print(f"   then: {' '.join(['python3', str(Path(start[1]).relative_to(REPO))] + start[2:])}")
     print(f"   (observability.sh up gets {', '.join(e for _, e, _ in identities)} over SSH stdin)")
+    print(f"5. {spec['host']}: {build_host.app_script(spec['apps_tree'], APP)} "
+          f"{' '.join(app_of(spec).get('verify', []))} (no token); a failure exits 1")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -235,14 +290,24 @@ def main(argv: list[str] | None = None) -> int:
             pull_images(spec, tag)
             build_host.step("mint and start")
             env = child_env(os.environ, hub_sign_in(), spec)
-            r = subprocess.run(mint_argv(tool_dir, IDENTITIES, spec), env=env)
+            try:
+                rc, started = run_start(mint_argv(tool_dir, IDENTITIES, spec), env)
+            except OSError as e:
+                raise Stop(f"cannot run vault_identity.py: {type(e).__name__}; nothing minted, nothing started")
         finally:
             shutil.rmtree(tool_dir, ignore_errors=True)
-        if r.returncode != 0:
-            print(f"vault_identity.py or the start: exit {r.returncode} (a mint failure starts nothing; "
-                  f"its message is above)")
-            return r.returncode
-        print(f"{APP} started on {spec['host']} with {len(IDENTITIES)} vault identities")
+        host, script = spec["host"], build_host.app_script(spec["apps_tree"], APP)
+        if rc != 0 and not started:
+            print(f"stopped: the mint failed (exit {rc}; vault_identity.py's ::error:: line is above): "
+                  f"nothing started")
+            return rc
+        if rc != 0:
+            print(f"stopped: the start failed (exit {rc}; its lines are above): the stack may be partly "
+                  f"recreated. On {host}, run `{script} status` and `{script} verify`")
+            return rc
+        build_host.step("verify")
+        verify_app(spec)
+        print(f"{APP} started on {host} with {len(IDENTITIES)} vault identities, and verifies")
         return 0
     except (Stop, build_host.Fail) as e:
         print(f"stopped: {e}")
