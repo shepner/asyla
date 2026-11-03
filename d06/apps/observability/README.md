@@ -98,5 +98,8 @@ three blackbox self-probes (it waits up to `VERIFY_WAIT_S`).
   subnet; d03 and d07 are not changed here.
 - d06's `update_all.sh` reports this app as FAIL. It runs `backup`, which this app does not have,
   and `update`, which needs the pull token from the workstation. This matches ticketing's `update`.
-- With the gateway's accounts off, no caller off this host can push logs or query Loki; only this
-  stack's own Vector reaches Loki, inside `observability-net`.
+- With the gateway's accounts off, no caller off this host can push logs or query Loki.
+- Vector's container-log pipeline (`VECTOR_DOCKER_LOGS`) is off: at 2144f83 its Loki sink needs
+  `/etc/loki-ca/root_ca.crt` to exist even over HTTP, and Vector refused to start without it on d06
+  (2026-11-03). So this stack's own logs do not reach Loki until theOrg's `secrets-loki-tls`
+  change. docker-state-exporter (container state, the container alerts) runs.

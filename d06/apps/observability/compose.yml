@@ -201,12 +201,17 @@ services:
     user: root
     volumes:
       - vector-disk-buffer:/var/lib/vector
-      - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       VECTOR_LOG: info
       LOKI_ADDRESS: loki:3100
       CHRONICLE_VECTOR_ADDRESS: ${CHRONICLE_VECTOR_ADDRESS:?}
-      VECTOR_DOCKER_LOGS: "true"
+      # Off on d06 for now: at 2144f83 vector-docker-logs.toml names /etc/loki-ca/root_ca.crt in its
+      # Loki sink's tls block, and Vector 0.40 refuses to start when that file is absent (measured on
+      # d06 2026-11-03: "Could not open certificate file"), though vector.toml's header says the sink
+      # falls back to HTTP. d06 runs Loki on HTTP with no root until theOrg's secrets-loki-tls
+      # change, so the pipeline (this stack's own logs to Loki) waits for that. docker-state-exporter
+      # (container state metrics and alerts) is unaffected.
+      VECTOR_DOCKER_LOGS: "false"
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:9598/metrics >/dev/null || exit 1"]
       interval: 30s
