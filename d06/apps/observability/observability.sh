@@ -7,12 +7,12 @@
 #
 # No secret is in any file or volume, here or on the host, on disk or in memory (asyla SEC-5 and
 # SEC-7; the operator, 2026-11-03: secrets live only in OpenBao). Nothing here writes a value
-# anywhere. Two values may reach this process, each only as a named environment variable that the
-# workstation resolves from OpenBao and sends at use (build_host.py, d06/host.toml):
-# - the image pulls use the variable named OBSERVABILITY_REGISTRY_PULL_TOKEN (pull_token_env),
-#   answered by the credential helper beside this script under a throwaway DOCKER_CONFIG;
-# - alert-relay's forge account uses the variable named OBSERVABILITY_ALERT_RELAY_GITEA_TOKEN, once
-#   that account exists (optional: without it the relay serves and every delivery fails, with a WARN).
+# anywhere. One value may reach this process, only as a named environment variable that the
+# workstation resolves from OpenBao and sends at use (build_host.py, d06/host.toml): the image
+# pulls use the variable named OBSERVABILITY_REGISTRY_PULL_TOKEN (pull_token_env), answered by the
+# credential helper beside this script under a throwaway DOCKER_CONFIG. No secret goes in any
+# container's environment (Docker keeps it in the container's config on the host). alert-relay
+# files nothing until theOrg's secrets-alert-relay change: it then logs in to OpenBao itself.
 # Every piece that needs a secret any other way is off until theOrg's stack reads it from OpenBao
 # itself (compose.yml's header says how each is off, README.md what turns each on).
 # Data under /mnt/docker/Observability (d06's local data disk; never NFS).
@@ -167,9 +167,7 @@ do_up() {
     run_compose up -d --wait --wait-timeout "$VERIFY_WAIT_S" $REPLICA_SERVICES
     return
   fi
-  if [ -z "${OBSERVABILITY_ALERT_RELAY_GITEA_TOKEN:-}" ]; then
-    warn "alert-relay files no issue: OBSERVABILITY_ALERT_RELAY_GITEA_TOKEN is not in this process's environment (add it to d06/host.toml start_env once its forge account exists; README.md)"
-  fi
+  info "alert-relay files no issue until theOrg's secrets-alert-relay change (it then logs in to OpenBao itself; README.md)"
   run_compose up -d --wait --wait-timeout "$VERIFY_WAIT_S"
 }
 
@@ -318,7 +316,9 @@ run_cmd() {
       run_compose down
       ;;
     restart)
-      run_compose down && do_up
+      # Pull what is missing before the stack goes down, so a missing token or image never leaves
+      # it down (do_up's own pull then finds nothing missing).
+      pull_missing && run_compose down && do_up
       ;;
     verify)
       do_verify
@@ -341,7 +341,7 @@ usage() {
   echo "  images   - Pull missing images, then list the images (build_host.py's replica guard)" >&2
   echo "  up       - Data directories, missing images, then the stack (replica: $REPLICA_SERVICES)" >&2
   echo "  down     - Stop and remove every container (the data stays)" >&2
-  echo "  restart  - down, then up" >&2
+  echo "  restart  - pull missing images, then down, then up" >&2
   echo "  verify   - Services running and healthy, Prometheus and its one Alertmanager," >&2
   echo "             docker-state-exporter, trends retention, the gateway over HTTP (failing" >&2
   echo "             closed), the blackbox self-probes" >&2

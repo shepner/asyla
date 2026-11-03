@@ -40,18 +40,20 @@ asyla deploys it here from theOrg observability `DEPLOY.md` at main
 No secret is in any file or volume, here or on the host, on disk or in memory (core `secrets.md`
 SEC-5 and SEC-7; the operator, 2026-11-03: "secrets are to live in the vault" and "then they need
 to be fixed", meaning the stack is fixed to read them from OpenBao itself). Nothing in this
-directory writes a value anywhere. Only two values may reach a process, each as a named
-environment variable that the workstation resolves from OpenBao at use and sends over SSH stdin
-(build_host.py, `pull_token_env` and `start_env`):
+directory writes a value anywhere. Only one value may reach a process, as a named environment
+variable that the workstation resolves from OpenBao at use and sends over SSH stdin (build_host.py,
+`pull_token_env`):
 
 - `OBSERVABILITY_REGISTRY_PULL_TOKEN`: the `theorg-registry` read:package token for the image
   pulls (`pull_token_env = "THEORG_REGISTRY_PULL_TOKEN"` in `d06/host.toml`). The credential helper
   answers Docker from it under a throwaway `DOCKER_CONFIG`; nothing is stored.
-- `OBSERVABILITY_ALERT_RELAY_GITEA_TOKEN`: alert-relay's forge account, optional, once that
-  account exists. Add it to the `[[app]]`'s `start_env` then. Docker keeps a container's
-  environment in the container's config on the host (`docker inspect` shows it): inference from
-  Docker's behaviour, not checked on d06. Without the variable the relay serves, every delivery
-  fails, and `up` warns.
+
+No secret goes in any container's environment: Docker keeps a container's environment in the
+container's config on the host (`config.v2.json`; `docker inspect` shows it): inference from
+Docker's behaviour, not checked on d06. So alert-relay gets no forge token. It files nothing until
+theOrg's `secrets-alert-relay` change: the relay then logs in to OpenBao itself through a
+single-use wrapped token minted from the `observability-d06` token role, so no secret ever sits in
+its environment. `relay.py` serves without a token.
 
 ## Off, and what turns each on
 
@@ -69,7 +71,7 @@ tag. `compose.yml`'s header says how each is off.
   Prometheus. On: `secrets-scrape-proxy`.
 - emporia-collector and the Loki gateway accounts: emporia-collector is not a service here (its
   scrape file is replaced the same way), and the gateway has no verifier files, so it refuses every
-  push and query with 401 and answers `/ready` alone; alert-relay's log lines to Loki are off with
+  push and query (401 or 403) and answers `/ready` alone; alert-relay's log lines to Loki are off with
   it. On: `secrets-in-process-emporia-loki`.
 - Loki TLS: no leaf, so Loki serves HTTP inside `observability-net` and the gateway serves HTTP.
   On: `secrets-loki-tls` (step-ca, the key held in memory by the process).
@@ -88,6 +90,13 @@ three blackbox self-probes (it waits up to `VERIFY_WAIT_S`).
   (`restore = false` in `host.toml`).
 - The trends Prometheus starts empty on d06. theOrg re-runs its `emporia-history` to fill it.
 - The Mini's emporia-collector keeps running until d06's trends writes, then theOrg turns it off.
-- alert-relay files nothing until asyla's relay account and the `asyla/alerts` repo exist.
+- alert-relay files nothing until theOrg's `secrets-alert-relay` change (it logs in to OpenBao
+  itself; see Secrets) and the `asyla/alerts` repo exist.
+- From d06 (10.0.0.65) the trends jobs `asyla-d03-node`, `asyla-d07-node` and `asyla-switch-snmp`
+  read `up=0`. The ports they scrape admit only 10.0.0.150 (the Mini): `d03/host.toml:27`,
+  `d07/host.toml:33` and `d07/host.toml:47`. A follow-up widens those allow lists to the LAN
+  subnet; d03 and d07 are not changed here.
+- d06's `update_all.sh` reports this app as FAIL. It runs `backup`, which this app does not have,
+  and `update`, which needs the pull token from the workstation. This matches ticketing's `update`.
 - With the gateway's accounts off, no caller off this host can push logs or query Loki; only this
   stack's own Vector reaches Loki, inside `observability-net`.

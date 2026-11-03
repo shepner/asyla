@@ -23,7 +23,7 @@
 #   emporia-collector     not a service here; trends-scrape-off.yml replaces its scrape file too
 #   Loki TLS              no leaf: Loki serves HTTP inside observability-net, the gateway HTTP
 #   Loki gateway accounts no verifier files: the gateway fails closed, refusing every push and
-#                         query (401), and serves /ready alone; alert-relay's log lines are off
+#                         query (401 or 403), and serves /ready alone; alert-relay's log lines are off
 #
 # Run with observability.sh: it sets OBSERVABILITY_TAG, OBSERVABILITY_ROOT and the settings below
 # and keeps the start order.
@@ -63,8 +63,9 @@ services:
       - observability-net
 
   # Files every alert as an issue in GITEA_ALERT_REPO (asyla/alerts) on the forge, off this host.
-  # Its forge account's value arrives only in observability.sh's environment, once the account
-  # exists; without it the relay serves and every delivery fails (README.md).
+  # It files nothing until theOrg's secrets-alert-relay change: the relay then logs in to OpenBao
+  # itself with a single-use wrapped token, so no secret sits in its environment (README.md).
+  # relay.py serves without a token.
   alert-relay:
     image: gitea.asyla.org/theorg/observability-alert-relay:${OBSERVABILITY_TAG:?}
     container_name: alert-relay-1
@@ -72,7 +73,6 @@ services:
       - "127.0.0.1:9111:9111"
     environment:
       GITEA_URL: ${GITEA_URL:?}
-      GITEA_TOKEN: ${OBSERVABILITY_ALERT_RELAY_GITEA_TOKEN:-}
       GITEA_ALERT_REPO: ${GITEA_ALERT_REPO:?}
       ALERT_REPOS: ${ALERT_REPOS:-}
     healthcheck:
@@ -109,7 +109,7 @@ services:
 
   # Loki's authenticating reverse proxy. With no leaf it serves HTTP (its entrypoint.sh); with no
   # verifier files it refuses every push and query (locations.conf: a caller without an account
-  # gets 401) and answers /ready alone.
+  # gets 401 or 403) and answers /ready alone.
   loki-gateway:
     image: gitea.asyla.org/theorg/observability-loki-gateway:${OBSERVABILITY_TAG:?}
     container_name: loki-gateway-1

@@ -44,8 +44,9 @@ start_env = ["TICKETING_DEPLOY_DEX_CLIENT_SECRET", "TICKETING_MCP_DEX_CLIENT_SEC
 # theOrg's observability stack (d06/apps/observability, theOrg observability DEPLOY.md at main
 # 2144f83c). Only the theorg-registry pull token reaches it (OBSERVABILITY_REGISTRY_PULL_TOKEN, for
 # the image pulls); the pieces that need any other value are off until theOrg's stack reads it from
-# OpenBao itself (its README.md). No start_env yet: alert-relay's forge token is added once its
-# account exists. No restore: its data has no NAS mirror yet.
+# OpenBao itself (its README.md). No start_env: no secret goes in a container's environment, and
+# alert-relay files nothing until theOrg's secrets-alert-relay change. No restore: its data has no
+# NAS mirror yet.
 [[app]]
 name = "observability"
 verify = ["verify"]
