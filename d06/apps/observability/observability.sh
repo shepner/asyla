@@ -187,7 +187,7 @@ trap cleanup EXIT
 # config.json names only the credential helper beside this script (docker-credential-observability-env),
 # which hands Docker OBSERVABILITY_REGISTRY_PULL_TOKEN from this process's environment
 # (build_host.py pull_token_env). Docker Hub images (pushgateway) pull anonymously. As ticketing.sh.
-pull_compose() {
+pull_config() {
   if [ -z "${OBSERVABILITY_REGISTRY_PULL_TOKEN:-}" ]; then
     echo "[ERROR] OBSERVABILITY_REGISTRY_PULL_TOKEN is not in this process's environment; the pull token comes from the workstation (build_host.py pull_token_env)" >&2
     return 1
@@ -196,7 +196,17 @@ pull_compose() {
     PULL_CONFIG="$(mktemp -d)" || return
     printf '{"credHelpers":{"%s":"observability-env"}}\n' "$REGISTRY" > "$PULL_CONFIG/config.json" || return
   fi
+}
+
+pull_compose() {
+  pull_config || return
   ( export DOCKER_CONFIG="$PULL_CONFIG" PATH="$SCRIPT_DIR:$PATH"; run_compose "$@" )
+}
+
+# One image by its reference, under the same throwaway DOCKER_CONFIG.
+pull_image() {
+  pull_config || return
+  ( export DOCKER_CONFIG="$PULL_CONFIG" PATH="$SCRIPT_DIR:$PATH"; docker pull --quiet "$1" )
 }
 
 do_pull() {
@@ -244,12 +254,21 @@ images_ready() {
   return 1
 }
 
-# Pull every image the stack names, so a newer `latest` replaces the one here (never kept because it
-# is present), then list them: deploy_role.py's pull before it mints the wrapped tokens, and
-# build_host.py's replica guard.
+# Pull every theOrg image the stack names ($REGISTRY/theorg/...), so a newer `latest` replaces the
+# one here (never kept because it is present); a third-party image (pinned by version: pushgateway)
+# only when it is missing. Then list them all: deploy_role.py's pull before it mints the wrapped
+# tokens, and build_host.py's restore and replica guard.
 do_images() {
-  do_pull >&2 || return
-  run_compose config --images
+  local img imgs
+  imgs="$(run_compose config --images)" \
+    || { echo "[ERROR] docker compose config failed" >&2; return 1; }
+  while read -r img; do
+    [ -n "$img" ] || continue
+    if [[ "$img" == "$REGISTRY/theorg/"* ]] || ! docker image inspect "$img" >/dev/null 2>&1; then
+      pull_image "$img" >&2 || { echo "[ERROR] pulling $img failed" >&2; return 1; }
+    fi
+  done <<< "$imgs"
+  printf '%s\n' "$imgs"
 }
 
 # Each image the stack names with the registry digest(s) this host pulled it by, "REF DIGEST ...",

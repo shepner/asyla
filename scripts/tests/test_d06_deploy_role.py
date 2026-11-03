@@ -104,27 +104,36 @@ def pull_cases() -> list[bool]:
             return Done(rc, stdout, stderr)
         return f
 
-    good = f"reg.example/theorg/observability-alert-relay:{TAG}\nprom/prometheus:v3\n"
+    good = f"{REG}/theorg/observability-alert-relay:{TAG}\nprom/prometheus:v3\n"
     bh.ssh = fake(0, good)
-    rc, printed = quiet(lambda: with_pull_env(lambda: dr.pull_images(SPEC, TAG)))
+    rc, printed = quiet(lambda: with_pull_env(lambda: dr.pull_images(SPEC, TAG, REG)))
     out.append(check("images: the pull token goes over stdin only, by name in the command",
                      len(calls) == 1 and calls[0][2] == PULL + "\n" and PULL not in calls[0][1]
                      and "OBSERVABILITY_REGISTRY_PULL_TOKEN" in calls[0][1] and "observability.sh images" in calls[0][1]
                      and PULL not in printed, repr(calls)))
-    bh.ssh = fake(0, "reg.example/theorg/observability-alert-relay:2144f83c\n")
+    got = quiet(lambda: with_pull_env(lambda: dr.pull_images(SPEC, TAG, REG)))[0]
+    out.append(check("images: returns the theOrg images it pulled (the list `digests` must match)",
+                     got == [f"{REG}/theorg/observability-alert-relay:{TAG}"], repr(got)))
+    for name, listed in (("on another registry host", f"other.example/theorg/observability-alert-relay:{TAG}\n"),
+                         ("on the registry host with another port", f"{REG}:8443/theorg/observability-alert-relay:{TAG}\n"),
+                         ("with no host (Docker Hub's theorg)", f"theorg/observability-alert-relay:{TAG}\n")):
+        bh.ssh = fake(0, good + listed)
+        out.append(stops(f"images: a theOrg image {name} stops, nothing minted", f"not on {REG}",
+                         lambda: with_pull_env(lambda: quiet(lambda: dr.pull_images(SPEC, TAG, REG)))))
+    bh.ssh = fake(0, f"{REG}/theorg/observability-alert-relay:2144f83c\n")
     out.append(stops("images: a theOrg image of another tag stops before any mint", "not of",
-                     lambda: with_pull_env(lambda: dr.pull_images(SPEC, TAG))))
+                     lambda: with_pull_env(lambda: dr.pull_images(SPEC, TAG, REG))))
     out.append(stops("images: a stale scripts tree names the fix (merge, then install master with --only bootstrap)",
                      "build_host.py d06 build --only bootstrap --apply",
-                     lambda: with_pull_env(lambda: dr.pull_images(SPEC, TAG))))
+                     lambda: with_pull_env(lambda: dr.pull_images(SPEC, TAG, REG))))
     bh.ssh = fake(0, "prom/prometheus:v3\n")
     out.append(stops("images: no theOrg image at all stops", "0 theOrg image(s)",
-                     lambda: with_pull_env(lambda: dr.pull_images(SPEC, TAG))))
+                     lambda: with_pull_env(lambda: dr.pull_images(SPEC, TAG, REG))))
     bh.ssh = fake(1, "", f"login failed for {PULL}\n")
     buf = io.StringIO()
     with contextlib.redirect_stderr(buf):
         got = stops("images: a failed pull stops, nothing minted", "nothing minted",
-                    lambda: with_pull_env(lambda: dr.pull_images(SPEC, TAG)))
+                    lambda: with_pull_env(lambda: dr.pull_images(SPEC, TAG, REG)))
     out.append(got)
     out.append(check("images: a failed pull's output is shown with the token redacted",
                      PULL not in buf.getvalue() and "login failed for ..." in buf.getvalue(), buf.getvalue()))
@@ -133,7 +142,7 @@ def pull_cases() -> list[bool]:
     buf = io.StringIO()
     try:
         with contextlib.redirect_stderr(buf):
-            with_pull_env(lambda: dr.pull_images(SPEC, TAG))
+            with_pull_env(lambda: dr.pull_images(SPEC, TAG, REG))
     except dr.Stop:
         pass
     out.append(check("images: a failed pull's output is redacted before it is cut (no part of the token)",
@@ -143,7 +152,7 @@ def pull_cases() -> list[bool]:
         raise subprocess.TimeoutExpired(cmd, kw.get("timeout"))
     bh.ssh = timeout
     out.append(stops("images: no answer in time is one clear line, nothing minted", "nothing minted",
-                     lambda: with_pull_env(lambda: dr.pull_images(SPEC, TAG))))
+                     lambda: with_pull_env(lambda: dr.pull_images(SPEC, TAG, REG))))
     bh.ssh = _no_contact
     return out
 
@@ -214,18 +223,28 @@ def main_cases() -> list[bool]:
         seen["verify"] = (target, cmd)
         return Done(seen.get("verify_rc", 0))
 
-    def fake_revision(spec, tag):
+    def fake_revision(spec, tag, registry, pulled):
         seen.setdefault("order", []).append("revision")
         if seen.get("revision_stop"):
             raise dr.Stop(seen["revision_stop"])
         return REV
 
+    def fake_check(rev):
+        seen.setdefault("order", []).append(f"check {rev}")
+        if seen.get("check_stop"):
+            raise dr.Stop(seen["check_stop"])
+
+    def fake_hub():
+        seen["hub"] = True
+        return HUB_STAND_IN
+
     real = (dr.unpack_tool, dr.pull_images, dr.hub_sign_in, dr.stack_tag, dr.has_tool, dr.build_host.load_spec,
-            dr.run_start, dr.stack_revision)
+            dr.run_start, dr.stack_revision, dr.check_tool)
     dr.unpack_tool = lambda rev, into: seen.setdefault("order", []).append(f"tool {rev}")
-    dr.pull_images = lambda spec, tag: seen.setdefault("order", []).append("images")
+    dr.pull_images = lambda spec, tag, registry: seen.setdefault("order", []).append(f"images {registry}")
     dr.stack_revision = fake_revision
-    dr.hub_sign_in = lambda: HUB_STAND_IN
+    dr.check_tool = fake_check
+    dr.hub_sign_in = fake_hub
     dr.stack_tag = lambda script: "latest"
     dr.has_tool = lambda tag: True
     dr.build_host.load_spec = lambda host: SPEC
@@ -238,7 +257,8 @@ def main_cases() -> list[bool]:
         rc, printed = quiet(lambda: with_pull_env(lambda: dr.main(["--dry-run"])))
         out.append(check("dry run: prints the plan (images, revision, tool, mint, verify with R), runs nothing, exit 0",
                          rc == 0 and not seen and "DRY RUN" in printed and all(n in printed for n in OBS_TOKENS)
-                         and f"2. d06: {SCRIPT} digests" in printed and "R on its origin/main" in printed
+                         and f"2. d06: {SCRIPT} digests" in printed and f"R and TOOL_REV {dr.TOOL_REV[:12]} on its origin/main" in printed
+                         and "git show TOOL_REV:scripts/" in printed and "source on gitea.asyla.org" in printed
                          and f"6. d06: OBSERVABILITY_REVISION=R {SCRIPT} verify" in printed
                          and "stand-in" not in printed, printed))
         rc, printed = quiet(lambda: with_pull_env(lambda: dr.main([])))
@@ -255,7 +275,7 @@ def main_cases() -> list[bool]:
                                                                  "apps", "--app", "observability", "--apply"],
                          repr(argv)))
         out.append(check("run: images, then the revision, then the tool at that revision, then the mint",
-                         seen.get("order") == ["images", "revision", f"tool {REV}"], repr(seen.get("order"))))
+                         seen.get("order") == ["images gitea.asyla.org", "revision", f"tool {REV}"], repr(seen.get("order"))))
         out.append(check("run: after a clean start, the app's verify runs on d06 with the revision; exit 0",
                          rc == 0 and seen.get("verify") == ("d06", f"OBSERVABILITY_REVISION={REV} {SCRIPT} verify")
                          and "verifies" in printed and REV in printed,
@@ -264,7 +284,7 @@ def main_cases() -> list[bool]:
         seen.update(revision_stop="the theOrg images were built from different commits; nothing minted")
         rc, printed = quiet(lambda: with_pull_env(lambda: dr.main([])))
         out.append(check("run: a revision that cannot be read stops after the pull: no tool, no mint, no start, exit 1",
-                         rc == 1 and seen.get("order") == ["images", "revision"] and "argv" not in seen
+                         rc == 1 and seen.get("order") == ["images gitea.asyla.org", "revision"] and "argv" not in seen
                          and "verify" not in seen and "different commits" in printed, repr((rc, seen, printed))))
         seen.clear()
         seen.update(verify_rc=1)
@@ -291,13 +311,38 @@ def main_cases() -> list[bool]:
                          rc == 1 and "cannot run vault_identity.py: FileNotFoundError" in printed
                          and "Traceback" not in printed, printed))
         seen.clear()
+        rc, printed = quiet(lambda: with_pull_env(lambda: dr.main(["--revision-only"])))
+        out.append(check("revision only: images, revision, the tool check; prints R; no hub token, no tool written, "
+                         "no mint, no start, no verify; exit 0",
+                         rc == 0 and seen.get("order") == ["images gitea.asyla.org", "revision", f"check {REV}"]
+                         and "hub" not in seen and "argv" not in seen and "verify" not in seen
+                         and f"R = {REV}" in printed and "nothing minted, nothing started" in printed
+                         and "stand-in" not in printed, repr((rc, seen, printed))))
+        seen.clear()
+        seen.update(check_stop="theOrg's minting tool changed between TOOL_REV f7579118fdac and R aaaaaaaaaaaa")
+        rc, printed = quiet(lambda: with_pull_env(lambda: dr.main(["--revision-only"])))
+        out.append(check("revision only: a changed minting tool stops, exit 1, no R line",
+                         rc == 1 and "minting tool changed" in printed and "R = " not in printed and "hub" not in seen,
+                         repr((rc, printed))))
+        seen.clear()
+        seen.update(revision_stop="the theOrg images were built from different commits; nothing minted")
+        rc, printed = quiet(lambda: with_pull_env(lambda: dr.main(["--revision-only"])))
+        out.append(check("revision only: an unread revision stops before the tool check, exit 1",
+                         rc == 1 and seen.get("order") == ["images gitea.asyla.org", "revision"], repr((rc, seen))))
+        seen.clear()
+        try:
+            rc = quiet(lambda: with_pull_env(lambda: dr.main(["--dry-run", "--revision-only"])))[0]
+        except SystemExit as e:   # argparse: the two modes exclude each other
+            rc = e.code
+        out.append(check("revision only: not with --dry-run", rc == 2 and not seen, repr(rc)))
+        seen.clear()
         os.environ.pop("THEORG_REGISTRY_PULL_TOKEN", None)
         rc, printed = quiet(lambda: dr.main([]))
         out.append(check("run: no pull token stops before anything runs", rc == 1 and not seen
                          and "THEORG_REGISTRY_PULL_TOKEN is not in the environment" in printed, printed))
     finally:
         (dr.unpack_tool, dr.pull_images, dr.hub_sign_in, dr.stack_tag, dr.has_tool, dr.build_host.load_spec,
-         dr.run_start, dr.stack_revision) = real
+         dr.run_start, dr.stack_revision, dr.check_tool) = real
         bh.ssh = _no_contact
         for n, v in saved.items():
             os.environ.pop(n, None)
@@ -317,18 +362,108 @@ def digests_cases() -> list[bool]:
         return f
 
     d1, d2 = "sha256:" + "1" * 64, "sha256:" + "2" * 64
-    bh.ssh = fake(0, f"reg.example/theorg/observability-loki:latest {d1} {d2}\n"
-                     f"reg.example/theorg/observability-vector:latest -\nprom/blackbox:v1 {d1}\n")
-    got = dr.image_digests(SPEC)
+    bh.ssh = fake(0, f"{REG}/theorg/observability-loki:latest {d1} {d2}\n"
+                     f"{REG}/theorg/observability-vector:latest -\nprom/blackbox:v1 {d1}\n")
+    got = dr.image_digests(SPEC, REG)
     out.append(check("digests: `observability.sh digests` on d06, no stdin (no token); theOrg images only, - is none",
                      calls == [("d06", f"{SCRIPT} digests", None)]
-                     and got == {"reg.example/theorg/observability-loki:latest": [d1, d2],
-                                 "reg.example/theorg/observability-vector:latest": []}, repr((calls, got))))
+                     and got == {f"{REG}/theorg/observability-loki:latest": [d1, d2],
+                                 f"{REG}/theorg/observability-vector:latest": []}, repr((calls, got))))
     bh.ssh = fake(1, "")
-    out.append(stops("digests: a failed read stops, nothing minted", "exit 1", lambda: quiet(lambda: dr.image_digests(SPEC))))
+    out.append(stops("digests: a failed read stops, nothing minted", "exit 1", lambda: quiet(lambda: dr.image_digests(SPEC, REG))))
     bh.ssh = fake(0, f"prom/blackbox:v1 {d1}\n")
-    out.append(stops("digests: no theOrg image stops", "listed no theOrg image", lambda: dr.image_digests(SPEC)))
+    out.append(stops("digests: no theOrg image stops", "listed no theOrg image", lambda: dr.image_digests(SPEC, REG)))
+    for name, line in (("a digest that is not sha256:<64 hex>", f"{REG}/theorg/observability-loki:latest sha256:abc\n"),
+                       ("an upper-case digest", f"{REG}/theorg/observability-loki:latest {d1.upper()}\n"),
+                       ("a digest with - beside it", f"{REG}/theorg/observability-loki:latest {d1} -\n"),
+                       ("a line with no digest field", f"{REG}/theorg/observability-loki:latest\n")):
+        bh.ssh = fake(0, line)
+        out.append(stops(f"digests: {name} stops", "is not sha256:<64 hex>", lambda: dr.image_digests(SPEC, REG)))
+    bh.ssh = fake(0, f"{REG}/theorg/observability-loki:latest {d1}\nother.example/theorg/observability-vector:latest {d2}\n")
+    out.append(stops("digests: a theOrg image on another registry host stops", f"not on {REG}",
+                     lambda: dr.image_digests(SPEC, REG)))
     bh.ssh = _no_contact
+    return out
+
+
+def tool_cases() -> list[bool]:
+    """check_tool and unpack_tool against a stand-in git: the tool runs from TOOL_REV, never R;
+    a change between them stops before anything is written; every git call has no prompt and a
+    timeout."""
+    out = []
+
+    def fake_git(diff_rc=0, on_main=True, timeout_on=""):
+        calls = []
+
+        def run(argv, **kw):
+            calls.append((argv, kw))
+            sub = argv[3:]   # git -C <clone> ...
+            if sub[0] == timeout_on:
+                raise subprocess.TimeoutExpired(argv, kw.get("timeout"))
+            if sub[0] == "merge-base":
+                return Done(0 if on_main or sub[2] == dr.TOOL_REV else 1)
+            if sub[0] == "diff":
+                return Done(diff_rc)
+            if sub[0] == "show":
+                return Done(0, f"# {sub[1]}\nparser.add_argument('--token-role')\n")
+            return Done(0)   # fetch, cat-file
+        return run, calls
+
+    def unpack(**kw):
+        run, calls = fake_git(**kw)
+        subprocess.run = run
+        d = tempfile.mkdtemp()
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                dr.unpack_tool(REV, Path(d))
+            return calls, {p.name: p.read_text() for p in Path(d).iterdir()}
+        finally:
+            subprocess.run = _no_contact
+            for p in Path(d).iterdir():
+                p.unlink()
+            os.rmdir(d)
+
+    calls, files = unpack()
+    subs = [c[0][3:] for c in calls]
+    out.append(check("tool: TOOL_REV is f757911, the commit asyla reviewed",
+                     dr.TOOL_REV == "f7579118fdac5d90101a5ec6698200ae2c9d836f"))
+    out.append(check("tool: unchanged between TOOL_REV and R: the files are git show TOOL_REV:..., never R",
+                     sorted(files) == ["openbao.py", "vault_identity.py"]
+                     and all(v.startswith(f"# {dr.TOOL_REV}:scripts/") for v in files.values())
+                     and not any(s[0] == "show" and REV in s[1] for s in subs), repr((subs, files))))
+    out.append(check("tool: the diff is TOOL_REV against R over the two files only",
+                     ["diff", "--quiet", dr.TOOL_REV, REV, "--", "scripts/vault_identity.py", "scripts/openbao.py"] in subs,
+                     repr(subs)))
+    out.append(check("tool: R and TOOL_REV checked against refs/remotes/origin/main",
+                     ["merge-base", "--is-ancestor", REV, "refs/remotes/origin/main"] in subs
+                     and ["merge-base", "--is-ancestor", dr.TOOL_REV, "refs/remotes/origin/main"] in subs, repr(subs)))
+    out.append(check("tool: every git call has GIT_TERMINAL_PROMPT=0 and a 120 s timeout",
+                     calls and all(kw.get("env", {}).get("GIT_TERMINAL_PROMPT") == "0" and kw.get("timeout") == 120
+                                   for _, kw in calls), repr([kw.get("timeout") for _, kw in calls])))
+    for name, needle, kw in (
+            ("a minting tool changed between TOOL_REV and R stops", "minting tool changed between TOOL_REV", {"diff_rc": 1}),
+            ("a failed diff stops", "exit 128", {"diff_rc": 128}),
+            ("R not on origin/main stops", f"R {REV[:12]} is not on origin/main", {"on_main": False}),
+            ("a git fetch with no end in time is one Stop line", "git fetch in", {"timeout_on": "fetch"}),
+            ("a git diff with no end in time is one Stop line", "no end in 120 s", {"timeout_on": "diff"})):
+        written = {}
+
+        def go(kw=kw):
+            c, f = unpack(**kw)
+            written.update(f)
+        out.append(stops(f"tool: {name}, nothing written, nothing minted", needle, go))
+        out.append(check(f"tool: {name}: no file written", written == {}, repr(written)))
+    run, calls = fake_git(diff_rc=1)
+    subprocess.run = run
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            dr.check_tool(REV)
+    except dr.Stop:
+        pass
+    finally:
+        subprocess.run = _no_contact
+    out.append(check("tool: a changed tool stops before any git show", not any(c[0][3] == "show" for c in calls),
+                     repr([c[0][3] for c in calls])))
     return out
 
 
@@ -342,7 +477,45 @@ def redirect_cases() -> list[bool]:
         return h.redirect_request(req, None, 307, "Temporary Redirect", {}, to)
 
     away, same = follow("https://storage.example/blob?sig=1"), follow("https://reg.example/v2/r/blobs/y")
+    port, port443 = follow("https://reg.example:8443/v2/r/blobs/y"), follow("https://reg.example:443/v2/r/blobs/y")
+
+    class Body:
+        def __init__(self, n):
+            self.status, self.headers, self.buf, self.asked = 200, {}, io.BytesIO(b"x" * n), []
+
+        def read(self, n=-1):
+            self.asked.append(n)
+            return self.buf.read(n)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    class Opener:
+        def __init__(self, n):
+            self.body = Body(n)
+
+        def open(self, req, timeout=None):
+            return self.body
+
+    def capped(n):
+        saved, dr.OPENER = dr.OPENER, Opener(n)
+        try:
+            return REAL_HTTP_GET("https://reg.example/v2/r/blobs/x", {}), dr.OPENER.body.asked
+        finally:
+            dr.OPENER = saved
+    (st, _, body), asked = capped(dr.MAX_BODY)
     return [
+        check("redirect: to the same host on another port, without the Authorization header",
+              port.get_header("Authorization") is None and not port.has_header("Authorization")),
+        check("redirect: to the same host with :443 named (the default port), the header stays",
+              port443.get_header("Authorization") == "Bearer stand-in-bearer"),
+        check("http_get: a body of 4 MiB is read whole, asking for one byte more at most",
+              st == 200 and len(body) == dr.MAX_BODY == 4 * 1024 * 1024 and asked == [dr.MAX_BODY + 1]),
+        stops("http_get: a body over 4 MiB stops, nothing minted", "an answer over 4 MiB",
+              lambda: capped(dr.MAX_BODY + 1)),
         check("redirect: to another host, without the Authorization header",
               away.full_url.startswith("https://storage.example/") and away.get_header("Authorization") is None
               and not away.has_header("Authorization")),
@@ -357,10 +530,10 @@ def redirect_cases() -> list[bool]:
     ]
 
 
-REG = "reg.example"
+REG = "gitea.example"   # the registry, and theOrg's forge (a provenance source's host)
 BASIC = "Basic " + base64.b64encode(f"{dr.REGISTRY_USER}:{PULL}".encode()).decode()
 BEARER = "stand-in-bearer"
-SOURCE = "https://gitea.example/theOrg/observability"
+SOURCE = f"https://{REG}/theOrg/observability"
 NAMES = ("alert-relay", "alertmanager", "blackbox-exporter", "emporia-collector", "loki", "prometheus",
          "prometheus-trends", "pushgateway", "scrape-proxy", "vector")
 
@@ -370,17 +543,54 @@ def digest(*parts: str) -> str:
     return "sha256:" + hashlib.sha256("/".join(parts).encode()).hexdigest()
 
 
+def sha(body: bytes) -> str:
+    import hashlib
+    return "sha256:" + hashlib.sha256(body).hexdigest()
+
+
 class StandInRegistry:
-    """A registry that answers http_get from what each image's provenance says: {name: [(source,
-    revision), ...]} (one per attestation; [] for an index without one)."""
+    """A content-addressed registry that answers http_get from what each image's provenance says:
+    {name: [(source, revision), ...]} (one per attestation; [] for an index without one). MORE
+    gives an image a second index digest the same way. Every manifest and blob is stored under the
+    sha256 of its body, as a registry does; TAMPER names an image whose index answers with other
+    bytes than its digest."""
 
     def __init__(self, prov: dict, realm: str = f"https://{REG}/v2/token", scheme: str = "Bearer",
-                 token_status: int = 200, predicate: str = "v1", index_body: bytes | None = None):
+                 token_status: int = 200, predicate: str = "v1", index_body: bytes | None = None,
+                 more: dict | None = None, tamper: str = ""):
         self.prov, self.realm, self.scheme, self.token_status = prov, realm, scheme, token_status
-        self.predicate, self.index_body, self.calls = predicate, index_body, []
+        self.predicate, self.calls, self.store, self.index = predicate, [], {}, {}
+        for n, atts in prov.items():
+            self.index[n] = [self._put(index_body) if index_body is not None else self._image(n, atts, "1")]
+            if more and n in more:
+                self.index[n].append(self._image(n, more[n], "2"))
+        if tamper:
+            d = self.index[tamper][0]
+            self.store[d] = self.store[d] + b" "
+
+    def _put(self, body: bytes) -> str:
+        self.store[sha(body)] = body
+        return sha(body)
+
+    def _image(self, n: str, atts: list, key: str) -> str:
+        image = self._put(f"image manifest {n} {key}".encode())
+        ms = [{"digest": image, "platform": {"os": "linux", "architecture": "amd64"}}]
+        for src, rev in atts:
+            vcs = {"source": src, "revision": rev}
+            pred = ({"runDetails": {"metadata": {"buildkit_metadata": {"vcs": vcs}}}} if self.predicate == "v1"
+                    else {"metadata": {"https://mobyproject.org/buildkit@v1#metadata": {"vcs": vcs}}})
+            blob = self._put(json.dumps({"predicate": pred, "image": f"{n} {key}"}).encode())
+            att = self._put(json.dumps({"layers": [{"digest": blob, "annotations": {
+                "in-toto.io/predicate-type": "https://slsa.dev/provenance/v1"}}]}).encode())
+            ms.append({"digest": att, "annotations": {"vnd.docker.reference.type": "attestation-manifest",
+                                                      "vnd.docker.reference.digest": image}})
+        return self._put(json.dumps({"manifests": ms}).encode())
+
+    def pulled(self) -> list[str]:
+        return [f"{REG}/theorg/observability-{n}:latest" for n in self.prov]
 
     def digests_out(self, missing: str = "") -> str:
-        return "".join(f"{REG}/theorg/observability-{n}:latest {'-' if n == missing else digest(n)}\n"
+        return "".join(f"{REG}/theorg/observability-{n}:latest {'-' if n == missing else ' '.join(self.index[n])}\n"
                        for n in self.prov) + f"prom/blackbox:v1 {digest('x')}\n"
 
     def __call__(self, url: str, headers: dict):
@@ -393,46 +603,31 @@ class StandInRegistry:
             if headers.get("Authorization") != BASIC:
                 return 401, {}, b""
             return self.token_status, {}, json.dumps({"token": BEARER}).encode()
-        if u.hostname != REG or headers.get("Authorization") != f"Bearer {BEARER}":
+        if (u.hostname, u.port) != (REG, None) or headers.get("Authorization") != f"Bearer {BEARER}":
             return 401, {}, b""
         _, _, repo_kind = u.path.partition("/v2/")
         repo, kind, ref = repo_kind.rsplit("/", 2)
-        n = repo.removeprefix("theorg/observability-")
-        if kind == "manifests" and ref == digest(n):
-            if self.index_body is not None:
-                return 200, {}, self.index_body
-            ms = [{"digest": digest(n, "amd64"), "platform": {"os": "linux", "architecture": "amd64"}}]
-            ms += [{"digest": digest(n, "att", str(i)), "annotations": {
-                "vnd.docker.reference.type": "attestation-manifest", "vnd.docker.reference.digest": digest(n, "amd64")}}
-                for i in range(len(self.prov[n]))]
-            return 200, {}, json.dumps({"manifests": ms}).encode()
-        for i, (src, rev) in enumerate(self.prov.get(n, [])):
-            if kind == "manifests" and ref == digest(n, "att", str(i)):
-                return 200, {}, json.dumps({"layers": [
-                    {"digest": digest(n, "blob", str(i)),
-                     "annotations": {"in-toto.io/predicate-type": "https://slsa.dev/provenance/v1"}}]}).encode()
-            if kind == "blobs" and ref == digest(n, "blob", str(i)):
-                vcs = {"source": src, "revision": rev}
-                pred = ({"runDetails": {"metadata": {"buildkit_metadata": {"vcs": vcs}}}} if self.predicate == "v1"
-                        else {"metadata": {"https://mobyproject.org/buildkit@v1#metadata": {"vcs": vcs}}})
-                return 200, {}, json.dumps({"predicate": pred}).encode()
-        return 404, {}, b""
+        if repo.removeprefix("theorg/observability-") not in self.prov or ref not in self.store:
+            return 404, {}, b""
+        return 200, {}, self.store[ref]
 
 
 def registry_cases() -> list[bool]:
     out = []
     good = {n: [(SOURCE, REV)] for n in NAMES}
 
-    def read(reg, tag="latest", missing=""):
+    def read(reg, tag="latest", missing="", digests_out=None, pulled=None):
         dr.http_get = reg
-        bh.ssh = lambda target, cmd, **kw: Done(0, reg.digests_out(missing))
+        text = reg.digests_out(missing) if digests_out is None else digests_out
+        bh.ssh = lambda target, cmd, **kw: Done(0, text)
         try:
-            return quiet(lambda: with_pull_env(lambda: dr.stack_revision(SPEC, tag)))
+            return quiet(lambda: with_pull_env(lambda: dr.stack_revision(
+                SPEC, tag, REG, reg.pulled() if pulled is None else pulled)))
         finally:
             dr.http_get, bh.ssh = _no_contact, _no_contact
 
-    def stopped(name, needle, reg, tag="latest", missing=""):
-        return stops(name, needle, lambda: read(reg, tag, missing))
+    def stopped(name, needle, reg, **kw):
+        return stops(name, needle, lambda: read(reg, **kw))
 
     reg = StandInRegistry(good)
     rev, printed = read(reg)
@@ -452,44 +647,71 @@ def registry_cases() -> list[bool]:
     out.append(check("registry: a pull-scoped token per repository",
                      sorted(u.split("scope=")[1] for u in basic_to)
                      == sorted(f"repository%3Atheorg%2Fobservability-{n}%3Apull" for n in NAMES), repr(basic_to)))
+    out.append(check("registry: every manifest and blob is read by its sha256 digest",
+                     all(dr.DIGEST.fullmatch(u.rsplit("/", 1)[1]) for u, _ in reg.calls if "/manifests/" in u or "/blobs/" in u)
+                     and any("/blobs/" in u for u, _ in reg.calls)))
     out.append(check("registry: a pin that is the images' revision passes",
                      read(StandInRegistry(good), tag=REV[:7])[0] == REV))
     out.append(check("registry: buildkit's v0.2 provenance is read too",
                      read(StandInRegistry(good, predicate="v0.2"))[0] == REV))
     out.append(check("registry: the source as a .git URL, case aside, is theOrg's",
                      read(StandInRegistry({n: [(SOURCE.upper() + ".git", REV)] for n in NAMES}))[0] == REV))
+    out.append(check("registry: an image with two digests, each naming exactly R, passes",
+                     read(StandInRegistry(good, more={"loki": [(SOURCE, REV)]}))[0] == REV))
+    two = "".join(f"{REG}/theorg/observability-{n}:latest {digest(n)}\n" for n in NAMES)
     for name, needle, r, kw in (
             ("a token realm on another host is refused: the pull token is not sent", "no Bearer realm",
              StandInRegistry(good, realm="https://elsewhere.example/v2/token"), {}),
+            ("a token realm on the registry host's other port is refused: the pull token is not sent", "no Bearer realm",
+             StandInRegistry(good, realm=f"https://{REG}:8443/v2/token"), {}),
             ("a token realm over http is refused", "no Bearer realm",
              StandInRegistry(good, realm=f"http://{REG}/v2/token"), {}),
             ("a Basic challenge (no Bearer realm) is refused", "no Bearer realm",
              StandInRegistry(good, scheme="Basic"), {}),
+            ("a theOrg image on a foreign registry host is refused before any request", "not on gitea.example",
+             StandInRegistry(good), {"digests_out": two.replace(f"{REG}/theorg/observability-loki", "elsewhere.example/theorg/observability-loki"),
+                                     "pulled": [f"{REG}/theorg/observability-{n}:latest" for n in NAMES]}),
+            ("`digests` listing other images than `images` pulled is refused before any request", "other theOrg images",
+             StandInRegistry(good), {"pulled": [f"{REG}/theorg/observability-{n}:latest" for n in NAMES[1:]]}),
+            ("a pulled image `digests` does not list is refused before any request", "other theOrg images",
+             StandInRegistry(good), {"pulled": [f"{REG}/theorg/observability-{n}:latest" for n in (*NAMES, "extra")]}),
+            ("a digest that is not sha256:<64 hex> is refused before any request", "is not sha256:<64 hex>",
+             StandInRegistry(good), {"digests_out": two.replace(digest("loki"), "sha256:" + "1" * 63)}),
             ("a refused pull token stops", "HTTP 401", StandInRegistry(good, token_status=401), {}),
             ("an image with no attestation stops", "loki:latest: no theOrg revision",
              StandInRegistry({**good, "loki": []}), {}),
+            ("an image whose second digest has no attestation (an empty set) stops", "loki:latest: no theOrg revision "
+             "in its provenance (1 of 2 digest(s))", StandInRegistry(good, more={"loki": []}), {}),
+            ("an image whose two digests name different commits stops", "loki:latest: revisions",
+             StandInRegistry(good, more={"loki": [(SOURCE, "b" * 40)]}), {}),
             ("images built from different commits stop", "different commits",
              StandInRegistry({**good, "vector": [(SOURCE, "b" * 40)]}), {}),
             ("one image whose attestations disagree stops", "vector:latest: revisions",
              StandInRegistry({**good, "vector": [(SOURCE, REV), (SOURCE, "b" * 40)]}), {}),
             ("a source that is not theOrg's observability stops", "loki:latest: no theOrg revision",
-             StandInRegistry({**good, "loki": [("https://gitea.example/grafana/loki", REV)]}), {}),
+             StandInRegistry({**good, "loki": [(f"https://{REG}/grafana/loki", REV)]}), {}),
+            ("a source with theOrg's path on another host stops", "loki:latest: no theOrg revision",
+             StandInRegistry({**good, "loki": [("https://elsewhere.example/theOrg/observability", REV)]}), {}),
             ("a source whose path only ends in theorg/observability stops", "loki:latest: no theOrg revision",
-             StandInRegistry({**good, "loki": [("https://elsewhere.example/x/theorg/observability", REV)]}), {}),
+             StandInRegistry({**good, "loki": [(f"https://{REG}/x/theorg/observability", REV)]}), {}),
             ("a revision that is not 40 hex stops", "loki:latest: no theOrg revision",
              StandInRegistry({**good, "loki": [(SOURCE, "f599ebc5")]}), {}),
             ("a pin the provenance does not name stops", "as their build revision", StandInRegistry(good),
              {"tag": "b" * 40}),
             ("an image with no registry digest on d06 stops", "vector:latest: no registry digest", StandInRegistry(good),
              {"missing": "vector"}),
+            ("an index whose bytes do not hash to its digest stops", "does not hash to its digest",
+             StandInRegistry(good, tamper="loki"), {}),
             ("an answer that is not understood stops", "not understood",
              StandInRegistry(good, index_body=b"<html>"), {})):
         r_calls = r.calls
         out.append(stopped(f"registry: {name}, nothing minted", needle, r, **kw))
-        if "realm" in name or "Basic challenge" in name:
+        if "realm" in name or "Basic challenge" in name or "before any request" in name:
             out.append(check(f"registry: {name.split(':')[0]}: no request carried an Authorization header",
                              all("Authorization" not in h for _, h in r_calls)
                              and not any("elsewhere" in u for u, _ in r_calls), repr(r_calls)))
+        if "before any request" in name:
+            out.append(check(f"registry: {name}: no request at all", r_calls == [], repr(r_calls)))
     q = StandInRegistry(good, realm=f"https://{REG}/v2/token?x=1")
     read(q)
     out.append(check("registry: a realm with its own query string keeps it",
@@ -562,6 +784,7 @@ results = [
     *run_start_cases(),
     *main_cases(),
     *digests_cases(),
+    *tool_cases(),
     *redirect_cases(),
     *registry_cases(),
 ]

@@ -80,14 +80,21 @@ From the workstation, on the LAN:
 cd ~/local/asyla && python3 core/tools/credentials.py exec THEORG_REGISTRY_PULL_TOKEN -- python3 projects/asyla-hosts/d06/apps/observability/deploy_role.py
 ```
 
-It pulls first (`observability.sh images`: every image, so a newer `latest` replaces the one d06
-has), then reads the theOrg revision R the images were built from (`observability.sh digests`, then
-the registry's provenance attestation of each digest; the images must agree, and R must be on the
-theOrg clone's `origin/main`), then mints the three wrapped tokens with theOrg's tool at R and starts
-the stack (`build_host.py d06 build --only apps --app observability --apply`, which runs
+It pulls first (`observability.sh images`: every theOrg image, so a newer `latest` replaces the one
+d06 has; pushgateway, pinned by version, only when missing), then reads the theOrg revision R the
+images were built from (`observability.sh digests`, then the registry's provenance attestation of
+each digest, every answer hash-checked against its digest; each digest must name exactly one commit,
+the images must agree, every theOrg image and the provenance source must be on `REGISTRY`, and R must
+be on the theOrg clone's `origin/main`), then mints the three wrapped tokens with theOrg's tool at
+`TOOL_REV` (`deploy_role.py`; the tool runs with asyla's hub token, so it stays at a commit asyla
+reviewed while the images follow `latest`) and starts the stack (`build_host.py d06 build --only apps --app observability --apply`, which runs
 `observability.sh up`), then runs `OBSERVABILITY_REVISION=R observability.sh verify` on d06
 (`--only apps` skips build_host's verify phase) and exits 1 when it fails; `deploy_role.py --dry-run` prints the plan and contacts
-nothing (its header has the steps). On a failure it says which step failed: the mint (nothing
+nothing (its header has the steps). `deploy_role.py --revision-only` (same command line) pulls,
+reads R and checks the minting tool, prints `R = <sha>` and stops: no hub token, nothing minted,
+nothing started. When theOrg changed `scripts/vault_identity.py` or `scripts/openbao.py` between
+`TOOL_REV` and R, the deploy stops before the mint: read the change, then bump `TOOL_REV` in a
+commit here. On a failure it says which step failed: the mint (nothing
 started) or the start (the stack may be partly recreated: run `observability.sh status` and
 `verify` on d06). If d06's installed `observability.sh` lists images of another tag, d06's
 scripts tree is not master yet: after the merge, install it with `build_host.py d06 build --only
@@ -188,7 +195,9 @@ tokened services move only through a deploy. The deploy prints the revision R it
 images' provenance (`theOrg observability revision R`), and `verify` prints it again. A pin is a
 commit here that sets `OBSERVABILITY_TAG`'s default in `observability.sh` to a theOrg `main` sha
 whose images are published; the deploy then stops unless the images' provenance names that sha.
-After a deploy to a new R, check `compose.yml` against theOrg's `docker-compose.yml` at R, and
+After a deploy to a new R, check `compose.yml` against theOrg's `docker-compose.yml` at R (nothing
+checks that before the start; `verify` after it catches a job theOrg drops or renames, as "no
+target", but not a service theOrg adds that `compose.yml` lacks), and
 what `check_tokened` and `check_watchdog` read against theOrg at R: the relay's metric names
 (`alert-relay/relay.py`) and the watchdog piece's receiver name and route
 (`alertmanager-pieces/watchdog/`). `verify` checks the services

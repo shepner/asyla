@@ -1362,7 +1362,7 @@ def phase_restore(spec: dict, apply: bool) -> None:
         print(f"restore {name} (skipped when its data dir is not empty; any other failure stops the build; "
               f"at most {limit} s)")
         if a.get("pull_token_env"):
-            print(f"  first `{name}.sh images` with {a['pull_token_env']} over SSH stdin (missing images pulled)")
+            print(f"  first `{name}.sh images` with {a['pull_token_env']} over SSH stdin (the app's script decides which images it pulls)")
         if apply and a.get("pull_token_env"):
             cmd, stdin = env_command(app_env(spec, a, start=False),
                                      f"{app_script(spec['apps_tree'], name)} images >/dev/null")
