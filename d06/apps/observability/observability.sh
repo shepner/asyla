@@ -1,20 +1,23 @@
 #!/bin/bash
 # theOrg's observability stack on d06 (Loki and its gateway, Prometheus, the trends Prometheus,
-# Alertmanager, alert-relay, Vector and the probes). Usage: observability.sh [switch ...], e.g.
-# up|down|restart|verify|update|pull|images|logs|status; switches can be combined. Loads
-# ~/scripts/docker/common.env. From theOrg observability DEPLOY.md at main
-# 2144f83c3ec978663d3cb544e743ae8006471a0a (README.md here says what asyla changed).
+# Alertmanager, alert-relay, emporia-collector, scrape-proxy, Vector and the probes). Usage:
+# observability.sh [switch ...], e.g. up|down|restart|verify|update|pull|images|logs|status;
+# switches can be combined. Loads ~/scripts/docker/common.env. From theOrg observability DEPLOY.md
+# at main 75723657f825814038bf8936e4765a5137a073a8 (README.md here says what asyla changed).
 #
 # No secret is in any file or volume, here or on the host, on disk or in memory (asyla SEC-5 and
 # SEC-7; the operator, 2026-11-03: secrets live only in OpenBao). Nothing here writes a value
-# anywhere. One value may reach this process, only as a named environment variable that the
-# workstation resolves from OpenBao and sends at use (build_host.py, d06/host.toml): the image
-# pulls use the variable named OBSERVABILITY_REGISTRY_PULL_TOKEN (pull_token_env), answered by the
-# credential helper beside this script under a throwaway DOCKER_CONFIG. No secret goes in any
-# container's environment (Docker keeps it in the container's config on the host). alert-relay
-# files nothing until theOrg's secrets-alert-relay change: it then logs in to OpenBao itself.
-# Every piece that needs a secret any other way is off until theOrg's stack reads it from OpenBao
-# itself (compose.yml's header says how each is off, README.md what turns each on).
+# anywhere. Values reach this process only as named environment variables that the workstation
+# sends at use over SSH stdin (build_host.py, d06/host.toml):
+# - OBSERVABILITY_REGISTRY_PULL_TOKEN (pull_token_env), for the image pulls, answered by the
+#   credential helper beside this script under a throwaway DOCKER_CONFIG;
+# - ALERT_RELAY_, EMPORIA_ and SCRAPE_PROXY_OPENBAO_WRAPPED_TOKEN (start_env_optional): each a
+#   single-use wrapping token that deploy_role.py mints from the observability-d06 token role.
+#   Its container unwraps it once at start and holds the real token in memory, so what Docker
+#   keeps in the container's config is spent. A wrapping token lapses 300 s after it is minted, so
+#   `up` never pulls while one is here (the deploy runs `images` first).
+# A tokened service starts only when its token is here; without it, it is left as it is (VAULT_READERS).
+# compose.yml's header says what is on and off, README.md what turns each on.
 # Data under /mnt/docker/Observability (d06's local data disk; never NFS).
 
 set -euo pipefail
@@ -38,17 +41,24 @@ DOCKER_DL="${DOCKER_DL:-/mnt/docker}"
 OBSERVABILITY_ROOT="$DOCKER_DL/Observability"
 
 # The theOrg observability commit whose images run here: one sha for every image (DEPLOY.md,
-# Images). 2144f83 is theOrg main (#298). Change it here, commit, then `update restart verify`.
-OBSERVABILITY_TAG="${OBSERVABILITY_TAG_OVERRIDE:-2144f83c3ec978663d3cb544e743ae8006471a0a}"
+# Images). 7572365 is theOrg main (#302). Change it here, commit, then deploy (README.md, Deploy).
+OBSERVABILITY_TAG="${OBSERVABILITY_TAG_OVERRIDE:-75723657f825814038bf8936e4765a5137a073a8}"
 REGISTRY="gitea.asyla.org"
 # Already pulled for the stack; also the throwaway container that sets the data directories' owners.
 GATEWAY_IMAGE="$REGISTRY/theorg/observability-loki-gateway:$OBSERVABILITY_TAG"
 
 # The host this folder belongs to. On any other host (test01 as a replica of d06) the stack runs
-# the services below only: no alert-relay (it files issues on the forge) and no Vector (its
-# chronicle episodes would reach production's memory-system).
+# the services below only: no alert-relay (it files issues on the forge), no emporia-collector or
+# scrape-proxy (they read production's OpenBao records) and no Vector (its chronicle episodes would
+# reach production's memory-system).
 SERVING_HOST="d06"
 REPLICA_SERVICES="loki loki-gateway prometheus prometheus-trends alertmanager pushgateway docker-state-exporter blackbox-exporter"
+
+# The services that read OpenBao in-process, each through the single-use wrapped token in the
+# variable token_var names. Each starts only when its token is here: started without one,
+# emporia-collector exits and the other two serve nothing, so `up --wait` would fail or the
+# service would sit idle. Without its token a service is left as it is, running or not.
+VAULT_READERS="alert-relay emporia-collector scrape-proxy"
 
 # asyla's settings (asyla hub, the observability-on-d06 item).
 PROMETHEUS_EXTERNAL_URL="${PROMETHEUS_EXTERNAL_URL:-https://prometheus.asyla.org}"
@@ -59,6 +69,16 @@ ALERT_REPOS=""
 # memory-system's Vector on the Mini (theOrg lead, 2026-11-03).
 CHRONICLE_VECTOR_ADDRESS="10.0.0.150:6000"
 COMPOSE_PROJECT_NAME="observability"
+# Where alert-relay, emporia-collector and scrape-proxy read their secrets (theOrg's default).
+OPENBAO_ADDR="https://vault.asyla.org"
+# Critical alerts by email: Alertmanager's email piece posts them to alert-relay, which sends them
+# with the SMTP login it reads from OpenBao (theOrg deploy.yml's recipient).
+ALERT_EMAIL_TO="shepner@asyla.org"
+# Alertmanager's watchdog piece: off until secret/hubs/asyla/observability-watchdog-ping-url
+# exists. Set to "on" to turn it on (alert-relay already names the record, compose.yml).
+ALERT_WATCHDOG_PING=""
+# Scraped by the trends Prometheus through scrape-proxy (theOrg deploy.yml's address).
+HOME_ASSISTANT_URL="https://homeassistant.asyla.org"
 
 # The blackbox-selftest job's three probes of Prometheus (theOrg prometheus/scrape-optional/
 # blackbox-exporter.yml), each of which must read 1 (DEPLOY.md: deploy.yml requires all three).
@@ -67,7 +87,8 @@ SELF_PROBES_WANT="http_2xx=1 icmp=1 tcp_connect=1"
 VERIFY_WAIT_S="${OBSERVABILITY_VERIFY_WAIT_S:-300}"
 
 export DOCKER_DL OBSERVABILITY_ROOT OBSERVABILITY_TAG PROMETHEUS_EXTERNAL_URL ALERTMANAGER_EXTERNAL_URL \
-  GITEA_URL GITEA_ALERT_REPO ALERT_REPOS CHRONICLE_VECTOR_ADDRESS COMPOSE_PROJECT_NAME
+  GITEA_URL GITEA_ALERT_REPO ALERT_REPOS CHRONICLE_VECTOR_ADDRESS COMPOSE_PROJECT_NAME \
+  OPENBAO_ADDR ALERT_EMAIL_TO ALERT_WATCHDOG_PING HOME_ASSISTANT_URL
 
 info() { echo "[INFO] $*"; }
 warn() { echo "[WARN] $*" >&2; }
@@ -79,6 +100,41 @@ is_replica() {
 
 run_compose() {
   docker compose -f "$COMPOSE_FILE" --project-directory "$SCRIPT_DIR" "$@"
+}
+
+# The variable that carries a tokened service's wrapped token; fails for any other service.
+token_var() {
+  case "$1" in
+    alert-relay) echo ALERT_RELAY_OPENBAO_WRAPPED_TOKEN ;;
+    emporia-collector) echo EMPORIA_OPENBAO_WRAPPED_TOKEN ;;
+    scrape-proxy) echo SCRAPE_PROXY_OPENBAO_WRAPPED_TOKEN ;;
+    *) return 1 ;;
+  esac
+}
+
+# True when the service is tokened and its token is here (set and not empty).
+has_token() {
+  local var
+  var="$(token_var "$1")" || return 1
+  [ -n "${!var:-}" ]
+}
+
+# The tokened services whose token is here (space-separated; empty when none is).
+tokens_here() {
+  local svc out=""
+  for svc in $VAULT_READERS; do
+    if has_token "$svc"; then out="$out $svc"; fi
+  done
+  echo "${out# }"
+}
+
+# The tokened services whose token is not here.
+tokens_absent() {
+  local svc out=""
+  for svc in $VAULT_READERS; do
+    if ! has_token "$svc"; then out="$out $svc"; fi
+  done
+  echo "${out# }"
 }
 
 # The pull's throwaway DOCKER_CONFIG, removed on exit.
@@ -110,23 +166,45 @@ do_pull() {
   pull_compose pull
 }
 
+# The images the stack names that are not on this host, space-separated (empty when none is).
+missing_images() {
+  local img imgs out=""
+  # Not a process substitution: its failure would read as "nothing missing" and skip the pull.
+  imgs="$(run_compose config --images)" \
+    || { echo "[ERROR] docker compose config failed" >&2; return 1; }
+  while read -r img; do
+    [ -n "$img" ] || continue
+    docker image inspect "$img" >/dev/null 2>&1 || out="$out $img"
+  done <<< "$imgs"
+  echo "${out# }"
+}
+
 # Pulls only images that are missing, so `up` on a running host does not move to a new image by
 # itself (that is `update`).
 pull_missing() {
-  local img imgs missing=false
-  # Not a process substitution: its failure would read as "nothing missing" and skip the pull.
-  imgs="$(run_compose config --images)" \
-    || { echo "[ERROR] docker compose config failed; not pulling" >&2; return 1; }
-  while read -r img; do
-    [ -n "$img" ] || continue
-    docker image inspect "$img" >/dev/null 2>&1 || missing=true
-  done <<< "$imgs"
-  $missing || return 0
+  local missing
+  missing="$(missing_images)" || { echo "[ERROR] not pulling" >&2; return 1; }
+  [ -n "$missing" ] || return 0
   if [ -z "${OBSERVABILITY_REGISTRY_PULL_TOKEN:-}" ]; then
     echo "[ERROR] images missing; the pull token comes from the workstation (build_host.py pull_token_env)" >&2
     return 1
   fi
   do_pull
+}
+
+# Before a start. With a wrapped token here nothing is pulled: a token lapses 300 s after it is
+# minted and a pull could outlast it, so the deploy runs `images` before it mints them, and a
+# missing image is an error. Without one, pull what is missing.
+images_ready() {
+  local missing
+  if [ -z "$(tokens_here)" ]; then
+    pull_missing
+    return
+  fi
+  missing="$(missing_images)" || return
+  [ -n "$missing" ] || return 0
+  echo "[ERROR] not pulling with a wrapped token here (it lapses 300 s after it is minted); run \`images\` before minting. Missing: $missing" >&2
+  return 1
 }
 
 do_images() {
@@ -158,8 +236,9 @@ own_dirs() {
 # --- up -------------------------------------------------------------------------------------------
 
 do_up() {
+  local all svc services="" left=""
   ensure_dirs || return
-  pull_missing || return
+  images_ready || return
   own_dirs || die "cannot set the data directories' owners under $OBSERVABILITY_ROOT"
   if is_replica; then
     info "Replica of $SERVING_HOST ($(hostname -s)): $REPLICA_SERVICES"
@@ -167,18 +246,53 @@ do_up() {
     run_compose up -d --wait --wait-timeout "$VERIFY_WAIT_S" $REPLICA_SERVICES
     return
   fi
-  info "alert-relay files no issue until theOrg's secrets-alert-relay change (it then logs in to OpenBao itself; README.md)"
-  run_compose up -d --wait --wait-timeout "$VERIFY_WAIT_S"
+  # Every service without a token, and each tokened service whose token is here (VAULT_READERS). Not a
+  # process substitution: an empty list would start every service.
+  all="$(run_compose config --services)" || die "docker compose config failed; not starting"
+  for svc in $all; do
+    if token_var "$svc" >/dev/null && ! has_token "$svc"; then
+      left="$left $svc"
+    else
+      services="$services $svc"
+    fi
+  done
+  [ -n "$services" ] || die "no service to start"
+  if [ -n "$left" ]; then
+    warn "no wrapped token for:$left; left as they are, running or not (README.md, Deploy)"
+  fi
+  info "starting:$services"
+  # shellcheck disable=SC2086
+  run_compose up -d --wait --wait-timeout "$VERIFY_WAIT_S" $services
 }
 
 # --- verify, status -------------------------------------------------------------------------------
 
+# On the serving host every service, except a tokened one with no container and no token here
+# (never deployed, or taken down; not_deployed lists them). A tokened container that exists is
+# expected to run: one looping on a spent token after a restart fails verify.
 expected_services() {
+  local all svc out=""
   if is_replica; then
     echo "$REPLICA_SERVICES"
-  else
-    run_compose config --services | tr '\n' ' '
+    return
   fi
+  all="$(run_compose config --services)" || return
+  for svc in $all; do
+    if token_var "$svc" >/dev/null && ! has_token "$svc" && [ "$(service_state "$svc")" = missing ]; then
+      continue
+    fi
+    out="$out $svc"
+  done
+  echo "${out# }"
+}
+
+not_deployed() {
+  local svc out=""
+  is_replica && return 0
+  for svc in $VAULT_READERS; do
+    if ! has_token "$svc" && [ "$(service_state "$svc")" = missing ]; then out="$out $svc"; fi
+  done
+  echo "${out# }"
 }
 
 # "running healthy", "running none" (no healthcheck), ... or "missing".
@@ -230,7 +344,9 @@ check_self_probes() {
 # retention, the gateway (HTTP, failing closed) and the blackbox self-probes. The pieces that are
 # off (compose.yml's header) have nothing to check.
 do_verify() {
-  local rc=0 svc state n body code
+  local rc=0 svc state n body code off
+  off="$(not_deployed)"
+  if [ -n "$off" ]; then warn "not deployed (no container, no wrapped token): $off"; fi
   wait_ready || true
   for svc in $(expected_services); do
     state="$(service_state "$svc")"
@@ -318,9 +434,14 @@ run_cmd() {
       run_compose down
       ;;
     restart)
-      # Pull what is missing before the stack goes down, so a missing token or image never leaves
-      # it down (do_up's own pull then finds nothing missing).
-      pull_missing && run_compose down && do_up
+      # down removes the tokened containers too, and only their tokens bring them back: on the
+      # serving host a restart needs every one (a deploy; README.md). Images are made ready before
+      # the stack goes down, so a missing token or image never leaves it down.
+      if ! is_replica && [ -n "$(tokens_absent)" ]; then
+        echo "[ERROR] restart takes down $VAULT_READERS, and no wrapped token is here for: $(tokens_absent). Deploy instead (README.md, Deploy)" >&2
+        return 1
+      fi
+      images_ready && run_compose down && do_up
       ;;
     verify)
       do_verify
@@ -340,10 +461,13 @@ usage() {
   echo "" >&2
   echo "  update   - Pull the images for OBSERVABILITY_TAG (screen if interactive); use up/restart to start" >&2
   echo "  pull     - Pull the images now (inline)" >&2
-  echo "  images   - Pull missing images, then list the images (build_host.py's replica guard)" >&2
-  echo "  up       - Data directories, missing images, then the stack (replica: $REPLICA_SERVICES)" >&2
-  echo "  down     - Stop and remove every container (the data stays)" >&2
-  echo "  restart  - pull missing images, then down, then up" >&2
+  echo "  images   - Pull missing images, then list the images (build_host.py's replica guard;" >&2
+  echo "             deploy_role.py's pull before it mints the wrapped tokens)" >&2
+  echo "  up       - Data directories, missing images (none pulled with a wrapped token here), then" >&2
+  echo "             the stack; a tokened service ($VAULT_READERS) only with its token" >&2
+  echo "             (replica: $REPLICA_SERVICES)" >&2
+  echo "  down     - Stop and remove every container (the data stays; the tokened ones need a deploy)" >&2
+  echo "  restart  - images ready, then down, then up; on $SERVING_HOST only with every wrapped token" >&2
   echo "  verify   - Services running and healthy, Prometheus and its one Alertmanager," >&2
   echo "             docker-state-exporter, trends retention, the gateway over HTTP (failing" >&2
   echo "             closed), the blackbox self-probes" >&2

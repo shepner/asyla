@@ -110,6 +110,9 @@ host, never in a command line, a file or this output; an unset one fails, naming
   start_env = ["NAME"...]  values only the start commands (apps and late phases) get, under their
                            own names; never on a replica (it runs no vault parts), where they are
                            neither read nor sent
+  start_env_optional = ["NAME"...]  as start_env, but one that is unset is skipped, not fatal: the
+                           app script decides what to start without it (d06's observability: the
+                           wrapped vault tokens its deploy_role.py mints, which a plain build lacks)
 d06's ticketing: pull_token_env = "THEORG_REGISTRY_PULL_TOKEN", start_env = its two Dex client
 values (d06/apps/ticketing/README.md).
 
@@ -272,7 +275,7 @@ NSENTER_PROBE = ('pid=$(docker inspect -f "{{{{.State.Pid}}}}" {c}) || exit 99; 
 INI_SECTION = re.compile(r"[a-z][a-z0-9_]*(\.[a-z0-9_]+)*")
 INI_KEY = re.compile(r"[A-Z][A-Z0-9_]*")
 INI_VALUE = re.compile(r"[A-Za-z0-9._:/,@-]*")
-ENV_NAME = re.compile(r"[A-Z_][A-Z0-9_]*")   # [[app]] pull_token_env, start_env
+ENV_NAME = re.compile(r"[A-Z_][A-Z0-9_]*")   # [[app]] pull_token_env, start_env, start_env_optional
 # d03's gitea compose mounts ${DOCKER_DL}/Gitea/data at /data.
 GITEA_INI = "/data/gitea/conf/app.ini"
 GITEA_INI_HOST = "/mnt/docker/Gitea/data/gitea/conf/app.ini"
@@ -478,8 +481,8 @@ def replica_apps(path: Path, rep: dict, src: str, apps: list[dict]) -> list[dict
 
 
 def check_app_env(path: Path, a: dict) -> None:
-    """[[app]] pull_token_env (one environment variable name), start_env (a list of them) and
-    restore_timeout (seconds, above 0)."""
+    """[[app]] pull_token_env (one environment variable name), start_env and start_env_optional
+    (lists of them, no name in both) and restore_timeout (seconds, above 0)."""
     name = a.get("name", "?")
     p = a.get("pull_token_env")
     if p is not None and not (isinstance(p, str) and ENV_NAME.fullmatch(p)):
@@ -492,6 +495,17 @@ def check_app_env(path: Path, a: dict) -> None:
                    f"names ({ENV_NAME.pattern})")
     if p is not None and pull_env_name(name) in se:
         raise Fail(f"{path}: [[app]] {name!r}: start_env names {pull_env_name(name)}, which pull_token_env sets")
+    so = a.get("start_env_optional", [])
+    if not isinstance(so, list) or not all(isinstance(n, str) and ENV_NAME.fullmatch(n) for n in so) \
+            or len(set(so)) != len(so):
+        raise Fail(f"{path}: [[app]] {name!r}: start_env_optional must be a list of distinct environment "
+                   f"variable names ({ENV_NAME.pattern})")
+    if set(so) & set(se):
+        raise Fail(f"{path}: [[app]] {name!r}: {', '.join(sorted(set(so) & set(se)))} in both start_env and "
+                   f"start_env_optional")
+    if p is not None and pull_env_name(name) in so:
+        raise Fail(f"{path}: [[app]] {name!r}: start_env_optional names {pull_env_name(name)}, which "
+                   f"pull_token_env sets")
     rt = a.get("restore_timeout", RESTORE_TIMEOUT)
     if isinstance(rt, bool) or not isinstance(rt, int) or rt <= 0:
         raise Fail(f"{path}: [[app]] {name!r}: restore_timeout must be a whole number of seconds above 0, not {rt!r}")
@@ -529,16 +543,28 @@ def env_needed(spec: dict, phases: list[str]) -> list[tuple[str, str]]:
     return need
 
 
+def env_optional(spec: dict, phases: list[str]) -> list[tuple[str, str]]:
+    """(name, what takes it) for each start_env_optional value the given phases send when it is set
+    (apps, late; never on a replica). An unset one is skipped, so pre-flight lists it only."""
+    if spec.get("replica") or not {"apps", "late"} & set(phases):
+        return []
+    return [(n, f"[[app]] {a['name']} start_env_optional") for a in spec.get("app", [])
+            for n in a.get("start_env_optional", [])]
+
+
 def preflight_env(spec: dict, phases: list[str], apply: bool) -> None:
     """Before any phase: each value the phases will take from the environment is set (names only,
-    never a value), so a build does not stop half-way for a missing one. Dry run: listed only."""
-    need = env_needed(spec, phases)
-    if not need:
+    never a value), so a build does not stop half-way for a missing one. Dry run: listed only.
+    start_env_optional names are listed, set or skipped, and never stop a build."""
+    need, opt = env_needed(spec, phases), env_optional(spec, phases)
+    if not need and not opt:
         return
     missing = [n for n, _ in need if not os.environ.get(n)]
-    print(f"pre-flight: {len(need)} value(s) from the environment")
+    print(f"pre-flight: {len(need)} value(s) from the environment" + (f", {len(opt)} optional" if opt else ""))
     for n, why in need:
         print(f"  {n:44} {'set' if os.environ.get(n) else 'MISSING'}  ({why})")
+    for n, why in opt:
+        print(f"  {n:44} {'set' if os.environ.get(n) else 'not set, skipped'}  ({why})")
     if missing and apply:
         raise Fail(f"not in the environment: {', '.join(dict.fromkeys(missing))}; run build_host.py through "
                    f"the credentials capability with those names")
@@ -546,13 +572,16 @@ def preflight_env(spec: dict, phases: list[str], apply: bool) -> None:
 
 def app_env(spec: dict, a: dict, start: bool) -> list[tuple[str, str]]:
     """(name on the host, value) pairs one app command gets over SSH stdin: the pull token, and for a
-    start command on a host that is not a replica, start_env (docstring, App environment)."""
+    start command on a host that is not a replica, start_env and each start_env_optional name that is
+    set (docstring, App environment)."""
     pairs = []
     if a.get("pull_token_env"):
         pairs.append((pull_env_name(a["name"]),
                       from_env(a["pull_token_env"], f"[[app]] {a['name']} pull_token_env")))
     if start and not spec.get("replica"):
         pairs += [(n, from_env(n, f"[[app]] {a['name']} start_env")) for n in a.get("start_env", [])]
+        pairs += [(n, from_env(n, f"[[app]] {a['name']} start_env_optional"))
+                  for n in a.get("start_env_optional", []) if os.environ.get(n)]
     return pairs
 
 
@@ -1492,9 +1521,12 @@ def phase_apps(spec: dict, apply: bool, late: bool = False) -> None:
         if not cmds:
             print(f"start {a['name']}: nothing to start (spec)")
             continue
+        opt = [] if spec.get("replica") else a.get("start_env_optional", [])
         sent = ([a["pull_token_env"]] if a.get("pull_token_env") else []) \
-            + ([] if spec.get("replica") else a.get("start_env", []))
-        print(f"start {a['name']}: {' '.join(cmds)}" + (f" (over SSH stdin: {', '.join(sent)})" if sent else ""))
+            + ([] if spec.get("replica") else a.get("start_env", [])) + [n for n in opt if os.environ.get(n)]
+        skipped = [n for n in opt if not os.environ.get(n)]
+        print(f"start {a['name']}: {' '.join(cmds)}" + (f" (over SSH stdin: {', '.join(sent)})" if sent else "")
+              + (f" (optional, not set: {', '.join(skipped)})" if skipped else ""))
         if apply:
             cmd, stdin = env_command(app_env(spec, a, start=True), f"{app_script(spec['apps_tree'], a['name'])} {' '.join(cmds)}")
             ssh(host, cmd, stdin=stdin, stream=True, timeout=3600)
@@ -2130,7 +2162,7 @@ def main() -> int:
         if not a.apply:
             print("DRY RUN (no --apply): showing what each phase would do")
         gaps = 0
-        if "vm" in phases or env_needed(spec, phases):
+        if "vm" in phases or env_needed(spec, phases) or env_optional(spec, phases):
             step("pre-flight")
         if "vm" in phases:
             preflight_secrets(spec, a.apply)

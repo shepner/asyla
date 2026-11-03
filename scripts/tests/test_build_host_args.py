@@ -229,7 +229,11 @@ def replica_images_own_case() -> bool:
 
 
 ENV_APP = ('[[app]]\nname = "tk"\npull_token_env = "PULL_X"\nstart_env = ["START_A", "START_B"]\n')
-ENV_NAMES = ["PULL_X", "START_A", "START_B"]
+ENV_NAMES = ["PULL_X", "START_A", "START_B", "OPT_C"]
+ENV_OPT_APP = ENV_APP + 'start_env_optional = ["OPT_C"]\n'
+# d06 observability's wrapped vault tokens (deploy_role.py mints them; a plain build lacks them).
+D06_OBS_TOKENS = ["ALERT_RELAY_OPENBAO_WRAPPED_TOKEN", "EMPORIA_OPENBAO_WRAPPED_TOKEN",
+                  "SCRAPE_PROXY_OPENBAO_WRAPPED_TOKEN"]
 
 
 def app_env_cases() -> list[bool]:
@@ -245,6 +249,14 @@ def app_env_cases() -> list[bool]:
               lambda: temp_specs({"x": VM + '[[app]]\nname = "a"\nstart_env = ["A", "A"]\n'})("x")),
         fails("app env: start_env cannot also carry the pull token's name", "which pull_token_env sets",
               lambda: temp_specs({"x": VM + '[[app]]\nname = "a"\npull_token_env = "P"\nstart_env = ["A_REGISTRY_PULL_TOKEN"]\n'})("x")),
+        fails("app env: start_env_optional must be a list of names", "start_env_optional must be",
+              lambda: temp_specs({"x": VM + '[[app]]\nname = "a"\nstart_env_optional = "A"\n'})("x")),
+        fails("app env: start_env_optional names are distinct", "start_env_optional must be",
+              lambda: temp_specs({"x": VM + '[[app]]\nname = "a"\nstart_env_optional = ["A", "A"]\n'})("x")),
+        fails("app env: a name is not both in start_env and start_env_optional", "in both start_env and",
+              lambda: temp_specs({"x": VM + '[[app]]\nname = "a"\nstart_env = ["A"]\nstart_env_optional = ["A"]\n'})("x")),
+        fails("app env: start_env_optional cannot carry the pull token's name", "which pull_token_env sets",
+              lambda: temp_specs({"x": VM + '[[app]]\nname = "a"\npull_token_env = "P"\nstart_env_optional = ["A_REGISTRY_PULL_TOKEN"]\n'})("x")),
         check("app env: the pull token's name on the host", build_host.pull_env_name("my-app") == "MY_APP_REGISTRY_PULL_TOKEN"),
         fails("app restore_timeout: a string is refused", "restore_timeout must be",
               lambda: temp_specs({"x": VM + '[[app]]\nname = "a"\nrestore_timeout = "2h"\n'})("x")),
@@ -318,6 +330,38 @@ def app_env_cases() -> list[bool]:
     err, printed = run_with({}, lambda: build_host.replica_images(rep_spec, True))
     out.append(check("app env: a replica's image pull without the pull token fails, naming it",
                      "PULL_X is not in the environment" in err, err))
+
+    # start_env_optional: sent when set, after start_env; skipped (not fatal) when unset; never on a replica.
+    opt = temp_specs({"x": VM + ENV_OPT_APP})("x")
+    err, printed = run_with(values, lambda: build_host.phase_apps(opt, True))
+    up = [(c, i) for c, i in calls if c.endswith("tk.sh up'")]
+    out.append(check("app env: a set start_env_optional name goes over stdin after start_env, by name only",
+                     not err and len(up) == 1 and up[0][1] == "stand-in-0\nstand-in-1\nstand-in-2\nstand-in-3\n"
+                     and "TK_REGISTRY_PULL_TOKEN START_A START_B OPT_C" in up[0][0]
+                     and not any(v in up[0][0] or v in printed for v in values.values()), repr((err, calls))))
+    unset_opt = {n: v for n, v in values.items() if n != "OPT_C"}
+    err, printed = run_with(unset_opt, lambda: build_host.phase_apps(opt, True))
+    up = [(c, i) for c, i in calls if c.endswith("tk.sh up'")]
+    out.append(check("app env: an unset start_env_optional name is skipped, not fatal, and said so",
+                     not err and len(up) == 1 and up[0][1] == "stand-in-0\nstand-in-1\nstand-in-2\n"
+                     and "OPT_C" not in up[0][0] and "optional, not set: OPT_C" in printed, repr((err, calls, printed))))
+    err, printed = run_with(unset_opt, lambda: build_host.preflight_env(opt, list(build_host.PHASES), True))
+    out.append(check("app env: pre-flight passes with a start_env_optional name unset and lists it",
+                     not err and "OPT_C" in printed and "not set, skipped" in printed, repr((err, printed))))
+    err, printed = run_with({"PULL_X": "stand-in-0", "OPT_C": "stand-in-3"},
+                            lambda: build_host.preflight_env(opt, list(build_host.PHASES), True))
+    out.append(check("app env: a start_env_optional name set does not excuse an unset start_env name",
+                     "START_A" in err and "OPT_C" not in err and "stand-in" not in err + printed, err))
+    rep_opt = temp_specs({"d07": VM + ENV_OPT_APP, "x": VM + '[replica]\nof = "d07"\n'})("x")
+    build_host.replica_guard = lambda spec, apply: None
+    try:
+        err, printed = run_with(values, lambda: build_host.phase_apps(rep_opt, True))
+    finally:
+        build_host.replica_guard = real_guard
+    up = [(c, i) for c, i in calls if c.endswith("tk.sh up'")]
+    out.append(check("app env: on a replica start_env_optional is neither read nor sent",
+                     not err and len(up) == 1 and up[0][1] == "stand-in-0\n" and "OPT_C" not in up[0][0]
+                     and build_host.env_optional(rep_opt, list(build_host.PHASES)) == [], repr((err, calls))))
     return out
 
 
@@ -833,13 +877,25 @@ results = [
                       "docker" in d["runner"]["labels"])
            == ("vmh01", 106, "10.0.0.65/24", 8, 16384, {"storage": "local-data2", "size": "64G"},
                {"storage": "local-data2", "size": "64G"}, False, False))(build_host.load_spec("d06"))),
-    check("d06 runs ticketing, verified by its own verify; its values come at use, none is a file on the host",
-          (lambda d: [(a["name"], a.get("verify"), a.get("pull_token_env"), a.get("start_env")) for a in d["app"]]
+    check("d06 runs ticketing and observability, each verified by its own verify; values come at use, none is a file",
+          (lambda d: [(a["name"], a.get("verify"), a.get("pull_token_env"), a.get("start_env"),
+                       sorted(a.get("start_env_optional", [])), a.get("restore", True)) for a in d["app"]]
            == [("ticketing", ["verify"], "THEORG_REGISTRY_PULL_TOKEN",
-                ["TICKETING_DEPLOY_DEX_CLIENT_SECRET", "TICKETING_MCP_DEX_CLIENT_SECRET"])]
+                ["TICKETING_DEPLOY_DEX_CLIENT_SECRET", "TICKETING_MCP_DEX_CLIENT_SECRET"], [], True),
+               ("observability", ["verify"], "THEORG_REGISTRY_PULL_TOKEN", None, D06_OBS_TOKENS, False)]
            and d.get("secret", []) == []
            and [(e["name"], e.get("env")) for e in d["external"]] == [("internal-access", ["D06_CF_API_TOKEN"])])(
                build_host.load_spec("d06"))),
+    # A full or a ticketing-only d06 build passes pre-flight without the observability tokens
+    # (deploy_role.py mints them); a full one lists them as optional.
+    check("d06: a full build needs no observability token, and lists them as optional",
+          (lambda d: not set(D06_OBS_TOKENS) & {n for n, _ in build_host.env_needed(d, list(build_host.PHASES))}
+           and sorted(n for n, _ in build_host.env_optional(d, list(build_host.PHASES))) == D06_OBS_TOKENS)(
+               build_host.load_spec("d06"))),
+    check("d06: a ticketing-only start needs only ticketing's values",
+          (lambda d: sorted({n for n, _ in build_host.env_needed(d, ["apps"])} | {n for n, _ in build_host.env_optional(d, ["apps"])})
+           == ["THEORG_REGISTRY_PULL_TOKEN", "TICKETING_DEPLOY_DEX_CLIENT_SECRET", "TICKETING_MCP_DEX_CLIENT_SECRET"])(
+               (lambda d: {**d, "app": [a for a in d["app"] if a["name"] == "ticketing"]})(build_host.load_spec("d06")))),
     # ns02 in the new form (draft): build/setup/ steps with dns_port.sh, no secret, pihole verified by its own verify.
     check("ns02's spec: the operator's values (2026-10-18), VM 311 on vmh02 at 10.0.0.11, not disposable, port 53 freed, no secret, no runner",
           (lambda n: (n["vm"]["node"], n["vm"]["vmid"], n["vm"]["ip"], bool(n["vm"].get("disposable")),

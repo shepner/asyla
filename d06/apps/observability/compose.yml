@@ -1,7 +1,8 @@
 # theOrg's observability stack on d06: Loki and its gateway, Prometheus, the trends Prometheus,
-# Alertmanager, alert-relay, the pushgateway, Vector, docker-state-exporter and blackbox-exporter.
-# Written by asyla from theOrg observability docker-compose.yml, compose.docker-socket.yml and
-# compose.blackbox.yml at main 2144f83c3ec978663d3cb544e743ae8006471a0a (DEPLOY.md at that sha).
+# Alertmanager, alert-relay, emporia-collector, scrape-proxy, the pushgateway, Vector,
+# docker-state-exporter and blackbox-exporter. Written by asyla from theOrg observability
+# docker-compose.yml, compose.docker-socket.yml and compose.blackbox.yml at main
+# 75723657f825814038bf8936e4765a5137a073a8 (DEPLOY.md at that sha).
 # Project, container names, volume names and the network are theOrg's. asyla's choices:
 # - the Docker-socket and blackbox pieces are folded in; credential-probe, the Ollama log and
 #   MONITOR_THEORG (theOrg's other stacks' jobs and rules) are not here;
@@ -10,20 +11,25 @@
 #   (Alertmanager on 9093, the pushgateway on 9091, docker-state-exporter on 9099);
 # - Loki, both Prometheus and Alertmanager keep their data on d06's local data disk, as named
 #   volumes bound to OBSERVABILITY_ROOT (theOrg decision asyla-network-monitoring §8: never NFS);
-# - no secret is in any file or volume, on disk or in memory (asyla SEC-5 and SEC-7; the operator,
-#   2026-11-03: secrets live only in OpenBao, and the stack is fixed to read them from there).
+# - no secret is in any file, volume or container environment (asyla SEC-5 and SEC-7; the
+#   operator, 2026-11-03: secrets live only in OpenBao). alert-relay, emporia-collector and
+#   scrape-proxy each read theirs from OpenBao in-process with their own token: deploy_role.py
+#   (beside this file) mints it from the observability-d06 token role and passes it
+#   response-wrapped, single use, in <NAME>_OPENBAO_WRAPPED_TOKEN. Each container spends it at
+#   start, so what Docker keeps is a spent wrapping token. The *_KV settings name asyla's records
+#   (the role's policies, secrets-vault policies/hubs.toml). A tokened service starts only with its
+#   token (observability.sh); after a reboot or a Docker restart it loops until the next deploy.
 #
-# Off until theOrg's stack reads its secrets from OpenBao itself (README.md says which change
-# turns each on). Each is off here and nowhere else:
-#   email receiver        Alertmanager gets no mail login, so alertmanager-entrypoint.sh leaves
-#                         its email piece off; every alert still goes to alert-relay
-#   Watchdog ping         Alertmanager gets no ping address: its watchdog piece is off
-#   delivery ping         alert-relay gets no ping address: its delivery ping is off
-#   trends HA job         trends-scrape-off.yml replaces the job's scrape file in prometheus-trends
-#   emporia-collector     not a service here; trends-scrape-off.yml replaces its scrape file too
+# On: the email receiver (Alertmanager's email piece, sent by alert-relay with the SMTP login),
+# the trends Home Assistant job (through scrape-proxy) and emporia-collector.
+# Off (README.md says what turns each on). Each is off here and nowhere else:
+#   Watchdog ping         ALERT_WATCHDOG_PING is empty (observability.sh): no record yet
+#   delivery ping, issues alert-relay names the records; absent, it logs the feature off at start
+#   alert-relay log lines LOKI_QUERY_URL is empty, and the Loki override is not set
 #   Loki TLS              no leaf: Loki serves HTTP inside observability-net, the gateway HTTP
 #   Loki gateway accounts no verifier files: the gateway fails closed, refusing every push and
-#                         query (401 or 403), and serves /ready alone; alert-relay's log lines are off
+#                         query (401 or 403), and serves /ready alone
+#   Vector container logs VECTOR_DOCKER_LOGS is false (the vector service says why)
 #
 # Run with observability.sh: it sets OBSERVABILITY_TAG, OBSERVABILITY_ROOT and the settings below
 # and keeps the start order.
@@ -39,12 +45,17 @@ services:
     networks:
       - observability-net
 
-  # Every alert goes to alert-relay (the base configuration); the optional pieces are off (above).
+  # Alertmanager holds no secret. Every alert goes to alert-relay (the base configuration). Its
+  # email piece is on with ALERT_EMAIL_TO (a webhook to alert-relay's /email); its watchdog piece
+  # is on with ALERT_WATCHDOG_PING ("on"), off here until the ping record exists.
   alertmanager:
     image: gitea.asyla.org/theorg/observability-alertmanager:${OBSERVABILITY_TAG:?}
     container_name: alertmanager-1
     ports:
       - "127.0.0.1:9093:9093"
+    environment:
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:?}
+      ALERT_WATCHDOG_PING: ${ALERT_WATCHDOG_PING:-}
     volumes:
       - alertmanager-data:/alertmanager
     command:
@@ -62,19 +73,33 @@ services:
     networks:
       - observability-net
 
-  # Files every alert as an issue in GITEA_ALERT_REPO (asyla/alerts) on the forge, off this host.
-  # It files nothing until theOrg's secrets-alert-relay change: the relay then logs in to OpenBao
-  # itself with a single-use wrapped token, so no secret sits in its environment (README.md).
-  # relay.py serves without a token.
+  # Files every alert as an issue in GITEA_ALERT_REPO (asyla/alerts) on the forge, off this host,
+  # and sends the critical ones by email. It reads every secret from OpenBao in-process
+  # (alert-relay/relay.py): ALERT_RELAY_<SECRET>_KV is PATH#FIELD. A record it cannot read switches
+  # that feature off, logged at start (the category, never a value): the forge token and the ping
+  # URLs are not stored yet. The Loki and chat-api records keep theOrg's defaults, which this
+  # token cannot read; both features are off here (LOKI_QUERY_URL and CHAT_API_URL empty).
   alert-relay:
     image: gitea.asyla.org/theorg/observability-alert-relay:${OBSERVABILITY_TAG:?}
     container_name: alert-relay-1
     ports:
       - "127.0.0.1:9111:9111"
     environment:
+      OPENBAO_ADDR: ${OPENBAO_ADDR:?}
+      OPENBAO_WRAPPED_TOKEN: ${ALERT_RELAY_OPENBAO_WRAPPED_TOKEN:-}
+      ALERT_RELAY_FORGE_KV: "secret/hubs/asyla/observability-alert-relay-gitea-token#value"
+      ALERT_RELAY_SMTP_USERNAME_KV: "secret/hubs/asyla/smtp-relay-username#value"
+      ALERT_RELAY_SMTP_PASSWORD_KV: "secret/hubs/asyla/smtp-relay-password#value"
+      ALERT_RELAY_WATCHDOG_PING_KV: "secret/hubs/asyla/observability-watchdog-ping-url#value"
+      ALERT_RELAY_DELIVERY_PING_KV: "secret/hubs/asyla/observability-delivery-ping-url#value"
       GITEA_URL: ${GITEA_URL:?}
       GITEA_ALERT_REPO: ${GITEA_ALERT_REPO:?}
       ALERT_REPOS: ${ALERT_REPOS:-}
+      LOKI_QUERY_URL: ""
+      CHAT_API_URL: ""
+      # Critical alerts by email: the recipient; the sender defaults to the SMTP username.
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:?}
+      ALERT_EMAIL_SMARTHOST: "smtp.gmail.com:587"
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:9101/healthz >/dev/null || exit 1"]
       interval: 30s
@@ -160,6 +185,8 @@ services:
       - observability-net
 
   # Long-term capacity and trend data; size retention only (24 GiB, sized for this 64 GiB disk).
+  # Its baked-in jobs include asyla's Home Assistant (through scrape-proxy:9119, no token file)
+  # and emporia-collector's own (emporia-collector:9108).
   prometheus-trends:
     image: gitea.asyla.org/theorg/observability-prometheus-trends:${OBSERVABILITY_TAG:?}
     container_name: prometheus-trends-1
@@ -169,18 +196,70 @@ services:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
       - --storage.tsdb.retention.size=${TRENDS_RETENTION_SIZE:-24GB}
+      # emporia-collector writes here. The receiver answers on the same port as queries, so
+      # anything that reaches 9107 can write: trend data only.
       - --web.enable-remote-write-receiver
     volumes:
       - prometheus-trends-data:/prometheus
-      # Two baked-in jobs off (header): the Home Assistant job and emporia-collector's own.
-      - ./trends-scrape-off.yml:/etc/prometheus/scrape/asyla-home-assistant.yml:ro
-      - ./trends-scrape-off.yml:/etc/prometheus/scrape/emporia.yml:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:9090/-/healthy"]
       interval: 15s
       timeout: 5s
       retries: 5
+      start_period: 10s
+    networks:
+      - observability-net
+
+  # Emporia Vue minute data into prometheus-trends by remote write, backfilling what Emporia still
+  # holds (emporia-collector/collector.py). Its own /metrics (9108) is not published. The Emporia
+  # login is read from OpenBao in-process: *_KV is a plain path, the field EMPORIA_KV_FIELD
+  # (default value). With no token at all it exits, so it starts only with its token.
+  emporia-collector:
+    image: gitea.asyla.org/theorg/observability-emporia-collector:${OBSERVABILITY_TAG:?}
+    container_name: emporia-collector-1
+    depends_on:
+      prometheus-trends:
+        condition: service_healthy
+    environment:
+      TRENDS_URL: http://prometheus-trends:9090
+      OPENBAO_ADDR: ${OPENBAO_ADDR:?}
+      OPENBAO_WRAPPED_TOKEN: ${EMPORIA_OPENBAO_WRAPPED_TOKEN:-}
+      EMPORIA_USERNAME_KV: secret/hubs/asyla/emporia-username
+      EMPORIA_PASSWORD_KV: secret/hubs/asyla/emporia-password
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9108/metrics', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - observability-net
+
+  # The trends Prometheus scrapes Home Assistant through this (/scrape/home-assistant), so no token
+  # is in a file (scrape-proxy/proxy.py). It reads the token from OpenBao in-process:
+  # HOME_ASSISTANT_TOKEN_KV is a plain path, the field HOME_ASSISTANT_TOKEN_FIELD (default value).
+  # Port 9119 is not published: only observability-net reaches it.
+  scrape-proxy:
+    image: gitea.asyla.org/theorg/observability-scrape-proxy:${OBSERVABILITY_TAG:?}
+    container_name: scrape-proxy-1
+    environment:
+      OPENBAO_WRAPPED_TOKEN: ${SCRAPE_PROXY_OPENBAO_WRAPPED_TOKEN:-}
+      OPENBAO_ADDR: ${OPENBAO_ADDR:?}
+      HOME_ASSISTANT_URL: ${HOME_ASSISTANT_URL:?}
+      HOME_ASSISTANT_TOKEN_KV: secret/hubs/asyla/home-assistant-prometheus-token
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9119/healthz', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
       start_period: 10s
     networks:
       - observability-net
