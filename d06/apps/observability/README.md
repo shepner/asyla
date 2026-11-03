@@ -3,19 +3,22 @@
 theOrg's observability stack: Loki, Prometheus, the trends Prometheus, Alertmanager,
 alert-relay, emporia-collector, scrape-proxy, the pushgateway, Vector, docker-state-exporter and
 blackbox-exporter, without theOrg's loki-gateway (On, off, below). asyla deploys it here from
-theOrg observability `DEPLOY.md` at main `f7579118fdac5d90101a5ec6698200ae2c9d836f` (#327; design
-4 since #311), using theOrg's published images of that sha. They were not read from the registry
-for f757911 when this pin was written: `deploy_role.py`'s `images` step pulls them on d06 and
-stops, with nothing minted or started, when one is missing.
+theOrg observability `DEPLOY.md`, last read at main `f7579118fdac5d90101a5ec6698200ae2c9d836f`
+(#327; design 4 since #311). The images follow theOrg's `latest` (operator 2026-11-03: "keep
+'latest' no matter what. Anything running older images will need to update"); the revision is read
+from the images' provenance at deploy: `deploy_role.py` pulls every image on d06, reads the theOrg
+commit each was built from out of the provenance attestation the registry holds for the digest d06
+pulled, and stops, with nothing minted or started, when one is missing, names no theOrg commit, or
+the images disagree. It prints that revision and passes it to `verify`.
 
 - `compose.yml`: theOrg's `docker-compose.yml` with `compose.docker-socket.yml` and
   `compose.blackbox.yml` folded in (the Docker-socket and blackbox pieces are on). `MONITOR_THEORG`
   is off: credential-probe, the Ollama log and the other stacks' jobs and rules are theOrg's, not
   here. Project, container, volume and network names are theOrg's. No build sections.
 - `observability.sh`: `up`, `down`, `restart`, `verify`, `update`, `pull`, `images`, `logs`,
-  `status`. It pins the tag, sets the settings, creates the data directories and keeps the start
-  order. A replica (a host with `[replica] of = "d06"`) runs only the services with nothing to reach
-  off the host: no alert-relay, emporia-collector, scrape-proxy or Vector.
+  `status`, `digests`. It names the tag (`latest`), sets the settings, creates the data directories
+  and keeps the start order. A replica (a host with `[replica] of = "d06"`) runs only the services
+  with nothing to reach off the host: no alert-relay, emporia-collector, scrape-proxy or Vector.
 - `deploy_role.py`: the deploy (below): pulls, mints the three wrapped tokens, starts the stack.
 - `docker-credential-observability-env`: the credential helper `observability.sh` points Docker at
   for the pulls (below).
@@ -48,10 +51,10 @@ environment variables that the workstation sends at use over SSH stdin (build_ho
   helper answers Docker from it under a throwaway `DOCKER_CONFIG`; nothing is stored.
 - `ALERT_RELAY_OPENBAO_WRAPPED_TOKEN`, `EMPORIA_OPENBAO_WRAPPED_TOKEN`,
   `SCRAPE_PROXY_OPENBAO_WRAPPED_TOKEN` (`start_env_optional` in `d06/host.toml`): each a
-  response-wrapped, single-use token that `deploy_role.py` mints from the `observability-d06`
-  token role (theOrg `scripts/vault_identity.py` at the pinned tag). The component unwraps it once
-  at start and holds the real token in memory, so what Docker keeps in the container's config is
-  a spent wrapping token. A wrapping token lapses 300 s after it is minted.
+  response-wrapped, single-use token that `deploy_role.py` mints from the `observability-d06` token
+  role (theOrg `scripts/vault_identity.py` at the images' revision). The component unwraps it once
+  at start and holds the real token in memory, so what Docker keeps in the container's config is a
+  spent wrapping token. A wrapping token lapses 300 s after it is minted.
 
 Each component reads only the records its role policy grants (secrets-vault
 `policies/hubs.toml`, `[token_roles.observability-d06.components]`), all under
@@ -77,10 +80,13 @@ From the workstation, on the LAN:
 cd ~/local/asyla && python3 core/tools/credentials.py exec THEORG_REGISTRY_PULL_TOKEN -- python3 projects/asyla-hosts/d06/apps/observability/deploy_role.py
 ```
 
-It pulls first (`observability.sh images`), then mints the three wrapped tokens and starts the
-stack (`build_host.py d06 build --only apps --app observability --apply`, which runs
-`observability.sh up`), then runs `observability.sh verify` on d06 (`--only apps` skips build_host's
-verify phase) and exits 1 when it fails; `deploy_role.py --dry-run` prints the plan and contacts
+It pulls first (`observability.sh images`: every image, so a newer `latest` replaces the one d06
+has), then reads the theOrg revision R the images were built from (`observability.sh digests`, then
+the registry's provenance attestation of each digest; the images must agree, and R must be on the
+theOrg clone's `origin/main`), then mints the three wrapped tokens with theOrg's tool at R and starts
+the stack (`build_host.py d06 build --only apps --app observability --apply`, which runs
+`observability.sh up`), then runs `OBSERVABILITY_REVISION=R observability.sh verify` on d06
+(`--only apps` skips build_host's verify phase) and exits 1 when it fails; `deploy_role.py --dry-run` prints the plan and contacts
 nothing (its header has the steps). On a failure it says which step failed: the mint (nothing
 started) or the start (the stack may be partly recreated: run `observability.sh status` and
 `verify` on d06). If d06's installed `observability.sh` lists images of another tag, d06's
@@ -177,10 +183,13 @@ Off here and nowhere else:
 
 ## Upgrade
 
-Change `OBSERVABILITY_TAG` in `observability.sh` to a theOrg `main` sha whose images are published,
-check `compose.yml` against theOrg's `docker-compose.yml` at that sha, commit, then deploy (above):
-the tokened services move to the new images only through a deploy. An upgrade also checks what
-`check_tokened` and `check_watchdog` read against theOrg at the new sha: the relay's metric names
+The stack follows theOrg's `latest`: a deploy (above) moves it to the newest images, and the
+tokened services move only through a deploy. The deploy prints the revision R it read from the
+images' provenance (`theOrg observability revision R`), and `verify` prints it again. A pin is a
+commit here that sets `OBSERVABILITY_TAG`'s default in `observability.sh` to a theOrg `main` sha
+whose images are published; the deploy then stops unless the images' provenance names that sha.
+After a deploy to a new R, check `compose.yml` against theOrg's `docker-compose.yml` at R, and
+what `check_tokened` and `check_watchdog` read against theOrg at R: the relay's metric names
 (`alert-relay/relay.py`) and the watchdog piece's receiver name and route
 (`alertmanager-pieces/watchdog/`). `verify` checks the services
 are healthy, Prometheus is healthy with one Alertmanager, `docker_container_running` on `9099`,
@@ -221,20 +230,21 @@ reads once. The relay's `error` count alone is a failure.
 The self-probes and the trends readings count only samples taken after the containers involved
 started: `timestamp(...) > S` in the query, S the later `.State.StartedAt` of the service and the
 Prometheus that holds the samples (for the self-probes, `prometheus-1` and `blackbox-exporter-1`).
-A tag change recreates both Prometheus, and a Prometheus that stops writes no staleness markers,
+A new image recreates both Prometheus, and a Prometheus that stops writes no staleness markers,
 so until its first scrape after the restart an instant query can return a sample from before it.
 
 The targets check reads the operations Prometheus's active targets (`127.0.0.1:9090/api/v1/targets`)
 and needs each to read health `up` at a scrape (`lastScrape`) after S, S the later
 `.State.StartedAt` of `prometheus-1` and the job's service, and each job of `STACK_JOBS`
-(`observability.sh`) to have a target. `STACK_JOBS` lists the jobs the prometheus image of
-`OBSERVABILITY_TAG` runs here: theOrg's `prometheus/scrape-stack/*.yml` (alert-relay, alertmanager,
+(`observability.sh`) to have a target. `STACK_JOBS` lists the jobs the prometheus image of the
+running revision (R) runs here: theOrg's `prometheus/scrape-stack/*.yml` (alert-relay, alertmanager,
 loki, prometheus-trends, pushgateway, scrape-proxy, vector), the two optional pieces'
 (`scrape-optional/blackbox-exporter.yml`: also blackbox-selftest; `docker-state-exporter.yml`) and
 `base_config.py`'s `prometheus`. A job whose service is not expected here (a replica's, or a tokened
 service never deployed) is left out. This is theOrg's deploy step "Verify this stack's own scrape
 targets are up" (#327), which reads the jobs from its checkout; d06 has only the images, so an
-upgrade checks `STACK_JOBS` against theOrg's `prometheus/` at the new sha. A job theOrg adds there
+deploy to a new R checks `STACK_JOBS` against theOrg's `prometheus/` at R (a "no target" failure
+says so). A job theOrg adds there
 and `STACK_JOBS` misses is still checked (S from `prometheus-1` alone); a job it drops fails as "no
 target". The trends Prometheus's targets are not checked (Known limits: three of its jobs read 0
 from d06).

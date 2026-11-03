@@ -1,8 +1,9 @@
 # theOrg's observability stack on d06: Loki, Prometheus, the trends Prometheus, Alertmanager,
 # alert-relay, emporia-collector, scrape-proxy, the pushgateway, Vector, docker-state-exporter and
 # blackbox-exporter. Written by asyla from theOrg observability docker-compose.yml,
-# compose.docker-socket.yml and compose.blackbox.yml at main
+# compose.docker-socket.yml and compose.blackbox.yml, last read at main
 # f7579118fdac5d90101a5ec6698200ae2c9d836f (#327; design 4 since #311; DEPLOY.md at that sha).
+# The images follow theOrg's `latest`; the revision is read from the images' provenance at deploy.
 # Project, container names, volume names and the network are theOrg's. asyla's choices:
 # - the Docker-socket and blackbox pieces are folded in; credential-probe, the Ollama log and
 #   MONITOR_THEORG (theOrg's other stacks' jobs and rules) are not here;
@@ -10,7 +11,7 @@
 #   loki-gateway identity in the observability-d06 token role and a step-ca provisioner and name
 #   for d06, none of which exist yet (README.md, On, off). observability.sh's `up` removes the
 #   container an earlier deploy left (--remove-orphans);
-# - no build sections: theOrg's published images of OBSERVABILITY_TAG (observability.sh pins it);
+# - no build sections: theOrg's published images of OBSERVABILITY_TAG (observability.sh: latest);
 # - no port on every address: every port on 127.0.0.1 only (Alertmanager on 9093, the
 #   pushgateway on 9091, docker-state-exporter on 9099);
 # - Loki, both Prometheus and Alertmanager keep their data on d06's local data disk, as named

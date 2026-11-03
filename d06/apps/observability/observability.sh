@@ -2,8 +2,9 @@
 # theOrg's observability stack on d06 (Loki without its gateway, Prometheus, the trends Prometheus,
 # Alertmanager, alert-relay, emporia-collector, scrape-proxy, Vector and the probes). Usage:
 # observability.sh [switch ...], e.g. up|down|restart|verify|update|pull|images|logs|status;
-# switches can be combined. Loads ~/scripts/docker/common.env. From theOrg observability DEPLOY.md
-# at main f7579118fdac5d90101a5ec6698200ae2c9d836f (README.md here says what asyla changed).
+# switches can be combined. Loads ~/scripts/docker/common.env. From theOrg observability DEPLOY.md,
+# last read at main f7579118fdac5d90101a5ec6698200ae2c9d836f (README.md here says what asyla changed).
+# The images follow theOrg's `latest`; the deploy records the revision it runs (below).
 #
 # No secret is in any file or volume, here or on the host, on disk or in memory (asyla SEC-5 and
 # SEC-7; the operator, 2026-11-03: secrets live only in OpenBao). Nothing here writes a value
@@ -40,10 +41,15 @@ fi
 DOCKER_DL="${DOCKER_DL:-/mnt/docker}"
 OBSERVABILITY_ROOT="$DOCKER_DL/Observability"
 
-# The theOrg observability commit whose images run here: one sha for every image (DEPLOY.md,
-# Images). f757911 is theOrg main (#327: Prometheus scrapes loki:3100 over plain HTTP; design 4
-# since #311). Change it here, commit, then deploy (README.md, Deploy).
-OBSERVABILITY_TAG="${OBSERVABILITY_TAG_OVERRIDE:-f7579118fdac5d90101a5ec6698200ae2c9d836f}"
+# The theOrg observability images run here: `latest` of each, which theOrg's publish-images moves
+# on every push to main and on its weekly rebuild (operator 2026-11-03: "keep 'latest' no matter
+# what. Anything running older images will need to update"). The deploy (deploy_role.py) pulls
+# every image first (`images`), then reads the commit they were built from out of their provenance
+# in the registry (`digests`): every image must name the same one, revision R, recorded in the
+# deploy's output and given to verify as OBSERVABILITY_REVISION. A pin by hand on this host:
+# OBSERVABILITY_TAG_OVERRIDE=<sha>; a pin through the deploy: a commit that sets the default below
+# to a theOrg sha whose images are published (README.md, Deploy).
+OBSERVABILITY_TAG="${OBSERVABILITY_TAG_OVERRIDE:-latest}"
 REGISTRY="gitea.asyla.org"
 # Already pulled for the stack, here and on a replica; also the throwaway container that sets the
 # data directories' owners: theOrg's Dockerfile.loki ends USER root on grafana/loki (Alpine: sh,
@@ -90,12 +96,14 @@ HOME_ASSISTANT_URL="https://homeassistant.asyla.org"
 # blackbox-exporter.yml), each of which must read 1 (DEPLOY.md: deploy.yml requires all three).
 SELF_PROBES_WANT="http_2xx=1 icmp=1 tcp_connect=1"
 
-# The operations Prometheus's own jobs at OBSERVABILITY_TAG, as job:service: theOrg
+# The operations Prometheus's own jobs at the running revision (OBSERVABILITY_REVISION; last read at
+# theOrg f757911, unchanged at 7947763), as job:service: theOrg
 # prometheus/scrape-stack/*.yml (always read), the two optional pieces compose.yml switches on
 # (scrape-optional/blackbox-exporter.yml, docker-state-exporter.yml) and base_config.py's own job.
 # The service is the one a sample must follow the start of. theOrg's deploy.yml step "Verify this
 # stack's own scrape targets are up" (#327) checks the scrape-stack jobs from its checkout's files;
-# d06 has only the images, so they are listed here (check_stack_targets).
+# d06 has only the images, so they are listed here (check_stack_targets). With `latest` theOrg may
+# add, drop or rename a job: a job that reads "no target" fails verify until this list follows.
 STACK_JOBS="prometheus:prometheus alert-relay:alert-relay alertmanager:alertmanager loki:loki
   prometheus-trends:prometheus-trends pushgateway:pushgateway scrape-proxy:scrape-proxy vector:vector
   blackbox-exporter:blackbox-exporter blackbox-selftest:blackbox-exporter
@@ -112,7 +120,7 @@ EMPORIA_WANT='openbao_failure=0 channel_info=[1-9][0-9]*'
 # come (check_watchdog): Alertmanager keeps its last send across a restart (the notification log
 # in alertmanager-data) and sends again once repeat_interval (5m) has passed, at a group_interval
 # (1m) tick, so up to about 6 minutes after a deploy; 7.5 with Prometheus's first evaluation (15 s)
-# and some margin. theOrg alertmanager-pieces/watchdog/route.yml at OBSERVABILITY_TAG.
+# and some margin. theOrg alertmanager-pieces/watchdog/route.yml at the running revision.
 WATCHDOG_WAIT_S="${OBSERVABILITY_WATCHDOG_WAIT_S:-450}"
 
 export DOCKER_DL OBSERVABILITY_ROOT OBSERVABILITY_TAG PROMETHEUS_EXTERNAL_URL ALERTMANAGER_EXTERNAL_URL \
@@ -236,9 +244,32 @@ images_ready() {
   return 1
 }
 
+# Pull every image the stack names, so a newer `latest` replaces the one here (never kept because it
+# is present), then list them: deploy_role.py's pull before it mints the wrapped tokens, and
+# build_host.py's replica guard.
 do_images() {
-  pull_missing >&2 || return
+  do_pull >&2 || return
   run_compose config --images
+}
+
+# Each image the stack names with the registry digest(s) this host pulled it by, "REF DIGEST ...",
+# "REF -" for none (not pulled). deploy_role.py reads the theOrg commit an image was built from out
+# of the provenance the registry holds for that digest. Local only: no pull, no token.
+do_digests() {
+  local img imgs repo last dg d all
+  imgs="$(run_compose config --images)" \
+    || { echo "[ERROR] docker compose config failed" >&2; return 1; }
+  while read -r img; do
+    [ -n "$img" ] || continue
+    last="${img##*/}"
+    if [[ "$last" == *:* ]]; then repo="${img%:*}"; else repo="$img"; fi
+    all="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$img" 2>/dev/null)" || all=""
+    dg=""
+    while read -r d; do
+      if [ "${d%@*}" = "$repo" ] && [[ " $dg " != *" ${d#*@} "* ]]; then dg="$dg ${d#*@}"; fi
+    done <<< "$all"
+    echo "$img ${dg# }"
+  done <<< "$imgs" | sed 's/ $/ -/'
 }
 
 do_update() {
@@ -484,6 +515,7 @@ check_stack_targets() {
     sleep 5
   done
   echo "[ERROR] prometheus targets: ${got:-no reading (a start time, or 127.0.0.1:9090/api/v1/targets)}" >&2
+  echo "[ERROR] a job that reads \"no target\": compare STACK_JOBS in $0 with theOrg observability prometheus/ (scrape-stack/, scrape-optional/, base_config.py) at revision ${OBSERVABILITY_REVISION:-R (not given: deploy_role.py prints it)}" >&2
   return 1
 }
 
@@ -676,6 +708,11 @@ check_vector_logs() {
 # check.
 do_verify() {
   local rc=0 svc state n body off
+  if [[ "${OBSERVABILITY_REVISION:-}" =~ ^[0-9a-f]{40}$ ]]; then
+    info "theOrg observability revision $OBSERVABILITY_REVISION (images :$OBSERVABILITY_TAG; recorded at deploy from their provenance)"
+  else
+    info "theOrg observability images :$OBSERVABILITY_TAG (revision not given: deploy_role.py reads it from their provenance and passes OBSERVABILITY_REVISION)"
+  fi
   off="$(not_deployed)"
   if [ -n "$off" ]; then warn "not deployed (no container, no wrapped token): $off"; fi
   wait_ready || true
@@ -748,6 +785,9 @@ run_cmd() {
     images)
       do_images
       ;;
+    digests)
+      do_digests
+      ;;
     up)
       do_up
       ;;
@@ -782,8 +822,10 @@ usage() {
   echo "" >&2
   echo "  update   - Pull the images for OBSERVABILITY_TAG (screen if interactive); use up/restart to start" >&2
   echo "  pull     - Pull the images now (inline)" >&2
-  echo "  images   - Pull missing images, then list the images (build_host.py's replica guard;" >&2
-  echo "             deploy_role.py's pull before it mints the wrapped tokens)" >&2
+  echo "  images   - Pull every image (a newer latest too), then list them (build_host.py's replica" >&2
+  echo "             guard; deploy_role.py's pull before it mints the wrapped tokens)" >&2
+  echo "  digests  - Each image with the registry digest it was pulled by (no pull; deploy_role.py" >&2
+  echo "             reads the theOrg revision from its provenance)" >&2
   echo "  up       - Data directories, missing images (none pulled with a wrapped token here), then" >&2
   echo "             the stack; a tokened service ($VAULT_READERS) only with its token" >&2
   echo "             (replica: $REPLICA_SERVICES)" >&2
