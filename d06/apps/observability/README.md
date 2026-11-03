@@ -1,11 +1,11 @@
 # observability (d06)
 
-theOrg's observability stack: Loki and its gateway, Prometheus, the trends Prometheus,
-Alertmanager, alert-relay, emporia-collector, scrape-proxy, the pushgateway, Vector,
-docker-state-exporter and blackbox-exporter. asyla deploys it here from theOrg observability
-`DEPLOY.md` at main `75723657f825814038bf8936e4765a5137a073a8` (#302), using theOrg's published
-images of that sha (each of the eleven theOrg images this stack names answered HTTP 200 to a
-registry manifest read, 2026-11-03).
+theOrg's observability stack: Loki, Prometheus, the trends Prometheus, Alertmanager,
+alert-relay, emporia-collector, scrape-proxy, the pushgateway, Vector, docker-state-exporter and
+blackbox-exporter, without theOrg's loki-gateway (On, off, below). asyla deploys it here from
+theOrg observability `DEPLOY.md` at main `64a2bf35c19275dadc577cdb37f9434064cf0842` (#311, design
+4), using theOrg's published images of that sha (each of the ten theOrg images this stack names
+answered HTTP 200 to a registry manifest read, 2026-11-03).
 
 - `compose.yml`: theOrg's `docker-compose.yml` with `compose.docker-socket.yml` and
   `compose.blackbox.yml` folded in (the Docker-socket and blackbox pieces are on). `MONITOR_THEORG`
@@ -25,11 +25,11 @@ registry manifest read, 2026-11-03).
   burst of 16 MB; Prometheus keeps 15d or 8GB; the trends Prometheus keeps 24GB (size only, sized
   for the 64 GiB data disk). `compose.yml` takes `PROMETHEUS_RETENTION_TIME`,
   `PROMETHEUS_RETENTION_SIZE` and `TRENDS_RETENTION_SIZE` from the environment if one is ever set.
-- Ports: the Loki gateway on `3100`, every address (callers off this host push through it); every
-  other port on `127.0.0.1` only: Prometheus `9090`, trends `9107` (container `9090`),
-  Alertmanager `9093`, pushgateway `9091`, alert-relay `9111`, Vector `9598`,
-  docker-state-exporter `9099`. Loki, alert-relay's health port, emporia-collector (`9108`),
-  scrape-proxy (`9119`) and blackbox-exporter are not published.
+- Ports: none on every address; each published port is on `127.0.0.1` only: Prometheus `9090`,
+  trends `9107` (container `9090`), Alertmanager `9093`, pushgateway `9091`, alert-relay `9111`,
+  Vector `9598`, docker-state-exporter `9099`. Loki (`3100`, plain HTTP, reached in the stack as
+  `loki:3100`), alert-relay's health port, emporia-collector (`9108`), scrape-proxy (`9119`) and
+  blackbox-exporter are not published.
 - Names (`caddy-internal-d06`, LAN only): `prometheus.asyla.org`, `alertmanager.asyla.org` and
   `prometheus-trends.asyla.org`. They are the external URLs Prometheus and Alertmanager put in
   links (`PROMETHEUS_EXTERNAL_URL`, `ALERTMANAGER_EXTERNAL_URL` in `observability.sh`). The proxy
@@ -120,7 +120,11 @@ the services can use again after a restart) is open with theOrg: it is their tok
 
 On: critical alerts by email (Alertmanager's email piece posts them to alert-relay, which sends
 them to `ALERT_EMAIL_TO` through `smtp.gmail.com:587` with the SMTP login), the trends Home
-Assistant job (through scrape-proxy) and emporia-collector.
+Assistant job (through scrape-proxy), emporia-collector, and Vector's container-log pipeline
+(`VECTOR_DOCKER_LOGS`, with the Docker socket mounted as theOrg's `compose.docker-socket.yml` does):
+this stack's own container logs to Loki over plain HTTP inside `observability-net`, and their
+`CHRONICLE_EPISODE` lines to memory-system's Vector on the Mini. At 7572365 it was off, because its
+Loki sink named `/etc/loki-ca/root_ca.crt`; at 64a2bf3 no Vector file names a CA or has a tls block.
 
 Off here and nowhere else:
 
@@ -129,17 +133,24 @@ Off here and nowhere else:
 - Delivery ping: same, record `observability-delivery-ping-url`.
 - Watchdog ping: record `observability-watchdog-ping-url`, and `ALERT_WATCHDOG_PING="on"` in
   `observability.sh` (one line; alert-relay already names the record). Then deploy.
-- alert-relay's log lines in issues, and the Loki gateway accounts: the gateway has no verifier
-  files, so it refuses every push and query (401 or 403) and answers `/ready` alone;
-  `LOKI_QUERY_URL` is empty. On with the accounts: alert-relay gets
-  `ALERT_RELAY_LOKI_KV=secret/hubs/asyla/own/loki-clients/alert-relay#password` after theOrg
-  secrets-vault#37 and theOrg's design 4 (not set yet), and `LOKI_QUERY_URL` names the gateway.
-- Loki TLS: no leaf, so Loki serves HTTP inside `observability-net` and the gateway serves HTTP.
-  On: theOrg's `secrets-loki-tls` (step-ca, the key held in memory by the process).
-- Vector's container-log pipeline (`VECTOR_DOCKER_LOGS`): at 2144f83 its Loki sink needed
-  `/etc/loki-ca/root_ca.crt` to exist even over HTTP, and Vector refused to start without it on
-  d06 (2026-11-03). On with Loki TLS. docker-state-exporter (container state, the container
-  alerts) runs.
+- The Loki gateway, so any log push or query from off this host (theOrg lead's option A for d06,
+  2026-11-03). theOrg's 64a2bf3 gateway reads its accounts from OpenBao with its own wrapped token
+  and signs its TLS leaf from step-ca's `loki` provisioner; d06 has neither a loki-gateway
+  identity in the `observability-d06` token role nor a provisioner or step-ca name of its own, so
+  `compose.yml` leaves the service out and `deploy_role.py` mints no token for it. `up` removes
+  the container an earlier deploy left (`loki-gateway-1`) with `--remove-orphans`. On: theOrg's
+  option B: a d06 loki-gateway component and its provisioner-password record in secrets-vault
+  (under `hubs/asyla/`), a `loki-d06` provisioner in certificate-management, and a LAN name for
+  step-ca; then the service in `compose.yml` with d06's settings and its line in `deploy_role.py`.
+  The volumes `loki-tls` and `loki-gateway-auth` on d06, from the first deploy, are unused now;
+  deleting them is the operator's decision.
+- alert-relay's log lines in issues: `LOKI_QUERY_URL` is empty and `ALERT_RELAY_LOKI_KV` is not
+  set. Loki in the stack needs no account, but the relay fetches lines only when `LOKI_QUERY_URL`
+  and its query password are both set (theOrg `alert-relay/relay.py` `log_section` and its start
+  line, "log lines: off"), so `http://loki:3100` alone changes nothing. On: the password record
+  (secrets-vault#37, `secret/hubs/asyla/own/loki-clients/alert-relay#password`, readable after its
+  vault-auth apply) in `ALERT_RELAY_LOKI_KV`, and `LOKI_QUERY_URL` set (the gateway under option
+  B).
 - chat-api: `CHAT_API_URL` is empty; theOrg's, not asyla's.
 
 ## Upgrade
@@ -148,14 +159,16 @@ Change `OBSERVABILITY_TAG` in `observability.sh` to a theOrg `main` sha whose im
 check `compose.yml` against theOrg's `docker-compose.yml` at that sha, commit, then deploy (above):
 the tokened services move to the new images only through a deploy. `verify` checks the services
 are healthy, Prometheus is healthy with one Alertmanager, `docker_container_running` on `9099`,
-the trends retention is a size, the gateway's `/ready` over HTTP and a 401 or 403 on an
-unauthenticated push, and the three blackbox self-probes (it waits up to `VERIFY_WAIT_S`). For
-each tokened service whose container exists, it also checks that the service holds its secrets,
-waiting once more up to `VERIFY_WAIT_S` for the first scrape: the trends Prometheus (`9107`) reads
-`up{job="asyla-home-assistant"}` 1 (scrape-proxy) and `up{job="emporia"}` 1 (emporia-collector),
-the job names of theOrg `trends/scrape/asyla-home-assistant.yml` and `trends/scrape/emporia.yml`;
-alert-relay's own metrics (`9111`) read `alert_relay_secret_present{secret="smtp_username"}` and
-`{secret="smtp_password"}` 1 (theOrg `alert-relay/relay.py`).
+the trends retention is a size, the three blackbox self-probes, and (not on a replica) that
+Vector's container logs reach Loki: lines labelled `forwarder="vector-observability"` in the last
+10 minutes, read from inside the network (`vector-1`'s wget to `loki:3100`). Each waits up to
+`VERIFY_WAIT_S`. For each tokened service whose container exists, it also checks that the service
+holds its secrets, waiting once more up to `VERIFY_WAIT_S` for the first scrape: the trends
+Prometheus (`9107`) reads `up{job="asyla-home-assistant"}` 1 (scrape-proxy) and `up{job="emporia"}`
+1 (emporia-collector), the job names of theOrg `trends/scrape/asyla-home-assistant.yml` and
+`trends/scrape/emporia.yml`; alert-relay's own metrics (`9111`) read
+`alert_relay_secret_present{secret="smtp_username"}` and `{secret="smtp_password"}` 1 (theOrg
+`alert-relay/relay.py`).
 
 ## Known limits
 
@@ -171,4 +184,4 @@ alert-relay's own metrics (`9111`) read `alert_relay_secret_present{secret="smtp
   subnet; d03 and d07 are not changed here.
 - d06's `update_all.sh` reports this app as FAIL. It runs `backup`, which this app does not have,
   and `update`, which needs the pull token from the workstation. This matches ticketing's `update`.
-- With the gateway's accounts off, no caller off this host can push logs or query Loki.
+- With no gateway, no caller off this host can push logs to or query Loki (option B, above).

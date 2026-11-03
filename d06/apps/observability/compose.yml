@@ -1,14 +1,18 @@
-# theOrg's observability stack on d06: Loki and its gateway, Prometheus, the trends Prometheus,
-# Alertmanager, alert-relay, emporia-collector, scrape-proxy, the pushgateway, Vector,
-# docker-state-exporter and blackbox-exporter. Written by asyla from theOrg observability
-# docker-compose.yml, compose.docker-socket.yml and compose.blackbox.yml at main
-# 75723657f825814038bf8936e4765a5137a073a8 (DEPLOY.md at that sha).
+# theOrg's observability stack on d06: Loki, Prometheus, the trends Prometheus, Alertmanager,
+# alert-relay, emporia-collector, scrape-proxy, the pushgateway, Vector, docker-state-exporter and
+# blackbox-exporter. Written by asyla from theOrg observability docker-compose.yml,
+# compose.docker-socket.yml and compose.blackbox.yml at main
+# 64a2bf35c19275dadc577cdb37f9434064cf0842 (#311, design 4; DEPLOY.md at that sha).
 # Project, container names, volume names and the network are theOrg's. asyla's choices:
 # - the Docker-socket and blackbox pieces are folded in; credential-probe, the Ollama log and
 #   MONITOR_THEORG (theOrg's other stacks' jobs and rules) are not here;
+# - no loki-gateway (theOrg lead's option A for d06, 2026-11-03): its 64a2bf3 service needs a
+#   loki-gateway identity in the observability-d06 token role and a step-ca provisioner and name
+#   for d06, none of which exist yet (README.md, On, off). observability.sh's `up` removes the
+#   container an earlier deploy left (--remove-orphans);
 # - no build sections: theOrg's published images of OBSERVABILITY_TAG (observability.sh pins it);
-# - only the gateway (3100) is published on every address; every other port on 127.0.0.1 only
-#   (Alertmanager on 9093, the pushgateway on 9091, docker-state-exporter on 9099);
+# - no port on every address: every port on 127.0.0.1 only (Alertmanager on 9093, the
+#   pushgateway on 9091, docker-state-exporter on 9099);
 # - Loki, both Prometheus and Alertmanager keep their data on d06's local data disk, as named
 #   volumes bound to OBSERVABILITY_ROOT (theOrg decision asyla-network-monitoring §8: never NFS);
 # - no secret is in any file, volume or container environment (asyla SEC-5 and SEC-7; the
@@ -21,15 +25,15 @@
 #   token (observability.sh); after a reboot or a Docker restart it loops until the next deploy.
 #
 # On: the email receiver (Alertmanager's email piece, sent by alert-relay with the SMTP login),
-# the trends Home Assistant job (through scrape-proxy) and emporia-collector.
+# the trends Home Assistant job (through scrape-proxy), emporia-collector, and Vector's
+# container-log pipeline (VECTOR_DOCKER_LOGS: this stack's own logs to Loki, plain HTTP inside
+# observability-net).
 # Off (README.md says what turns each on). Each is off here and nowhere else:
 #   Watchdog ping         ALERT_WATCHDOG_PING is empty (observability.sh): no record yet
 #   delivery ping, issues alert-relay names the records; absent, it logs the feature off at start
-#   alert-relay log lines LOKI_QUERY_URL is empty, and the Loki override is not set
-#   Loki TLS              no leaf: Loki serves HTTP inside observability-net, the gateway HTTP
-#   Loki gateway accounts no verifier files: the gateway fails closed, refusing every push and
-#                         query (401 or 403), and serves /ready alone
-#   Vector container logs VECTOR_DOCKER_LOGS is false (the vector service says why)
+#   alert-relay log lines LOKI_QUERY_URL is empty: the relay needs a query password too
+#                         (relay.py), and ALERT_RELAY_LOKI_KV is not set
+#   Loki gateway          not in this file: no caller off this host pushes to or queries Loki
 #
 # Run with observability.sh: it sets OBSERVABILITY_TAG, OBSERVABILITY_ROOT and the settings below
 # and keeps the start order.
@@ -78,7 +82,10 @@ services:
   # (alert-relay/relay.py): ALERT_RELAY_<SECRET>_KV is PATH#FIELD. A record it cannot read switches
   # that feature off, logged at start (the category, never a value): the forge token and the ping
   # URLs are not stored yet. The Loki and chat-api records keep theOrg's defaults, which this
-  # token cannot read; both features are off here (LOKI_QUERY_URL and CHAT_API_URL empty).
+  # token cannot read; both features are off here (LOKI_QUERY_URL and CHAT_API_URL empty). Loki
+  # itself needs no account in the stack, but the relay fetches log lines only with LOKI_QUERY_URL
+  # and its query password both set (relay.py log_section and its start line), so loki:3100 here
+  # alone would change nothing.
   alert-relay:
     image: gitea.asyla.org/theorg/observability-alert-relay:${OBSERVABILITY_TAG:?}
     container_name: alert-relay-1
@@ -113,8 +120,8 @@ services:
   loki:
     image: gitea.asyla.org/theorg/observability-loki:${OBSERVABILITY_TAG:?}
     container_name: loki-1
-    # Not published: callers off the stack reach Loki through loki-gateway. HTTP: no leaf is
-    # mounted, so loki-entrypoint.sh picks the HTTP configuration.
+    # Not published, and plain HTTP (theOrg's only configuration at 64a2bf3): Vector pushes and
+    # Prometheus scrapes loki:3100 on observability-net. Nothing off this host reaches it.
     volumes:
       - loki-data:/loki
     # Unset here, so the configs' own defaults apply (744h, 0.05 MB/s, burst 16; DEPLOY.md).
@@ -124,7 +131,7 @@ services:
       - LOKI_INGESTION_BURST_SIZE_MB
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:3100/ready >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:3100/ready >/dev/null 2>&1 || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -132,26 +139,8 @@ services:
     networks:
       - observability-net
 
-  # Loki's authenticating reverse proxy. With no leaf it serves HTTP (its entrypoint.sh); with no
-  # verifier files it refuses every push and query (locations.conf: a caller without an account
-  # gets 401 or 403) and answers /ready alone.
-  loki-gateway:
-    image: gitea.asyla.org/theorg/observability-loki-gateway:${OBSERVABILITY_TAG:?}
-    container_name: loki-gateway-1
-    ports:
-      - "3100:3100"
-    depends_on:
-      loki:
-        condition: service_healthy
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:3100/ready >/dev/null || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    networks:
-      - observability-net
+  # loki-gateway is theOrg's and not here (option A; the header and README.md say why). Option B
+  # adds it back with d06's own settings: identity, provisioner, step-ca address and KV paths.
 
   prometheus:
     image: gitea.asyla.org/theorg/observability-prometheus:${OBSERVABILITY_TAG:?}
@@ -264,9 +253,10 @@ services:
     networks:
       - observability-net
 
-  # With the Docker socket (folded in): this stack's own logs to Loki over HTTP inside
-  # observability-net (no CA is mounted, so vector-entrypoint.sh picks http), and its
-  # CHRONICLE_EPISODE lines to memory-system's Vector (CHRONICLE_VECTOR_ADDRESS).
+  # With the Docker socket (folded in from compose.docker-socket.yml): this stack's own logs to Loki
+  # over plain HTTP inside observability-net (theOrg vector-docker-logs.toml at 64a2bf3 has no tls
+  # block and names no CA file), and its CHRONICLE_EPISODE lines to memory-system's Vector
+  # (CHRONICLE_VECTOR_ADDRESS). observability.sh verify reads the lines back from loki:3100.
   vector:
     image: gitea.asyla.org/theorg/observability-vector:${OBSERVABILITY_TAG:?}
     container_name: vector-1
@@ -280,17 +270,14 @@ services:
     user: root
     volumes:
       - vector-disk-buffer:/var/lib/vector
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       VECTOR_LOG: info
       LOKI_ADDRESS: loki:3100
       CHRONICLE_VECTOR_ADDRESS: ${CHRONICLE_VECTOR_ADDRESS:?}
-      # Off on d06 for now: at 2144f83 vector-docker-logs.toml names /etc/loki-ca/root_ca.crt in its
-      # Loki sink's tls block, and Vector 0.40 refuses to start when that file is absent (measured on
-      # d06 2026-11-03: "Could not open certificate file"), though vector.toml's header says the sink
-      # falls back to HTTP. d06 runs Loki on HTTP with no root until theOrg's secrets-loki-tls
-      # change, so the pipeline (this stack's own logs to Loki) waits for that. docker-state-exporter
-      # (container state metrics and alerts) is unaffected.
-      VECTOR_DOCKER_LOGS: "false"
+      # vector-entrypoint.sh loads vector-docker-logs.toml when this is true. On at 64a2bf3; it was
+      # off on d06 at 7572365 (that sink named /etc/loki-ca/root_ca.crt; Vector refused to start).
+      VECTOR_DOCKER_LOGS: "true"
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:9598/metrics >/dev/null || exit 1"]
       interval: 30s

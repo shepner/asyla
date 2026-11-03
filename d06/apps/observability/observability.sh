@@ -1,9 +1,9 @@
 #!/bin/bash
-# theOrg's observability stack on d06 (Loki and its gateway, Prometheus, the trends Prometheus,
+# theOrg's observability stack on d06 (Loki without its gateway, Prometheus, the trends Prometheus,
 # Alertmanager, alert-relay, emporia-collector, scrape-proxy, Vector and the probes). Usage:
 # observability.sh [switch ...], e.g. up|down|restart|verify|update|pull|images|logs|status;
 # switches can be combined. Loads ~/scripts/docker/common.env. From theOrg observability DEPLOY.md
-# at main 75723657f825814038bf8936e4765a5137a073a8 (README.md here says what asyla changed).
+# at main 64a2bf35c19275dadc577cdb37f9434064cf0842 (README.md here says what asyla changed).
 #
 # No secret is in any file or volume, here or on the host, on disk or in memory (asyla SEC-5 and
 # SEC-7; the operator, 2026-11-03: secrets live only in OpenBao). Nothing here writes a value
@@ -41,18 +41,22 @@ DOCKER_DL="${DOCKER_DL:-/mnt/docker}"
 OBSERVABILITY_ROOT="$DOCKER_DL/Observability"
 
 # The theOrg observability commit whose images run here: one sha for every image (DEPLOY.md,
-# Images). 7572365 is theOrg main (#302). Change it here, commit, then deploy (README.md, Deploy).
-OBSERVABILITY_TAG="${OBSERVABILITY_TAG_OVERRIDE:-75723657f825814038bf8936e4765a5137a073a8}"
+# Images). 64a2bf3 is theOrg main (#311, design 4). Change it here, commit, then deploy (README.md,
+# Deploy).
+OBSERVABILITY_TAG="${OBSERVABILITY_TAG_OVERRIDE:-64a2bf35c19275dadc577cdb37f9434064cf0842}"
 REGISTRY="gitea.asyla.org"
-# Already pulled for the stack; also the throwaway container that sets the data directories' owners.
-GATEWAY_IMAGE="$REGISTRY/theorg/observability-loki-gateway:$OBSERVABILITY_TAG"
+# Already pulled for the stack, here and on a replica; also the throwaway container that sets the
+# data directories' owners: theOrg's Dockerfile.loki ends USER root on grafana/loki (Alpine: sh,
+# chown). Not the gateway's image any more: it is not in the stack, and at 64a2bf3 it is FROM
+# scratch, with no shell.
+LOKI_IMAGE="$REGISTRY/theorg/observability-loki:$OBSERVABILITY_TAG"
 
 # The host this folder belongs to. On any other host (test01 as a replica of d06) the stack runs
 # the services below only: no alert-relay (it files issues on the forge), no emporia-collector or
 # scrape-proxy (they read production's OpenBao records) and no Vector (its chronicle episodes would
 # reach production's memory-system).
 SERVING_HOST="d06"
-REPLICA_SERVICES="loki loki-gateway prometheus prometheus-trends alertmanager pushgateway docker-state-exporter blackbox-exporter"
+REPLICA_SERVICES="loki prometheus prometheus-trends alertmanager pushgateway docker-state-exporter blackbox-exporter"
 
 # The services that read OpenBao in-process, each through the single-use wrapped token in the
 # variable token_var names. Each starts only when its token is here: started without one,
@@ -228,13 +232,21 @@ ensure_dirs() {
 # Loki runs as root in theOrg's image (Dockerfile.loki ends USER root) and grafana/loki's own user
 # is 10001, which suits both. Top directories only: what is inside is the service's own.
 own_dirs() {
-  docker run --rm --network none --pull never -v "$OBSERVABILITY_ROOT:/data" --entrypoint sh "$GATEWAY_IMAGE" -c \
+  docker run --rm --network none --pull never -v "$OBSERVABILITY_ROOT:/data" --entrypoint sh "$LOKI_IMAGE" -c \
     'chown 10001:10001 /data/loki-data && chown 65534:65534 /data/prometheus-data /data/prometheus-trends-data /data/alertmanager-data' \
     < /dev/null
 }
 
 # --- up -------------------------------------------------------------------------------------------
 
+# Every `up` and `down` passes --remove-orphans: a service taken out of compose.yml leaves its
+# container behind otherwise (loki-gateway-1 when 64a2bf3 dropped the gateway, option A). It
+# removes only containers of this project whose service is not in compose.yml; a tokened service
+# left out of the named list stays as it is. Measured with Compose v5.6.1 (d06's version) on a
+# throwaway busybox project, 2026-11-03: a service dropped from the file was removed by
+# `up -d --wait --remove-orphans <one service>` and another running service kept, while a service
+# kept in the file under an inactive `profiles:` was not removed (so the gateway is dropped, not
+# profiled out).
 do_up() {
   local all svc services="" left=""
   ensure_dirs || return
@@ -243,7 +255,7 @@ do_up() {
   if is_replica; then
     info "Replica of $SERVING_HOST ($(hostname -s)): $REPLICA_SERVICES"
     # shellcheck disable=SC2086
-    run_compose up -d --wait --wait-timeout "$VERIFY_WAIT_S" $REPLICA_SERVICES
+    run_compose up -d --wait --wait-timeout "$VERIFY_WAIT_S" --remove-orphans $REPLICA_SERVICES
     return
   fi
   # Every service without a token, and each tokened service whose token is here (VAULT_READERS). Not a
@@ -262,7 +274,7 @@ do_up() {
   fi
   info "starting:$services"
   # shellcheck disable=SC2086
-  run_compose up -d --wait --wait-timeout "$VERIFY_WAIT_S" $services
+  run_compose up -d --wait --wait-timeout "$VERIFY_WAIT_S" --remove-orphans $services
 }
 
 # --- verify, status -------------------------------------------------------------------------------
@@ -397,12 +409,43 @@ check_tokened() {
   return "$rc"
 }
 
+# The lines Vector's container-log pipeline put in Loki in the last 10 minutes (theOrg
+# vector-docker-logs.toml labels every one forwarder="vector-observability"), asked from inside
+# observability-net: vector-1's own wget (Dockerfile.vector installs it) to loki:3100, the address
+# Vector pushes to. Prints the count, 0 for none.
+vector_lines() {
+  local q
+  q="$(python3 -c 'import urllib.parse; print(urllib.parse.quote("sum(count_over_time({forwarder=\"vector-observability\"}[10m]))", safe=""))')" || return
+  docker exec vector-1 wget -q -O- "http://loki:3100/loki/api/v1/query?query=$q" < /dev/null \
+    | python3 -c 'import json,sys; r=json.load(sys.stdin)["data"]["result"]; print(int(float(r[0]["value"][1])) if r else 0)'
+}
+
+# Waits up to VERIFY_WAIT_S for a line from Vector. Vector reads the stack's containers from the
+# moment it starts, so a quiet stack could leave nothing; but Loki logs every query at info
+# (caller=metrics.go; measured on grafana/loki:2.9.4, 2026-11-03, and theOrg's config sets no
+# log_level), so this check's own first query gives Vector a line to ship.
+check_vector_logs() {
+  local deadline got=""
+  deadline=$(( $(date +%s) + VERIFY_WAIT_S ))
+  while :; do
+    got="$(vector_lines 2>/dev/null)" || got=""
+    if [[ "$got" =~ ^[1-9][0-9]*$ ]]; then
+      info "vector: $got lines in Loki from this stack's containers in the last 10 minutes (forwarder vector-observability, read from vector-1 at loki:3100)"
+      return 0
+    fi
+    [ "$(date +%s)" -lt "$deadline" ] || break
+    sleep 5
+  done
+  echo "[ERROR] vector: Loki holds '${got:-nothing}' lines with forwarder vector-observability in the last 10 minutes, not 1 or more" >&2
+  return 1
+}
+
 # What runs: the services, Prometheus and its Alertmanager, docker-state-exporter, the trends
-# retention, the gateway (HTTP, failing closed), the blackbox self-probes and the tokened
-# services' secrets (check_tokened). The pieces that are off (compose.yml's header) have nothing
-# to check.
+# retention, the blackbox self-probes, Vector's container logs in Loki (not on a replica: no
+# Vector) and the tokened services' secrets (check_tokened). The pieces that are off
+# (compose.yml's header) have nothing to check.
 do_verify() {
-  local rc=0 svc state n body code off
+  local rc=0 svc state n body off
   off="$(not_deployed)"
   if [ -n "$off" ]; then warn "not deployed (no container, no wrapped token): $off"; fi
   wait_ready || true
@@ -440,21 +483,8 @@ do_verify() {
     echo "[ERROR] prometheus-trends storageRetention is '${body:-unknown}', not a size alone" >&2; rc=1
   fi
 
-  if curl -sf -o /dev/null --max-time 10 http://127.0.0.1:3100/ready; then
-    info "loki-gateway /ready over HTTP"
-  else
-    echo "[ERROR] loki-gateway http://127.0.0.1:3100/ready failed" >&2; rc=1
-  fi
-  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X POST http://127.0.0.1:3100/loki/api/v1/push)" || code=""
-  # No verifier files: nginx answers 403 for a missing one and 401 for an empty one (theOrg DEPLOY.md,
-  # Loki gateway, measured). Either is fail-closed.
-  if [ "$code" = "401" ] || [ "$code" = "403" ]; then
-    info "loki-gateway refuses a push without an account ($code): no accounts, so it fails closed"
-  else
-    echo "[ERROR] loki-gateway answered a push without an account with ${code:-nothing}, not 401 or 403" >&2; rc=1
-  fi
-
   check_self_probes || rc=1
+  if ! is_replica; then check_vector_logs || rc=1; fi
   check_tokened || rc=1
 
   if [ "$rc" -eq 0 ]; then info "verify OK"; else echo "[ERROR] verify failed" >&2; fi
@@ -490,7 +520,7 @@ run_cmd() {
       do_up
       ;;
     down)
-      run_compose down
+      run_compose down --remove-orphans
       ;;
     restart)
       # down removes the tokened containers too, and only their tokens bring them back: on the
@@ -500,7 +530,7 @@ run_cmd() {
         echo "[ERROR] restart takes down $VAULT_READERS, and no wrapped token is here for: $(tokens_absent). Deploy instead (README.md, Deploy)" >&2
         return 1
       fi
-      images_ready && run_compose down && do_up
+      images_ready && run_compose down --remove-orphans && do_up
       ;;
     verify)
       do_verify
@@ -528,8 +558,8 @@ usage() {
   echo "  down     - Stop and remove every container (the data stays; the tokened ones need a deploy)" >&2
   echo "  restart  - images ready, then down, then up; on $SERVING_HOST only with every wrapped token" >&2
   echo "  verify   - Services running and healthy, Prometheus and its one Alertmanager," >&2
-  echo "             docker-state-exporter, trends retention, the gateway over HTTP (failing" >&2
-  echo "             closed), the blackbox self-probes" >&2
+  echo "             docker-state-exporter, trends retention, the blackbox self-probes, Vector's" >&2
+  echo "             container logs in Loki, the tokened services' secrets" >&2
   echo "  status   - Containers" >&2
   echo "  logs     - Follow logs (optionally for one service)" >&2
 }

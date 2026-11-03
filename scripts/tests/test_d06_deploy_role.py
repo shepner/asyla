@@ -31,7 +31,7 @@ def _no_contact(*a, **kw):
 subprocess.run = _no_contact
 bh.ssh = _no_contact
 
-TAG = "75723657f825814038bf8936e4765a5137a073a8"
+TAG = "64a2bf35c19275dadc577cdb37f9434064cf0842"
 OBS_TOKENS = ["SCRAPE_PROXY_OPENBAO_WRAPPED_TOKEN", "EMPORIA_OPENBAO_WRAPPED_TOKEN", "ALERT_RELAY_OPENBAO_WRAPPED_TOKEN"]
 PULL = "stand-in-pull"
 HUB_STAND_IN = "stand-in-hub"
@@ -98,14 +98,14 @@ def pull_cases() -> list[bool]:
             return Done(rc, stdout, stderr)
         return f
 
-    good = f"reg.example/theorg/observability-loki-gateway:{TAG}\nprom/prometheus:v3\n"
+    good = f"reg.example/theorg/observability-alert-relay:{TAG}\nprom/prometheus:v3\n"
     bh.ssh = fake(0, good)
     rc, printed = quiet(lambda: with_pull_env(lambda: dr.pull_images(SPEC, TAG)))
     out.append(check("images: the pull token goes over stdin only, by name in the command",
                      len(calls) == 1 and calls[0][2] == PULL + "\n" and PULL not in calls[0][1]
                      and "OBSERVABILITY_REGISTRY_PULL_TOKEN" in calls[0][1] and "observability.sh images" in calls[0][1]
                      and PULL not in printed, repr(calls)))
-    bh.ssh = fake(0, "reg.example/theorg/observability-loki-gateway:2144f83c\n")
+    bh.ssh = fake(0, "reg.example/theorg/observability-alert-relay:2144f83c\n")
     out.append(stops("images: a theOrg image of another tag stops before any mint", "not of",
                      lambda: with_pull_env(lambda: dr.pull_images(SPEC, TAG))))
     out.append(stops("images: a stale scripts tree names the fix (merge, then install master with --only bootstrap)",
