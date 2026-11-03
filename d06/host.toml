@@ -1,12 +1,13 @@
 # d06 build spec, read by scripts/build_host.py: theOrg's memory and applications host (asyla hub
 # decisions/host-layout.md). First tenant: theOrg's ticketing (Vikunja, vikunja-mcp), moved from
-# the Mac Mini (asyla hub backlog, the d06 item); the other six stacks follow when theOrg moves
-# them. Built as every other Docker host (host-layout decision 6). d06 is not disposable: a build
+# the Mac Mini (asyla hub backlog, the d06 item); then theOrg's observability stack (Loki,
+# Prometheus, Alertmanager, alert-relay); the other stacks follow when theOrg moves them.
+# Built as every other Docker host (host-layout decision 6). d06 is not disposable: a build
 # or a destroy needs --confirm d06 and the operator's approval of the exact action.
 # Not built yet. The ticketing [[app]] and the internal-access [[external]]
 # (hosts/d06: vikunja, vikunja-mcp) are from theOrg ticketing DEPLOY.md at main 041215a (the #19
 # merge) and its images of that sha; the path is proven on test01 as [replica] of = "d06"
-# (ASY-HST-6).
+# (ASY-HST-6). The observability [[app]] is from theOrg observability DEPLOY.md at main 2144f83c.
 # No external-access: every name here is LAN-only, so d06 has no tunnel (yet).
 
 # Operator's values, 2026-10-18. order=20: after d04 (10) and d03 (15) when vmh01 boots.
@@ -39,6 +40,17 @@ name = "ticketing"
 verify = ["verify"]
 pull_token_env = "THEORG_REGISTRY_PULL_TOKEN"
 start_env = ["TICKETING_DEPLOY_DEX_CLIENT_SECRET", "TICKETING_MCP_DEX_CLIENT_SECRET"]
+
+# theOrg's observability stack (d06/apps/observability, theOrg observability DEPLOY.md at main
+# 2144f83c). Only the theorg-registry pull token reaches it (OBSERVABILITY_REGISTRY_PULL_TOKEN, for
+# the image pulls); the pieces that need any other value are off until theOrg's stack reads it from
+# OpenBao itself (its README.md). No start_env yet: alert-relay's forge token is added once its
+# account exists. No restore: its data has no NAS mirror yet.
+[[app]]
+name = "observability"
+verify = ["verify"]
+restore = false
+pull_token_env = "THEORG_REGISTRY_PULL_TOKEN"
 
 [[external]]
 name = "internal-access"
