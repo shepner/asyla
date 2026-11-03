@@ -274,6 +274,27 @@ def main_cases() -> list[bool]:
     return out
 
 
+def relay_records_cases() -> list[bool]:
+    """alert-relay's token reads its SMTP login and the Watchdog's ping URL, each named in
+    compose.yml; no delivery ping record (on only with the forge token), and the watchdog piece is on."""
+    records = {c: rs for c, _, rs in dr.IDENTITIES}["alert-relay"]
+    compose = (dr.HERE / "compose.yml").read_text()
+    live = [ln.strip() for ln in compose.splitlines() if not ln.lstrip().startswith("#")]
+    sh = (dr.HERE / "observability.sh").read_text()
+    return [
+        check("relay: its records are the SMTP login and the Watchdog's ping URL",
+              records == ["smtp-relay-username", "smtp-relay-password", "observability-watchdog-ping-url"]),
+        check("relay: compose.yml names each of its records",
+              all(any(ln.startswith("ALERT_RELAY_") and f'"secret/hubs/asyla/{r}#value"' in ln for ln in live)
+                  for r in records)),
+        check("relay: no delivery ping record, in compose.yml or IDENTITIES",
+              not any(ln.startswith("ALERT_RELAY_DELIVERY_PING_KV") for ln in live)
+              and not any("delivery-ping" in r for _, _, rs in dr.IDENTITIES for r in rs)),
+        check("relay: the watchdog piece is on in observability.sh",
+              '\nALERT_WATCHDOG_PING="on"\n' in sh),
+    ]
+
+
 with tempfile.TemporaryDirectory() as d:
     sh = Path(d) / "observability.sh"
     sh.write_text(f'x=1\nOBSERVABILITY_TAG="${{OBSERVABILITY_TAG_OVERRIDE:-{TAG}}}"\n')
@@ -302,6 +323,7 @@ results = [
     stops("spec: two identities with one variable stop", "each component once",
           lambda: dr.check_spec(SPEC, [("a", OBS_TOKENS[0], ["r"]), ("b", OBS_TOKENS[0], ["r"])])),
     d06_spec_case(),
+    *relay_records_cases(),
     check("start: --only apps, or late for an after_external app",
           dr.start_argv(SPEC)[4:6] == ["--only", "apps"]
           and dr.start_argv({**SPEC, "app": [{**SPEC["app"][0], "after_external": True}]})[4:6] == ["--only", "late"]),

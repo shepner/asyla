@@ -58,10 +58,12 @@ Each component reads only the records its role policy grants (secrets-vault
 `secret/hubs/asyla/`, named in `compose.yml`:
 
 - alert-relay (`ALERT_RELAY_<X>_KV`, `PATH#FIELD`): `smtp-relay-username#value`,
-  `smtp-relay-password#value`, `observability-alert-relay-gitea-token#value`,
-  `observability-watchdog-ping-url#value`, `observability-delivery-ping-url#value`. A record it
-  cannot read switches that feature off at start, logged by category (never a value)
-  (`alert-relay/relay.py`).
+  `smtp-relay-password#value`, `observability-watchdog-ping-url#value`, and
+  `observability-alert-relay-gitea-token#value` (not stored yet). A record it cannot read switches
+  that feature off at start, logged by category (never a value) (`alert-relay/relay.py`). The
+  delivery ping's record, `observability-delivery-ping-url`, is stored but named nowhere yet (On,
+  off, below): the relay reads theOrg's default path instead, which this token is refused, and
+  logs that ping off.
 - emporia-collector (`EMPORIA_USERNAME_KV`, `EMPORIA_PASSWORD_KV`, plain paths, field `value`):
   `emporia-username`, `emporia-password`.
 - scrape-proxy (`HOME_ASSISTANT_TOKEN_KV`, plain path, field `value`):
@@ -111,8 +113,9 @@ when the host says one is required (`remote/maint_host.py:301-306`). What notice
 
 - now: host-maintenance's restart count, a "container ... restarted Nx since last check" warning
   for each of the three (`runner/maint.py:295-298`);
-- once the watchdog ping is on (`ALERT_WATCHDOG_PING`): the healthchecks.io dead-man, since
-  Alertmanager's Watchdog reaches it through alert-relay.
+- the watchdog ping (`ALERT_WATCHDOG_PING="on"`): the healthchecks.io dead-man check, since
+  Alertmanager's Watchdog reaches it only through alert-relay: a relay looping on a spent token
+  sends no ping, and the check goes down.
 
 The recovery is the deploy above (`deploy_role.py`), run by hand. theOrg's heal exists at f757911
 (`scripts/heal_spent_tokens.py` and `heal.yml`, #324 and #326; DEPLOY.md "Recovery after reboot or
@@ -123,7 +126,10 @@ with the operator.
 ## On, off, and what turns each on
 
 On: critical alerts by email (Alertmanager's email piece posts them to alert-relay, which sends
-them to `ALERT_EMAIL_TO` through `smtp.gmail.com:587` with the SMTP login), the trends Home
+them to `ALERT_EMAIL_TO` through `smtp.gmail.com:587` with the SMTP login), the Watchdog ping
+(Alertmanager's watchdog piece, `ALERT_WATCHDOG_PING="on"` in `observability.sh`: the always-firing
+Watchdog goes to alert-relay's `/watchdog` every 5 to 6 minutes, and the relay pings the
+healthchecks.io check with `observability-watchdog-ping-url`; `""` turns it off), the trends Home
 Assistant job (through scrape-proxy), emporia-collector, and Vector's container-log pipeline
 (`VECTOR_DOCKER_LOGS`, with the Docker socket mounted as theOrg's `compose.docker-socket.yml` does):
 this stack's own container logs to Loki over plain HTTP inside `observability-net`, and their
@@ -140,9 +146,15 @@ Off here and nowhere else:
 
 - Alert issues on the forge: the forge token record is not stored. On: store
   `observability-alert-relay-gitea-token`, then deploy (the relay reads its records at start).
-- Delivery ping: same, record `observability-delivery-ping-url`.
-- Watchdog ping: record `observability-watchdog-ping-url`, and `ALERT_WATCHDOG_PING="on"` in
-  `observability.sh` (one line; alert-relay already names the record). Then deploy.
+- Delivery ping: its record `observability-delivery-ping-url` is stored, but `compose.yml` sets no
+  `ALERT_RELAY_DELIVERY_PING_KV` and `deploy_role.py` lists no record for it. Without the forge
+  token the relay's self-test (at start, then daily) and every delivery fail, and each failure
+  pings the check's `/fail` (theOrg `alert-relay/relay.py` `delivery_selftest`, `record_selftest`,
+  `record_delivery`), so on now it would take the check down and page at the first start. On: the
+  forge token and `asyla/alerts` first (above), then `ALERT_RELAY_DELIVERY_PING_KV:
+  "secret/hubs/asyla/observability-delivery-ping-url#value"` in `compose.yml`, the record in
+  `deploy_role.py`'s `IDENTITIES`, and `delivery_ping_url=1` in `check_tokened`
+  (`observability.sh`); then deploy.
 - The Loki gateway, so any log push or query from off this host (theOrg lead's option A for d06,
   2026-11-03). theOrg's f757911 gateway reads its accounts from OpenBao with its own wrapped token
   and signs its TLS leaf from step-ca's `loki` provisioner; d06 has neither a loki-gateway
@@ -167,7 +179,10 @@ Off here and nowhere else:
 
 Change `OBSERVABILITY_TAG` in `observability.sh` to a theOrg `main` sha whose images are published,
 check `compose.yml` against theOrg's `docker-compose.yml` at that sha, commit, then deploy (above):
-the tokened services move to the new images only through a deploy. `verify` checks the services
+the tokened services move to the new images only through a deploy. An upgrade also checks what
+`check_tokened` and `check_watchdog` read against theOrg at the new sha: the relay's metric names
+(`alert-relay/relay.py`) and the watchdog piece's receiver name and route
+(`alertmanager-pieces/watchdog/`). `verify` checks the services
 are healthy, Prometheus is healthy with one Alertmanager, `docker_container_running` on `9099`,
 the trends retention is a size, the three blackbox self-probes, every target of the operations
 Prometheus (below), and (not on a replica) that Vector's container logs reach Loki: lines labelled
@@ -187,9 +202,21 @@ at least `SCRAPE_GRACE_S` (75 s, one scrape and some) for each:
   the login forever (theOrg `emporia-collector/collector.py` at f757911). The failure gauge is 0 in
   every category after an OpenBao read or a renewal that worked (the renewal since #325); the
   channel names appear only once Emporia took the login and the collector read the channels.
-- alert-relay: its own metrics (`9111`) read `alert_relay_secret_present{secret="smtp_username"}`
-  and `{secret="smtp_password"}` 1 (theOrg `alert-relay/relay.py`). That it holds the login, not
-  that Gmail takes it.
+- alert-relay: its own metrics (`9111`) read `alert_relay_secret_present` 1 for `smtp_username`
+  and `smtp_password` (with `ALERT_EMAIL_TO`) and for `watchdog_ping_url` (with
+  `ALERT_WATCHDOG_PING`), and 0 for `delivery_ping_url` (off until the forge token, above) (theOrg
+  `alert-relay/relay.py`). That it holds the login, not that Gmail takes it.
+
+With `ALERT_WATCHDOG_PING` on and alert-relay running, verify then checks the Watchdog's ping
+(`check_watchdog`): the running Alertmanager loaded the watchdog piece (its `/api/v2/status`
+configuration has the receiver `watchdog` and a route to it; Alertmanager shows webhook URLs there
+as `<secret>`), and the relay's `alert_relay_watchdog_pings_total{result="sent"}` is 1 or more, a
+ping the check's endpoint answered 2xx. A healthchecks.io check that never got a ping stays "new"
+and never alerts, so that first ping arms it. It waits until `WATCHDOG_WAIT_S` (450 s) after the
+later `.State.StartedAt` of `alertmanager-1` and `alert-relay-1`: Alertmanager keeps its last send
+in `alertmanager-data` across a restart and sends again only once `repeat_interval` (5m) has passed,
+at a `group_interval` (1m) tick (theOrg `alertmanager-pieces/watchdog/route.yml`). A later verify
+reads once. The relay's `error` count alone is a failure.
 
 The self-probes and the trends readings count only samples taken after the containers involved
 started: `timestamp(...) > S` in the query, S the later `.State.StartedAt` of the service and the

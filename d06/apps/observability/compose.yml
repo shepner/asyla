@@ -25,12 +25,14 @@
 #   token (observability.sh); after a reboot or a Docker restart it loops until the next deploy.
 #
 # On: the email receiver (Alertmanager's email piece, sent by alert-relay with the SMTP login),
-# the trends Home Assistant job (through scrape-proxy), emporia-collector, and Vector's
-# container-log pipeline (VECTOR_DOCKER_LOGS: this stack's own logs to Loki, plain HTTP inside
-# observability-net).
+# the Watchdog ping (Alertmanager's watchdog piece, ALERT_WATCHDOG_PING "on" in observability.sh;
+# alert-relay pings healthchecks.io with the URL it reads), the trends Home Assistant job (through
+# scrape-proxy), emporia-collector, and Vector's container-log pipeline (VECTOR_DOCKER_LOGS: this
+# stack's own logs to Loki, plain HTTP inside observability-net).
 # Off (README.md says what turns each on). Each is off here and nowhere else:
-#   Watchdog ping         ALERT_WATCHDOG_PING is empty (observability.sh): no record yet
-#   delivery ping, issues alert-relay names the records; absent, it logs the feature off at start
+#   issues                alert-relay names the forge token record; absent, it logs it at start
+#   delivery ping         no record named (ALERT_RELAY_DELIVERY_PING_KV below): on with the forge
+#                         token, since without it the relay pings the check's /fail at each start
 #   alert-relay log lines LOKI_QUERY_URL is empty: the relay needs a query password too
 #                         (relay.py), and ALERT_RELAY_LOKI_KV is not set
 #   Loki gateway          not in this file: no caller off this host pushes to or queries Loki
@@ -51,7 +53,8 @@ services:
 
   # Alertmanager holds no secret. Every alert goes to alert-relay (the base configuration). Its
   # email piece is on with ALERT_EMAIL_TO (a webhook to alert-relay's /email); its watchdog piece
-  # is on with ALERT_WATCHDOG_PING ("on"), off here until the ping record exists.
+  # with ALERT_WATCHDOG_PING ("on", observability.sh): the Watchdog to alert-relay's /watchdog
+  # every 5 to 6 minutes, which pings the check with the URL the relay reads from OpenBao.
   alertmanager:
     image: gitea.asyla.org/theorg/observability-alertmanager:${OBSERVABILITY_TAG:?}
     container_name: alertmanager-1
@@ -80,9 +83,16 @@ services:
   # Files every alert as an issue in GITEA_ALERT_REPO (asyla/alerts) on the forge, off this host,
   # and sends the critical ones by email. It reads every secret from OpenBao in-process
   # (alert-relay/relay.py): ALERT_RELAY_<SECRET>_KV is PATH#FIELD. A record it cannot read switches
-  # that feature off, logged at start (the category, never a value): the forge token and the ping
-  # URLs are not stored yet. The Loki and chat-api records keep theOrg's defaults, which this
-  # token cannot read; both features are off here (LOKI_QUERY_URL and CHAT_API_URL empty). Loki
+  # that feature off, logged at start (the category, never a value): the forge token is not
+  # stored yet. The Loki, chat-api and delivery ping records keep theOrg's defaults, which this
+  # token cannot read ("refused"); those features are off here (LOKI_QUERY_URL and CHAT_API_URL
+  # empty). The delivery ping stays off until the forge token is stored, though its record
+  # (observability-delivery-ping-url) exists: with no token the relay's self-test fails at start
+  # and daily, and every delivery fails, each pinging the check's /fail, which takes it down and
+  # pages at once (theOrg alert-relay/relay.py delivery_selftest, record_selftest). On: the
+  # forge token and asyla/alerts first, then ALERT_RELAY_DELIVERY_PING_KV:
+  # "secret/hubs/asyla/observability-delivery-ping-url#value" below and its record in
+  # deploy_role.py's IDENTITIES (README.md, On, off). Loki
   # itself needs no account in the stack, but the relay fetches log lines only with LOKI_QUERY_URL
   # and its query password both set (relay.py log_section and its start line), so loki:3100 here
   # alone would change nothing.
@@ -98,7 +108,7 @@ services:
       ALERT_RELAY_SMTP_USERNAME_KV: "secret/hubs/asyla/smtp-relay-username#value"
       ALERT_RELAY_SMTP_PASSWORD_KV: "secret/hubs/asyla/smtp-relay-password#value"
       ALERT_RELAY_WATCHDOG_PING_KV: "secret/hubs/asyla/observability-watchdog-ping-url#value"
-      ALERT_RELAY_DELIVERY_PING_KV: "secret/hubs/asyla/observability-delivery-ping-url#value"
+      # No ALERT_RELAY_DELIVERY_PING_KV: the delivery ping goes on with the forge token (above).
       GITEA_URL: ${GITEA_URL:?}
       GITEA_ALERT_REPO: ${GITEA_ALERT_REPO:?}
       ALERT_REPOS: ${ALERT_REPOS:-}

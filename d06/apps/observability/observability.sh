@@ -78,9 +78,11 @@ OPENBAO_ADDR="https://vault.asyla.org"
 # Critical alerts by email: Alertmanager's email piece posts them to alert-relay, which sends them
 # with the SMTP login it reads from OpenBao (theOrg deploy.yml's recipient).
 ALERT_EMAIL_TO="shepner@asyla.org"
-# Alertmanager's watchdog piece: off until secret/hubs/asyla/observability-watchdog-ping-url
-# exists. Set to "on" to turn it on (alert-relay already names the record, compose.yml).
-ALERT_WATCHDOG_PING=""
+# Alertmanager's watchdog piece (theOrg alertmanager-pieces/watchdog/): on posts the always-firing
+# Watchdog to alert-relay's /watchdog, which pings the healthchecks.io check with the URL it reads
+# from secret/hubs/asyla/observability-watchdog-ping-url (compose.yml; stored 2026-11-03). "" turns
+# the piece off: the Watchdog then stops at the base's watchdog-off receiver.
+ALERT_WATCHDOG_PING="on"
 # Scraped by the trends Prometheus through scrape-proxy (theOrg deploy.yml's address).
 HOME_ASSISTANT_URL="https://homeassistant.asyla.org"
 
@@ -106,6 +108,12 @@ SCRAPE_GRACE_S="${OBSERVABILITY_SCRAPE_GRACE_S:-75}"
 # emporia_held's reading when the collector read its login from OpenBao, Emporia took it and the
 # channels are read (an extended regex, matched whole).
 EMPORIA_WANT='openbao_failure=0 channel_info=[1-9][0-9]*'
+# How long after the later start of alertmanager-1 and alert-relay-1 the first Watchdog ping may
+# come (check_watchdog): Alertmanager keeps its last send across a restart (the notification log
+# in alertmanager-data) and sends again once repeat_interval (5m) has passed, at a group_interval
+# (1m) tick, so up to about 6 minutes after a deploy; 7.5 with Prometheus's first evaluation (15 s)
+# and some margin. theOrg alertmanager-pieces/watchdog/route.yml at OBSERVABILITY_TAG.
+WATCHDOG_WAIT_S="${OBSERVABILITY_WATCHDOG_WAIT_S:-450}"
 
 export DOCKER_DL OBSERVABILITY_ROOT OBSERVABILITY_TAG PROMETHEUS_EXTERNAL_URL ALERTMANAGER_EXTERNAL_URL \
   GITEA_URL GITEA_ALERT_REPO ALERT_REPOS CHRONICLE_VECTOR_ADDRESS COMPOSE_PROJECT_NAME \
@@ -503,11 +511,34 @@ emporia_held() {
   echo "openbao_failure=${failure:-none} channel_info=${channels:-none}"
 }
 
-# alert-relay's alert_relay_secret_present for its SMTP login, as "secret=value ..." (sorted), from
-# its own metrics on 127.0.0.1:9111 (theOrg alert-relay/relay.py; compose.yml publishes it there).
-relay_smtp_held() {
+# alert-relay's alert_relay_secret_present for the secrets "$@", as "secret=value ..." (sorted),
+# from its own metrics on 127.0.0.1:9111 (theOrg alert-relay/relay.py; compose.yml publishes it
+# there). The running relay's own gauges: it reads each secret once at start, so the reading is of
+# the container running now. 0 for a ping URL also when the value is not an http(s) URL.
+relay_held() {
   curl -sf --max-time 10 http://127.0.0.1:9111/metrics \
-    | python3 -c 'import re,sys; print(" ".join(sorted(m[0] + "=" + format(float(m[1]), "g") for m in re.findall(r"^alert_relay_secret_present\{secret=\"(smtp_username|smtp_password)\"\} (\S+)$", sys.stdin.read(), re.M))))'
+    | python3 -c 'import re,sys; names=set(sys.argv[1:]); print(" ".join(sorted(m[0] + "=" + format(float(m[1]), "g") for m in re.findall(r"^alert_relay_secret_present\{secret=\"(\w+)\"\} (\S+)$", sys.stdin.read(), re.M) if m[0] in names)))' "$@"
+}
+
+# alert-relay's Watchdog pings since it started, as "sent=N error=M"
+# (alert_relay_watchdog_pings_total on 127.0.0.1:9111; theOrg alert-relay/relay.py watchdog_ping):
+# sent counts the pings the check's endpoint answered 2xx, error those it did not or that never
+# reached it. Counters of the running relay, so they start at 0 with the container.
+relay_watchdog_pings() {
+  curl -sf --max-time 10 http://127.0.0.1:9111/metrics \
+    | python3 -c 'import re,sys; d=dict(re.findall(r"^alert_relay_watchdog_pings_total\{result=\"(sent|error)\"\} (\S+)$", sys.stdin.read(), re.M)); print("sent=%d error=%d" % (float(d["sent"]), float(d["error"])))'
+}
+
+# "on" when the running Alertmanager loaded the watchdog piece, else "off": its loaded
+# configuration (/api/v2/status config.original) has the piece's receiver "watchdog" and a route
+# to it (theOrg alertmanager-pieces/watchdog/), not only the base's "watchdog-off". The receiver's
+# name, not its URL: Alertmanager shows every webhook URL there as <secret> (v0.27.0, read
+# first-hand; theOrg scripts/check_alertmanager_email.sh says the same). That the URL reaches
+# alert-relay's /watchdog is shown by the relay's sent pings (check_watchdog). Only the word is
+# printed.
+am_watchdog() {
+  curl -sf --max-time 10 http://127.0.0.1:9093/api/v2/status \
+    | python3 -c 'import json,re,sys; c=json.load(sys.stdin)["config"]["original"]; print("on" if re.search(r"^- name: watchdog$", c, re.M) and re.search(r"^ *- receiver: watchdog$", c, re.M) else "off")'
 }
 
 # Waits until "$@" prints a reading that the extended regex WANT ($1) matches whole, or the shared
@@ -532,11 +563,18 @@ wait_reading() {
 #   up 1. It answers 503 without its vault token and 502 when Home Assistant refuses the token,
 #   which Prometheus records as up 0 (theOrg scrape-proxy/proxy.py);
 # - emporia-collector: no OpenBao failure and the channel names on (emporia_held);
-# - alert-relay: alert_relay_secret_present 1 for its SMTP login (its own metrics, live).
+# - alert-relay: alert_relay_secret_present (its own metrics, live) 1 for its SMTP login with
+#   ALERT_EMAIL_TO set and for the Watchdog's ping URL with ALERT_WATCHDOG_PING set, and 0 for the
+#   delivery check's ping URL: compose.yml names no record for it until the forge token is stored,
+#   since without the token the relay's self-test pings that check's /fail at every start.
 # The first scrape comes within a minute (scrape_interval 60s): one wait of VERIFY_WAIT_S for all,
 # and at least SCRAPE_GRACE_S for each.
 check_tokened() {
-  local rc=0
+  local rc=0 names="delivery_ping_url" want="delivery_ping_url=0"
+  if [ -n "$ALERT_EMAIL_TO" ]; then
+    names="$names smtp_password smtp_username"; want="$want smtp_password=1 smtp_username=1"
+  fi
+  if [ -n "$ALERT_WATCHDOG_PING" ]; then names="$names watchdog_ping_url"; want="$want watchdog_ping_url=1"; fi
   TOKENED_DEADLINE=$(( $(date +%s) + VERIFY_WAIT_S ))
   if [ "$(service_state scrape-proxy)" != missing ]; then
     if wait_reading 1 trends_up asyla-home-assistant scrape-proxy-1; then
@@ -552,14 +590,52 @@ check_tokened() {
       echo "[ERROR] emporia-collector: trends scraped after it started reads '${GOT:-nothing}', not openbao_failure=0 and channel_info 1 or more" >&2; rc=1
     fi
   fi
-  if [ "$(service_state alert-relay)" != missing ] && [ -n "$ALERT_EMAIL_TO" ]; then
-    if wait_reading "smtp_password=1 smtp_username=1" relay_smtp_held; then
-      info "alert-relay: alert_relay_secret_present 1 for smtp_username and smtp_password"
+  if [ "$(service_state alert-relay)" != missing ]; then
+    # shellcheck disable=SC2086 # one word per secret
+    if wait_reading "$want" relay_held $names; then
+      info "alert-relay: alert_relay_secret_present $GOT"
     else
-      echo "[ERROR] alert-relay: alert_relay_secret_present reads '${GOT:-nothing}', not smtp_password=1 smtp_username=1" >&2; rc=1
+      echo "[ERROR] alert-relay: alert_relay_secret_present reads '${GOT:-nothing}', not $want" >&2; rc=1
     fi
   fi
   return "$rc"
+}
+
+# The Watchdog's dead-man ping (theOrg DEPLOY.md, "Watching the watcher"), where alert-relay runs
+# and ALERT_WATCHDOG_PING is on: the running Alertmanager loaded the watchdog piece, and the
+# running relay has sent at least one ping the check's endpoint took. A healthchecks.io check that
+# never got a ping stays "new" and never alerts, so that first ping is what arms it. It may come up
+# to WATCHDOG_WAIT_S after the later start of alertmanager-1 and alert-relay-1; a verify run later
+# reads once. check_tokened has already said whether the relay holds the URL.
+check_watchdog() {
+  local since deadline got
+  [ "$(service_state alert-relay)" != missing ] || return 0
+  if [ -z "$ALERT_WATCHDOG_PING" ]; then
+    info "watchdog ping: off (ALERT_WATCHDOG_PING empty)"
+    return 0
+  fi
+  got="$(am_watchdog 2>/dev/null)" || got=""
+  if [ "$got" != on ]; then
+    echo "[ERROR] alertmanager: watchdog piece reads '${got:-nothing}', not on (alertmanager-1's log line 'pieces on:' says why)" >&2
+    return 1
+  fi
+  info "alertmanager: watchdog piece on (receiver watchdog loaded: the Watchdog goes to alert-relay's /watchdog)"
+  since="$(started_at alertmanager-1 alert-relay-1)" || {
+    echo "[ERROR] alert-relay: no start time for alertmanager-1 and alert-relay-1" >&2
+    return 1
+  }
+  deadline=$(( ${since%.*} + WATCHDOG_WAIT_S ))
+  while :; do
+    got="$(relay_watchdog_pings 2>/dev/null)" || got=""
+    if [[ "$got" =~ ^sent=[1-9][0-9]*\ error=[0-9]+$ ]]; then
+      info "alert-relay: Watchdog pings since it started: $got (sent: the check's endpoint answered 2xx)"
+      return 0
+    fi
+    [ "$(date +%s)" -lt "$deadline" ] || break
+    sleep 5
+  done
+  echo "[ERROR] alert-relay: Watchdog pings since it started read '${got:-nothing}', not sent 1 or more within ${WATCHDOG_WAIT_S}s of the later start of alertmanager-1 and alert-relay-1" >&2
+  return 1
 }
 
 # The lines Vector's container-log pipeline put in Loki in the last 10 minutes (theOrg
@@ -595,8 +671,9 @@ check_vector_logs() {
 
 # What runs: the services, Prometheus and its Alertmanager, docker-state-exporter, the trends
 # retention, the blackbox self-probes, every operations Prometheus target up, Vector's container
-# logs in Loki (not on a replica: no Vector) and the tokened services' secrets (check_tokened). The
-# pieces that are off (compose.yml's header) have nothing to check.
+# logs in Loki (not on a replica: no Vector), the tokened services' secrets (check_tokened) and the
+# Watchdog's ping (check_watchdog). The pieces that are off (compose.yml's header) have nothing to
+# check.
 do_verify() {
   local rc=0 svc state n body off
   off="$(not_deployed)"
@@ -640,6 +717,7 @@ do_verify() {
   check_stack_targets || rc=1
   if ! is_replica; then check_vector_logs || rc=1; fi
   check_tokened || rc=1
+  check_watchdog || rc=1
 
   if [ "$rc" -eq 0 ]; then info "verify OK"; else echo "[ERROR] verify failed" >&2; fi
   return "$rc"
@@ -714,7 +792,7 @@ usage() {
   echo "  verify   - Services running and healthy, Prometheus and its one Alertmanager," >&2
   echo "             docker-state-exporter, trends retention, the blackbox self-probes, every" >&2
   echo "             operations Prometheus target up, Vector's container logs in Loki, the" >&2
-  echo "             tokened services' secrets" >&2
+  echo "             tokened services' secrets, the Watchdog's healthchecks.io ping" >&2
   echo "  status   - Containers" >&2
   echo "  logs     - Follow logs (optionally for one service)" >&2
 }
