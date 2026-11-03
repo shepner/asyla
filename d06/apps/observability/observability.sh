@@ -272,10 +272,12 @@ do_verify() {
     echo "[ERROR] loki-gateway http://127.0.0.1:3100/ready failed" >&2; rc=1
   fi
   code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X POST http://127.0.0.1:3100/loki/api/v1/push)" || code=""
-  if [ "$code" = "401" ]; then
-    info "loki-gateway refuses a push without an account (401): no accounts, so it fails closed"
+  # No verifier files: nginx answers 403 for a missing one and 401 for an empty one (theOrg DEPLOY.md,
+  # Loki gateway, measured). Either is fail-closed.
+  if [ "$code" = "401" ] || [ "$code" = "403" ]; then
+    info "loki-gateway refuses a push without an account ($code): no accounts, so it fails closed"
   else
-    echo "[ERROR] loki-gateway answered a push without an account with ${code:-nothing}, not 401" >&2; rc=1
+    echo "[ERROR] loki-gateway answered a push without an account with ${code:-nothing}, not 401 or 403" >&2; rc=1
   fi
 
   check_self_probes || rc=1

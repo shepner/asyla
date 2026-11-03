@@ -81,7 +81,7 @@ tag. `compose.yml`'s header says how each is off.
 Change `OBSERVABILITY_TAG` in `observability.sh` to a theOrg `main` sha whose images are published,
 commit, then `observability.sh update up verify`. `verify` checks the services are healthy,
 Prometheus is healthy with one Alertmanager, `docker_container_running` on `9099`, the trends
-retention is a size, the gateway's `/ready` over HTTP and a 401 on an unauthenticated push, and the
+retention is a size, the gateway's `/ready` over HTTP and a 401 or 403 on an unauthenticated push, and the
 three blackbox self-probes (it waits up to `VERIFY_WAIT_S`).
 
 ## Known limits
