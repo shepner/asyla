@@ -3,7 +3,7 @@
 # Alertmanager, alert-relay, emporia-collector, scrape-proxy, Vector and the probes). Usage:
 # observability.sh [switch ...], e.g. up|down|restart|verify|update|pull|images|logs|status;
 # switches can be combined. Loads ~/scripts/docker/common.env. From theOrg observability DEPLOY.md
-# at main 64a2bf35c19275dadc577cdb37f9434064cf0842 (README.md here says what asyla changed).
+# at main f7579118fdac5d90101a5ec6698200ae2c9d836f (README.md here says what asyla changed).
 #
 # No secret is in any file or volume, here or on the host, on disk or in memory (asyla SEC-5 and
 # SEC-7; the operator, 2026-11-03: secrets live only in OpenBao). Nothing here writes a value
@@ -41,13 +41,13 @@ DOCKER_DL="${DOCKER_DL:-/mnt/docker}"
 OBSERVABILITY_ROOT="$DOCKER_DL/Observability"
 
 # The theOrg observability commit whose images run here: one sha for every image (DEPLOY.md,
-# Images). 64a2bf3 is theOrg main (#311, design 4). Change it here, commit, then deploy (README.md,
-# Deploy).
-OBSERVABILITY_TAG="${OBSERVABILITY_TAG_OVERRIDE:-64a2bf35c19275dadc577cdb37f9434064cf0842}"
+# Images). f757911 is theOrg main (#327: Prometheus scrapes loki:3100 over plain HTTP; design 4
+# since #311). Change it here, commit, then deploy (README.md, Deploy).
+OBSERVABILITY_TAG="${OBSERVABILITY_TAG_OVERRIDE:-f7579118fdac5d90101a5ec6698200ae2c9d836f}"
 REGISTRY="gitea.asyla.org"
 # Already pulled for the stack, here and on a replica; also the throwaway container that sets the
 # data directories' owners: theOrg's Dockerfile.loki ends USER root on grafana/loki (Alpine: sh,
-# chown). Not the gateway's image any more: it is not in the stack, and at 64a2bf3 it is FROM
+# chown). Not the gateway's image any more: it is not in the stack, and at f757911 it is FROM
 # scratch, with no shell.
 LOKI_IMAGE="$REGISTRY/theorg/observability-loki:$OBSERVABILITY_TAG"
 
@@ -87,6 +87,17 @@ HOME_ASSISTANT_URL="https://homeassistant.asyla.org"
 # The blackbox-selftest job's three probes of Prometheus (theOrg prometheus/scrape-optional/
 # blackbox-exporter.yml), each of which must read 1 (DEPLOY.md: deploy.yml requires all three).
 SELF_PROBES_WANT="http_2xx=1 icmp=1 tcp_connect=1"
+
+# The operations Prometheus's own jobs at OBSERVABILITY_TAG, as job:service: theOrg
+# prometheus/scrape-stack/*.yml (always read), the two optional pieces compose.yml switches on
+# (scrape-optional/blackbox-exporter.yml, docker-state-exporter.yml) and base_config.py's own job.
+# The service is the one a sample must follow the start of. theOrg's deploy.yml step "Verify this
+# stack's own scrape targets are up" (#327) checks the scrape-stack jobs from its checkout's files;
+# d06 has only the images, so they are listed here (check_stack_targets).
+STACK_JOBS="prometheus:prometheus alert-relay:alert-relay alertmanager:alertmanager loki:loki
+  prometheus-trends:prometheus-trends pushgateway:pushgateway scrape-proxy:scrape-proxy vector:vector
+  blackbox-exporter:blackbox-exporter blackbox-selftest:blackbox-exporter
+  docker-state-exporter:docker-state-exporter"
 
 VERIFY_WAIT_S="${OBSERVABILITY_VERIFY_WAIT_S:-300}"
 # The least each tokened service's check waits after the shared VERIFY_WAIT_S: one 60 s scrape and
@@ -397,6 +408,77 @@ check_self_probes() {
   return 1
 }
 
+# The operations Prometheus's active targets (127.0.0.1:9090/api/v1/targets) in one line: "N
+# targets up in M jobs" when each reads health up at a scrape (lastScrape) after S and each job of
+# STACK_JOBS has a target; else "not up: ..." naming each other target with Prometheus's error, and
+# exit 1. health is that scrape's outcome, which Prometheus also writes as up (1 when up). S: the
+# later .State.StartedAt of prometheus-1 and the job's service (STACK_JOBS; prometheus-1 alone for
+# a job not listed there). A listed job whose service is not expected here (a replica's, or a
+# tokened service never deployed: expected_services) is left out: its target cannot be up.
+stack_targets() {
+  local entry job svc since base expected
+  local -a args=()
+  expected=" $(expected_services) " || return 1
+  base="$(started_at prometheus-1)" || return 1
+  for entry in $STACK_JOBS; do
+    job="${entry%%:*}"; svc="${entry#*:}"
+    if [[ "$expected" != *" $svc "* ]]; then args+=("$job=-"); continue; fi
+    since="$(started_at prometheus-1 "$svc-1")" || return 1
+    args+=("$job=$since")
+  done
+  curl -sf --max-time 10 'http://127.0.0.1:9090/api/v1/targets?state=active' | python3 -c '
+import calendar, json, re, sys, time
+def epoch(s):
+    m = re.fullmatch(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(\.\d+)?(Z|[+-]\d\d:\d\d)", s or "")
+    if not m:
+        return 0.0
+    t = calendar.timegm(time.strptime(m[1], "%Y-%m-%dT%H:%M:%S")) + float(m[2] or 0)
+    if m[3] != "Z":
+        t -= (1 if m[3][0] == "+" else -1) * (int(m[3][1:3]) * 3600 + int(m[3][4:6]) * 60)
+    return t
+base, since, skip = float(sys.argv[1]), {}, set()
+for a in sys.argv[2:]:
+    job, s = a.split("=", 1)
+    if s == "-":
+        skip.add(job)
+    else:
+        since[job] = float(s)
+targets = [t for t in json.load(sys.stdin)["data"]["activeTargets"] if t["labels"].get("job") not in skip]
+jobs = {t["labels"].get("job") for t in targets}
+bad = ["%s: no target" % j for j in sorted(set(since) - jobs)]
+for t in targets:
+    job = t["labels"].get("job")
+    fresh = epoch(t.get("lastScrape")) > since.get(job, base)
+    if t.get("health") != "up" or not fresh:
+        bad.append("%s %s: %s%s%s" % (job, t["labels"].get("instance", "?"), t.get("health"),
+                   "" if fresh else ", no scrape since it started",
+                   " " + t["lastError"] if t.get("lastError") else ""))
+if bad:
+    print("not up: " + "; ".join(bad))
+    sys.exit(1)
+print("%d targets up in %d jobs" % (len(targets), len(jobs)))' "$base" "${args[@]}"
+}
+
+# Every target of the operations Prometheus up after the restart (stack_targets). Not the trends
+# Prometheus: from d06 its asyla-d03-node, asyla-d07-node and asyla-switch-snmp jobs read 0 by the
+# allow lists of those ports (README.md, Known limits). It runs after the self-probes, which waited
+# for the first scrapes after prometheus-1 started; every job here is scraped each 15 s
+# (base_config.py) but blackbox-selftest (60 s), so it waits SCRAPE_GRACE_S of its own.
+check_stack_targets() {
+  local deadline got=""
+  deadline=$(( $(date +%s) + SCRAPE_GRACE_S ))
+  while :; do
+    if got="$(stack_targets 2>/dev/null)"; then
+      info "prometheus: $got, each scraped after it started"
+      return 0
+    fi
+    [ "$(date +%s)" -lt "$deadline" ] || break
+    sleep 5
+  done
+  echo "[ERROR] prometheus targets: ${got:-no reading (a start time, or 127.0.0.1:9090/api/v1/targets)}" >&2
+  return 1
+}
+
 # The trends Prometheus's up{job="$1"} values (space-separated), from its 127.0.0.1:9107: only
 # samples taken after container $2 and prometheus-trends-1 started.
 trends_up() {
@@ -408,10 +490,11 @@ trends_up() {
 # emporia-collector as the trends Prometheus scraped it (job emporia) after emporia-collector-1
 # and prometheus-trends-1 started, as "openbao_failure=SUM channel_info=COUNT" ("none" for no such
 # sample). It serves /metrics before it reads OpenBao and retries the login forever (theOrg
-# emporia-collector/collector.py at 64a2bf3), so up{job="emporia"} 1 proves neither. SUM is
-# emporia_collector_openbao_failure over its categories: all 0 after an OpenBao read that worked,
-# the failed category 1 after one that did not. COUNT is the emporia_channel_info series, set only
-# once Emporia took the login and the collector read the channels.
+# emporia-collector/collector.py at f757911), so up{job="emporia"} 1 proves neither. SUM is
+# emporia_collector_openbao_failure over its categories: all 0 after an OpenBao read or a renewal
+# that worked (the renewal since #325), the failed category 1 after one that did not. COUNT is the
+# emporia_channel_info series, set only once Emporia took the login and the collector read the
+# channels.
 emporia_held() {
   local since failure channels
   since="$(started_at emporia-collector-1 prometheus-trends-1)" || return 1
@@ -511,9 +594,9 @@ check_vector_logs() {
 }
 
 # What runs: the services, Prometheus and its Alertmanager, docker-state-exporter, the trends
-# retention, the blackbox self-probes, Vector's container logs in Loki (not on a replica: no
-# Vector) and the tokened services' secrets (check_tokened). The pieces that are off
-# (compose.yml's header) have nothing to check.
+# retention, the blackbox self-probes, every operations Prometheus target up, Vector's container
+# logs in Loki (not on a replica: no Vector) and the tokened services' secrets (check_tokened). The
+# pieces that are off (compose.yml's header) have nothing to check.
 do_verify() {
   local rc=0 svc state n body off
   off="$(not_deployed)"
@@ -554,6 +637,7 @@ do_verify() {
   fi
 
   check_self_probes || rc=1
+  check_stack_targets || rc=1
   if ! is_replica; then check_vector_logs || rc=1; fi
   check_tokened || rc=1
 
@@ -628,8 +712,9 @@ usage() {
   echo "  down     - Stop and remove every container (the data stays; the tokened ones need a deploy)" >&2
   echo "  restart  - images ready, then down, then up; on $SERVING_HOST only with every wrapped token" >&2
   echo "  verify   - Services running and healthy, Prometheus and its one Alertmanager," >&2
-  echo "             docker-state-exporter, trends retention, the blackbox self-probes, Vector's" >&2
-  echo "             container logs in Loki, the tokened services' secrets" >&2
+  echo "             docker-state-exporter, trends retention, the blackbox self-probes, every" >&2
+  echo "             operations Prometheus target up, Vector's container logs in Loki, the" >&2
+  echo "             tokened services' secrets" >&2
   echo "  status   - Containers" >&2
   echo "  logs     - Follow logs (optionally for one service)" >&2
 }

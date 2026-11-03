@@ -2,11 +2,11 @@
 # alert-relay, emporia-collector, scrape-proxy, the pushgateway, Vector, docker-state-exporter and
 # blackbox-exporter. Written by asyla from theOrg observability docker-compose.yml,
 # compose.docker-socket.yml and compose.blackbox.yml at main
-# 64a2bf35c19275dadc577cdb37f9434064cf0842 (#311, design 4; DEPLOY.md at that sha).
+# f7579118fdac5d90101a5ec6698200ae2c9d836f (#327; design 4 since #311; DEPLOY.md at that sha).
 # Project, container names, volume names and the network are theOrg's. asyla's choices:
 # - the Docker-socket and blackbox pieces are folded in; credential-probe, the Ollama log and
 #   MONITOR_THEORG (theOrg's other stacks' jobs and rules) are not here;
-# - no loki-gateway (theOrg lead's option A for d06, 2026-11-03): its 64a2bf3 service needs a
+# - no loki-gateway (theOrg lead's option A for d06, 2026-11-03): its f757911 service needs a
 #   loki-gateway identity in the observability-d06 token role and a step-ca provisioner and name
 #   for d06, none of which exist yet (README.md, On, off). observability.sh's `up` removes the
 #   container an earlier deploy left (--remove-orphans);
@@ -120,8 +120,10 @@ services:
   loki:
     image: gitea.asyla.org/theorg/observability-loki:${OBSERVABILITY_TAG:?}
     container_name: loki-1
-    # Not published, and plain HTTP (theOrg's only configuration at 64a2bf3): Vector pushes and
-    # Prometheus scrapes loki:3100 on observability-net. Nothing off this host reaches it.
+    # Not published, and plain HTTP (theOrg's only configuration at f757911): Vector pushes and
+    # Prometheus scrapes loki:3100 on observability-net. Nothing off this host reaches it. The
+    # Prometheus job asks plain HTTP since #327 (prometheus/scrape-stack/loki.yml); at 64a2bf3 it
+    # asked https and d06 read up{job="loki"} 0 (2026-11-03).
     volumes:
       - loki-data:/loki
     # Unset here, so the configs' own defaults apply (744h, 0.05 MB/s, burst 16; DEPLOY.md).
@@ -254,7 +256,7 @@ services:
       - observability-net
 
   # With the Docker socket (folded in from compose.docker-socket.yml): this stack's own logs to Loki
-  # over plain HTTP inside observability-net (theOrg vector-docker-logs.toml at 64a2bf3 has no tls
+  # over plain HTTP inside observability-net (theOrg vector-docker-logs.toml at f757911 has no tls
   # block and names no CA file), and its CHRONICLE_EPISODE lines to memory-system's Vector
   # (CHRONICLE_VECTOR_ADDRESS). observability.sh verify reads the lines back from loki:3100.
   # The socket bind matches theOrg's compose.docker-socket.yml. Its :ro does not make the Docker
@@ -279,8 +281,9 @@ services:
       VECTOR_LOG: info
       LOKI_ADDRESS: loki:3100
       CHRONICLE_VECTOR_ADDRESS: ${CHRONICLE_VECTOR_ADDRESS:?}
-      # vector-entrypoint.sh loads vector-docker-logs.toml when this is true. On at 64a2bf3; it was
-      # off on d06 at 7572365 (that sink named /etc/loki-ca/root_ca.crt; Vector refused to start).
+      # vector-entrypoint.sh loads vector-docker-logs.toml when this is true. On since 64a2bf3; it
+      # was off on d06 at 7572365 (that sink named /etc/loki-ca/root_ca.crt; Vector refused to
+      # start).
       VECTOR_DOCKER_LOGS: "true"
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:9598/metrics >/dev/null || exit 1"]

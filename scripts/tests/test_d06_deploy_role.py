@@ -31,7 +31,7 @@ def _no_contact(*a, **kw):
 subprocess.run = _no_contact
 bh.ssh = _no_contact
 
-TAG = "64a2bf35c19275dadc577cdb37f9434064cf0842"
+TAG = "f7579118fdac5d90101a5ec6698200ae2c9d836f"
 OBS_TOKENS = ["SCRAPE_PROXY_OPENBAO_WRAPPED_TOKEN", "EMPORIA_OPENBAO_WRAPPED_TOKEN", "ALERT_RELAY_OPENBAO_WRAPPED_TOKEN"]
 PULL = "stand-in-pull"
 HUB_STAND_IN = "stand-in-hub"

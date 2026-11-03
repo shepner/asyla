@@ -3,9 +3,10 @@
 theOrg's observability stack: Loki, Prometheus, the trends Prometheus, Alertmanager,
 alert-relay, emporia-collector, scrape-proxy, the pushgateway, Vector, docker-state-exporter and
 blackbox-exporter, without theOrg's loki-gateway (On, off, below). asyla deploys it here from
-theOrg observability `DEPLOY.md` at main `64a2bf35c19275dadc577cdb37f9434064cf0842` (#311, design
-4), using theOrg's published images of that sha (each of the ten theOrg images this stack names
-answered HTTP 200 to a registry manifest read, 2026-11-03).
+theOrg observability `DEPLOY.md` at main `f7579118fdac5d90101a5ec6698200ae2c9d836f` (#327; design
+4 since #311), using theOrg's published images of that sha. They were not read from the registry
+for f757911 when this pin was written: `deploy_role.py`'s `images` step pulls them on d06 and
+stops, with nothing minted or started, when one is missing.
 
 - `compose.yml`: theOrg's `docker-compose.yml` with `compose.docker-socket.yml` and
   `compose.blackbox.yml` folded in (the Docker-socket and blackbox pieces are on). `MONITOR_THEORG`
@@ -113,8 +114,11 @@ when the host says one is required (`remote/maint_host.py:301-306`). What notice
 - once the watchdog ping is on (`ALERT_WATCHDOG_PING`): the healthchecks.io dead-man, since
   Alertmanager's Watchdog reaches it through alert-relay.
 
-The recovery is the deploy above (`deploy_role.py`), run by hand. Recovering on its own (a token
-the services can use again after a restart) is open with theOrg: it is their token convention.
+The recovery is the deploy above (`deploy_role.py`), run by hand. theOrg's heal exists at f757911
+(`scripts/heal_spent_tokens.py` and `heal.yml`, #324 and #326; DEPLOY.md "Recovery after reboot or
+restart" names `--token-role observability-d06` for d06): it re-mints only the looping holders
+without a deploy. d06 does not run it yet: which credential a scheduled heal mints with is open
+with the operator.
 
 ## On, off, and what turns each on
 
@@ -124,13 +128,13 @@ Assistant job (through scrape-proxy), emporia-collector, and Vector's container-
 (`VECTOR_DOCKER_LOGS`, with the Docker socket mounted as theOrg's `compose.docker-socket.yml` does):
 this stack's own container logs to Loki over plain HTTP inside `observability-net`, and their
 `CHRONICLE_EPISODE` lines to memory-system's Vector on the Mini. At 7572365 it was off, because its
-Loki sink named `/etc/loki-ca/root_ca.crt`; at 64a2bf3 no Vector file names a CA or has a tls block.
+Loki sink named `/etc/loki-ca/root_ca.crt`; at f757911 no Vector file names a CA or has a tls block.
 
 The Docker socket is bound into `vector-1` and `docker-state-exporter-1` as theOrg's
 `compose.docker-socket.yml` binds it. The bind's `:ro` does not make the Docker API read-only:
 whatever can connect to the socket has the whole API. Vector's only inputs are `internal_metrics`
 and `docker_logs` limited to compose project `observability` (theOrg `vector.toml` and
-`vector-docker-logs.toml` at 64a2bf3). A socket proxy in front of it would be theOrg's change.
+`vector-docker-logs.toml` at f757911). A socket proxy in front of it would be theOrg's change.
 
 Off here and nowhere else:
 
@@ -140,7 +144,7 @@ Off here and nowhere else:
 - Watchdog ping: record `observability-watchdog-ping-url`, and `ALERT_WATCHDOG_PING="on"` in
   `observability.sh` (one line; alert-relay already names the record). Then deploy.
 - The Loki gateway, so any log push or query from off this host (theOrg lead's option A for d06,
-  2026-11-03). theOrg's 64a2bf3 gateway reads its accounts from OpenBao with its own wrapped token
+  2026-11-03). theOrg's f757911 gateway reads its accounts from OpenBao with its own wrapped token
   and signs its TLS leaf from step-ca's `loki` provisioner; d06 has neither a loki-gateway
   identity in the `observability-d06` token role nor a provisioner or step-ca name of its own, so
   `compose.yml` leaves the service out and `deploy_role.py` mints no token for it. `up` removes
@@ -165,12 +169,13 @@ Change `OBSERVABILITY_TAG` in `observability.sh` to a theOrg `main` sha whose im
 check `compose.yml` against theOrg's `docker-compose.yml` at that sha, commit, then deploy (above):
 the tokened services move to the new images only through a deploy. `verify` checks the services
 are healthy, Prometheus is healthy with one Alertmanager, `docker_container_running` on `9099`,
-the trends retention is a size, the three blackbox self-probes, and (not on a replica) that
-Vector's container logs reach Loki: lines labelled `forwarder="vector-observability"` in the last
-10 minutes, read from inside the network (`vector-1`'s wget to `loki:3100`). Each waits up to
-`VERIFY_WAIT_S`. For each tokened service whose container exists, it also checks that the service
-read its secrets, waiting once more up to `VERIFY_WAIT_S` for all three and at least
-`SCRAPE_GRACE_S` (75 s, one scrape and some) for each:
+the trends retention is a size, the three blackbox self-probes, every target of the operations
+Prometheus (below), and (not on a replica) that Vector's container logs reach Loki: lines labelled
+`forwarder="vector-observability"` in the last 10 minutes, read from inside the network
+(`vector-1`'s wget to `loki:3100`). Each waits up to `VERIFY_WAIT_S`, the targets up to
+`SCRAPE_GRACE_S` after the self-probes. For each tokened service whose container exists, it also
+checks that the service read its secrets, waiting once more up to `VERIFY_WAIT_S` for all three and
+at least `SCRAPE_GRACE_S` (75 s, one scrape and some) for each:
 
 - scrape-proxy: the trends Prometheus (`9107`) reads `up{job="asyla-home-assistant"}` 1 (theOrg
   `trends/scrape/asyla-home-assistant.yml`). The proxy answers 503 without its vault token and 502
@@ -179,9 +184,9 @@ read its secrets, waiting once more up to `VERIFY_WAIT_S` for all three and at l
 - emporia-collector: the trends Prometheus reads `sum(emporia_collector_openbao_failure)` 0 and
   `count(emporia_channel_info)` 1 or more (job `emporia`, theOrg `trends/scrape/emporia.yml`). Its
   `up` alone proves nothing: the collector serves its metrics before it reads OpenBao and retries
-  the login forever (theOrg `emporia-collector/collector.py` at 64a2bf3). The failure gauge is 0 in
-  every category after an OpenBao read that worked; the channel names appear only once Emporia took
-  the login and the collector read the channels.
+  the login forever (theOrg `emporia-collector/collector.py` at f757911). The failure gauge is 0 in
+  every category after an OpenBao read or a renewal that worked (the renewal since #325); the
+  channel names appear only once Emporia took the login and the collector read the channels.
 - alert-relay: its own metrics (`9111`) read `alert_relay_secret_present{secret="smtp_username"}`
   and `{secret="smtp_password"}` 1 (theOrg `alert-relay/relay.py`). That it holds the login, not
   that Gmail takes it.
@@ -191,6 +196,21 @@ started: `timestamp(...) > S` in the query, S the later `.State.StartedAt` of th
 Prometheus that holds the samples (for the self-probes, `prometheus-1` and `blackbox-exporter-1`).
 A tag change recreates both Prometheus, and a Prometheus that stops writes no staleness markers,
 so until its first scrape after the restart an instant query can return a sample from before it.
+
+The targets check reads the operations Prometheus's active targets (`127.0.0.1:9090/api/v1/targets`)
+and needs each to read health `up` at a scrape (`lastScrape`) after S, S the later
+`.State.StartedAt` of `prometheus-1` and the job's service, and each job of `STACK_JOBS`
+(`observability.sh`) to have a target. `STACK_JOBS` lists the jobs the prometheus image of
+`OBSERVABILITY_TAG` runs here: theOrg's `prometheus/scrape-stack/*.yml` (alert-relay, alertmanager,
+loki, prometheus-trends, pushgateway, scrape-proxy, vector), the two optional pieces'
+(`scrape-optional/blackbox-exporter.yml`: also blackbox-selftest; `docker-state-exporter.yml`) and
+`base_config.py`'s `prometheus`. A job whose service is not expected here (a replica's, or a tokened
+service never deployed) is left out. This is theOrg's deploy step "Verify this stack's own scrape
+targets are up" (#327), which reads the jobs from its checkout; d06 has only the images, so an
+upgrade checks `STACK_JOBS` against theOrg's `prometheus/` at the new sha. A job theOrg adds there
+and `STACK_JOBS` misses is still checked (S from `prometheus-1` alone); a job it drops fails as "no
+target". The trends Prometheus's targets are not checked (Known limits: three of its jobs read 0
+from d06).
 
 ## Known limits
 
