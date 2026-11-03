@@ -126,6 +126,12 @@ this stack's own container logs to Loki over plain HTTP inside `observability-ne
 `CHRONICLE_EPISODE` lines to memory-system's Vector on the Mini. At 7572365 it was off, because its
 Loki sink named `/etc/loki-ca/root_ca.crt`; at 64a2bf3 no Vector file names a CA or has a tls block.
 
+The Docker socket is bound into `vector-1` and `docker-state-exporter-1` as theOrg's
+`compose.docker-socket.yml` binds it. The bind's `:ro` does not make the Docker API read-only:
+whatever can connect to the socket has the whole API. Vector's only inputs are `internal_metrics`
+and `docker_logs` limited to compose project `observability` (theOrg `vector.toml` and
+`vector-docker-logs.toml` at 64a2bf3). A socket proxy in front of it would be theOrg's change.
+
 Off here and nowhere else:
 
 - Alert issues on the forge: the forge token record is not stored. On: store
@@ -163,12 +169,28 @@ the trends retention is a size, the three blackbox self-probes, and (not on a re
 Vector's container logs reach Loki: lines labelled `forwarder="vector-observability"` in the last
 10 minutes, read from inside the network (`vector-1`'s wget to `loki:3100`). Each waits up to
 `VERIFY_WAIT_S`. For each tokened service whose container exists, it also checks that the service
-holds its secrets, waiting once more up to `VERIFY_WAIT_S` for the first scrape: the trends
-Prometheus (`9107`) reads `up{job="asyla-home-assistant"}` 1 (scrape-proxy) and `up{job="emporia"}`
-1 (emporia-collector), the job names of theOrg `trends/scrape/asyla-home-assistant.yml` and
-`trends/scrape/emporia.yml`; alert-relay's own metrics (`9111`) read
-`alert_relay_secret_present{secret="smtp_username"}` and `{secret="smtp_password"}` 1 (theOrg
-`alert-relay/relay.py`).
+read its secrets, waiting once more up to `VERIFY_WAIT_S` for all three and at least
+`SCRAPE_GRACE_S` (75 s, one scrape and some) for each:
+
+- scrape-proxy: the trends Prometheus (`9107`) reads `up{job="asyla-home-assistant"}` 1 (theOrg
+  `trends/scrape/asyla-home-assistant.yml`). The proxy answers 503 without its vault token and 502
+  when Home Assistant refuses the token (theOrg `scrape-proxy/proxy.py`), so 1 means Home
+  Assistant took the token it read.
+- emporia-collector: the trends Prometheus reads `sum(emporia_collector_openbao_failure)` 0 and
+  `count(emporia_channel_info)` 1 or more (job `emporia`, theOrg `trends/scrape/emporia.yml`). Its
+  `up` alone proves nothing: the collector serves its metrics before it reads OpenBao and retries
+  the login forever (theOrg `emporia-collector/collector.py` at 64a2bf3). The failure gauge is 0 in
+  every category after an OpenBao read that worked; the channel names appear only once Emporia took
+  the login and the collector read the channels.
+- alert-relay: its own metrics (`9111`) read `alert_relay_secret_present{secret="smtp_username"}`
+  and `{secret="smtp_password"}` 1 (theOrg `alert-relay/relay.py`). That it holds the login, not
+  that Gmail takes it.
+
+The self-probes and the trends readings count only samples taken after the containers involved
+started: `timestamp(...) > S` in the query, S the later `.State.StartedAt` of the service and the
+Prometheus that holds the samples (for the self-probes, `prometheus-1` and `blackbox-exporter-1`).
+A tag change recreates both Prometheus, and a Prometheus that stops writes no staleness markers,
+so until its first scrape after the restart an instant query can return a sample from before it.
 
 ## Known limits
 
@@ -185,3 +207,7 @@ Prometheus (`9107`) reads `up{job="asyla-home-assistant"}` 1 (scrape-proxy) and 
 - d06's `update_all.sh` reports this app as FAIL. It runs `backup`, which this app does not have,
   and `update`, which needs the pull token from the workstation. This matches ticketing's `update`.
 - With no gateway, no caller off this host can push logs to or query Loki (option B, above).
+- `VECTOR_DOCKER_LOGS` also loads theOrg's `to_memory_system` sink: `CHRONICLE_EPISODE` lines to
+  `CHRONICLE_VECTOR_ADDRESS` (10.0.0.150:6000, the Mini's memory-system). On d06 it forwards none (a
+  2026-11-03 read: 0 in 2 h from all 11 containers; `docker_logs` reads only project
+  `observability`). A separate off switch would be theOrg's change.

@@ -89,6 +89,12 @@ HOME_ASSISTANT_URL="https://homeassistant.asyla.org"
 SELF_PROBES_WANT="http_2xx=1 icmp=1 tcp_connect=1"
 
 VERIFY_WAIT_S="${OBSERVABILITY_VERIFY_WAIT_S:-300}"
+# The least each tokened service's check waits after the shared VERIFY_WAIT_S: one 60 s scrape and
+# some (check_tokened).
+SCRAPE_GRACE_S="${OBSERVABILITY_SCRAPE_GRACE_S:-75}"
+# emporia_held's reading when the collector read its login from OpenBao, Emporia took it and the
+# channels are read (an extended regex, matched whole).
+EMPORIA_WANT='openbao_failure=0 channel_info=[1-9][0-9]*'
 
 export DOCKER_DL OBSERVABILITY_ROOT OBSERVABILITY_TAG PROMETHEUS_EXTERNAL_URL ALERTMANAGER_EXTERNAL_URL \
   GITEA_URL GITEA_ALERT_REPO ALERT_REPOS CHRONICLE_VECTOR_ADDRESS COMPOSE_PROJECT_NAME \
@@ -328,14 +334,53 @@ wait_ready() {
   done
 }
 
-# The self-probes as "module=value ..." (sorted), from the operations Prometheus.
+# The latest .State.StartedAt of the containers "$@", in epoch seconds; fails when one is missing
+# or has never started. Reads only that field.
+started_at() {
+  local name stamps=""
+  for name in "$@"; do
+    stamps="$stamps $(docker inspect -f '{{.State.StartedAt}}' "$name" 2>/dev/null)" || return 1
+  done
+  # shellcheck disable=SC2086 # one word per container
+  python3 -c '
+import calendar, re, sys, time
+out = []
+for s in sys.argv[1:]:
+    m = re.fullmatch(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(\.\d+)?Z", s)
+    t = calendar.timegm(time.strptime(m[1], "%Y-%m-%dT%H:%M:%S")) + float(m[2] or 0) if m else 0
+    if t <= 0:
+        sys.exit(1)
+    out.append(t)
+if not out:
+    sys.exit(1)
+print("%.3f" % max(out))' $stamps
+}
+
+# The values of PromQL instant query $2 on 127.0.0.1:$1, sorted, space-separated (empty for none).
+prom_values() {
+  curl -sf --max-time 10 -G "http://127.0.0.1:$1/api/v1/query" --data-urlencode "query=$2" \
+    | python3 -c 'import json,sys; print(" ".join(sorted(r["value"][1] for r in json.load(sys.stdin)["data"]["result"])))'
+}
+
+# PromQL: the series of selector $1 whose newest sample was scraped after epoch $2. An instant
+# query returns a series' last sample for up to 5 minutes, and a Prometheus that stops writes no
+# staleness markers, so until its first scrape after a restart (every 60 s here) it can return a
+# sample taken before the restart: no evidence about the containers running now.
+fresh() {
+  printf '(%s and timestamp(%s) > %s)' "$1" "$1" "$2"
+}
+
+# The self-probes as "module=value ..." (sorted), from the operations Prometheus: only samples
+# taken after prometheus-1 and blackbox-exporter-1 started.
 self_probes() {
+  local since
+  since="$(started_at prometheus-1 blackbox-exporter-1)" || return 1
   curl -sf --max-time 10 -G http://127.0.0.1:9090/api/v1/query \
-      --data-urlencode 'query=probe_success{job="blackbox-selftest",instance=~"http://prometheus:9090/-/healthy|prometheus:9090|prometheus"}' \
+      --data-urlencode "query=$(fresh 'probe_success{job="blackbox-selftest",instance=~"http://prometheus:9090/-/healthy|prometheus:9090|prometheus"}' "$since")" \
     | python3 -c 'import json,sys; print(" ".join(sorted(r["metric"].get("module", "?") + "=" + r["value"][1] for r in json.load(sys.stdin)["data"]["result"])))'
 }
 
-# Waits for the first scrapes (the probe job runs every 60 s).
+# Waits for the first scrapes after the restart (the probe job runs every 60 s).
 check_self_probes() {
   local deadline got=""
   deadline=$(( $(date +%s) + VERIFY_WAIT_S ))
@@ -352,10 +397,27 @@ check_self_probes() {
   return 1
 }
 
-# The trends Prometheus's up{job="$1"} values (space-separated), from its 127.0.0.1:9107.
+# The trends Prometheus's up{job="$1"} values (space-separated), from its 127.0.0.1:9107: only
+# samples taken after container $2 and prometheus-trends-1 started.
 trends_up() {
-  curl -sf --max-time 10 -G http://127.0.0.1:9107/api/v1/query --data-urlencode "query=up{job=\"$1\"}" \
-    | python3 -c 'import json,sys; print(" ".join(sorted(r["value"][1] for r in json.load(sys.stdin)["data"]["result"])))'
+  local since
+  since="$(started_at "$2" prometheus-trends-1)" || return 1
+  prom_values 9107 "$(fresh "up{job=\"$1\"}" "$since")"
+}
+
+# emporia-collector as the trends Prometheus scraped it (job emporia) after emporia-collector-1
+# and prometheus-trends-1 started, as "openbao_failure=SUM channel_info=COUNT" ("none" for no such
+# sample). It serves /metrics before it reads OpenBao and retries the login forever (theOrg
+# emporia-collector/collector.py at 64a2bf3), so up{job="emporia"} 1 proves neither. SUM is
+# emporia_collector_openbao_failure over its categories: all 0 after an OpenBao read that worked,
+# the failed category 1 after one that did not. COUNT is the emporia_channel_info series, set only
+# once Emporia took the login and the collector read the channels.
+emporia_held() {
+  local since failure channels
+  since="$(started_at emporia-collector-1 prometheus-trends-1)" || return 1
+  failure="$(prom_values 9107 "sum$(fresh 'emporia_collector_openbao_failure{job="emporia"}' "$since")")" || return 1
+  channels="$(prom_values 9107 "count$(fresh 'emporia_channel_info{job="emporia"}' "$since")")" || return 1
+  echo "openbao_failure=${failure:-none} channel_info=${channels:-none}"
 }
 
 # alert-relay's alert_relay_secret_present for its SMTP login, as "secret=value ..." (sorted), from
@@ -365,38 +427,46 @@ relay_smtp_held() {
     | python3 -c 'import re,sys; print(" ".join(sorted(m[0] + "=" + format(float(m[1]), "g") for m in re.findall(r"^alert_relay_secret_present\{secret=\"(smtp_username|smtp_password)\"\} (\S+)$", sys.stdin.read(), re.M))))'
 }
 
-# Waits until "$@" prints WANT ($1) or the shared deadline TOKENED_DEADLINE passes; the last
-# reading is in GOT.
+# Waits until "$@" prints a reading that the extended regex WANT ($1) matches whole, or the shared
+# deadline TOKENED_DEADLINE passes; each reading still gets SCRAPE_GRACE_S of its own when an
+# earlier one used up the shared wait. The last reading is in GOT.
 wait_reading() {
-  local want="$1"
+  local want="$1" deadline
   shift
+  deadline=$(( $(date +%s) + SCRAPE_GRACE_S ))
+  [ "$deadline" -ge "$TOKENED_DEADLINE" ] || deadline="$TOKENED_DEADLINE"
   while :; do
     GOT="$("$@" 2>/dev/null)" || GOT=""
-    [ "$GOT" = "$want" ] && return 0
-    [ "$(date +%s)" -lt "$TOKENED_DEADLINE" ] || return 1
+    [[ "$GOT" =~ ^($want)$ ]] && return 0
+    [ "$(date +%s)" -lt "$deadline" ] || return 1
     sleep 5
   done
 }
 
-# That each tokened service whose container exists holds its secrets, not only that it is
-# healthy: the trends jobs scrape-proxy and emporia-collector serve (theOrg trends/scrape/
-# asyla-home-assistant.yml and emporia.yml) read up 1, and alert-relay holds its SMTP login.
-# The first scrape comes within a minute (scrape_interval 60s): one wait of VERIFY_WAIT_S for all.
+# That each tokened service whose container exists read its secrets (the two trends ones: and used
+# them), not only that it is healthy, from samples taken after it and the trends Prometheus started:
+# - scrape-proxy: the trends job it serves (theOrg trends/scrape/asyla-home-assistant.yml) reads
+#   up 1. It answers 503 without its vault token and 502 when Home Assistant refuses the token,
+#   which Prometheus records as up 0 (theOrg scrape-proxy/proxy.py);
+# - emporia-collector: no OpenBao failure and the channel names on (emporia_held);
+# - alert-relay: alert_relay_secret_present 1 for its SMTP login (its own metrics, live).
+# The first scrape comes within a minute (scrape_interval 60s): one wait of VERIFY_WAIT_S for all,
+# and at least SCRAPE_GRACE_S for each.
 check_tokened() {
   local rc=0
   TOKENED_DEADLINE=$(( $(date +%s) + VERIFY_WAIT_S ))
   if [ "$(service_state scrape-proxy)" != missing ]; then
-    if wait_reading 1 trends_up asyla-home-assistant; then
-      info "scrape-proxy: trends up{job=\"asyla-home-assistant\"} 1 (it holds the Home Assistant token)"
+    if wait_reading 1 trends_up asyla-home-assistant scrape-proxy-1; then
+      info "scrape-proxy: trends up{job=\"asyla-home-assistant\"} 1, scraped after it started (Home Assistant took the token it read)"
     else
-      echo "[ERROR] scrape-proxy: trends up{job=\"asyla-home-assistant\"} reads '${GOT:-nothing}', not 1" >&2; rc=1
+      echo "[ERROR] scrape-proxy: trends up{job=\"asyla-home-assistant\"} scraped after it started reads '${GOT:-nothing}', not 1" >&2; rc=1
     fi
   fi
   if [ "$(service_state emporia-collector)" != missing ]; then
-    if wait_reading 1 trends_up emporia; then
-      info "emporia-collector: trends up{job=\"emporia\"} 1"
+    if wait_reading "$EMPORIA_WANT" emporia_held; then
+      info "emporia-collector: trends $GOT, scraped after it started (OpenBao read, Emporia login, channels)"
     else
-      echo "[ERROR] emporia-collector: trends up{job=\"emporia\"} reads '${GOT:-nothing}', not 1" >&2; rc=1
+      echo "[ERROR] emporia-collector: trends scraped after it started reads '${GOT:-nothing}', not openbao_failure=0 and channel_info 1 or more" >&2; rc=1
     fi
   fi
   if [ "$(service_state alert-relay)" != missing ] && [ -n "$ALERT_EMAIL_TO" ]; then

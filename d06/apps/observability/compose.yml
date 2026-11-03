@@ -257,6 +257,10 @@ services:
   # over plain HTTP inside observability-net (theOrg vector-docker-logs.toml at 64a2bf3 has no tls
   # block and names no CA file), and its CHRONICLE_EPISODE lines to memory-system's Vector
   # (CHRONICLE_VECTOR_ADDRESS). observability.sh verify reads the lines back from loki:3100.
+  # The socket bind matches theOrg's compose.docker-socket.yml. Its :ro does not make the Docker
+  # API read-only: whatever connects to the socket has the whole API. Vector's only inputs are
+  # internal_metrics and docker_logs limited to compose project observability (theOrg vector.toml,
+  # vector-docker-logs.toml). A socket proxy would be theOrg's change.
   vector:
     image: gitea.asyla.org/theorg/observability-vector:${OBSERVABILITY_TAG:?}
     container_name: vector-1
@@ -289,7 +293,8 @@ services:
       - observability-net
 
   # Container lifecycle metrics for every container on this daemon (theOrg's
-  # compose.docker-socket.yml, folded in; published on 127.0.0.1 only).
+  # compose.docker-socket.yml, folded in; published on 127.0.0.1 only). Its socket bind is theOrg's
+  # too: the :ro does not make the Docker API read-only (as for vector, above).
   docker-state-exporter:
     image: gitea.asyla.org/theorg/observability-docker-state-exporter:${OBSERVABILITY_TAG:?}
     container_name: docker-state-exporter-1
