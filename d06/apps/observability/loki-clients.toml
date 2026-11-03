@@ -1,0 +1,30 @@
+# The Loki gateway's accounts on d06, in the format of theOrg observability loki-clients.toml
+# (DEPLOY.md at 2144f83, "Deploying without theOrg's OpenBao"); read by vendor/loki_clients.py
+# through observability.sh (--registry). Each password is in asyla's OpenBao, handed to `up` in
+# the environment as LOKI_CLIENT_<NAME> (upper case, "-" as "_"; d06/host.toml start_env) and put
+# in a 0700 directory under /dev/shm for that run only. An account whose value is absent is left
+# out of the render, so the gateway refuses it.
+#
+#   scope      "push" and/or "query"
+#   container  the container that presents it on this host, if any (check-senders)
+#   env        the variable it is handed in (default LOKI_PUSH_PASSWORD for push, else
+#              LOKI_QUERY_PASSWORD)
+
+# Used only by `observability.sh up`'s loki_clients.py verify, one per scope.
+[clients.observability-check-push]
+scope = ["push"]
+
+[clients.observability-check-query]
+scope = ["query"]
+
+# alert-relay-1's queries for an alert's logql annotation (ALERT_RELAY_LOKI_PASSWORD).
+[clients.alert-relay]
+scope = ["query"]
+container = "alert-relay-1"
+env = "LOKI_QUERY_PASSWORD"
+
+# ticketing's Vector on d06, when its vector piece is on (d06/apps/ticketing).
+[clients.vector-ticketing-d06]
+scope = ["push"]
+container = "ticketing-vector-1"
+env = "LOKI_PUSH_PASSWORD"

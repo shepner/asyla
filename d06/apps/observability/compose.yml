@@ -1,0 +1,331 @@
+# theOrg's observability stack on d06: Loki and its gateway, Prometheus, the trends Prometheus,
+# Alertmanager, alert-relay, the pushgateway, Vector, emporia-collector, docker-state-exporter and
+# blackbox-exporter. Written by asyla from theOrg observability docker-compose.yml,
+# compose.docker-socket.yml and compose.blackbox.yml at main 2144f83c3ec978663d3cb544e743ae8006471a0a
+# (DEPLOY.md at that sha). Project, container names, volume names and the network are theOrg's, so
+# its scripts (loki_clients.py, write_ping_url.sh, state_backup.py) work unchanged. asyla's choices:
+# - the Docker-socket and blackbox pieces are folded in; credential-probe, the Ollama log and
+#   MONITOR_THEORG (theOrg's other stacks' jobs and rules) are not here;
+# - no build sections: theOrg's published images of OBSERVABILITY_TAG (observability.sh pins it);
+# - only the gateway (3100) is published on every address; every other port on 127.0.0.1 only
+#   (Alertmanager on 9093, the pushgateway on 9091, docker-state-exporter on 9099);
+# - Loki, both Prometheus and Alertmanager keep their data on d06's local data disk, as named
+#   volumes bound to OBSERVABILITY_ROOT (theOrg decision asyla-network-monitoring §8: never NFS);
+# - the Loki TLS and CA volumes have fixed names (observability-loki-tls, observability-loki-ca);
+# - the secret-bearing volumes are declared plain here; compose.secret-volumes.yml makes them
+#   in-memory and adds secrets-holder (the operator's rule: secrets live in the vault). On d06
+#   observability.sh always adds it; a replica runs this file alone and writes no secret.
+# Run with observability.sh: it sets OBSERVABILITY_TAG, OBSERVABILITY_ROOT and the settings below,
+# writes the secret files, renders the gateway's accounts and keeps the start order.
+name: observability
+
+services:
+  pushgateway:
+    image: prom/pushgateway:v1.11.1
+    container_name: pushgateway-1
+    ports:
+      - "127.0.0.1:9091:9091"
+    restart: unless-stopped
+    networks:
+      - observability-net
+
+  alertmanager:
+    image: gitea.asyla.org/theorg/observability-alertmanager:${OBSERVABILITY_TAG:?}
+    container_name: alertmanager-1
+    ports:
+      - "127.0.0.1:9093:9093"
+    # The email piece is on only with ALERT_EMAIL_TO set and the SMTP login in alertmanager-smtp;
+    # the watchdog piece only with watchdog-url in alertmanager-healthchecks (DEPLOY.md).
+    environment:
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:-}
+      ALERT_EMAIL_FROM: ${ALERT_EMAIL_FROM:-}
+      ALERT_EMAIL_SMARTHOST: ${ALERT_EMAIL_SMARTHOST:-smtp.gmail.com:587}
+    volumes:
+      - alertmanager-data:/alertmanager
+      - alertmanager-smtp:/run/alertmanager-smtp:ro
+      - alertmanager-healthchecks:/run/alertmanager-healthchecks:ro
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      # Links in notifications (scheme://host:port, no path, so the route prefix stays /).
+      - --web.external-url=${ALERTMANAGER_EXTERNAL_URL:?}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:9093/-/healthy >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - observability-net
+
+  # Files every alert as an issue in GITEA_ALERT_REPO (asyla/alerts) on the forge, off this host.
+  alert-relay:
+    image: gitea.asyla.org/theorg/observability-alert-relay:${OBSERVABILITY_TAG:?}
+    container_name: alert-relay-1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:9111:9111"
+    environment:
+      GITEA_URL: ${GITEA_URL:?}
+      GITEA_TOKEN: ${ALERT_RELAY_GITEA_TOKEN:-}
+      GITEA_ALERT_REPO: ${GITEA_ALERT_REPO:?}
+      ALERT_REPOS: ${ALERT_REPOS:-}
+      # An alert's logql annotation runs through the relay's own query account at the gateway.
+      LOKI_QUERY_URL: ${ALERT_RELAY_LOKI_URL:?}
+      LOKI_QUERY_USER: alert-relay
+      LOKI_QUERY_PASSWORD: ${ALERT_RELAY_LOKI_PASSWORD:-}
+      CHAT_API_URL: ""
+      CHAT_API_CHANNEL: alerts
+      CHAT_API_TOKEN: ""
+    volumes:
+      - loki-ca:/etc/loki-ca:ro
+      - alert-relay-healthchecks:/run/alert-relay-healthchecks:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:9101/healthz >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - observability-net
+
+  loki:
+    image: gitea.asyla.org/theorg/observability-loki:${OBSERVABILITY_TAG:?}
+    container_name: loki-1
+    # Not published: callers off the stack reach Loki through loki-gateway.
+    volumes:
+      - loki-data:/loki
+      - loki-tls:/etc/loki/tls:ro
+    # Unset here, so the configs' own defaults apply (744h, 0.05 MB/s, burst 16; DEPLOY.md).
+    environment:
+      - LOKI_RETENTION_PERIOD
+      - LOKI_INGESTION_RATE_MB
+      - LOKI_INGESTION_BURST_SIZE_MB
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q -O- http://127.0.0.1:3100/ready 2>/dev/null || wget -q -O- --no-check-certificate https://127.0.0.1:3100/ready 2>/dev/null || exit 1",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - observability-net
+
+  # Loki's authenticating reverse proxy: one basic-auth account per caller (loki-clients.toml),
+  # verifiers on loki-gateway-auth (observability.sh renders them with loki_clients.py).
+  loki-gateway:
+    image: gitea.asyla.org/theorg/observability-loki-gateway:${OBSERVABILITY_TAG:?}
+    container_name: loki-gateway-1
+    ports:
+      - "3100:3100"
+    volumes:
+      - loki-tls:/etc/loki/tls:ro
+      - loki-gateway-auth:/etc/nginx/loki-auth:ro
+    depends_on:
+      loki:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sfk https://127.0.0.1:3100/ready || curl -sf http://127.0.0.1:3100/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - observability-net
+
+  prometheus:
+    image: gitea.asyla.org/theorg/observability-prometheus:${OBSERVABILITY_TAG:?}
+    container_name: prometheus-1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:9090:9090"
+    # prometheus-entrypoint.sh enables the two pieces' scrape jobs (folded in from theOrg's
+    # compose.docker-socket.yml and compose.blackbox.yml). MONITOR_THEORG stays unset.
+    environment:
+      SCRAPE_DOCKER_STATE_EXPORTER: "true"
+      SCRAPE_BLACKBOX_EXPORTER: "true"
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION_TIME:-15d}
+      - --storage.tsdb.retention.size=${PROMETHEUS_RETENTION_SIZE:-8GB}
+      - --web.external-url=${PROMETHEUS_EXTERNAL_URL:?}
+    volumes:
+      - prometheus-data:/prometheus
+      - prometheus-tokens:/etc/prometheus/tokens:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - observability-net
+
+  # Long-term capacity and trend data; size retention only (24 GiB, sized for this 64 GiB disk).
+  prometheus-trends:
+    image: gitea.asyla.org/theorg/observability-prometheus-trends:${OBSERVABILITY_TAG:?}
+    container_name: prometheus-trends-1
+    ports:
+      - "127.0.0.1:9107:9090"
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.size=${TRENDS_RETENTION_SIZE:-24GB}
+      - --web.enable-remote-write-receiver
+    volumes:
+      - prometheus-trends-data:/prometheus
+      # asyla-home-assistant: the Home Assistant scrape token (observability.sh writes it).
+      - prometheus-trends-tokens:/etc/prometheus/tokens:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - observability-net
+
+  # Emporia Vue minute data into prometheus-trends. Started only with its login written.
+  emporia-collector:
+    image: gitea.asyla.org/theorg/observability-emporia-collector:${OBSERVABILITY_TAG:?}
+    container_name: emporia-collector-1
+    depends_on:
+      prometheus-trends:
+        condition: service_healthy
+    environment:
+      TRENDS_URL: http://prometheus-trends:9090
+      EMPORIA_CREDENTIALS_DIR: /run/emporia
+    volumes:
+      - emporia-login:/run/emporia:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9108/metrics', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - observability-net
+
+  # With the Docker socket (folded in): this stack's own logs to Loki, and its CHRONICLE_EPISODE
+  # lines to memory-system's Vector (CHRONICLE_VECTOR_ADDRESS).
+  vector:
+    image: gitea.asyla.org/theorg/observability-vector:${OBSERVABILITY_TAG:?}
+    container_name: vector-1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:9598:9598"
+    depends_on:
+      loki:
+        condition: service_healthy
+    user: root
+    volumes:
+      - vector-disk-buffer:/var/lib/vector
+      - loki-ca:/etc/loki-ca:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      VECTOR_LOG: info
+      LOKI_ADDRESS: loki:3100
+      CHRONICLE_VECTOR_ADDRESS: ${CHRONICLE_VECTOR_ADDRESS:?}
+      VECTOR_DOCKER_LOGS: "true"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:9598/metrics >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - observability-net
+
+  # Container lifecycle metrics for every container on this daemon (theOrg's
+  # compose.docker-socket.yml, folded in; published on 127.0.0.1 only).
+  docker-state-exporter:
+    image: gitea.asyla.org/theorg/observability-docker-state-exporter:${OBSERVABILITY_TAG:?}
+    container_name: docker-state-exporter-1
+    ports:
+      - "127.0.0.1:9099:9099"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:9099/metrics >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - observability-net
+
+  # Probes (theOrg's compose.blackbox.yml, folded in). Not published: anything that reaches /probe
+  # can make it connect anywhere this host can.
+  blackbox-exporter:
+    image: gitea.asyla.org/theorg/observability-blackbox-exporter:${OBSERVABILITY_TAG:?}
+    container_name: blackbox-exporter-1
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_RAW
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:9115/-/healthy >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - observability-net
+
+volumes:
+  # Data, on d06's local data disk (observability.sh creates and owns the directories).
+  alertmanager-data:
+    driver: local
+    driver_opts: { type: none, o: bind, device: "${OBSERVABILITY_ROOT:?}/alertmanager-data" }
+  loki-data:
+    driver: local
+    driver_opts: { type: none, o: bind, device: "${OBSERVABILITY_ROOT:?}/loki-data" }
+  prometheus-data:
+    driver: local
+    driver_opts: { type: none, o: bind, device: "${OBSERVABILITY_ROOT:?}/prometheus-data" }
+  prometheus-trends-data:
+    driver: local
+    driver_opts: { type: none, o: bind, device: "${OBSERVABILITY_ROOT:?}/prometheus-trends-data" }
+  # Loki's leaf, key and root (cert.pem, key.pem, root_ca.crt), written by `observability.sh
+  # tls-install`; in memory on d06 (compose.secret-volumes.yml).
+  loki-tls:
+    name: observability-loki-tls
+  # The root alone (a public certificate): persistent. Vector and alert-relay verify Loki with it.
+  loki-ca:
+    name: observability-loki-ca
+  # The gateway's verifiers (SHA-512-crypt hashes, no password): persistent, re-rendered each up.
+  loki-gateway-auth:
+  # Empty on d06 (theOrg's secrets-vault writes it on the Mini; MONITOR_THEORG is off here).
+  prometheus-tokens:
+  # Secret-bearing; in memory on d06 (compose.secret-volumes.yml), written by observability.sh.
+  prometheus-trends-tokens:
+  emporia-login:
+  alertmanager-smtp:
+  alertmanager-healthchecks:
+  alert-relay-healthchecks:
+  vector-disk-buffer:
+    name: observability-vector-disk-buffer
+
+networks:
+  observability-net:
+    driver: bridge
