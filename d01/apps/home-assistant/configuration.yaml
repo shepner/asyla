@@ -2,7 +2,8 @@
 # start: edit it here, never on the host. Integrations (Ecobee, Cielo) are added in the UI.
 
 # Packages: one file per job in packages/, installed by home-assistant.sh up (packages/hvac.yaml:
-# the HVAC cold-spell report). Only packages here: location, units and time zone stay in the UI.
+# the HVAC cold-spell report; packages/dry_air.yaml: the dry-air advice). Only packages here:
+# location, units and time zone stay in the UI.
 homeassistant:
   packages: !include_dir_named packages
 

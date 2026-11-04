@@ -134,6 +134,44 @@ host-maintenance's).
    `input_datetime.hvac_cold_spell_report_last_success`, so the next cold-spell report is 7 days
    later).
 
+## Dry-air advice
+
+asyla backlog `2026-11-04-home-automation-dry-air-advice-home-assistant-tells-the-operator-when-to-air`:
+Home Assistant tells the operator when to air the house and when to run the basement dehumidifier
+(operator, 2026-11-04). Advice only: it switches no device.
+
+- `packages/dry_air.yaml`. Inputs: the Ecobee `sensor.downstairs_hallway_temperature` and
+  `_humidity`, the Ambient Weather `sensor.mke_temperature`, `_humidity`, `_dew_point` and
+  `_precipitation_intensity`. Every template converts a temperature by that entity's
+  `unit_of_measurement` (°F and °C; anything else counts as unavailable): on d01 they read °F,
+  and Home Assistant shows any temperature-class sensor, `sensor.indoor_dew_point` included, in
+  the system's unit. Thresholds are in °C.
+  - `sensor.indoor_dew_point`: Magnus formula (a 17.62, b 243.12), computed in °C.
+  - `sensor.outdoor_air_rh_indoors`: the RH outdoor air reads once warmed to the indoor
+    temperature (2026-11-04: 83% at 12.2 °C outdoors reads about 41% at 23.6 °C indoors).
+  - `binary_sensor.outdoor_air_can_dry_the_house`: outdoor dew point at least 3 °C under the
+    indoor one, 5 °C to the indoor temperature outdoors, no rain; held 30 min. Its `reasons`
+    attribute says why not: humid, rain, too cold, warmer outside, or readings unavailable.
+  - `binary_sensor.indoor_humidity_high` (RH 60% or more, held 6 h) and
+    `binary_sensor.indoor_humidity_dry_enough` (50% or less, held 3 h).
+  - Four `input_datetime.dry_air_last_*_notice` helpers: when each notice was last sent (no
+    `initial`, restored at start; the 00:00:00 start value is harmless, as notices start at 08:00).
+  - Four automations, 08:00-21:00 local only, each also at 08:00 so a condition that held
+    overnight is sent then. **Air the house**: RH 55% or more and the outdoor air can dry it; at
+    most every 3 h, and it checks again 3 h after a notice. **Stop airing**: the outdoor air
+    stops drying it within 3 h of an air notice, once per air notice, with the reasons.
+    **Dehumidifier on** (basement, set 50%): RH high while the outdoor air cannot dry the house
+    (off or unavailable); once until an off notice. **Dehumidifier off**: after an on notice, RH
+    dry enough. Each sets its helper, then calls the script.
+  - `script.dry_air_notice`: a persistent notification (`asyla_dry_air_airing` or
+    `asyla_dry_air_dehumidifier`, so a later notice in a thread replaces the earlier one), then
+    mail to `notify.hvac_report`. Every notice ends with the live readings in °F and °C and the
+    converted RH. Until the SMTP integration exists (Mail, above), only the UI shows them.
+- Test on WS01: `python3 scripts/tests/test_home_assistant_dry_air.py` (with the image pulled, it
+  runs `check_config` and every template in Home Assistant's own template engine).
+- To see one now: Settings → Automations → a "Dry air" automation → Run actions (this skips the
+  conditions and sets its helper).
+
 ## Restore
 
 `restore` brings back everything but `.storage`. Then `up`: Home Assistant starts as new and `up`
