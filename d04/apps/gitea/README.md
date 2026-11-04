@@ -52,6 +52,33 @@ docker exec -u git gitea gitea admin regenerate hooks   # Gitea docs: needed or 
 Existing `data/ssh/` keys are kept; on a fresh disk the container creates new ones (only SSH clients would notice).
 For an earlier day, copy from nas01's ZFS snapshot instead (see [../README.md](../README.md)).
 
+## Registry retention
+
+Three package cleanup rules, turned on 2026-11-04 with the operator's approval, one per organisation:
+
+| Rule | Owner | Enabled | Type | Keep the most recent | Keep versions matching | Remove versions older than | Remove versions matching | Match full name |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | theOrg | yes | container | 0 | empty | 7 days | empty | off |
+| 2 | asyla | yes | container | 0 | empty | 7 days | empty | off |
+| 3 | personal | yes | container | 0 | empty | 7 days | empty | off |
+
+- **Set in the web UI only:** Gitea 1.27.3 has no REST API for cleanup rules (org Settings →
+  Packages → Cleanup rules, `/org/<owner>/settings/packages/rules`). Don't open theOrg's Preview
+  page: on 2026-11-04 it held the database for 207 s and Gitea's health check failed meanwhile.
+- **Always kept:** each package's `latest`, and a `sha256:` digest version while a kept version
+  still references it. Everything else older than 7 days is deleted with its files
+  ([cleanup.go](https://github.com/go-gitea/gitea/blob/v1.27.3/services/packages/cleanup/cleanup.go),
+  [container/cleanup.go](https://github.com/go-gitea/gitea/blob/v1.27.3/services/packages/container/cleanup.go)).
+- **When:** Gitea's `cleanup_packages` job, at `@midnight` (America/Chicago) and at every start, so
+  also when the nightly backup starts Gitea again. The same job frees blobs nothing references.
+- **Why:** the registry grew about 2 GB a day from per-commit images (theOrg pushes every image
+  tagged with the commit on each push to main), filling d04's disk and slowing the nightly backup.
+  Hosts follow `latest` and are redeployed weekly, so none runs a version the rules remove.
+- `gitea.sh verify` prints the rules (read-only) and warns when one is missing or differs from the
+  table above.
+
+History and the decision: asyla hub backlog `2026-11-03-hosts-gitea-registry-retention-for-theorg-images`.
+
 ## Usage
 
 ```bash

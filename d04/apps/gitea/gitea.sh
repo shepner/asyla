@@ -188,7 +188,43 @@ do_verify() {
     echo "[ERROR] $GITEA_PUBLIC_URL check failed" >&2
     rc=1
   fi
+  check_cleanup_rules
   return "$rc"
+}
+
+# Registry retention (README): one container cleanup rule per owner, set in the web UI only (Gitea
+# 1.27.3 has no API for rules). verify prints them from the DB, opened read-only, and warns when one
+# is missing or differs. A warning, not a failure: verify is Gitea's health check (`restart verify`,
+# build_host.py verify, the empty Gitea of test_gitea_verify_test01.sh), and a failed verify after an
+# applied update rolls the image back (host-maintenance), which would not fix a rule.
+GITEA_CLEANUP_OWNERS="theOrg asyla personal"
+
+gitea_sql_ro() {
+  docker exec -u git gitea sqlite3 -readonly -cmd ".timeout 5000" /data/gitea/gitea.db "$1"
+}
+
+check_cleanup_rules() {
+  local rules good owner missing=""
+  if ! rules="$(gitea_sql_ro "select r.id, u.name, r.enabled, r.type, r.keep_count, r.remove_days, quote(r.keep_pattern), quote(r.remove_pattern) from package_cleanup_rule r join user u on u.id = r.owner_id order by r.id;" 2>&1)"; then
+    echo "[WARN] Could not read the package cleanup rules: ${rules##*$'\n'}" >&2
+    return 0
+  fi
+  echo "[INFO] Package cleanup rules (id|owner|enabled|type|keep_count|remove_days|keep_pattern|remove_pattern):"
+  if [ -n "$rules" ]; then
+    printf '%s\n' "$rules" | sed 's/^/         /'
+  else
+    echo "         (none)"
+  fi
+  # The owners whose rule is as the README's table has it.
+  good="$(gitea_sql_ro "select u.name from package_cleanup_rule r join user u on u.id = r.owner_id where r.enabled = 1 and r.type = 'container' and r.keep_count = 0 and r.remove_days = 7 and r.keep_pattern = '' and r.remove_pattern = '';" 2>/dev/null)" || good=""
+  for owner in $GITEA_CLEANUP_OWNERS; do
+    grep -qxF "$owner" <<<"$good" || missing="$missing $owner"
+  done
+  if [ -n "$missing" ]; then
+    echo "[WARN] No enabled container cleanup rule with keep_count 0, remove_days 7 and no pattern for:$missing (README, Registry retention)" >&2
+  else
+    echo "[INFO] Cleanup rules for ${GITEA_CLEANUP_OWNERS// /, } as in the README"
+  fi
 }
 
 run_cmd() {
@@ -251,7 +287,8 @@ if [ $# -eq 0 ]; then
   echo "  up       - Start containers only" >&2
   echo "  down     - Stop and remove containers" >&2
   echo "  restart  - Down then up" >&2
-  echo "  verify   - curl local :3000 /api/healthz (fatal) and https://gitea.asyla.org" >&2
+  echo "  verify   - curl local :3000 /api/healthz (fatal) and https://gitea.asyla.org;" >&2
+  echo "             print the package cleanup rules (read-only; warns on drift)" >&2
   echo "  logs     - Follow logs (optionally for one service)" >&2
   exit 1
 fi
