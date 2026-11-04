@@ -50,8 +50,8 @@ import urllib.request
 from collections import defaultdict
 from zoneinfo import ZoneInfo
 
-# theOrg's trends Prometheus on the Mini (theOrg observability PR 240; ASY-TRD); no login.
-PROM = "http://10.0.0.150:9107"
+# theOrg's trends Prometheus on d06 since 2026-11-03 (ASY-TRD); GET only, no login.
+PROM = "https://prometheus-trends.asyla.org"
 TZ = ZoneInfo("America/Chicago")
 STEP = 60
 MAX_POINTS = 10000  # Prometheus refuses more than 11000 points per series per query

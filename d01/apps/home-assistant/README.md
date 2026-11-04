@@ -112,10 +112,10 @@ data (operator, 2026-10-28). Read-only: nothing here changes a thermostat.
     mails it to `notify.hvac_report`.
 - `asyla/report_hvac_cycles.py`: the report (standard library only). This is its only copy; the
   asyla hub's `tools/report_hvac_cycles.py` runs this file from the hub's clone of this repo. It
-  reads theOrg's trends Prometheus at `http://10.0.0.150:9107` with GET only (reached from this
-  container: HTTP 200, 2026-10-29T00:00Z). It must finish within `shell_command`'s 60 s: each
-  request waits at most 10 s and the run at most 45 s, then it exits 2 with an `[ERROR]` line,
-  which the mail carries.
+  reads theOrg's trends Prometheus on d06 at `https://prometheus-trends.asyla.org` with GET only
+  (reached from this container, certificate trusted: `/-/healthy` 200, 2026-11-04T02:20Z). It
+  must finish within `shell_command`'s 60 s: each request waits at most 10 s and the run at most
+  45 s, then it exits 2 with an `[ERROR]` line, which the mail carries.
 - Test on WS01: `python3 scripts/tests/test_home_assistant_hvac.py` (with the image in
   `compose.yml` pulled, it also runs Home Assistant's `check_config` and the templates in it).
 
