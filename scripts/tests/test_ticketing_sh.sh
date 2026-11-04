@@ -1,6 +1,6 @@
 #!/bin/bash
 # d06/apps/ticketing/ticketing.sh against stubs (docker, hostname, getent): the start order, the tag (latest) and
-# up pulling only missing images, the replica mode, the restore refusal build_host.py reads as a skip, the seeded restore, and the backup host guard.
+# up pulling only missing images, the replica mode, verify's wait for vikunja-mcp, the restore refusal build_host.py reads as a skip, the seeded restore, and the backup host guard.
 # Nothing here reaches a registry, the vault or a host. Run: bash scripts/tests/test_ticketing_sh.sh
 set -uo pipefail
 
@@ -29,7 +29,8 @@ PULL_NAME="TICKETING_REGISTRY_PULL_TOKEN"
 
 # docker: logs every call; `image inspect` says present unless STUB_MISSING; `compose ... config
 # --images` names one image; a pull logs its DOCKER_CONFIG and asks the credential helper there, as
-# Docker would; `exec -T vikunja-mcp` prints STUB_MCP ("200 401" by default). Like
+# Docker would; `exec -T vikunja-mcp` prints STUB_MCP ("200 401" by default), after failing its first
+# STUB_MCP_DOWN calls as a container still starting does. Like
 # compose, any compose call fails when a `${...:?}` the files use is empty: compose interpolates
 # the whole file, unused services included. Each compose call also logs the tag it would use (TAG ...).
 cat > "$T/bin/docker" <<'EOF'
@@ -49,7 +50,12 @@ case "$*" in
     printf 'gitea.asyla.org' | docker-credential-ticketing-env get | grep -q '"Username":"theorg-registry"' \
       && echo "HELPER_OK" >> "$STUB_LOG" ;;
   *"ps -q vikunja"*) if [ -n "${STUB_RUNNING:-}" ]; then echo abc; fi ;;
-  *"exec -T vikunja-mcp python -c"*) echo "${STUB_MCP:-200 401}" ;;
+  *"exec -T vikunja-mcp python -c"*)
+    if [ -n "${STUB_MCP_DOWN:-}" ]; then
+      n="$(cat "$STUB_LOG.mcp" 2>/dev/null)"; n=$(( ${n:-0} + 1 )); echo "$n" > "$STUB_LOG.mcp"
+      [ "$n" -gt "$STUB_MCP_DOWN" ] || { echo 'service "vikunja-mcp" is not running' >&2; exit 1; }
+    fi
+    echo "${STUB_MCP:-200 401}" ;;
 esac
 EOF
 cat > "$T/bin/hostname" <<'EOF'
@@ -68,10 +74,11 @@ chmod +x "$T/bin/"*
 
 run() {   # run HOST SWITCH...: output in $OUT, docker calls in $T/log, status returned
   : > "$T/log"
+  : > "$T/log.mcp"
   local set=() n
   for n in ${STUB_SET:-}; do set+=("$n=stand-in"); done
   OUT="$(env ${set[@]+"${set[@]}"} HOME="$T/home" PATH="$T/bin:$PATH" STUB_LOG="$T/log" STUB_HOST="$1" \
-    TICKETING_VERIFY_WAIT_S=0 bash "$T/app/ticketing.sh" "${@:2}" 2>&1)"
+    TICKETING_VERIFY_WAIT_S="${STUB_WAIT_S:-0}" bash "$T/app/ticketing.sh" "${@:2}" 2>&1)"
 }
 
 # Start order on d06: DEPLOY.md 1-4, configure before vikunja-mcp, with the vault file.
@@ -153,6 +160,13 @@ STUB_SET="$DEX_NAMES" STUB_IP=10.0.0.69 run test01 configure; rc=$?
 STUB_IP=10.0.0.65 run d06 verify; rc=$?
 [ "$rc" -eq 0 ] && grep -q 'compose.vault.yml exec -T vikunja-mcp python -c' "$T/log" && echo "$OUT" | grep -q '(401)' \
   && ok "verify on d06: vikunja-mcp /metrics 200 and /mcp 401 from inside its container" || bad "verify d06" "rc=$rc; $OUT"
+# A deploy has just recreated vikunja-mcp (2026-11-04 15:01Z): its first probes fail; verify waits, then passes.
+STUB_MCP_DOWN=2 STUB_WAIT_S=30 STUB_IP=10.0.0.65 run d06 verify; rc=$?
+[ "$rc" -eq 0 ] && [ "$(grep -c 'exec -T vikunja-mcp' "$T/log")" -eq 4 ] && echo "$OUT" | grep -q '(401)' \
+  && ok "verify on d06 waits for a starting vikunja-mcp, then passes" || bad "verify waits for mcp" "rc=$rc; $OUT"
+STUB_MCP_DOWN=99 STUB_WAIT_S=3 STUB_IP=10.0.0.65 run d06 verify; rc=$?
+[ "$rc" -ne 0 ] && echo "$OUT" | grep -q 'answered 000, not 200' \
+  && ok "verify on d06: a vikunja-mcp that never answers fails after the wait" || bad "verify mcp never ready" "rc=$rc; $OUT"
 STUB_MCP="200 200" STUB_IP=10.0.0.65 run d06 verify; rc=$?
 [ "$rc" -ne 0 ] && echo "$OUT" | grep -q 'answered 200, not 401' && ok "verify on d06: an open /mcp fails" || bad "verify open mcp" "rc=$rc; $OUT"
 STUB_IP=10.0.0.69 run test01 verify; rc=$?
