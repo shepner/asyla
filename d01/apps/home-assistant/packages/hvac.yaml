@@ -48,9 +48,16 @@ automation:
       - trigger: time
         at: "09:00:00"
     conditions:
+      # The 24 h low in °C, by the sensor's unit: it follows sensor.mke_temperature, which reads
+      # °F on d01, so a bare `below: 0` meant below -17.8 °C. Another unit, or no number, renders
+      # none, which numeric_state counts as false.
       - condition: numeric_state
         entity_id: sensor.mke_temperature_24_h_minimum
-        below: 0  # assumes sensor.mke_temperature reports °C
+        value_template: >-
+          {%- set v = state.state | float(none) -%}
+          {%- set u = state.attributes.unit_of_measurement -%}
+          {{ none if v is none else (v - 32) * 5 / 9 if u == '°F' else v if u == '°C' else none }}
+        below: 0
       # The last successful report, by local date, so a report at 09:00:00.2 does not block the
       # next one. Unknown, unavailable or the 00:00:00 start value (never set) count as no report.
       - condition: template
@@ -73,8 +80,14 @@ automation:
               entity_id: input_datetime.hvac_cold_spell_report_last_success
             data:
               datetime: "{{ now() }}"
+      # The low in both units, by the sensor's unit (its state as it is when that is not °F or °C).
       - variables:
-          low: "{{ states('sensor.mke_temperature_24_h_minimum') }}"
+          low: >-
+            {%- set e = 'sensor.mke_temperature_24_h_minimum' -%}
+            {%- set v = states(e) | float(none) -%}
+            {%- set u = state_attr(e, 'unit_of_measurement') -%}
+            {%- set c = none if v is none else (v - 32) * 5 / 9 if u == '°F' else v if u == '°C' else none -%}
+            {{ states(e) if c is none else '%.1f °F (%.1f °C)' | format(c * 9 / 5 + 32, c) }}
           body: >-
             {% if report is defined and report.returncode == 0 %}{{ report.stdout }}
             {%- elif report is defined %}report_hvac_cycles.py failed (exit {{ report.returncode }}):
@@ -84,12 +97,12 @@ automation:
       - action: persistent_notification.create
         data:
           notification_id: asyla_hvac_cold_spell_report
-          title: "HVAC cold-spell report (24 h low {{ low }} °C)"
+          title: "HVAC cold-spell report (24 h low {{ low }})"
           message: "{{ body }}"
       # notify.hvac_report: the SMTP integration's recipient entity, renamed to this id (README).
       - action: notify.send_message
         target:
           entity_id: notify.hvac_report
         data:
-          title: "HVAC cold-spell report (24 h low {{ low }} °C)"
+          title: "HVAC cold-spell report (24 h low {{ low }})"
           message: "{{ body }}"

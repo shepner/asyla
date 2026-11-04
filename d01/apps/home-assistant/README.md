@@ -98,18 +98,20 @@ data (operator, 2026-10-28). Read-only: nothing here changes a thermostat.
 
 - `packages/hvac.yaml` (loaded through `homeassistant: packages:` in `configuration.yaml`):
   - `sensor.mke_temperature_24_h_minimum`: a `statistics` sensor, the lowest
-    `sensor.mke_temperature` (Ambient Weather station, °C) over the last 24 h.
+    `sensor.mke_temperature` (Ambient Weather station) over the last 24 h, in that sensor's unit:
+    °F on d01.
   - `shell_command.hvac_cycle_report`: `python3 /config/asyla/report_hvac_cycles.py --days 7`.
   - `input_datetime.hvac_cold_spell_report_last_success`: when the last successful report ran
     (local date and time). It has no `initial`, so Home Assistant restores it at every start. With
     nothing to restore it starts as today 00:00:00, which the automation reads as never set.
   - Automation "HVAC cold-spell report": daily at 09:00, when that minimum is below 0 °C (the gate
-    assumes `sensor.mke_temperature` is in °C) and the last successful report is 7 or more days
+    converts it to °C by its `unit_of_measurement`; until 2026-11-04 a bare `below: 0` on the °F
+    reading meant below −17.8 °C; any other unit never passes) and the last successful report is 7 or more days
     old by local date, or never happened (unknown, unavailable or the 00:00:00 start value). It
     runs the report and, only when the script exits 0, sets the `input_datetime` to now. A failed
     run (Prometheus down, a timeout) leaves it alone, so the report is tried again at 09:00 the
     next day. Either way it puts the output, or the failure, in a persistent notification, then
-    mails it to `notify.hvac_report`.
+    mails it to `notify.hvac_report`; the title gives the low in °F and °C.
 - `asyla/report_hvac_cycles.py`: the report (standard library only). This is its only copy; the
   asyla hub's `tools/report_hvac_cycles.py` runs this file from the hub's clone of this repo. It
   reads theOrg's trends Prometheus on d06 at `https://prometheus-trends.asyla.org` with GET only

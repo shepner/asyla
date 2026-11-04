@@ -11,7 +11,9 @@
    with no network: Home Assistant's check_config accepts the installed config (it exits 0 even on
    errors, so its output is read), report_hvac_cycles.py --selftest passes on the image's python3,
    and the automation's templates render as intended (Jinja2 with stand-ins for now, states and
-   strptime).
+   strptime); the cold-spell gate and the report title, in Home Assistant's own numeric_state
+   condition and template engine, read the 24 h low in °C whether the sensor reports °F (as on
+   d01) or °C.
    Without them those cases say skip.
 Nothing reaches a host, Home Assistant or Prometheus.
 """
@@ -213,6 +215,42 @@ for name, got, want in cases:
 sys.exit(1 if bad else 0)
 '''
 
+# The gate through Home Assistant's own numeric_state condition, and the title's low, with the
+# statistics sensor in °F (d01: it follows sensor.mke_temperature) and in °C.
+UNITS = r'''
+import asyncio, sys, yaml
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.condition import async_numeric_state
+from homeassistant.helpers.template import Template
+auto = yaml.safe_load(open("/config/packages/hvac.yaml"))["automation"][0]
+gate = [c for c in auto["conditions"] if c["condition"] == "numeric_state"][0]
+low = [a for a in auto["actions"] if "variables" in a][0]["variables"]["low"]
+titles = {a["data"]["title"] for a in auto["actions"] if "title" in a.get("data", {})}
+E = gate["entity_id"]
+cases = [("gate: below 0 (°C), on the 24 h minimum", (E, gate["below"]), ("sensor.mke_temperature_24_h_minimum", 0)),
+         ("titles: the low carries its units", titles, {"HVAC cold-spell report (24 h low {{ low }})"})]
+async def main():
+    hass = HomeAssistant("/config")
+    vt = Template(gate["value_template"], hass)
+    def at(state, unit):
+        hass.states.async_set(E, state, {"unit_of_measurement": unit} if unit else {})
+        return (async_numeric_state(hass, E, below=gate["below"], value_template=vt),
+                Template(low, hass).async_render(parse_result=False).strip())
+    for state, unit, want in (
+            ("31.0", "°F", (True, "31.0 °F (-0.6 °C)")), ("32.0", "°F", (False, "32.0 °F (0.0 °C)")),
+            ("5.0", "°F", (True, "5.0 °F (-15.0 °C)")), ("-0.5", "°C", (True, "31.1 °F (-0.5 °C)")),
+            ("3.0", "°C", (False, "37.4 °F (3.0 °C)")), ("270", "K", (False, "270")),
+            ("unavailable", "°F", (False, "unavailable")), ("31.0", None, (False, "31.0"))):
+        cases.append((f"{state} {unit}: gate, title low", at(state, unit), want))
+asyncio.run(main())
+bad = 0
+for name, got, want in cases:
+    ok = got == want
+    bad += not ok
+    print(("ok   " if ok else "FAIL ") + name + ("" if ok else f": got {got!r}, want {want!r}"))
+sys.exit(1 if bad else 0)
+'''
+
 
 @unittest.skipUnless(image_present(), f"needs docker and {IMAGE} (docker pull it)")
 class InPinnedImage(unittest.TestCase):
@@ -247,6 +285,11 @@ class InPinnedImage(unittest.TestCase):
 
     def test_templates(self):
         r = in_image(self.cfg, "-", stdin=TEMPLATES)
+        print(r.stdout, end="")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_cold_spell_gate_and_title_by_the_sensor_unit(self):
+        r = in_image(self.cfg, "-", stdin=UNITS)
         print(r.stdout, end="")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
