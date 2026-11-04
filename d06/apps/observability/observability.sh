@@ -122,6 +122,11 @@ EMPORIA_WANT='openbao_failure=0 channel_info=[1-9][0-9]*'
 # (1m) tick, so up to about 6 minutes after a deploy; 7.5 with Prometheus's first evaluation (15 s)
 # and some margin. theOrg alertmanager-pieces/watchdog/route.yml at the running revision.
 WATCHDOG_WAIT_S="${OBSERVABILITY_WATCHDOG_WAIT_S:-450}"
+# How long after alert-relay-1 started its forge self-test and the delivery check's ping may take
+# (check_delivery): the relay runs the self-test as it starts (a forge search with a 20 s timeout,
+# once more after a 401), then pings; a ping that errors is tried again after 5, 10, 20, 40 s ...
+# (theOrg alert-relay/relay.py delivery_selftest, _request, PING_RETRY_FIRST_SECONDS).
+DELIVERY_WAIT_S="${OBSERVABILITY_DELIVERY_WAIT_S:-180}"
 
 export DOCKER_DL OBSERVABILITY_ROOT OBSERVABILITY_TAG PROMETHEUS_EXTERNAL_URL ALERTMANAGER_EXTERNAL_URL \
   GITEA_URL GITEA_ALERT_REPO ALERT_REPOS CHRONICLE_VECTOR_ADDRESS COMPOSE_PROJECT_NAME \
@@ -580,6 +585,17 @@ relay_watchdog_pings() {
     | python3 -c 'import re,sys; d=dict(re.findall(r"^alert_relay_watchdog_pings_total\{result=\"(sent|error)\"\} (\S+)$", sys.stdin.read(), re.M)); print("sent=%d error=%d" % (float(d["sent"]), float(d["error"])))'
 }
 
+# alert-relay's forge self-tests and delivery check pings since it started, as
+# "selftest_ok=N selftest_failed=N success_sent=N fail_sent=N" (127.0.0.1:9111; theOrg
+# alert-relay/relay.py): alert_relay_delivery_selftests_total by result, and
+# alert_relay_delivery_pings_total with result "sent" (the check's endpoint took it) by kind,
+# success or fail (its /fail). The relay makes a series only when it first counts one, so a
+# missing series reads 0. Counters of the running relay, so they start at 0 with the container.
+relay_delivery() {
+  curl -sf --max-time 10 http://127.0.0.1:9111/metrics \
+    | python3 -c 'import re,sys; t=sys.stdin.read(); s=dict(re.findall(r"^alert_relay_delivery_selftests_total\{result=\"(ok|failed)\"\} (\S+)$", t, re.M)); p=dict(re.findall(r"^alert_relay_delivery_pings_total\{kind=\"(success|fail)\",result=\"sent\"\} (\S+)$", t, re.M)); print("selftest_ok=%d selftest_failed=%d success_sent=%d fail_sent=%d" % tuple(float(d.get(k, 0)) for d, k in ((s, "ok"), (s, "failed"), (p, "success"), (p, "fail"))))'
+}
+
 # "on" when the running Alertmanager loaded the watchdog piece, else "off": its loaded
 # configuration (/api/v2/status config.original) has the piece's receiver "watchdog" and a route
 # to it (theOrg alertmanager-pieces/watchdog/), not only the base's "watchdog-off". The receiver's
@@ -614,14 +630,14 @@ wait_reading() {
 #   up 1. It answers 503 without its vault token and 502 when Home Assistant refuses the token,
 #   which Prometheus records as up 0 (theOrg scrape-proxy/proxy.py);
 # - emporia-collector: no OpenBao failure and the channel names on (emporia_held);
-# - alert-relay: alert_relay_secret_present (its own metrics, live) 1 for its SMTP login with
-#   ALERT_EMAIL_TO set and for the Watchdog's ping URL with ALERT_WATCHDOG_PING set, and 0 for the
-#   delivery check's ping URL: compose.yml names no record for it until the forge token is stored,
-#   since without the token the relay's self-test pings that check's /fail at every start.
+# - alert-relay: alert_relay_secret_present (its own metrics, live) 1 for the delivery check's ping
+#   URL and the forge token, for its SMTP login with ALERT_EMAIL_TO set and for the Watchdog's ping
+#   URL with ALERT_WATCHDOG_PING set. relay_held sorts the reading, so want keeps that order.
+#   That the forge took the token and the check took a ping is check_delivery's.
 # The first scrape comes within a minute (scrape_interval 60s): one wait of VERIFY_WAIT_S for all,
 # and at least SCRAPE_GRACE_S for each.
 check_tokened() {
-  local rc=0 names="delivery_ping_url" want="delivery_ping_url=0"
+  local rc=0 names="delivery_ping_url forge_token" want="delivery_ping_url=1 forge_token=1"
   if [ -n "$ALERT_EMAIL_TO" ]; then
     names="$names smtp_password smtp_username"; want="$want smtp_password=1 smtp_username=1"
   fi
@@ -689,6 +705,40 @@ check_watchdog() {
   return 1
 }
 
+# The delivery check's ping (theOrg DEPLOY.md, "Watching the watcher"), where alert-relay runs:
+# since the running relay started, its forge self-test passed (its token searched
+# GITEA_ALERT_REPO's issues and the forge answered 200) and the delivery check's endpoint took a
+# success ping, with no failed self-test and no ping to the check's /fail. The relay runs the
+# self-test as it starts when it holds the check's URL (check_tokened has said whether it does),
+# then daily, and a passing one pings success. A healthchecks.io check that never got a ping
+# stays "new" and never alerts, so that first ping arms it. It may come up to DELIVERY_WAIT_S
+# after alert-relay-1 started; a verify run later reads once. A failed self-test or a /fail ping
+# is counted for good, so either fails at once.
+check_delivery() {
+  local since deadline got
+  [ "$(service_state alert-relay)" != missing ] || return 0
+  since="$(started_at alert-relay-1)" || {
+    echo "[ERROR] alert-relay: no start time for alert-relay-1" >&2
+    return 1
+  }
+  deadline=$(( ${since%.*} + DELIVERY_WAIT_S ))
+  while :; do
+    got="$(relay_delivery 2>/dev/null)" || got=""
+    if [[ "$got" =~ ^selftest_ok=[1-9][0-9]*\ selftest_failed=0\ success_sent=[1-9][0-9]*\ fail_sent=0$ ]]; then
+      info "alert-relay: delivery since it started: $got (the forge took its token on GITEA_ALERT_REPO; the delivery check's endpoint took a success ping)"
+      return 0
+    fi
+    if [[ "$got" =~ selftest_failed=[1-9]|fail_sent=[1-9] ]]; then
+      echo "[ERROR] alert-relay: delivery since it started reads '$got': a failed forge self-test or a ping to the delivery check's /fail (alert-relay-1's log says why: 'delivery self-test', 'delivery ping')" >&2
+      return 1
+    fi
+    [ "$(date +%s)" -lt "$deadline" ] || break
+    sleep 5
+  done
+  echo "[ERROR] alert-relay: delivery since it started reads '${got:-nothing}', not selftest_ok and success_sent 1 or more within ${DELIVERY_WAIT_S}s of alert-relay-1's start (alert-relay-1's log says why: 'delivery ping: off', 'delivery self-test', 'delivery ping')" >&2
+  return 1
+}
+
 # The lines Vector's container-log pipeline put in Loki in the last 10 minutes (theOrg
 # vector-docker-logs.toml labels every one forwarder="vector-observability"), asked from inside
 # observability-net: vector-1's own wget (Dockerfile.vector installs it) to loki:3100, the address
@@ -722,9 +772,9 @@ check_vector_logs() {
 
 # What runs: the services, Prometheus and its Alertmanager, docker-state-exporter, the trends
 # retention, the blackbox self-probes, every operations Prometheus target up, Vector's container
-# logs in Loki (not on a replica: no Vector), the tokened services' secrets (check_tokened) and the
-# Watchdog's ping (check_watchdog). The pieces that are off (compose.yml's header) have nothing to
-# check.
+# logs in Loki (not on a replica: no Vector), the tokened services' secrets (check_tokened), the
+# Watchdog's ping (check_watchdog) and alert-relay's forge self-test and delivery ping
+# (check_delivery). The pieces that are off (compose.yml's header) have nothing to check.
 do_verify() {
   local rc=0 svc state n body off
   if [[ "${OBSERVABILITY_REVISION:-}" =~ ^[0-9a-f]{40}$ ]]; then
@@ -774,6 +824,7 @@ do_verify() {
   if ! is_replica; then check_vector_logs || rc=1; fi
   check_tokened || rc=1
   check_watchdog || rc=1
+  check_delivery || rc=1
 
   if [ "$rc" -eq 0 ]; then info "verify OK"; else echo "[ERROR] verify failed" >&2; fi
   return "$rc"
@@ -853,7 +904,8 @@ usage() {
   echo "  verify   - Services running and healthy, Prometheus and its one Alertmanager," >&2
   echo "             docker-state-exporter, trends retention, the blackbox self-probes, every" >&2
   echo "             operations Prometheus target up, Vector's container logs in Loki, the" >&2
-  echo "             tokened services' secrets, the Watchdog's healthchecks.io ping" >&2
+  echo "             tokened services' secrets, the Watchdog's healthchecks.io ping, and" >&2
+  echo "             alert-relay's forge self-test and delivery check ping" >&2
   echo "  status   - Containers" >&2
   echo "  logs     - Follow logs (optionally for one service)" >&2
 }

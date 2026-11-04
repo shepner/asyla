@@ -849,21 +849,25 @@ def registry_cases() -> list[bool]:
 
 
 def relay_records_cases() -> list[bool]:
-    """alert-relay's token reads its SMTP login and the Watchdog's ping URL, each named in
-    compose.yml; no delivery ping record (on only with the forge token), and the watchdog piece is on."""
+    """alert-relay's token reads its SMTP login, the Watchdog's ping URL, the forge token and the
+    delivery check's ping URL, each named in compose.yml (the forge token and the delivery ping URL
+    by their own settings), and the watchdog piece is on."""
     records = {c: rs for c, _, rs in dr.IDENTITIES}["alert-relay"]
     compose = (dr.HERE / "compose.yml").read_text()
     live = [ln.strip() for ln in compose.splitlines() if not ln.lstrip().startswith("#")]
     sh = (dr.HERE / "observability.sh").read_text()
     return [
-        check("relay: its records are the SMTP login and the Watchdog's ping URL",
-              records == ["smtp-relay-username", "smtp-relay-password", "observability-watchdog-ping-url"]),
+        check("relay: its records are the SMTP login, the Watchdog's ping URL, the forge token and "
+              "the delivery ping URL",
+              records == ["smtp-relay-username", "smtp-relay-password", "observability-watchdog-ping-url",
+                          "observability-alert-relay-gitea-token", "observability-delivery-ping-url"]),
         check("relay: compose.yml names each of its records",
               all(any(ln.startswith("ALERT_RELAY_") and f'"secret/hubs/asyla/{r}#value"' in ln for ln in live)
                   for r in records)),
-        check("relay: no delivery ping record, in compose.yml or IDENTITIES",
-              not any(ln.startswith("ALERT_RELAY_DELIVERY_PING_KV") for ln in live)
-              and not any("delivery-ping" in r for _, _, rs in dr.IDENTITIES for r in rs)),
+        check("relay: compose.yml gives the forge token and the delivery ping URL their settings",
+              'ALERT_RELAY_FORGE_KV: "secret/hubs/asyla/observability-alert-relay-gitea-token#value"' in live
+              and 'ALERT_RELAY_DELIVERY_PING_KV: "secret/hubs/asyla/observability-delivery-ping-url#value"'
+              in live),
         check("relay: the watchdog piece is on in observability.sh",
               '\nALERT_WATCHDOG_PING="on"\n' in sh),
     ]

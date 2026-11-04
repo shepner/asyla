@@ -136,10 +136,12 @@ VERIFY_TIMEOUT = 1800   # s: verify waits up to VERIFY_WAIT_S (300 s) per wait, 
 IDENTITIES = [
     ("scrape-proxy", "SCRAPE_PROXY_OPENBAO_WRAPPED_TOKEN", ["home-assistant-prometheus-token"]),
     ("emporia-collector", "EMPORIA_OPENBAO_WRAPPED_TOKEN", ["emporia-username", "emporia-password"]),
-    # The Watchdog's ping URL (on: observability.sh ALERT_WATCHDOG_PING). No delivery ping URL: on
-    # with the forge token (compose.yml). The forge token's record is not stored yet.
+    # The SMTP login, the Watchdog's ping URL (on: observability.sh ALERT_WATCHDOG_PING), the forge
+    # token for alert issues in asyla/alerts, and the delivery check's ping URL (compose.yml). The
+    # minting tool reads each record, so a record not stored stops the deploy before the stack.
     ("alert-relay", "ALERT_RELAY_OPENBAO_WRAPPED_TOKEN",
-     ["smtp-relay-username", "smtp-relay-password", "observability-watchdog-ping-url"]),
+     ["smtp-relay-username", "smtp-relay-password", "observability-watchdog-ping-url",
+      "observability-alert-relay-gitea-token", "observability-delivery-ping-url"]),
 ]
 
 
