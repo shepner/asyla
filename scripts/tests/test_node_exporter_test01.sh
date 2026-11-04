@@ -108,7 +108,7 @@ systemctl is-active --quiet prometheus-node-exporter; check "prometheus-node-exp
 deny=$(systemctl show -p IPAddressDeny --value prometheus-node-exporter)
 allow=$(systemctl show -p IPAddressAllow --value prometheus-node-exporter)
 echo "  IPAddressDeny=$deny IPAddressAllow=$allow"
-[[ "$deny" == *0.0.0.0/0* && "$allow" == *10.0.0.150* ]]; check "address filter: deny any, allow 10.0.0.150" $?
+[[ "$deny" == *0.0.0.0/0* && "$allow" == *10.0.0.0/24* ]]; check "address filter: deny any, allow 10.0.0.0/24" $?
 dpkg-query -W -f='${Version}\n' prometheus-node-exporter
 [ "$(dpkg-query -W -f='${db:Status-Status}' prometheus-node-exporter-collectors 2>/dev/null)" != installed ]; check "recommends not installed (prometheus-node-exporter-collectors)" $?
 

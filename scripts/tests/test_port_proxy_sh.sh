@@ -20,8 +20,8 @@ S="$T/d07/asyla-proxy-switch-snmp.socket"; V="$T/d07/asyla-proxy-switch-snmp.ser
 grep -qx "ListenStream=9116" "$S" 2>/dev/null && ok "socket listens on 9116" || bad "socket listens on 9116"
 grep -qx "IPAddressDeny=any" "$S" 2>/dev/null && ok "socket denies by default" || bad "socket denies by default"
 allows=$(grep '^IPAddressAllow=' "$S" 2>/dev/null | tr '\n' ' ')
-[ "$allows" = "IPAddressAllow=localhost IPAddressAllow=10.0.0.150 " ] && ok "socket allows localhost and 10.0.0.150 only" \
-  || bad "socket allows localhost and 10.0.0.150 only" "$allows"
+[ "$allows" = "IPAddressAllow=localhost IPAddressAllow=10.0.0.0/24 " ] && ok "socket allows localhost and 10.0.0.0/24 only" \
+  || bad "socket allows localhost and 10.0.0.0/24 only" "$allows"
 grep -qx "ExecStart=/usr/lib/systemd/systemd-socket-proxyd --connections-max=16 127.0.0.1:19116" "$V" 2>/dev/null \
   && ok "proxy forwards to 127.0.0.1:19116" || bad "proxy forwards to 127.0.0.1:19116"
 [ "$(grep '^IPAddress' "$V" 2>/dev/null | tr '\n' ' ')" = "IPAddressDeny=any IPAddressAllow=localhost " ] \

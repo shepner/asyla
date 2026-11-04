@@ -836,8 +836,8 @@ results = [
               build_host.load_spec("d03")) == (["nfs.sh"], True)),
     fails("--step not in the spec is refused", "not in d03's [setup].steps",
           lambda: build_host.select_steps(build_host.load_spec("d03"), ["smb.sh"])),
-    check("d03's [node_exporter]: only the trends Prometheus's host may scrape",
-          build_host.load_spec("d03")["node_exporter"]["allow"] == ["10.0.0.150"]),
+    check("d03's [node_exporter]: the LAN may scrape, not one host (the trends Prometheus moves)",
+          build_host.load_spec("d03")["node_exporter"]["allow"] == ["10.0.0.0/24"]),
     check("d07's unifi-monitor: its key over SSH stdin only, no restore",
           (lambda a: (a.get("start_env"), a.get("restore")) == (["UNIFI_SITE_MANAGER_API_KEY"], False))(
               next(x for x in build_host.load_spec("d07")["app"] if x["name"] == "unifi-monitor"))),

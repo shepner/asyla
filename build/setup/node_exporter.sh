@@ -7,7 +7,7 @@
 #
 # From this host's host.toml (HOST_SPEC):
 #   [node_exporter]
-#   allow = ["10.0.0.150"]          # who may connect to 9100, besides localhost: the scraper only
+#   allow = ["10.0.0.0/24"]         # who may connect to 9100, besides localhost: a subnet, not the scraper's host
 #   textfile_sources = ["/mnt/docker/app/app.prom", ...]   # copied into the textfile directory
 #
 # Port 9100 is limited to `allow` by the unit's own IPAddressDeny=any / IPAddressAllow= (systemd

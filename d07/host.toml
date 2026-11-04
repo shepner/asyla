@@ -30,7 +30,7 @@ steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "bashrc.sh", "node_exporter.s
 # ASY-TRD): port 9100 from these addresses only, and the .prom files it serves. theOrg's job
 # asyla-d07-node scrapes d07.asyla.org:9100 every 5 min after the cutover (a hand-off to theOrg).
 [node_exporter]
-allow = ["10.0.0.150"]     # the trends Prometheus's host (the Mini; d06 after the move)
+allow = ["10.0.0.0/24"]    # the LAN, so the trends Prometheus can move (d06 since 2026-11-03); a subnet, not a host (operator, 2026-10-25)
 textfile_sources = [
   "/mnt/docker/unifi-monitor/unifi.prom",
   "/mnt/docker/att-monitor/att.prom",
@@ -44,7 +44,7 @@ textfile_sources = [
 name = "switch-snmp"
 listen = 9116
 target = "127.0.0.1:19116"   # switch-monitor's snmp-exporter (compose.yml publishes it on loopback only)
-allow = ["10.0.0.150"]       # the trends Prometheus's host (the Mini; d06 after the move)
+allow = ["10.0.0.0/24"]      # the LAN, as [node_exporter]: the trends Prometheus (d06) and any later host
 
 # No [[secret]]: d07 keeps no secret on disk, like d06. Its images are Docker Hub's, so no registry
 # login; every credential is a start_env value, resolved from OpenBao on the workstation and sent over

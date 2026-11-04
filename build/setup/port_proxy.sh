@@ -9,7 +9,7 @@
 #   name = "switch-snmp"          # units asyla-proxy-NAME.socket and asyla-proxy-NAME.service
 #   listen = 9116                 # the host port
 #   target = "127.0.0.1:19116"    # the loopback-published container port
-#   allow = ["10.0.0.150"]        # who may connect, besides localhost
+#   allow = ["10.0.0.0/24"]       # who may connect, besides localhost: a subnet, not a host
 #
 # The port is limited to `allow` by the socket unit's IPAddressDeny=any / IPAddressAllow= (systemd
 # BPF filter on the socket's listening and connection sockets, systemd.resource-control(5)), as
