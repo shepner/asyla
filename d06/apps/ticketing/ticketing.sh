@@ -248,10 +248,25 @@ ping = urllib.request.Request(base + "/mcp", data=b"{\"jsonrpc\":\"2.0\",\"id\":
 print(status(base + "/metrics"), status(ping))
 '
 
+# vikunja-mcp is not published: probed from inside its container, with its own python.
+mcp_codes() {
+  local codes
+  codes="$(run_compose exec -T vikunja-mcp python -c "$MCP_PROBE" 2>/dev/null)" || codes="000 000"
+  echo "$codes"
+}
+
+# Waits, within one TICKETING_VERIFY_WAIT_S, for Vikunja and then (d06) for vikunja-mcp to give the
+# answers verify expects: a deploy that has just recreated vikunja-mcp answers 000 while it starts
+# (2026-11-04 15:01Z, verify failed; healthy and passing 30 s later). Verify's checks after it are fatal.
 wait_ready() {
   local deadline
   deadline=$(( $(date +%s) + TICKETING_VERIFY_WAIT_S ))
   until curl -sf -o /dev/null --max-time 5 "$LOCAL_VIKUNJA/api/v1/info"; do
+    [ "$(date +%s)" -lt "$deadline" ] || return 1
+    sleep 2
+  done
+  is_replica && return 0
+  until [ "$(mcp_codes)" = "200 401" ]; do
     [ "$(date +%s)" -lt "$deadline" ] || return 1
     sleep 2
   done
@@ -272,8 +287,7 @@ do_verify() {
     echo "[INFO] Replica: vikunja-mcp and $PUBLIC_URL not checked (not run here / production's name)"
     return "$rc"
   fi
-  # vikunja-mcp is not published: checked from inside its container, with its own python.
-  codes="$(run_compose exec -T vikunja-mcp python -c "$MCP_PROBE" 2>/dev/null)" || codes="000 000"
+  codes="$(mcp_codes)"
   read -r metrics mcp <<< "$codes"
   if [ "${metrics:-}" = "200" ]; then
     echo "[INFO] vikunja-mcp /metrics OK"
@@ -364,7 +378,8 @@ usage() {
   echo "  down      - Stop and remove the containers" >&2
   echo "  restart   - Down then up (checks the environment first, as up)" >&2
   echo "  verify    - Vikunja on 127.0.0.1:3456 (fatal); on d06 also vikunja-mcp from inside its container" >&2
-  echo "              (/metrics 200, /mcp with no bearer 401; fatal) and $PUBLIC_URL" >&2
+  echo "              (/metrics 200, /mcp with no bearer 401; fatal) and $PUBLIC_URL; first waits up to" >&2
+  echo "              TICKETING_VERIFY_WAIT_S (default 120 s, in all) for the local checks to pass" >&2
   echo "  logs      - Follow logs (optionally for one service)" >&2
 }
 

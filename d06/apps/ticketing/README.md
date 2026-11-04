@@ -25,6 +25,11 @@ theOrg's own `deploy.yml` does not target d06.
   exists (a copy seeded there by the asyla hub's `seed_ticketing.py`), `restore` takes `backup/`
   as it stands instead, only if its `STATUS` starts with `OK`, never reads the NAS mirror, and
   removes `SEED` after theOrg's restore passes; the next backup then writes the mirror.
+- `ticketing.sh verify` fails unless Vikunja answers on `127.0.0.1:3456`, `vikunja.asyla.org`
+  answers, and on d06 vikunja-mcp, probed from inside its container, gives `/metrics` 200 and `/mcp`
+  with no bearer 401 (a replica checks Vikunja alone). It first waits, up to
+  `TICKETING_VERIFY_WAIT_S` (default 120 s, for both together), until the local checks pass, so a
+  deploy that has just recreated a container does not fail verify while it starts.
 - Names (internal-access `hosts/d06`, LAN only, over `ticketing_net`): `vikunja.asyla.org` and
   `vikunja-mcp.asyla.org` (bearer-guarded).
 - Images follow `latest` (`TICKETING_TAG` in `ticketing.sh`), which theOrg ticketing publishes from
