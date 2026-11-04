@@ -99,6 +99,18 @@ renames it into place; import-from and the qemu-img rewrite then read that copy.
 Guests are reached as docker@HOST with ~/.ssh/docker_rsa, the user and key the vm phase gives
 them, so a host needs no entry in the workstation's ssh config.
 
+SSH override, opt-in from build_host.py's environment, for a caller that is not the workstation
+(host-maintenance's redeploy job in its d03 runner container: its /maint-ssh key, and a known_hosts
+that pins hosts by address). Unset, every ssh command is as above. Set but empty, or naming no
+file, it fails before any ssh runs.
+  BUILD_HOST_SSH_KEY=FILE          a guest gets -i FILE (not ~/.ssh/docker_rsa) and
+                                   IdentitiesOnly=yes; a node (user@host) keeps its own ssh key
+  BUILD_HOST_SSH_KNOWN_HOSTS=FILE  every target gets UserKnownHostsFile=FILE,
+                                   GlobalKnownHostsFile=/dev/null, StrictHostKeyChecking=yes: only
+                                   a host key FILE pins is accepted, and nothing is written to it
+  BUILD_HOST_SSH_BY_ADDRESS=1      a guest NAME is reached as docker@ADDRESS, ADDRESS the [vm] ip of
+                                   NAME/host.toml here (no DNS; a name with no spec fails). Only "1".
+
 App environment (no secret on the host or in a file, asyla SEC-5): an [[app]] may name values
 that build_host.py takes from its own environment (the credentials capability puts them there)
 and sends over SSH stdin, so they exist only in that one command's process environment on the
@@ -176,6 +188,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -288,6 +301,10 @@ INI_READ_PY = ("import configparser, json, sys\n"
                "print(json.dumps({s + '.' + k: c.get(s, k, fallback=None) for s, k in json.loads(sys.argv[2])}))\n")
 COMPOSE_ENV = '[ -f ~/scripts/docker/common.env ] && . ~/scripts/docker/common.env; export DOCKER_DL="${DOCKER_DL:-/mnt/docker}"'
 SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
+# The opt-in SSH override (module docstring); read at every ssh_argv call.
+SSH_KEY_ENV = "BUILD_HOST_SSH_KEY"
+SSH_KNOWN_HOSTS_ENV = "BUILD_HOST_SSH_KNOWN_HOSTS"
+SSH_BY_ADDRESS_ENV = "BUILD_HOST_SSH_BY_ADDRESS"
 
 
 class Fail(Exception):
@@ -319,12 +336,58 @@ def run(cmd: list[str], stdin: str | None = None, timeout: int = 1800, check: bo
     return r
 
 
+SSH_OPTION_PATH = re.compile(r"[^\s%\"'\\]+")   # ssh splits these options on blanks and expands %
+
+
+def ssh_override_file(name: str) -> str | None:
+    """The file the SSH override variable NAME names (module docstring), or None when NAME is
+    unset. Set but empty, not a file, or a path ssh would split or expand: Fail."""
+    if name not in os.environ:
+        return None
+    v = os.environ[name]
+    if not v:
+        raise Fail(f"{name} is set but empty: unset it, or name the file")
+    if not SSH_OPTION_PATH.fullmatch(v):
+        raise Fail(f"{name}: a path with a blank, %, a quote or a backslash; ssh would split or expand it")
+    if not Path(v).is_file():
+        raise Fail(f"{name}: {v} is not a file")
+    return v
+
+
+def guest_address(name: str) -> str:
+    """NAME's [vm] ip, without its prefix length, from NAME/host.toml in this repo: the address
+    a guest is reached at with BUILD_HOST_SSH_BY_ADDRESS=1 (no DNS). No such spec or ip: Fail."""
+    path = REPO / name / "host.toml"
+    ip = ""
+    if re.fullmatch(r"[a-z][a-z0-9-]*", name) and path.is_file():
+        ip = str(tomllib.loads(path.read_text()).get("vm", {}).get("ip", "")).split("/")[0]
+    try:
+        return str(ipaddress.IPv4Address(ip))
+    except ValueError:
+        raise Fail(f"{SSH_BY_ADDRESS_ENV}=1: {name} has no {name}/host.toml [vm].ip in this repo; "
+                   f"it is reached by address only") from None
+
+
 def ssh_argv(target: str) -> list[str]:
     """The ssh command for a target: user@host as given (a node), or a bare guest name, which is
-    reached as GUEST_USER with SSH_KEY whatever the workstation's ssh config says of that name."""
+    reached as GUEST_USER with SSH_KEY whatever the workstation's ssh config says of that name.
+    With the SSH override set (module docstring): its pinned known_hosts for every target, its key
+    for a guest, and a guest by its spec's address. The override's options come before any a
+    caller adds, so ssh keeps them (its first value of an option wins)."""
+    key, known = ssh_override_file(SSH_KEY_ENV), ssh_override_file(SSH_KNOWN_HOSTS_ENV)
+    by_address = os.environ.get(SSH_BY_ADDRESS_ENV)
+    if by_address not in (None, "1"):
+        raise Fail(f"{SSH_BY_ADDRESS_ENV} must be 1 or unset")
+    if key is None and known is None and by_address is None:
+        if "@" in target:
+            return SSH + [target]
+        return SSH + ["-i", str(SSH_KEY), f"{GUEST_USER}@{target}"]
+    pins = ["-o", f"UserKnownHostsFile={known}", "-o", "GlobalKnownHostsFile=/dev/null",
+            "-o", "StrictHostKeyChecking=yes"] if known else []
     if "@" in target:
-        return SSH + [target]
-    return SSH + ["-i", str(SSH_KEY), f"{GUEST_USER}@{target}"]
+        return SSH + pins + [target]
+    ident = ["-i", key, "-o", "IdentitiesOnly=yes"] if key else ["-i", str(SSH_KEY)]
+    return SSH + pins + ident + [f"{GUEST_USER}@{guest_address(target) if by_address else target}"]
 
 
 def ssh(target: str, command: str, stdin: str | None = None, timeout: int = 1800,

@@ -28,7 +28,8 @@ Run on the workstation, from ~/local/asyla (asyla's hub token is the hub of the 
    and bump TOOL_REV.
 4. asyla's hub OpenBao token, in this process (secrets-vault's openbao_client.token(), the hub
    of the working directory), set only in the minting tool's environment as BAO_TOKEN;
-   OPENBAO_TOKEN, VAULT_TOKEN and BAO_ROOT_TOKEN are removed from it.
+   OPENBAO_TOKEN, VAULT_TOKEN and BAO_ROOT_TOKEN are removed from it. With
+   OBSERVABILITY_DEPLOY_VAULT_TOKEN set (below), that token instead: no hub sign-in.
 5. `vault_identity.py --token-role observability-d06` with one --identity per IDENTITIES line,
    which then runs `build_host.py d06 build --only apps --app observability --apply`: build_host
    sends each wrapping token to `observability.sh up` over SSH stdin, as a start_env_optional
@@ -45,6 +46,20 @@ local files only: it mints nothing and contacts nothing (no SSH, no vault, no fe
 --revision-only runs steps 1-3 without writing the tool (the pull, the digests, the provenance,
 origin/main and the TOOL_REV check), prints R and exits 0 (1 on any stop): no hub token, nothing
 minted, nothing started.
+
+Off the workstation (host-maintenance's redeploy job, in its runner container), from this
+script's environment; unset, everything is as above:
+  OBSERVABILITY_DEPLOY_VAULT_TOKEN=TOKEN  the vault token for step 4 (the job's own login), used
+      as BAO_TOKEN instead of the hub sign-in. Taken out of this process's environment before
+      anything runs, so no git, ssh or other child gets it under that name; set but empty, or
+      more than one word: exit 1, nothing contacted. Every other step is unchanged: the same
+      provenance, origin/main and TOOL_REV checks.
+  OBSERVABILITY_DEPLOY_THEORG_CLONE=DIR   the theOrg observability clone (THEORG_CLONE), instead
+      of ~/local/theOrg/projects/observability; it must have origin/main fetched, or fetchable
+  OBSERVABILITY_DEPLOY_SECRETS_CLIENT=DIR secrets-vault's client/ (only for the hub sign-in),
+      instead of ~/local/theOrg/projects/secrets-vault/client
+  build_host.py's SSH override (BUILD_HOST_SSH_*, its docstring) reaches d06 for steps 1, 2, 5
+  and 6: this script's SSH goes through build_host.ssh, and the start's build_host.py inherits it.
 
 Turning a component off, or adding a record to one, is a one-line edit of IDENTITIES.
 """
@@ -75,8 +90,22 @@ HOST, APP = "d06", "observability"
 VAULT_ROLE = "observability-d06"            # secrets-vault policies/hubs.toml [token_roles.observability-d06]
 HUB = "asyla"
 KV = "secret/hubs/asyla"
-THEORG_CLONE = Path.home() / "local/theOrg/projects/observability"
-SECRETS_CLIENT = Path.home() / "local/theOrg/projects/secrets-vault/client"   # data/components.toml openbao
+
+# For a caller that is not the workstation (host-maintenance's redeploy job): the two theOrg paths,
+# and a vault token it already holds, from these variables. Unset, the workstation's (docstring).
+THEORG_CLONE_ENV = "OBSERVABILITY_DEPLOY_THEORG_CLONE"       # a clone of theOrg observability
+SECRETS_CLIENT_ENV = "OBSERVABILITY_DEPLOY_SECRETS_CLIENT"   # secrets-vault's client/ directory
+VAULT_TOKEN_ENV = "OBSERVABILITY_DEPLOY_VAULT_TOKEN"         # instead of the hub sign-in (step 4)
+
+
+def env_path(name: str, default: Path) -> Path:
+    """The directory variable NAME names, else DEFAULT (NAME unset or empty)."""
+    return Path(os.environ[name]).expanduser() if os.environ.get(name) else default
+
+
+THEORG_CLONE = env_path(THEORG_CLONE_ENV, Path.home() / "local/theOrg/projects/observability")
+SECRETS_CLIENT = env_path(   # data/components.toml openbao
+    SECRETS_CLIENT_ENV, Path.home() / "local/theOrg/projects/secrets-vault/client")
 TOOL_FILES = ("vault_identity.py", "openbao.py")
 # The theOrg observability commit whose minting tool (TOOL_FILES) asyla reviewed. It runs with
 # asyla's hub token, so it is pinned apart from the images (which follow `latest`): the deploy runs
@@ -188,7 +217,7 @@ def check_spec(spec: dict, identities: list) -> None:
 def child_env(base: dict, signed_in: str, spec: dict) -> dict:
     """The minting tool's environment: the caller's, without any other vault token or a stale
     wrapping token, with the hub token as BAO_TOKEN."""
-    drop = set(CALLER_TOKENS) | set(app_of(spec).get("start_env_optional", [])) | {"BAO_TOKEN"}
+    drop = set(CALLER_TOKENS) | set(app_of(spec).get("start_env_optional", [])) | {"BAO_TOKEN", VAULT_TOKEN_ENV}
     env = {k: v for k, v in base.items() if k not in drop}
     env["BAO_TOKEN"] = signed_in
     return env
@@ -561,7 +590,22 @@ def hub_sign_in() -> str:
     return tok
 
 
-def show_plan(spec: dict, tag: str, registry: str, identities: list) -> None:
+def take_given_token() -> str | None:
+    """VAULT_TOKEN_ENV's value, taken out of this process's environment (so no child gets it under
+    that name), or None when it is unset. Set but empty, or with a blank inside: Stop. Never
+    printed."""
+    raw = os.environ.pop(VAULT_TOKEN_ENV, None)
+    if raw is None:
+        return None
+    tok = raw.strip()
+    if not tok:
+        raise Stop(f"{VAULT_TOKEN_ENV} is set but empty; nothing contacted")
+    if any(c.isspace() or not c.isprintable() for c in tok):
+        raise Stop(f"{VAULT_TOKEN_ENV} is not one token (a blank or a control character inside); nothing contacted")
+    return tok
+
+
+def show_plan(spec: dict, tag: str, registry: str, identities: list, given_token: bool = False) -> None:
     a = app_of(spec)
     pull = a.get("pull_token_env")
     script = build_host.app_script(spec['apps_tree'], APP)
@@ -576,8 +620,9 @@ def show_plan(spec: dict, tag: str, registry: str, identities: list) -> None:
     print(f"3. git fetch origin in {THEORG_CLONE}; R and TOOL_REV {TOOL_REV[:12]} on its origin/main; "
           f"scripts/{{{','.join(TOOL_FILES)}}} the same at R as at TOOL_REV; git show "
           f"TOOL_REV:scripts/{{{','.join(TOOL_FILES)}}} into a private temp dir (removed after)")
-    print(f"4. asyla's hub token (openbao_client.token(), cwd hub) as BAO_TOKEN in the minting tool's "
-          f"environment only; {', '.join(CALLER_TOKENS)} removed")
+    who = (f"the vault token {VAULT_TOKEN_ENV} gave (set)" if given_token
+           else "asyla's hub token (openbao_client.token(), cwd hub)")
+    print(f"4. {who} as BAO_TOKEN in the minting tool's environment only; {', '.join(CALLER_TOKENS)} removed")
     print(f"5. vault_identity.py --token-role {VAULT_ROLE}:")
     for component, env, records in identities:
         print(f"     {component:18} -> {env}  kv: {', '.join(f'{KV}/{r}' for r in records)}")
@@ -597,11 +642,12 @@ def main(argv: list[str] | None = None) -> int:
                            "no hub token, mint nothing, start nothing")
     args = p.parse_args(argv)
     try:
+        given = take_given_token()   # first: out of os.environ before any child (git, ssh) runs
         spec = build_host.load_spec(HOST)
         check_spec(spec, IDENTITIES)
         tag = stack_tag(HERE / f"{APP}.sh")
         registry = stack_registry(HERE / f"{APP}.sh")
-        show_plan(spec, tag, registry, IDENTITIES)
+        show_plan(spec, tag, registry, IDENTITIES, given is not None)
         if args.dry_run:
             print("DRY RUN: nothing minted, nothing contacted")
             return 0
@@ -628,7 +674,7 @@ def main(argv: list[str] | None = None) -> int:
             build_host.step("tool")
             unpack_tool(rev, tool_dir)
             build_host.step("mint and start")
-            env = child_env(os.environ, hub_sign_in(), spec)
+            env = child_env(os.environ, given if given is not None else hub_sign_in(), spec)
             try:
                 rc, started = run_start(mint_argv(tool_dir, IDENTITIES, spec), env)
             except OSError as e:

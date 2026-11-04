@@ -209,6 +209,134 @@ def run_start_cases() -> list[bool]:
     return out
 
 
+GIVEN_STAND_IN = "stand-in-given"   # OBSERVABILITY_DEPLOY_VAULT_TOKEN's stand-in
+
+
+def given_token_cases() -> list[bool]:
+    """OBSERVABILITY_DEPLOY_VAULT_TOKEN and the two path variables, outside main: unset, the
+    workstation's; set, taken out of the environment; malformed, a Stop."""
+    out, name = [], dr.VAULT_TOKEN_ENV
+    saved = os.environ.pop(name, None)
+    try:
+        out.append(check("given token: the variable names are the documented ones",
+                         (dr.VAULT_TOKEN_ENV, dr.THEORG_CLONE_ENV, dr.SECRETS_CLIENT_ENV)
+                         == ("OBSERVABILITY_DEPLOY_VAULT_TOKEN", "OBSERVABILITY_DEPLOY_THEORG_CLONE",
+                             "OBSERVABILITY_DEPLOY_SECRETS_CLIENT")
+                         and all(n in dr.__doc__ for n in (dr.VAULT_TOKEN_ENV, dr.THEORG_CLONE_ENV, dr.SECRETS_CLIENT_ENV))))
+        out.append(check("given token: unset is None (the hub sign-in)", dr.take_given_token() is None))
+        os.environ[name] = f" {GIVEN_STAND_IN}\n"
+        got = dr.take_given_token()
+        out.append(check("given token: set is its value, stripped, and no longer in the environment",
+                         got == GIVEN_STAND_IN and name not in os.environ, repr(got)))
+        for what, raw, needle in (("set but empty", "", "is set but empty"), ("blanks only", " \n", "is set but empty"),
+                                  ("two words", "stand-in one", "is not one token"),
+                                  ("a control character", "stand-in\x07x", "is not one token")):
+            os.environ[name] = raw
+            out.append(stops(f"given token: {what} stops", needle, dr.take_given_token))
+            out.append(check(f"given token: {what}: taken out of the environment all the same", name not in os.environ))
+        env = dr.child_env({name: OTHER_STAND_IN, "PATH": "/bin"}, GIVEN_STAND_IN, SPEC)
+        out.append(check("given token: the minting tool's env has it as BAO_TOKEN only, never under its own name",
+                         env == {"PATH": "/bin", "BAO_TOKEN": GIVEN_STAND_IN}, repr(sorted(env))))
+    finally:
+        os.environ.pop(name, None)
+        if saved is not None:
+            os.environ[name] = saved
+    home = Path.home()
+    out.append(check("paths: unset, the workstation's clones under ~/local/theOrg",
+                     dr.env_path("OBSERVABILITY_TEST_UNSET_PATH", home / "x") == home / "x"
+                     and (os.environ.get(dr.THEORG_CLONE_ENV) or dr.THEORG_CLONE == home / "local/theOrg/projects/observability")
+                     and (os.environ.get(dr.SECRETS_CLIENT_ENV)
+                          or dr.SECRETS_CLIENT == home / "local/theOrg/projects/secrets-vault/client")))
+    import importlib.util
+    saved = {n: os.environ.get(n) for n in (dr.THEORG_CLONE_ENV, dr.SECRETS_CLIENT_ENV)}
+    os.environ.update({dr.THEORG_CLONE_ENV: "/builds/theorg/observability", dr.SECRETS_CLIENT_ENV: ""})
+    try:
+        spec = importlib.util.spec_from_file_location("deploy_role_paths", REPO / "d06/apps/observability/deploy_role.py")
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+    finally:
+        for n, v in saved.items():
+            os.environ.pop(n, None)
+            if v is not None:
+                os.environ[n] = v
+    calls = []
+    real_run = subprocess.run
+    subprocess.run = lambda argv, **kw: calls.append(argv) or Done(0)
+    try:
+        m.git("cat-file", "-e", "x", check=False)
+    finally:
+        subprocess.run = real_run
+    out.append(check("paths: OBSERVABILITY_DEPLOY_THEORG_CLONE names the clone every git call runs in; "
+                     "an empty OBSERVABILITY_DEPLOY_SECRETS_CLIENT is the default",
+                     m.THEORG_CLONE == Path("/builds/theorg/observability")
+                     and m.SECRETS_CLIENT == home / "local/theOrg/projects/secrets-vault/client"
+                     and calls == [["git", "-C", "/builds/theorg/observability", "cat-file", "-e", "x"]]
+                     and m.TOOL_REV == dr.TOOL_REV, repr((m.THEORG_CLONE, m.SECRETS_CLIENT, calls))))
+    return out
+
+
+def given_token_main_cases(seen: dict) -> list[bool]:
+    """main with OBSERVABILITY_DEPLOY_VAULT_TOKEN, under main_cases' stand-ins: the given token is
+    BAO_TOKEN instead of the hub sign-in, out of the environment before the first step; every step
+    and check as without it."""
+    out, name = [], dr.VAULT_TOKEN_ENV
+    real_pull = dr.pull_images
+
+    def pull(spec, tag, registry):
+        seen["in env at the pull"] = name in os.environ
+        seen.setdefault("order", []).append(f"images {registry}")
+    dr.pull_images = pull
+    try:
+        seen.clear()
+        os.environ[name] = GIVEN_STAND_IN
+        rc, printed = quiet(lambda: with_pull_env(lambda: dr.main(["--dry-run"])))
+        out.append(check("given token: dry run names it as set, never its value, and runs nothing",
+                         rc == 0 and not seen and f"4. the vault token {name} gave (set) as BAO_TOKEN" in printed
+                         and "hub token" not in printed and "stand-in" not in printed, printed))
+        seen.clear()
+        os.environ[name] = GIVEN_STAND_IN
+        rc, printed = quiet(lambda: with_pull_env(lambda: dr.main([])))
+        env, argv = seen.get("env", {}), seen.get("argv", [])
+        out.append(check("given token: BAO_TOKEN is the given token, no hub sign-in, no other vault token",
+                         rc == 0 and env.get("BAO_TOKEN") == GIVEN_STAND_IN and "hub" not in seen
+                         and not any(n in env for n in (name, *OTHER_VAULT_VARS, *OBS_TOKENS)),
+                         repr((rc, sorted(env), seen.get("hub")))))
+        out.append(check("given token: out of the environment before the first step, and after",
+                         seen.get("in env at the pull") is False and name not in os.environ, repr(seen)))
+        out.append(check("given token: the same steps (images, revision, the tool at R), the same mint, the verify with R",
+                         seen.get("order") == ["images gitea.asyla.org", "revision", f"tool {REV}"]
+                         and argv[3:5] == ["--token-role", "observability-d06"]
+                         and seen.get("verify") == ("d06", f"OBSERVABILITY_REVISION={REV} {SCRIPT} verify"),
+                         repr((seen.get("order"), argv[3:5], seen.get("verify")))))
+        out.append(check("given token: never printed, never in an argument", "stand-in" not in printed + " ".join(argv),
+                         printed))
+        seen.clear()
+        seen.update(check_stop="theOrg's minting tool changed between TOOL_REV f7579118fdac and R aaaaaaaaaaaa")
+        dr.unpack_tool = lambda rev, into: dr.check_tool(rev)
+        os.environ[name] = GIVEN_STAND_IN
+        rc, printed = quiet(lambda: with_pull_env(lambda: dr.main([])))
+        out.append(check("given token: a changed minting tool still stops before the mint, exit 1",
+                         rc == 1 and "minting tool changed" in printed and "argv" not in seen and "hub" not in seen,
+                         repr((rc, seen, printed))))
+        seen.clear()
+        seen.update(revision_stop="the theOrg images were built from different commits; nothing minted")
+        os.environ[name] = GIVEN_STAND_IN
+        rc, printed = quiet(lambda: with_pull_env(lambda: dr.main([])))
+        out.append(check("given token: an unread provenance still stops before the tool, exit 1",
+                         rc == 1 and seen.get("order") == ["images gitea.asyla.org", "revision"] and "argv" not in seen,
+                         repr((rc, seen))))
+        seen.clear()
+        os.environ[name] = ""
+        rc, printed = quiet(lambda: with_pull_env(lambda: dr.main([])))
+        out.append(check("given token: set but empty stops before anything runs (no hub sign-in in its place)",
+                         rc == 1 and not seen and f"{name} is set but empty" in printed, repr((rc, seen, printed))))
+    finally:
+        dr.pull_images = real_pull
+        dr.unpack_tool = lambda rev, into: seen.setdefault("order", []).append(f"tool {rev}")
+        os.environ.pop(name, None)
+    return out
+
+
 def main_cases() -> list[bool]:
     out = []
     seen = {}
@@ -335,6 +463,7 @@ def main_cases() -> list[bool]:
         except SystemExit as e:   # argparse: the two modes exclude each other
             rc = e.code
         out.append(check("revision only: not with --dry-run", rc == 2 and not seen, repr(rc)))
+        out += given_token_main_cases(seen)
         seen.clear()
         os.environ.pop("THEORG_REGISTRY_PULL_TOKEN", None)
         rc, printed = quiet(lambda: dr.main([]))
@@ -783,6 +912,7 @@ results = [
     *verify_cases(),
     *run_start_cases(),
     *main_cases(),
+    *given_token_cases(),
     *digests_cases(),
     *tool_cases(),
     *redirect_cases(),
