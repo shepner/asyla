@@ -160,8 +160,8 @@ whatever can connect to the socket has the whole API. Vector's only inputs are `
 and `docker_logs` limited to compose project `observability` (theOrg `vector.toml` and
 `vector-docker-logs.toml` at f757911). A socket proxy in front of it would be theOrg's change.
 
-The delivery ping and the alert issues go on together. Holding the ping URL without a token the
-forge takes, the relay's self-test fails at its first start and pings the check's `/fail`, which
+The delivery ping and the alert issues go on together. Holding the ping URL without a token that
+can read `asyla/alerts`, the relay's self-test fails at its first start and pings the check's `/fail`, which
 takes the check down and pages (theOrg `alert-relay/relay.py` `delivery_selftest`,
 `record_selftest`). So the gitea account, its token in `observability-alert-relay-gitea-token` and
 `asyla/alerts` come before the deploy that names them. To turn the ping off, drop
@@ -229,8 +229,8 @@ at least `SCRAPE_GRACE_S` (75 s, one scrape and some) for each:
 - alert-relay: its own metrics (`9111`) read `alert_relay_secret_present` 1 for
   `delivery_ping_url` and `forge_token`, for `smtp_username` and `smtp_password` (with
   `ALERT_EMAIL_TO`) and for `watchdog_ping_url` (with `ALERT_WATCHDOG_PING`) (theOrg
-  `alert-relay/relay.py`). That it holds them, not that Gmail takes the login; that the forge
-  takes the token is `check_delivery`'s.
+  `alert-relay/relay.py`). That it holds them, not that Gmail takes the login; that the token can
+  read `asyla/alerts` is `check_delivery`'s.
 
 With `ALERT_WATCHDOG_PING` on and alert-relay running, verify then checks the Watchdog's ping
 (`check_watchdog`): the running Alertmanager loaded the watchdog piece (its `/api/v2/status`
@@ -245,16 +245,23 @@ reads once. The relay's `error` count alone is a failure.
 
 With alert-relay running, verify then checks its forge self-test and the delivery ping
 (`check_delivery`), from the relay's own metrics (`9111`; a series the relay has not counted yet
-reads 0): `alert_relay_delivery_selftests_total{result="ok"}` 1 or more and `{result="failed"}` 0,
-and `alert_relay_delivery_pings_total{kind="success",result="sent"}` 1 or more and
-`{kind="fail",result="sent"}` 0. Holding the ping URL, the relay runs the self-test as it starts:
-its token searches `GITEA_ALERT_REPO`'s open issues, which passes on HTTP 200 (theOrg
+reads 0): `alert_relay_delivery_selftests_total{result="ok"}` 1 or more and `{result="failed"}` 0;
+`alert_relay_delivery_pings_total{kind="success",result="sent"}` 1 or more, and
+`{kind="fail",result="sent"}` and `{kind="fail",result="error"}` (a `/fail` ping the endpoint did
+not take) 0; and `alert_relay_delivery_failures_total{sink="gitea"}` (an alert the relay did not
+get to the forge) 0. Holding the ping URL, the relay runs the self-test as it starts: its token
+searches `GITEA_ALERT_REPO`'s open issues, a GET, which passes on HTTP 200 (theOrg
 `alert-relay/relay.py` `delivery_selftest`, `selftest_loop`), and a pass pings the check's URL, a
-ping its endpoint took (`_send_ping`). So it proves the token, `asyla/alerts` and the path to the
-forge, not a write; and that first ping arms the healthchecks.io check. It waits until
-`DELIVERY_WAIT_S` (180 s) after `alert-relay-1`'s `.State.StartedAt` (the search may take 20 s and
-once more after a 401; an errored ping is tried again after 5, 10, 20 s ...). A later verify reads
-once. A failed self-test or a `/fail` ping since the start fails at once: a counter never falls.
+ping its endpoint took (`_send_ping`). So it proves that the token can read `asyla/alerts` and the
+path to the forge, not that it can write there: verify creates no issue. Write is proven once, at
+go-live, by a synthetic alert that files an issue in `asyla/alerts`. That first ping also arms the
+healthchecks.io check. It waits until `DELIVERY_WAIT_S` (180 s) after `alert-relay-1`'s
+`.State.StartedAt` (the search may take 20 s and once more after a 401; an errored ping is tried
+again after 5, 10, 20 s ...). A later verify reads once. A failed self-test, a `/fail` ping (sent
+or errored) or a failed forge delivery since the start fails at once: a counter never falls. The
+counters cover the relay's whole life, so once one failure is counted, every later standalone
+verify fails until alert-relay is recreated. A deploy always recreates it, since it passes a new
+wrapped token; so once the cause is fixed, redeploy (`deploy_role.py`) to clear it.
 
 The self-probes and the trends readings count only samples taken after the containers involved
 started: `timestamp(...) > S` in the query, S the later `.State.StartedAt` of the service and the

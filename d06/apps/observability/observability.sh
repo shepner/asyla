@@ -585,15 +585,18 @@ relay_watchdog_pings() {
     | python3 -c 'import re,sys; d=dict(re.findall(r"^alert_relay_watchdog_pings_total\{result=\"(sent|error)\"\} (\S+)$", sys.stdin.read(), re.M)); print("sent=%d error=%d" % (float(d["sent"]), float(d["error"])))'
 }
 
-# alert-relay's forge self-tests and delivery check pings since it started, as
-# "selftest_ok=N selftest_failed=N success_sent=N fail_sent=N" (127.0.0.1:9111; theOrg
-# alert-relay/relay.py): alert_relay_delivery_selftests_total by result, and
-# alert_relay_delivery_pings_total with result "sent" (the check's endpoint took it) by kind,
-# success or fail (its /fail). The relay makes a series only when it first counts one, so a
-# missing series reads 0. Counters of the running relay, so they start at 0 with the container.
+# alert-relay's forge self-tests, delivery check pings and failed forge deliveries since it
+# started, as "selftest_ok=N selftest_failed=N success_sent=N fail_sent=N fail_error=N
+# gitea_failures=N" (127.0.0.1:9111; theOrg alert-relay/relay.py SELFTESTS, PINGS, FAILED):
+# alert_relay_delivery_selftests_total by result; alert_relay_delivery_pings_total by kind,
+# success or fail (its /fail), with result "sent" (the check's endpoint took it) and, for fail,
+# "error" (the endpoint did not: a failure the check has not heard of); and
+# alert_relay_delivery_failures_total{sink="gitea"} (an alert the relay did not get to the forge).
+# The relay makes a series only when it first counts one, so a missing series reads 0. Counters of
+# the running relay, so they start at 0 with the container.
 relay_delivery() {
   curl -sf --max-time 10 http://127.0.0.1:9111/metrics \
-    | python3 -c 'import re,sys; t=sys.stdin.read(); s=dict(re.findall(r"^alert_relay_delivery_selftests_total\{result=\"(ok|failed)\"\} (\S+)$", t, re.M)); p=dict(re.findall(r"^alert_relay_delivery_pings_total\{kind=\"(success|fail)\",result=\"sent\"\} (\S+)$", t, re.M)); print("selftest_ok=%d selftest_failed=%d success_sent=%d fail_sent=%d" % tuple(float(d.get(k, 0)) for d, k in ((s, "ok"), (s, "failed"), (p, "success"), (p, "fail"))))'
+    | python3 -c 'import re,sys; t=sys.stdin.read(); s=dict(re.findall(r"^alert_relay_delivery_selftests_total\{result=\"(ok|failed)\"\} (\S+)$", t, re.M)); p={k + "_" + r: v for k, r, v in re.findall(r"^alert_relay_delivery_pings_total\{kind=\"(success|fail)\",result=\"(sent|error)\"\} (\S+)$", t, re.M)}; f=dict(re.findall(r"^alert_relay_delivery_failures_total\{sink=\"(gitea)\"\} (\S+)$", t, re.M)); print("selftest_ok=%d selftest_failed=%d success_sent=%d fail_sent=%d fail_error=%d gitea_failures=%d" % tuple(float(d.get(k, 0)) for d, k in ((s, "ok"), (s, "failed"), (p, "success_sent"), (p, "fail_sent"), (p, "fail_error"), (f, "gitea"))))'
 }
 
 # "on" when the running Alertmanager loaded the watchdog piece, else "off": its loaded
@@ -633,7 +636,7 @@ wait_reading() {
 # - alert-relay: alert_relay_secret_present (its own metrics, live) 1 for the delivery check's ping
 #   URL and the forge token, for its SMTP login with ALERT_EMAIL_TO set and for the Watchdog's ping
 #   URL with ALERT_WATCHDOG_PING set. relay_held sorts the reading, so want keeps that order.
-#   That the forge took the token and the check took a ping is check_delivery's.
+#   That the token can read GITEA_ALERT_REPO and the check took a ping is check_delivery's.
 # The first scrape comes within a minute (scrape_interval 60s): one wait of VERIFY_WAIT_S for all,
 # and at least SCRAPE_GRACE_S for each.
 check_tokened() {
@@ -707,13 +710,17 @@ check_watchdog() {
 
 # The delivery check's ping (theOrg DEPLOY.md, "Watching the watcher"), where alert-relay runs:
 # since the running relay started, its forge self-test passed (its token searched
-# GITEA_ALERT_REPO's issues and the forge answered 200) and the delivery check's endpoint took a
-# success ping, with no failed self-test and no ping to the check's /fail. The relay runs the
-# self-test as it starts when it holds the check's URL (check_tokened has said whether it does),
-# then daily, and a passing one pings success. A healthchecks.io check that never got a ping
-# stays "new" and never alerts, so that first ping arms it. It may come up to DELIVERY_WAIT_S
-# after alert-relay-1 started; a verify run later reads once. A failed self-test or a /fail ping
-# is counted for good, so either fails at once.
+# GITEA_ALERT_REPO's issues and the forge answered 200: a read, not a write) and the delivery
+# check's endpoint took a success ping, with no failed self-test, no ping to the check's /fail
+# (sent or errored) and no failed delivery to the forge. The relay runs the self-test as it starts
+# when it holds the check's URL (check_tokened has said whether it does), then daily, and a
+# passing one pings success. A healthchecks.io check that never got a ping stays "new" and never
+# alerts, so that first ping arms it. It may come up to DELIVERY_WAIT_S after alert-relay-1
+# started; a verify run later reads once. A failure of any of those is counted for good, so it
+# fails at once.
+# The counters cover the relay's whole life: once one failure is counted, every later standalone
+# verify fails until alert-relay is recreated. A deploy always recreates it (it passes a new
+# wrapped token), so once the cause is fixed, redeploy to clear it.
 check_delivery() {
   local since deadline got
   [ "$(service_state alert-relay)" != missing ] || return 0
@@ -724,12 +731,12 @@ check_delivery() {
   deadline=$(( ${since%.*} + DELIVERY_WAIT_S ))
   while :; do
     got="$(relay_delivery 2>/dev/null)" || got=""
-    if [[ "$got" =~ ^selftest_ok=[1-9][0-9]*\ selftest_failed=0\ success_sent=[1-9][0-9]*\ fail_sent=0$ ]]; then
-      info "alert-relay: delivery since it started: $got (the forge took its token on GITEA_ALERT_REPO; the delivery check's endpoint took a success ping)"
+    if [[ "$got" =~ ^selftest_ok=[1-9][0-9]*\ selftest_failed=0\ success_sent=[1-9][0-9]*\ fail_sent=0\ fail_error=0\ gitea_failures=0$ ]]; then
+      info "alert-relay: delivery since it started: $got (its token can read GITEA_ALERT_REPO's issues, a read only; no delivery to the forge failed; the delivery check's endpoint took a success ping)"
       return 0
     fi
-    if [[ "$got" =~ selftest_failed=[1-9]|fail_sent=[1-9] ]]; then
-      echo "[ERROR] alert-relay: delivery since it started reads '$got': a failed forge self-test or a ping to the delivery check's /fail (alert-relay-1's log says why: 'delivery self-test', 'delivery ping')" >&2
+    if [[ "$got" =~ selftest_failed=[1-9]|fail_sent=[1-9]|fail_error=[1-9]|gitea_failures=[1-9] ]]; then
+      echo "[ERROR] alert-relay: delivery since it started reads '$got': a failed forge self-test or a ping to the delivery check's /fail (sent or errored), or a failed delivery to the forge (alert-relay-1's log says why: 'delivery self-test', 'delivery ping', 'gitea issue search failed', 'gitea alert delivery failed', 'could not deliver'). The counters last as long as the container: redeploy to clear them once the cause is fixed" >&2
       return 1
     fi
     [ "$(date +%s)" -lt "$deadline" ] || break
