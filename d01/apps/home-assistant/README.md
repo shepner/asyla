@@ -152,25 +152,36 @@ Home Assistant tells the operator when to air the house and when to run the base
   - `sensor.outdoor_air_rh_indoors`: the RH outdoor air reads once warmed to the indoor
     temperature (2026-11-04: 83% at 12.2 °C outdoors reads about 41% at 23.6 °C indoors).
   - `binary_sensor.outdoor_air_can_dry_the_house`: outdoor dew point at least 3 °C under the
-    indoor one, 5 °C to the indoor temperature outdoors, no rain; held 30 min. Its `reasons`
-    attribute says why not: humid, rain, too cold, warmer outside, or readings unavailable.
+    indoor one, 5 °C to the indoor temperature outdoors, no rain; held 30 min before it turns on
+    and 15 min before it turns off, so a reading near a bound does not flap. Its `reasons`
+    attribute says why not, from the live readings (so during a hold it can differ from the
+    state): humid (outdoor dew point at or above the indoor one), house nearly as dry as outdoors
+    (under it by less than 3 °C, which airing itself leads to), rain, too cold, warmer outside, or
+    readings unavailable (then the sensor is unavailable at once, with no hold).
   - `binary_sensor.indoor_humidity_high` (RH 60% or more, held 6 h) and
     `binary_sensor.indoor_humidity_dry_enough` (50% or less, held 3 h).
   - Four `input_datetime.dry_air_last_*_notice` helpers: when each notice was last sent (no
     `initial`, restored at start; the 00:00:00 start value is harmless, as notices start at 08:00).
   - Four automations, 08:00-21:00 local only, each also at 08:00 so a condition that held
-    overnight is sent then. **Air the house**: RH 55% or more and the outdoor air can dry it; at
-    most every 3 h, and it checks again 3 h after a notice. **Stop airing**: the outdoor air
-    stops drying it within 3 h of an air notice, once per air notice, with the reasons.
-    **Dehumidifier on** (basement, set 50%): RH high while the outdoor air cannot dry the house
-    (off or unavailable); once until an off notice. **Dehumidifier off**: after an on notice, RH
-    dry enough. Each sets its helper, then calls the script.
+    overnight is sent then. **Air the house**: RH 55% or more and the outdoor air can dry it, with
+    no reasons (not an "on" that is only the 15 min off hold); at most every 3 h, and it checks
+    again 3 h after a notice and at start. **Stop airing**: within 3 h of an air notice, the
+    sensor turns off (from any state; off is held 15 min) or its readings stay unavailable for
+    15 min; once per air notice. The message says why: the readings are unavailable; the house is
+    now about as dry as the outdoor air can make it (with any other reasons); or the outdoor air no
+    longer dries it, with the reasons. **Dehumidifier on** (basement, set 50%): RH high while the
+    outdoor air cannot dry the house (off or unavailable), and not within 3 h of an air notice
+    (airing is under way); it checks again 3 h after the air notice and at start, where only a
+    known off counts (the station may not have reported yet); once until an off notice.
+    **Dehumidifier off**: after an on notice, RH dry enough. Each sets its helper, then calls the
+    script.
   - `script.dry_air_notice`: a persistent notification (`asyla_dry_air_airing` or
     `asyla_dry_air_dehumidifier`, so a later notice in a thread replaces the earlier one), then
     mail to `notify.hvac_report`. Every notice ends with the live readings in °F and °C and the
     converted RH. Until the SMTP integration exists (Mail, above), only the UI shows them.
 - Test on WS01: `python3 scripts/tests/test_home_assistant_dry_air.py` (with the image pulled, it
-  runs `check_config` and every template in Home Assistant's own template engine).
+  runs `check_config`, every template in Home Assistant's own template engine, and one boot with
+  the package alone: readings out for 15 min after an air notice send one stop notice).
 - To see one now: Settings → Automations → a "Dry air" automation → Run actions (this skips the
   conditions and sets its helper).
 

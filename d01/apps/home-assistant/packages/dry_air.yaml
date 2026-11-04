@@ -60,14 +60,20 @@ template:
 
   - binary_sensor:
       # On when the outdoor dew point is at least 3 °C under the indoor one, it is between 5 °C and
-      # the indoor temperature outdoors, and no rain falls; held 30 min before it turns on.
-      # `reasons` says why it is off: humid, rain, too cold, warmer outside (or readings
-      # unavailable). State and reasons share one preamble, so they cannot disagree.
+      # the indoor temperature outdoors, and no rain falls; held 30 min before it turns on and
+      # 15 min before it turns off (so a reading near a bound does not flap). `reasons` says why
+      # not, from the live readings, so it can differ from the held state: humid (outdoor dew
+      # point at or above the indoor one), house nearly as dry as outdoors (under it, by less than
+      # 3 °C: what airing itself leads to), rain, too cold, warmer outside (or readings
+      # unavailable; then the entity is unavailable at once, with no hold). State and reasons
+      # share one preamble, so they cannot disagree.
       - name: "Outdoor air can dry the house"
         unique_id: asyla_dry_air_outdoor_air_can_dry_the_house
         default_entity_id: binary_sensor.outdoor_air_can_dry_the_house
         delay_on:
           minutes: 30
+        delay_off:
+          minutes: 15
         availability: >-
           {%- macro c(e) -%}{%- set v = states(e) | float(none) -%}{%- set u = state_attr(e, 'unit_of_measurement') -%}{{- none if v is none else (v - 32) * 5 / 9 if u == '°F' else v if u == '°C' else none -}}{%- endmacro -%}
           {%- set t_in = c('sensor.downstairs_hallway_temperature') | float(none) -%}
@@ -76,7 +82,7 @@ template:
           {%- set dp_out = c('sensor.mke_dew_point') | float(none) -%}
           {%- set rain = states('sensor.mke_precipitation_intensity') | float(none) -%}
           {%- set ok = none not in [t_in, dp_in, t_out, dp_out, rain] -%}
-          {%- set r = ['readings unavailable'] if not ok else ((['humid'] if dp_out > dp_in - 3 else []) + (['rain'] if rain > 0 else []) + (['too cold'] if t_out < 5 else []) + (['warmer outside'] if t_out > t_in else [])) -%}
+          {%- set r = ['readings unavailable'] if not ok else ((['humid'] if dp_out >= dp_in else ['house nearly as dry as outdoors'] if dp_out > dp_in - 3 else []) + (['rain'] if rain > 0 else []) + (['too cold'] if t_out < 5 else []) + (['warmer outside'] if t_out > t_in else [])) -%}
           {{ ok }}
         state: >-
           {%- macro c(e) -%}{%- set v = states(e) | float(none) -%}{%- set u = state_attr(e, 'unit_of_measurement') -%}{{- none if v is none else (v - 32) * 5 / 9 if u == '°F' else v if u == '°C' else none -}}{%- endmacro -%}
@@ -86,7 +92,7 @@ template:
           {%- set dp_out = c('sensor.mke_dew_point') | float(none) -%}
           {%- set rain = states('sensor.mke_precipitation_intensity') | float(none) -%}
           {%- set ok = none not in [t_in, dp_in, t_out, dp_out, rain] -%}
-          {%- set r = ['readings unavailable'] if not ok else ((['humid'] if dp_out > dp_in - 3 else []) + (['rain'] if rain > 0 else []) + (['too cold'] if t_out < 5 else []) + (['warmer outside'] if t_out > t_in else [])) -%}
+          {%- set r = ['readings unavailable'] if not ok else ((['humid'] if dp_out >= dp_in else ['house nearly as dry as outdoors'] if dp_out > dp_in - 3 else []) + (['rain'] if rain > 0 else []) + (['too cold'] if t_out < 5 else []) + (['warmer outside'] if t_out > t_in else [])) -%}
           {{ r | count == 0 }}
         attributes:
           reasons: >-
@@ -97,7 +103,7 @@ template:
             {%- set dp_out = c('sensor.mke_dew_point') | float(none) -%}
             {%- set rain = states('sensor.mke_precipitation_intensity') | float(none) -%}
             {%- set ok = none not in [t_in, dp_in, t_out, dp_out, rain] -%}
-            {%- set r = ['readings unavailable'] if not ok else ((['humid'] if dp_out > dp_in - 3 else []) + (['rain'] if rain > 0 else []) + (['too cold'] if t_out < 5 else []) + (['warmer outside'] if t_out > t_in else [])) -%}
+            {%- set r = ['readings unavailable'] if not ok else ((['humid'] if dp_out >= dp_in else ['house nearly as dry as outdoors'] if dp_out > dp_in - 3 else []) + (['rain'] if rain > 0 else []) + (['too cold'] if t_out < 5 else []) + (['warmer outside'] if t_out > t_in else [])) -%}
             {{ r | join(', ') }}
 
       # Ecobee hallway RH 60% or more, held 6 h (a dip under 60 starts the 6 h again).
@@ -210,7 +216,7 @@ automation:
     alias: "Dry air: air the house"
     description: >-
       Indoor RH 55% or more and the outdoor air can dry the house: open windows for 10-15 minutes.
-      At most every 3 hours; 3 hours after a notice it checks again.
+      At most every 3 hours; 3 hours after a notice, and at start, it checks again.
     mode: single
     max_exceeded: silent
     triggers:
@@ -225,6 +231,9 @@ automation:
         at:
           entity_id: input_datetime.dry_air_last_air_notice
           offset: "03:00:00"
+      # The +3 h trigger arms only while that time is ahead: a restart across it checks here.
+      - trigger: homeassistant
+        event: start
     conditions:
       - condition: time
         after: "08:00:00"
@@ -238,6 +247,10 @@ automation:
       - condition: template
         value_template: >-
           {{ now().timestamp() - (state_attr('input_datetime.dry_air_last_air_notice', 'timestamp') or 0) >= 3 * 3600 - 60 }}
+      # The live readings agree (no reasons): "on" is not just the 15 min off hold, or the hold
+      # resuming after an outage that ended with readings that cannot dry the house.
+      - condition: template
+        value_template: "{{ not state_attr('binary_sensor.outdoor_air_can_dry_the_house', 'reasons') }}"
     actions:
       - action: input_datetime.set_datetime
         target:
@@ -256,15 +269,22 @@ automation:
   - id: asyla_dry_air_stop_airing
     alias: "Dry air: stop airing"
     description: >-
-      Within 3 hours of an air-the-house notice, the outdoor air stops drying the house: close the
-      windows, and why (humid, rain, too cold, warmer outside). Once per air notice.
+      Within 3 hours of an air-the-house notice, the outdoor air stops drying the house (off for
+      15 minutes, or its readings unavailable for 15 minutes): close the windows, and why. Once
+      per air notice.
     mode: single
     max_exceeded: silent
     triggers:
+      # Off is held 15 min (delay_off). From any state, so on → unavailable → off counts too.
       - trigger: state
         entity_id: binary_sensor.outdoor_air_can_dry_the_house
-        from: "on"
         to: "off"
+      # The readings out for 15 min (unavailable has no hold): the outdoor air cannot be judged.
+      - trigger: state
+        entity_id: binary_sensor.outdoor_air_can_dry_the_house
+        to: "unavailable"
+        for:
+          minutes: 15
       - trigger: time
         at: "08:00:00"
     conditions:
@@ -273,7 +293,9 @@ automation:
         before: "21:00:00"
       - condition: state
         entity_id: binary_sensor.outdoor_air_can_dry_the_house
-        state: "off"
+        state:
+          - "off"
+          - "unavailable"
       - condition: template
         value_template: >-
           {%- set a = state_attr('input_datetime.dry_air_last_air_notice', 'timestamp') or 0 -%}
@@ -289,15 +311,26 @@ automation:
         data:
           thread: airing
           title: "Stop airing"
+          # "house nearly as dry as outdoors" is what airing leads to: say so, not "humid".
           message: >-
-            Close the windows: the outdoor air no longer dries the house
-            ({{ state_attr('binary_sensor.outdoor_air_can_dry_the_house', 'reasons') or 'reason unknown' }}).
+            {%- set r = (state_attr('binary_sensor.outdoor_air_can_dry_the_house', 'reasons') or '').split(', ') | reject('eq', '') | list -%}
+            {%- set near = 'house nearly as dry as outdoors' -%}
+            {%- if is_state('binary_sensor.outdoor_air_can_dry_the_house', 'unavailable') -%}
+            Close the windows: the outdoor readings are unavailable, so the outdoor air cannot be
+            counted on to dry the house.
+            {%- elif near in r -%}
+            Close the windows: the house is now about as dry as the outdoor air can make it (its
+            dew point is within 3 °C of the outdoor one{{ '' if r | count == 1 else '; also ' ~ (r | reject('eq', near) | join(', ')) }}).
+            {%- else -%}
+            Close the windows: the outdoor air no longer dries the house ({{ r | join(', ') or 'reason unknown' }}).
+            {%- endif -%}
 
   - id: asyla_dry_air_dehumidifier_on
     alias: "Dry air: dehumidifier on"
     description: >-
       Indoor RH 60% or more for 6 hours while the outdoor air cannot dry the house: run the
-      basement dehumidifier at 50%. Once until a dehumidifier-off notice.
+      basement dehumidifier at 50%. Not within 3 hours of an air-the-house notice (airing is under
+      way; it checks again then, and at start). Once until a dehumidifier-off notice.
     mode: single
     max_exceeded: silent
     triggers:
@@ -309,6 +342,13 @@ automation:
         to: "off"
       - trigger: time
         at: "08:00:00"
+      - trigger: time
+        at:
+          entity_id: input_datetime.dry_air_last_air_notice
+          offset: "03:00:00"
+      - trigger: homeassistant
+        event: start
+        id: start
     conditions:
       - condition: time
         after: "08:00:00"
@@ -316,9 +356,16 @@ automation:
       - condition: state
         entity_id: binary_sensor.indoor_humidity_high
         state: "on"
-      # Off or unavailable: without station readings the outdoor air is not counted on.
+      # Off or unavailable: without station readings the outdoor air is not counted on. At start
+      # only a known off counts: the station may not have reported yet.
       - condition: template
-        value_template: "{{ not is_state('binary_sensor.outdoor_air_can_dry_the_house', 'on') }}"
+        value_template: >-
+          {{ not is_state('binary_sensor.outdoor_air_can_dry_the_house', 'on')
+             and (trigger.id != 'start' or is_state('binary_sensor.outdoor_air_can_dry_the_house', 'off')) }}
+      # 3 hours since the last air-the-house notice, less a minute for the +3 h trigger's timing.
+      - condition: template
+        value_template: >-
+          {{ now().timestamp() - (state_attr('input_datetime.dry_air_last_air_notice', 'timestamp') or 0) >= 3 * 3600 - 60 }}
       - condition: template
         value_template: >-
           {{ (state_attr('input_datetime.dry_air_last_dehumidifier_on_notice', 'timestamp') or 0)

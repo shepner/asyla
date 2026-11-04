@@ -13,7 +13,10 @@
    the house" and its reasons, the humidity thresholds, the notice gates on the "last sent"
    helpers, the messages and the readings every notice carries; and the automations' shape
    (triggers, 08:00-21:00 window, helper set before the send).
-   Without them those cases say skip.
+3. In that image, one boot of Home Assistant with the package alone (a stand-in notify action, the
+   event loop's clock moved on for the holds): station readings out for 15 minutes within 3 hours
+   of an air notice send one stop notice, and not before.
+   Without docker and the image, 2 and 3 say skip.
 Nothing reaches a host or Home Assistant.
 """
 from __future__ import annotations
@@ -122,6 +125,8 @@ async def main():
     check("indoor dew point: °C, temperature class",
           (ENT[DP_IN]["unit_of_measurement"], ENT[DP_IN]["device_class"]), ("°C", "temperature"))
     check("delays", [ENT[e]["delay_on"] for e in (DRY, HIGH, LOW)], [{"minutes": 30}, {"hours": 6}, {"hours": 3}])
+    check("off delays: can dry 15 min, the RH sensors none",
+          [ENT[e].get("delay_off") for e in (DRY, HIGH, LOW)], [{"minutes": 15}, None, None])
     check("helpers", sorted(f"input_datetime.{k}" for k in HELPERS), sorted([AIR_H, STOP_H, ON_H, OFF_H]))
     check("helpers: date and time, no initial (restored at start)",
           {(h.get("has_date"), h.get("has_time"), "initial" in h) for h in HELPERS.values()}, {(True, True, False)})
@@ -160,17 +165,27 @@ async def main():
     dp_f = "%.1f" % (float(base[DP_IN][0]) * 9 / 5 + 32)
     check("indoor dew point shown in °F (as on d01): same", ev(DRY, keys, base | {DP_IN: (dp_f, "°F")}),
           ("True", "True", ""))
-    check("humid", ev(DRY, keys, base | {DP_OUT: ("62.0", "°F")}), ("True", "False", "humid"))
+    check("11-04 indoor dew point: 64.9 °F", dp_f, "64.9")
+    check("humid: outdoor dew point 66 °F, over the indoor 64.9 °F",
+          ev(DRY, keys, base | {DP_OUT: ("66.0", "°F")}), ("True", "False", "humid"))
+    near = "house nearly as dry as outdoors"
+    check("near: outdoor dew point 62 °F, under the indoor 64.9 °F by less than 3 °C",
+          ev(DRY, keys, base | {DP_OUT: ("62.0", "°F")}), ("True", "False", near))
     check("rain", ev(DRY, keys, base | {RAIN: ("0.02", "in/h")}), ("True", "False", "rain"))
     check("too cold", ev(DRY, keys, base | {T_OUT: ("40.0", "°F"), DP_OUT: ("30.0", "°F")}),
           ("True", "False", "too cold"))
     check("warmer outside", ev(DRY, keys, base | {T_OUT: ("78.0", "°F")}), ("True", "False", "warmer outside"))
-    check("humid and rain", ev(DRY, keys, base | {DP_OUT: ("62.0", "°F"), RAIN: ("0.1", "in/h")}),
+    check("humid and rain", ev(DRY, keys, base | {DP_OUT: ("66.0", "°F"), RAIN: ("0.1", "in/h")}),
           ("True", "False", "humid, rain"))
+    check("near and rain", ev(DRY, keys, base | {DP_OUT: ("62.0", "°F"), RAIN: ("0.1", "in/h")}),
+          ("True", "False", near + ", rain"))
     edge = {T_IN: ("22.0", "°C"), DP_IN: ("18.5", "°C"), T_OUT: ("5.0", "°C"), DP_OUT: ("15.5", "°C"), RAIN: ("0", "in/h")}
     check("bounds: dew point 3 °C under, 5 °C outdoors", ev(DRY, keys, edge), ("True", "True", ""))
     check("bounds: as warm as indoors", ev(DRY, keys, edge | {T_OUT: ("22.0", "°C")}), ("True", "True", ""))
     check("bounds: 4.9 °C", ev(DRY, keys, edge | {T_OUT: ("4.9", "°C")}), ("True", "False", "too cold"))
+    for dp, want in (("15.6", near), ("18.4", near), ("18.5", "humid"), ("18.6", "humid")):
+        check(f"bounds: outdoor dew point {dp} °C against 18.5 °C indoors",
+              ev(DRY, keys, edge | {DP_OUT: (dp, "°C")}), ("True", "False", want))
     for name, over in (("station dew point unavailable", {DP_OUT: ("unavailable", "°F")}),
                        ("rain unknown", {RAIN: ("unknown", "in/h")}),
                        ("indoor dew point missing", {DP_IN: ("unknown", "°C")}),
@@ -208,9 +223,23 @@ async def main():
           {"trigger": "time", "at": {"entity_id": AIR_H, "offset": "03:00:00"}} in air["triggers"], True)
     check("air: RH trigger and condition are one test", air["triggers"][1]["value_template"],
           air["conditions"][2]["value_template"])
+    check("air: re-check at start", {"trigger": "homeassistant", "event": "start"} in air["triggers"], True)
     stop = AUTO["asyla_dry_air_stop_airing"]
-    check("stop: on the on-to-off edge", stop["triggers"][0],
-          {"trigger": "state", "entity_id": DRY, "from": "on", "to": "off"})
+    check("stop: to off from any state (off is held 15 min by delay_off)", stop["triggers"][0],
+          {"trigger": "state", "entity_id": DRY, "to": "off"})
+    check("stop: unavailable held 15 min", stop["triggers"][1],
+          {"trigger": "state", "entity_id": DRY, "to": "unavailable", "for": {"minutes": 15}})
+    check("stop: three triggers", len(stop["triggers"]), 3)
+    check("stop: can dry off or unavailable", stop["conditions"][1],
+          {"condition": "state", "entity_id": DRY, "state": ["off", "unavailable"]})
+    on = AUTO["asyla_dry_air_dehumidifier_on"]
+    off = AUTO["asyla_dry_air_dehumidifier_off"]
+    check("dehumidifier on: re-check 3 h after the last air notice",
+          {"trigger": "time", "at": {"entity_id": AIR_H, "offset": "03:00:00"}} in on["triggers"], True)
+    check("dehumidifier on: re-check at start, trigger id start",
+          {"trigger": "homeassistant", "event": "start", "id": "start"} in on["triggers"], True)
+    check("dehumidifier on: no other trigger ids", [t.get("id") for t in on["triggers"]].count(None),
+          len(on["triggers"]) - 1)
 
     # --- the RH >= 55 test -------------------------------------------------------------------------
     for rh, want in (("55", "True"), ("54.9", "False"), ("unavailable", "False")):
@@ -237,28 +266,64 @@ async def main():
     check("stop gate: air 3 h 1 min ago", gate(stop_gate, **{AIR_H: 3 * H + 60, STOP_H: 48 * H}), "False")
     check("stop gate: start values (equal)", gate(stop_gate, **{AIR_H: 8 * H, STOP_H: 8 * H}), "False")
     check("stop gate: never sent", gate(stop_gate), "False")
-    on = AUTO["asyla_dry_air_dehumidifier_on"]
-    off = AUTO["asyla_dry_air_dehumidifier_off"]
-    on_gate, off_gate = on["conditions"][3]["value_template"], off["conditions"][2]["value_template"]
+    on_air_gate = on["conditions"][3]["value_template"]
+    check("dehumidifier on: the air gate is the air automation's", on_air_gate, air_gate)
+    for name, h, want in (("never sent", {}, "True"), ("air 1 h ago", {AIR_H: H}, "False"),
+                          ("air 2 h 58 min ago", {AIR_H: 3 * H - 120}, "False"),
+                          ("air 3 h ago (the +3 h trigger)", {AIR_H: 3 * H}, "True")):
+        check(f"dehumidifier on, air gate: {name}", gate(on_air_gate, **h), want)
+    on_gate, off_gate = on["conditions"][4]["value_template"], off["conditions"][2]["value_template"]
     for name, h, want_on, want_off in (("never sent", {}, "True", "False"),
                                        ("start values (equal)", {ON_H: 8 * H, OFF_H: 8 * H}, "True", "False"),
                                        ("on outstanding", {ON_H: H, OFF_H: 30 * H}, "False", "True"),
                                        ("off after on", {ON_H: 30 * H, OFF_H: H}, "True", "False"),
                                        ("on sent, off never", {ON_H: H}, "False", "True")):
         check(f"dehumidifier gates: {name}", (gate(on_gate, **h), gate(off_gate, **h)), (want_on, want_off))
-    for st, want in (("on", "False"), ("off", "True"), ("unavailable", "True")):
+    # A state or time trigger's id is its index as a string; at start only a known off counts.
+    for st, want, want_start in (("on", "False", "False"), ("off", "True", "True"),
+                                 ("unavailable", "True", "False"), ("unknown", "True", "False")):
         put({DRY: (st, None)})
-        check(f"dehumidifier on: can dry {st}", r(on["conditions"][2]["value_template"]), want)
+        got = tuple(r(on["conditions"][2]["value_template"], trigger={"id": i}) for i in ("1", "start"))
+        check(f"dehumidifier on: can dry {st} (other trigger, start)", got, (want, want_start))
+    # The live readings agree: "on" held through delay_off, or resumed, still has reasons.
+    air_live = air["conditions"][4]["value_template"]
+    for name, st, attrs, want in (("no reasons", "on", {"reasons": ""}, "True"),
+                                  ("on in the off hold", "on", {"reasons": near}, "False"),
+                                  ("on, rain now", "on", {"reasons": "rain"}, "False")):
+        put({})
+        hass.states.async_set(DRY, st, attrs)
+        check(f"air: live readings, {name}", r(air_live), want)
 
     # --- messages ----------------------------------------------------------------------------------
     put({})
     hass.states.async_set(DRY, "off", {"reasons": "humid, rain"})
-    check("stop message names why", r(stop["actions"][1]["data"]["message"]),
+    stop_msg = stop["actions"][1]["data"]["message"]
+    check("stop message names why", r(stop_msg),
           "Close the windows: the outdoor air no longer dries the house (humid, rain).")
     check("dehumidifier on message",
           r(on["actions"][1]["data"]["message"]),
           "Turn the basement dehumidifier on, set to 50%: indoor RH has been 60% or more for 6 hours and the "
           "outdoor air cannot dry the house (humid, rain).")
+    for name, st, attrs, want in (
+            ("near", "off", {"reasons": near},
+             "Close the windows: the house is now about as dry as the outdoor air can make it (its dew point "
+             "is within 3 °C of the outdoor one)."),
+            ("near and rain, too cold", "off", {"reasons": near + ", rain, too cold"},
+             "Close the windows: the house is now about as dry as the outdoor air can make it (its dew point "
+             "is within 3 °C of the outdoor one; also rain, too cold)."),
+            ("rain", "off", {"reasons": "rain"},
+             "Close the windows: the outdoor air no longer dries the house (rain)."),
+            ("no reasons", "off", {"reasons": ""},
+             "Close the windows: the outdoor air no longer dries the house (reason unknown)."),
+            ("unavailable", "unavailable", {},
+             "Close the windows: the outdoor readings are unavailable, so the outdoor air cannot be counted "
+             "on to dry the house."),
+            ("unavailable, stale reasons", "unavailable", {"reasons": near},
+             "Close the windows: the outdoor readings are unavailable, so the outdoor air cannot be counted "
+             "on to dry the house.")):
+        put({})
+        hass.states.async_set(DRY, st, attrs)
+        check(f"stop message: {name}", r(stop_msg), want)
     put({})
     check("dehumidifier on message, station down", r(on["actions"][1]["data"]["message"])[-23:],
           "(readings unavailable).")
@@ -334,6 +399,89 @@ class InPinnedImage(unittest.TestCase):
         print(r.stdout, end="")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertNotIn("FAIL", r.stdout)
+
+
+LIVE = r'''
+import asyncio, sys, time
+from homeassistant import bootstrap, runner
+
+DRY = "binary_sensor.outdoor_air_can_dry_the_house"
+AIR_H, STOP_H = "input_datetime.dry_air_last_air_notice", "input_datetime.dry_air_last_stop_notice"
+# The 2026-11-04 reading in °F, as on d01: the outdoor air can dry the house.
+READ = {"sensor.downstairs_hallway_temperature": ("74.5", "°F"), "sensor.downstairs_hallway_humidity": ("72", "%"),
+        "sensor.mke_temperature": ("54.0", "°F"), "sensor.mke_humidity": ("83", "%"),
+        "sensor.mke_dew_point": ("48.9", "°F"), "sensor.mke_precipitation_intensity": ("0", "in/h")}
+bad = []
+def check(name, got, want):
+    bad.extend([] if got == want else [name])
+    print(("ok   " if got == want else "FAIL ") + name + ("" if got == want else f": got {got!r}, want {want!r}"),
+          flush=True)
+
+async def main():
+    # Timers (delay_on/off, a state trigger's for:) are loop.call_at deadlines: skip() moves the
+    # loop's clock on. The wall clock, which the time window and the helper gates read, does not move.
+    loop = asyncio.get_running_loop()
+    real, skew = loop.time, [0.0]
+    loop.time = lambda: real() + skew[0]
+    async def skip(minutes):
+        skew[0] += minutes * 60
+        for _ in range(10):
+            await asyncio.sleep(0.05)
+    hass = await bootstrap.async_setup_hass(runner.RuntimeConfig(config_dir="/config", skip_pip=True))
+    sent = []
+    async def stand_in(call): sent.append(dict(call.data))
+    hass.services.async_register("notify", "send_message", stand_in)
+    await hass.async_start()
+    for e, (s, u) in READ.items():
+        hass.states.async_set(e, s, {"unit_of_measurement": u})
+    await hass.services.async_call("input_datetime", "set_datetime",
+                                   {"entity_id": AIR_H, "timestamp": int(time.time()) - 3600}, blocking=True)
+    await skip(0)
+    stop0 = hass.states.get(STOP_H).attributes.get("timestamp")
+    check("live: an air notice 1 h ago, can dry not yet on (30 min delay_on)", hass.states.get(DRY).state != "on", True)
+    hass.states.async_set("sensor.mke_dew_point", "unavailable", {"unit_of_measurement": "°F"})
+    await skip(0)
+    check("live: station dew point unavailable: can dry unavailable at once", hass.states.get(DRY).state,
+          "unavailable")
+    await skip(14)
+    check("live: 14 min unavailable: no stop notice", (len(sent), hass.states.get(STOP_H).attributes.get("timestamp")),
+          (0, stop0))
+    await skip(2)
+    check("live: 16 min unavailable: one stop notice", [(s.get("entity_id"), s.get("title")) for s in sent],
+          [(["notify.hvac_report"], "Stop airing")])
+    check("live: stop notice, unavailable branch", (sent[0].get("message", "") if sent else "").split("\n")[0],
+          "Close the windows: the outdoor readings are unavailable, so the outdoor air cannot be counted on to "
+          "dry the house.")
+    check("live: stop helper set", hass.states.get(STOP_H).attributes.get("timestamp") != stop0, True)
+    await skip(30)
+    check("live: still one stop notice 30 min on", len(sent), 1)
+    await hass.async_stop(force=True)
+
+asyncio.run(main())
+print(f"live: {len(bad)} failed")
+sys.exit(1 if bad else 0)
+'''
+
+
+@unittest.skipUnless(image_present(), f"needs docker and {IMAGE} (docker pull it)")
+class LiveInPinnedImage(unittest.TestCase):
+    """One boot of the pinned image with the package alone: readings out for 15 min send the stop notice."""
+
+    def test_unavailable_15_min_sends_stop(self):
+        import datetime
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Path(tmp)
+            (cfg / "packages").mkdir()
+            shutil.copy(APP / PACKAGE, cfg / PACKAGE)
+            # A fixed-offset zone where it is now about 14:00, inside the 08:00-21:00 window.
+            n = 14 - datetime.datetime.now(datetime.timezone.utc).hour
+            tz = "Etc/GMT" if n == 0 else f"Etc/GMT{-n:+d}"
+            (cfg / "configuration.yaml").write_text(
+                f"homeassistant:\n  time_zone: {tz}\n  packages:\n    dry_air: !include {PACKAGE}\n")
+            r = in_image(cfg, "-", stdin=LIVE)
+        print(r.stdout, end="")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr[-3000:])
+        self.assertIn("live: 0 failed", r.stdout)
 
 
 if __name__ == "__main__":
