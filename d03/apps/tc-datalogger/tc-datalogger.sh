@@ -210,9 +210,20 @@ run_tc_script() {
     "$TC_SRC/scripts/$script" "$@" 2>&1 | sed -E 's/key=[^&" ]+/key=REDACTED/g'
 }
 
+# The dashboard answers a few seconds after `up` returns: the redeploy of 2026-11-05 checked it in
+# the second its Flask app started, failed verify, and failed the job, though it was serving 3 s later.
+dashboard_wait() {
+  local deadline
+  deadline=$(( $(date +%s) + ${TC_VERIFY_WAIT_S:-60} ))
+  until curl -sf -o /dev/null --max-time 5 http://127.0.0.1:8081/login; do
+    [ "$(date +%s)" -lt "$deadline" ] || return 1
+    sleep 2
+  done
+}
+
 do_verify() {
-  curl -sf -o /dev/null http://127.0.0.1:8081/login || {
-    echo "[ERROR] Local dashboard :8081 failed" >&2
+  dashboard_wait || {
+    echo "[ERROR] Local dashboard :8081 failed (waited ${TC_VERIFY_WAIT_S:-60}s)" >&2
     return 1
   }
   echo "[INFO] Local http://127.0.0.1:8081/login OK"
