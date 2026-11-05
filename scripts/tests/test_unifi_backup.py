@@ -285,7 +285,7 @@ class Cycle(unittest.TestCase):
     def test_a_wrong_size_is_not_kept_and_then_missed(self):
         self.api.sizes[self.MKE2] = 99
         s = self.run_cycle()
-        self.assertEqual(self.keys(s), {f"copy:MKE:{self.MKE2}": "warn", "missed:MKE": "urgent"})
+        self.assertEqual(self.keys(s), {f"copy:MKE:{self.MKE2}": "warn", "missed:MKE": "warn"})
         self.assertFalse((ub.COPIES / "MKE" / self.MKE2).exists())
         self.assertFalse(any(p.name.endswith(".part") for p in (ub.COPIES / "MKE").iterdir()))
 
@@ -294,11 +294,12 @@ class Cycle(unittest.TestCase):
         self.at(dt.datetime(2026, 10, 1, 20, 0, tzinfo=dt.timezone.utc))   # 14.5 h after it was made
         self.assertNotIn("missed:MKE", self.keys(self.run_cycle()))
 
-    def test_api_failures_turn_urgent_on_the_third_cycle(self):
+    def test_api_failures_stay_warnings_and_count_the_cycles(self):
         self.api.down = True
-        for sev in ("warn", "warn", "urgent"):
+        for n in range(1, 7):
             s = self.run_cycle()
-            self.assertEqual(self.keys(s), {"api:MKE": sev, "api:DAY": sev})
+            self.assertEqual(self.keys(s), {"api:MKE": "warn", "api:DAY": "warn"})
+            self.assertIn(f"({n} cycles in a row)", s["problems"][0]["message"])
             self.assertFalse(s["ok"])
         self.api.down = False
         self.assertEqual(self.keys(self.run_cycle()), {})
@@ -339,14 +340,14 @@ class Cycle(unittest.TestCase):
     def test_the_newest_timing_out_is_an_api_problem_but_older_files_are_copied(self):
         self.api.slow.add(self.MKE2)
         self.at(dt.datetime(2026, 10, 1, 12, 0, tzinfo=dt.timezone.utc))   # 6.5 h after it was made
-        for sev in ("warn", "warn", "urgent"):
+        for _ in range(3):
             s = self.run_cycle()
-            self.assertEqual(self.keys(s), {"api:MKE": sev})
+            self.assertEqual(self.keys(s), {"api:MKE": "warn"})
             self.assertFalse(s["ok"])
         self.assertIn("HTTP 408", s["problems"][0]["message"])
         self.assertEqual(s["consoles"]["MKE"]["newest_copy"], self.MKE1)
         self.at(dt.datetime(2026, 10, 2, 6, 0, tzinfo=dt.timezone.utc))   # 24.5 h after it was made
-        self.assertEqual(self.keys(self.run_cycle()), {"api:MKE": "urgent", "missed:MKE": "urgent"})
+        self.assertEqual(self.keys(self.run_cycle()), {"api:MKE": "warn", "missed:MKE": "warn"})
 
     def test_both_formats_are_copied_and_an_unknown_one_is_kept_with_a_warning(self):
         self.api.consoles["DAY"][self.DAY1] = unf(postgres_v1(), end_left=None)

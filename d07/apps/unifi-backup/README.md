@@ -44,8 +44,8 @@ host-maintenance when a copy is missed (asyla backlog item
 
   | Problem | Severity |
   | --- | --- |
-  | The console's newest autobackup not on the NAS 24 h after it was made (`copy_grace_hours`) | urgent |
-  | A console's list cannot be read, or its newest file fetched | warn, urgent from the 3rd cycle in a row |
+  | The console's newest autobackup not on the NAS 24 h after it was made (`copy_grace_hours`) | warn |
+  | A console's list cannot be read, or its newest file fetched (cycles in a row in the message) | warn |
   | A copy fetched but its check fails (it is not kept) | warn |
   | A copy in a format the check does not know (it is kept) | warn |
   | The console's newest autobackup older than `max_age_days` (32: autobackup off or failing) | warn |

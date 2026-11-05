@@ -1,11 +1,9 @@
 # What unifi_backup.py copies and when it calls something a problem (README.md beside this file).
 
-# The console's newest autobackup not on the NAS this long after it was made is urgent (the copy
-# was missed). A cycle runs every hour, so this allows a day of failed tries.
+# Every problem is a digest warning, never an urgent mail (operator 2026-11-05).
+# The console's newest autobackup not on the NAS this long after it was made is reported as missed.
+# A cycle runs every hour, so this allows a day of failed tries.
 copy_grace_hours = 24
-# A console that cannot be read (or a copy that cannot be fetched) this many cycles in a row is
-# urgent; before that it is a warning in the digest.
-api_fails_urgent = 3
 
 # Each console by its Site Manager name. max_age_days: the console's newest autobackup older than
 # this is reported (digest): autobackup off or failing on the console. Both consoles back up monthly

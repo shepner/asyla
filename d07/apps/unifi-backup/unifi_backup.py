@@ -32,7 +32,9 @@ COPIES.
 Writes, in UNIFI_DATA (/data, the host's /mnt/docker/unifi-backup):
   status.json  {"time", "checker", "ok", "problems": [{"key", "severity", "message"}], "consoles"}:
                read by the host-maintenance monitor on each run ([[status]] in its
-               config/maintenance.toml); "urgent" mails at once, "warn" goes to the 07:00 digest
+               config/maintenance.toml); every problem here is "warn", for the 07:00 digest:
+               the consoles back up monthly and keep their own files, so nothing here needs anyone
+               at once (operator 2026-11-05, after a 6-hour connector 403 mailed as urgent)
   state.json   API failures in a row, per console
 stage.json, written by `unifi-backup.sh stage`, adds one urgent problem until it expires: the
 end-to-end test of the alert path.
@@ -372,7 +374,7 @@ def copy_console(name: str, cid: str, key: str, ccfg: dict, cfg: dict,
         found.append((f"none:{name}", "warn", f"UniFi backup {name}: the console lists no autobackup"))
     else:
         if newest["filename"] not in have and newest_t and t - newest_t > dt.timedelta(hours=cfg["copy_grace_hours"]):
-            found.append((f"missed:{name}", "urgent",
+            found.append((f"missed:{name}", "warn",
                           f"UniFi backup {name}: the console's newest autobackup {newest['filename']} "
                           f"({iso(newest_t)}) is not on the NAS after {cfg['copy_grace_hours']} h"))
         if newest_t and t - newest_t > dt.timedelta(days=ccfg["max_age_days"]):
@@ -424,8 +426,7 @@ def cycle() -> int:
             fails[name] = 0
         except ApiError as e:
             fails[name] = fails.get(name, 0) + 1
-            sev = "urgent" if fails[name] >= cfg["api_fails_urgent"] else "warn"
-            found.append((f"api:{name}", sev, f"UniFi backup {name}: cannot read or copy ({fails[name]} cycles "
+            found.append((f"api:{name}", "warn", f"UniFi backup {name}: cannot read or copy ({fails[name]} cycles "
                                               f"in a row): {e}"))
     found += staged(t)
     problems = [{"key": k, "severity": s, "message": m.replace(key, "<redacted>")} for k, s, m in found]
