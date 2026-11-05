@@ -3,13 +3,15 @@
 # home-assistant.sh up installs this folder as config/packages/ on every start: edit it here.
 # Advice only: it sends notices and switches no device. Four notices, 08:00-21:00 local only (a
 # condition that holds overnight is sent at 08:00): air the house, stop airing, run the basement
-# dehumidifier, turn it off. Each carries the live readings in °F and °C and the RH the outdoor air
-# reads once warmed to the indoor temperature (asyla memory humidity-advice-quotes-live-readings).
+# dehumidifier, turn it off. Each carries the live readings in °F (the operator reads °F; asyla
+# memory report-temperatures-in-fahrenheit) and the RH the outdoor air reads once warmed to the
+# indoor temperature (asyla memory humidity-advice-quotes-live-readings).
 #
 # Units: every template converts a temperature by that entity's unit_of_measurement (°F or °C;
 # anything else counts as unavailable), because Home Assistant shows temperature-class sensors in
 # the system's unit: on d01 the Ecobee and Ambient Weather sensors read °F, and so does
-# sensor.indoor_dew_point below although it is computed in °C. Thresholds are in °C.
+# sensor.indoor_dew_point below although it is computed in °C. Thresholds and maths are in °C;
+# every temperature a notice shows is in °F.
 # Home Assistant has no shared macros without config/custom_templates (not installed by up), so the
 # conversion macro `c` is repeated in each template; the tests render every copy.
 
@@ -59,14 +61,19 @@ template:
           {%- endif -%}
 
   - binary_sensor:
-      # On when the outdoor dew point is at least 3 °C under the indoor one, it is between 5 °C and
-      # the indoor temperature outdoors, and no rain falls; held 30 min before it turns on and
-      # 15 min before it turns off (so a reading near a bound does not flap). `reasons` says why
-      # not, from the live readings, so it can differ from the held state: humid (outdoor dew
-      # point at or above the indoor one), house nearly as dry as outdoors (under it, by less than
-      # 3 °C: what airing itself leads to), rain, too cold, warmer outside (or readings
-      # unavailable; then the entity is unavailable at once, with no hold). State and reasons
-      # share one preamble, so they cannot disagree.
+      # On when the outdoor dew point is at least 3 °C (5.4 °F) under the indoor one, it is
+      # between 5 °C (41 °F) and the indoor temperature outdoors, and it is not wet outside; held
+      # 30 min before it turns on and 15 min before it turns off (so a reading near a bound does
+      # not flap). `reasons` says why not, from the live readings, so it can differ from the held
+      # state: humid (outdoor dew point at or above the indoor one), house nearly as dry as
+      # outdoors (under it, by less than 3 °C: what airing itself leads to), wet outside, too
+      # cold, warmer outside (or readings unavailable; then the entity is unavailable at once,
+      # with no hold). State and reasons share one preamble, so they cannot disagree.
+      # Wet outside: rain rate over 0, the station's last rain 60 min ago or less, or outdoor RH
+      # 95% or more. Mist does not register on the gauge (2026-11-04: 0 in/h while misting, at
+      # 88% RH), so light mist under 95% RH still gets through. now() makes Home Assistant render
+      # these templates again at every minute (helpers/event.py, has_time), so the last-rain hour
+      # runs out with no state change; it is called before any branch so every render records it.
       - name: "Outdoor air can dry the house"
         unique_id: asyla_dry_air_outdoor_air_can_dry_the_house
         default_entity_id: binary_sensor.outdoor_air_can_dry_the_house
@@ -81,8 +88,11 @@ template:
           {%- set t_out = c('sensor.mke_temperature') | float(none) -%}
           {%- set dp_out = c('sensor.mke_dew_point') | float(none) -%}
           {%- set rain = states('sensor.mke_precipitation_intensity') | float(none) -%}
-          {%- set ok = none not in [t_in, dp_in, t_out, dp_out, rain] -%}
-          {%- set r = ['readings unavailable'] if not ok else ((['humid'] if dp_out >= dp_in else ['house nearly as dry as outdoors'] if dp_out > dp_in - 3 else []) + (['rain'] if rain > 0 else []) + (['too cold'] if t_out < 5 else []) + (['warmer outside'] if t_out > t_in else [])) -%}
+          {%- set rh_out = states('sensor.mke_humidity') | float(none) -%}
+          {%- set last_rain = as_timestamp(states('sensor.mke_last_rain'), none) -%}
+          {%- set t_now = now().timestamp() -%}
+          {%- set ok = none not in [t_in, dp_in, t_out, dp_out, rain, rh_out] -%}
+          {%- set r = ['readings unavailable'] if not ok else ((['humid'] if dp_out >= dp_in else ['house nearly as dry as outdoors'] if dp_out > dp_in - 3 else []) + (['wet outside'] if rain > 0 or rh_out >= 95 or (last_rain is not none and t_now - last_rain <= 3600) else []) + (['too cold'] if t_out < 5 else []) + (['warmer outside'] if t_out > t_in else [])) -%}
           {{ ok }}
         state: >-
           {%- macro c(e) -%}{%- set v = states(e) | float(none) -%}{%- set u = state_attr(e, 'unit_of_measurement') -%}{{- none if v is none else (v - 32) * 5 / 9 if u == '°F' else v if u == '°C' else none -}}{%- endmacro -%}
@@ -91,8 +101,11 @@ template:
           {%- set t_out = c('sensor.mke_temperature') | float(none) -%}
           {%- set dp_out = c('sensor.mke_dew_point') | float(none) -%}
           {%- set rain = states('sensor.mke_precipitation_intensity') | float(none) -%}
-          {%- set ok = none not in [t_in, dp_in, t_out, dp_out, rain] -%}
-          {%- set r = ['readings unavailable'] if not ok else ((['humid'] if dp_out >= dp_in else ['house nearly as dry as outdoors'] if dp_out > dp_in - 3 else []) + (['rain'] if rain > 0 else []) + (['too cold'] if t_out < 5 else []) + (['warmer outside'] if t_out > t_in else [])) -%}
+          {%- set rh_out = states('sensor.mke_humidity') | float(none) -%}
+          {%- set last_rain = as_timestamp(states('sensor.mke_last_rain'), none) -%}
+          {%- set t_now = now().timestamp() -%}
+          {%- set ok = none not in [t_in, dp_in, t_out, dp_out, rain, rh_out] -%}
+          {%- set r = ['readings unavailable'] if not ok else ((['humid'] if dp_out >= dp_in else ['house nearly as dry as outdoors'] if dp_out > dp_in - 3 else []) + (['wet outside'] if rain > 0 or rh_out >= 95 or (last_rain is not none and t_now - last_rain <= 3600) else []) + (['too cold'] if t_out < 5 else []) + (['warmer outside'] if t_out > t_in else [])) -%}
           {{ r | count == 0 }}
         attributes:
           reasons: >-
@@ -102,8 +115,11 @@ template:
             {%- set t_out = c('sensor.mke_temperature') | float(none) -%}
             {%- set dp_out = c('sensor.mke_dew_point') | float(none) -%}
             {%- set rain = states('sensor.mke_precipitation_intensity') | float(none) -%}
-            {%- set ok = none not in [t_in, dp_in, t_out, dp_out, rain] -%}
-            {%- set r = ['readings unavailable'] if not ok else ((['humid'] if dp_out >= dp_in else ['house nearly as dry as outdoors'] if dp_out > dp_in - 3 else []) + (['rain'] if rain > 0 else []) + (['too cold'] if t_out < 5 else []) + (['warmer outside'] if t_out > t_in else [])) -%}
+            {%- set rh_out = states('sensor.mke_humidity') | float(none) -%}
+            {%- set last_rain = as_timestamp(states('sensor.mke_last_rain'), none) -%}
+            {%- set t_now = now().timestamp() -%}
+            {%- set ok = none not in [t_in, dp_in, t_out, dp_out, rain, rh_out] -%}
+            {%- set r = ['readings unavailable'] if not ok else ((['humid'] if dp_out >= dp_in else ['house nearly as dry as outdoors'] if dp_out > dp_in - 3 else []) + (['wet outside'] if rain > 0 or rh_out >= 95 or (last_rain is not none and t_now - last_rain <= 3600) else []) + (['too cold'] if t_out < 5 else []) + (['warmer outside'] if t_out > t_in else [])) -%}
             {{ r | join(', ') }}
 
       # Ecobee hallway RH 60% or more, held 6 h (a dip under 60 starts the 6 h again).
@@ -179,7 +195,7 @@ script:
             {%- set v = states(e) | float(none) -%}
             {%- set u = state_attr(e, 'unit_of_measurement') -%}
             {%- set c = none if v is none else (v - 32) * 5 / 9 if u == '°F' else v if u == '°C' else none -%}
-            {{- 'unavailable' if c is none else '%.1f °F (%.1f °C)' | format(c * 9 / 5 + 32, c) -}}
+            {{- 'unavailable' if c is none else '%.1f °F' | format(c * 9 / 5 + 32) -}}
             {%- endmacro -%}
             {%- macro h(e) -%}
             {%- set v = states(e) | float(none) -%}
@@ -320,7 +336,7 @@ automation:
             counted on to dry the house.
             {%- elif near in r -%}
             Close the windows: the house is now about as dry as the outdoor air can make it (its
-            dew point is within 3 °C of the outdoor one{{ '' if r | count == 1 else '; also ' ~ (r | reject('eq', near) | join(', ')) }}).
+            dew point is within 5.4 °F of the outdoor one{{ '' if r | count == 1 else '; also ' ~ (r | reject('eq', near) | join(', ')) }}).
             {%- else -%}
             Close the windows: the outdoor air no longer dries the house ({{ r | join(', ') or 'reason unknown' }}).
             {%- endif -%}

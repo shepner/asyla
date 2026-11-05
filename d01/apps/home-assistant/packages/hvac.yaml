@@ -80,14 +80,15 @@ automation:
               entity_id: input_datetime.hvac_cold_spell_report_last_success
             data:
               datetime: "{{ now() }}"
-      # The low in both units, by the sensor's unit (its state as it is when that is not °F or °C).
+      # The low in °F (the operator reads °F), by the sensor's unit (its state as it is when that is
+      # not °F or °C).
       - variables:
           low: >-
             {%- set e = 'sensor.mke_temperature_24_h_minimum' -%}
             {%- set v = states(e) | float(none) -%}
             {%- set u = state_attr(e, 'unit_of_measurement') -%}
             {%- set c = none if v is none else (v - 32) * 5 / 9 if u == '°F' else v if u == '°C' else none -%}
-            {{ states(e) if c is none else '%.1f °F (%.1f °C)' | format(c * 9 / 5 + 32, c) }}
+            {{ states(e) if c is none else '%.1f °F' | format(c * 9 / 5 + 32) }}
           body: >-
             {% if report is defined and report.returncode == 0 %}{{ report.stdout }}
             {%- elif report is defined %}report_hvac_cycles.py failed (exit {{ report.returncode }}):

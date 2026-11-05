@@ -10,12 +10,16 @@
    in the package renders as intended in Home Assistant's own template engine (a bare
    HomeAssistant object with stand-in states: the d01 sensors in °F, and in °C). That covers the
    unit conversion, the indoor dew point, the RH outdoor air reaches indoors, "outdoor air can dry
-   the house" and its reasons, the humidity thresholds, the notice gates on the "last sent"
-   helpers, the messages and the readings every notice carries; and the automations' shape
+   the house" and its reasons (wet outside: rain rate, last rain within 60 min, outdoor RH 95%; and
+   that every render calls now(), so Home Assistant renders it again each minute), the humidity
+   thresholds, the notice gates on the "last sent"
+   helpers, the messages and the readings every notice carries (°F only); and the automations' shape
    (triggers, 08:00-21:00 window, helper set before the send).
 3. In that image, one boot of Home Assistant with the package alone (a stand-in notify action, the
    event loop's clock moved on for the holds): station readings out for 15 minutes within 3 hours
-   of an air notice send one stop notice, and not before.
+   of an air notice send one stop notice, and not before; a last rain that turns 60 minutes old at
+   the next whole minute clears "wet outside" then, with no state change (a real wait of up to a
+   minute).
    Without docker and the image, 2 and 3 say skip.
 Nothing reaches a host or Home Assistant.
 """
@@ -57,7 +61,7 @@ class UpAndVerify(unittest.TestCase):
 
 
 TEMPLATES = r'''
-import asyncio, math, re, sys, time, yaml
+import asyncio, datetime, math, re, sys, time, yaml
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.template import Template
 
@@ -76,7 +80,10 @@ def rh_in(dp_out, t_in): return min(100, 100 * math.exp(A * dp_out / (B + dp_out
 
 T_IN, RH_IN = "sensor.downstairs_hallway_temperature", "sensor.downstairs_hallway_humidity"
 T_OUT, RH_OUT, DP_OUT = "sensor.mke_temperature", "sensor.mke_humidity", "sensor.mke_dew_point"
-RAIN = "sensor.mke_precipitation_intensity"
+RAIN, LAST_RAIN = "sensor.mke_precipitation_intensity", "sensor.mke_last_rain"
+def ago(seconds):
+    """The station's last-rain state as d01 shows it (ISO 8601 in UTC), this long before now."""
+    return datetime.datetime.fromtimestamp(time.time() - seconds, datetime.timezone.utc).isoformat(timespec="seconds")
 DP_IN, RHI = "sensor.indoor_dew_point", "sensor.outdoor_air_rh_indoors"
 DRY, HIGH, LOW = ("binary_sensor.outdoor_air_can_dry_the_house", "binary_sensor.indoor_humidity_high",
                   "binary_sensor.indoor_humidity_dry_enough")
@@ -84,7 +91,7 @@ AIR_H, STOP_H, ON_H, OFF_H = (f"input_datetime.dry_air_last_{n}_notice"
                               for n in ("air", "stop", "dehumidifier_on", "dehumidifier_off"))
 # The 2026-11-04 22:32Z readings as d01 shows them (°F; asyla backlog item, Findings).
 BASE = {T_IN: ("74.5", "°F"), RH_IN: ("72", "%"), T_OUT: ("54.0", "°F"), RH_OUT: ("83", "%"),
-        DP_OUT: ("48.9", "°F"), RAIN: ("0.0", "in/h")}
+        DP_OUT: ("48.9", "°F"), RAIN: ("0.0", "in/h"), LAST_RAIN: (ago(8 * 3600), None)}
 
 cases = []
 def check(name, got, want): cases.append((name, got, want))
@@ -169,17 +176,43 @@ async def main():
     check("humid: outdoor dew point 66 °F, over the indoor 64.9 °F",
           ev(DRY, keys, base | {DP_OUT: ("66.0", "°F")}), ("True", "False", "humid"))
     near = "house nearly as dry as outdoors"
-    check("near: outdoor dew point 62 °F, under the indoor 64.9 °F by less than 3 °C",
+    check("near: outdoor dew point 62 °F, under the indoor 64.9 °F by less than 5.4 °F",
           ev(DRY, keys, base | {DP_OUT: ("62.0", "°F")}), ("True", "False", near))
-    check("rain", ev(DRY, keys, base | {RAIN: ("0.02", "in/h")}), ("True", "False", "rain"))
+    wet = "wet outside"
+    check("wet: rain rate 0.02 in/h", ev(DRY, keys, base | {RAIN: ("0.02", "in/h")}), ("True", "False", wet))
+    no_last_rain = {k: v for k, v in base.items() if k != LAST_RAIN}
+    for name, states, want in (
+            ("wet: outdoor RH 95%", base | {RH_OUT: ("95", "%")}, wet),
+            ("outdoor RH 94.9%: not wet", base | {RH_OUT: ("94.9", "%")}, ""),
+            ("11-04 mist (0 in/h, 88% RH, last rain 8 h ago): not wet, the stated limit",
+             base | {RH_OUT: ("88", "%")}, ""),
+            ("wet: last rain 1 min ago, rain rate back to 0", base | {LAST_RAIN: (ago(60), None)}, wet),
+            ("wet: last rain 59 min ago", base | {LAST_RAIN: (ago(59 * 60), None)}, wet),
+            ("last rain 61 min ago: not wet", base | {LAST_RAIN: (ago(61 * 60), None)}, ""),
+            ("wet: last rain 2 min ahead (station clock ahead)", base | {LAST_RAIN: (ago(-120), None)}, wet),
+            ("last rain unknown: not wet, still available", base | {LAST_RAIN: ("unknown", None)}, ""),
+            ("last rain unavailable: not wet, still available", base | {LAST_RAIN: ("unavailable", None)}, ""),
+            ("no last-rain entity: not wet, still available", no_last_rain, ""),
+            ("wet: RH 96% and last rain 10 min ago, one reason", base | {RH_OUT: ("96", "%"), LAST_RAIN: (ago(600), None)}, wet)):
+        check(name, ev(DRY, keys, states), ("True", "False" if want else "True", want))
+    # now() in every render (before any branch): Home Assistant then renders it again at each minute.
+    for name, states in (("readings ok", base), ("wet", base | {RH_OUT: ("96", "%")}),
+                         ("readings unavailable", base | {DP_OUT: ("unavailable", "°F")})):
+        put(states)
+        infos = [Template(x, hass).async_render_to_info() for x in
+                 (ENT[DRY]["availability"], ENT[DRY]["state"], ENT[DRY]["attributes"]["reasons"])]
+        check(f"can dry: availability, state and reasons re-render each minute, {name}",
+              [i.has_time for i in infos], [True, True, True])
+    check("can dry: tracks the outdoor RH and last-rain sensors", {RH_OUT, LAST_RAIN} <= infos[2].entities, True)
     check("too cold", ev(DRY, keys, base | {T_OUT: ("40.0", "°F"), DP_OUT: ("30.0", "°F")}),
           ("True", "False", "too cold"))
     check("warmer outside", ev(DRY, keys, base | {T_OUT: ("78.0", "°F")}), ("True", "False", "warmer outside"))
-    check("humid and rain", ev(DRY, keys, base | {DP_OUT: ("66.0", "°F"), RAIN: ("0.1", "in/h")}),
-          ("True", "False", "humid, rain"))
-    check("near and rain", ev(DRY, keys, base | {DP_OUT: ("62.0", "°F"), RAIN: ("0.1", "in/h")}),
-          ("True", "False", near + ", rain"))
-    edge = {T_IN: ("22.0", "°C"), DP_IN: ("18.5", "°C"), T_OUT: ("5.0", "°C"), DP_OUT: ("15.5", "°C"), RAIN: ("0", "in/h")}
+    check("humid and wet", ev(DRY, keys, base | {DP_OUT: ("66.0", "°F"), RAIN: ("0.1", "in/h")}),
+          ("True", "False", "humid, wet outside"))
+    check("near and wet", ev(DRY, keys, base | {DP_OUT: ("62.0", "°F"), RAIN: ("0.1", "in/h")}),
+          ("True", "False", near + ", wet outside"))
+    edge = {T_IN: ("22.0", "°C"), DP_IN: ("18.5", "°C"), T_OUT: ("5.0", "°C"), DP_OUT: ("15.5", "°C"), RAIN: ("0", "in/h"),
+            RH_OUT: ("80", "%")}
     check("bounds: dew point 3 °C under, 5 °C outdoors", ev(DRY, keys, edge), ("True", "True", ""))
     check("bounds: as warm as indoors", ev(DRY, keys, edge | {T_OUT: ("22.0", "°C")}), ("True", "True", ""))
     check("bounds: 4.9 °C", ev(DRY, keys, edge | {T_OUT: ("4.9", "°C")}), ("True", "False", "too cold"))
@@ -188,6 +221,7 @@ async def main():
               ev(DRY, keys, edge | {DP_OUT: (dp, "°C")}), ("True", "False", want))
     for name, over in (("station dew point unavailable", {DP_OUT: ("unavailable", "°F")}),
                        ("rain unknown", {RAIN: ("unknown", "in/h")}),
+                       ("outdoor RH unavailable", {RH_OUT: ("unavailable", "%")}),
                        ("indoor dew point missing", {DP_IN: ("unknown", "°C")}),
                        ("unknown unit", {T_OUT: ("285.4", "K")})):
         check(f"can dry: {name}", ev(DRY, keys, base | over), ("False", "False", "readings unavailable"))
@@ -289,30 +323,30 @@ async def main():
     air_live = air["conditions"][4]["value_template"]
     for name, st, attrs, want in (("no reasons", "on", {"reasons": ""}, "True"),
                                   ("on in the off hold", "on", {"reasons": near}, "False"),
-                                  ("on, rain now", "on", {"reasons": "rain"}, "False")):
+                                  ("on, wet now", "on", {"reasons": "wet outside"}, "False")):
         put({})
         hass.states.async_set(DRY, st, attrs)
         check(f"air: live readings, {name}", r(air_live), want)
 
     # --- messages ----------------------------------------------------------------------------------
     put({})
-    hass.states.async_set(DRY, "off", {"reasons": "humid, rain"})
+    hass.states.async_set(DRY, "off", {"reasons": "humid, wet outside"})
     stop_msg = stop["actions"][1]["data"]["message"]
     check("stop message names why", r(stop_msg),
-          "Close the windows: the outdoor air no longer dries the house (humid, rain).")
+          "Close the windows: the outdoor air no longer dries the house (humid, wet outside).")
     check("dehumidifier on message",
           r(on["actions"][1]["data"]["message"]),
           "Turn the basement dehumidifier on, set to 50%: indoor RH has been 60% or more for 6 hours and the "
-          "outdoor air cannot dry the house (humid, rain).")
+          "outdoor air cannot dry the house (humid, wet outside).")
     for name, st, attrs, want in (
             ("near", "off", {"reasons": near},
              "Close the windows: the house is now about as dry as the outdoor air can make it (its dew point "
-             "is within 3 °C of the outdoor one)."),
-            ("near and rain, too cold", "off", {"reasons": near + ", rain, too cold"},
+             "is within 5.4 °F of the outdoor one)."),
+            ("near and wet, too cold", "off", {"reasons": near + ", wet outside, too cold"},
              "Close the windows: the house is now about as dry as the outdoor air can make it (its dew point "
-             "is within 3 °C of the outdoor one; also rain, too cold)."),
-            ("rain", "off", {"reasons": "rain"},
-             "Close the windows: the outdoor air no longer dries the house (rain)."),
+             "is within 5.4 °F of the outdoor one; also wet outside, too cold)."),
+            ("wet outside", "off", {"reasons": "wet outside"},
+             "Close the windows: the outdoor air no longer dries the house (wet outside)."),
             ("no reasons", "off", {"reasons": ""},
              "Close the windows: the outdoor air no longer dries the house (reason unknown)."),
             ("unavailable", "unavailable", {},
@@ -330,7 +364,7 @@ async def main():
     check("air message", r(air["actions"][1]["data"]["message"])[:68],
           "The outdoor air can dry the house. Open windows wide with a cross dr")
 
-    # --- the script: readings in °F and °C, persistent then mail -------------------------------------
+    # --- the script: readings in °F only, persistent then mail -------------------------------------
     seq = SCRIPT["sequence"]
     check("script: queued", SCRIPT["mode"], "queued")
     check("script: readings, persistent notification, then mail",
@@ -343,16 +377,17 @@ async def main():
     readings = seq[0]["variables"]["readings"]
     s = derived(BASE)
     dp_c = float(s[DP_IN][0])
-    want = ("Outdoors 54.0 °F (12.2 °C), 83% RH, dew point 48.9 °F (9.4 °C).\n"
-            f"Indoors 74.5 °F (23.6 °C), 72% RH, dew point {dp_c * 9 / 5 + 32:.1f} °F ({dp_c:.1f} °C).\n"
+    want = ("Outdoors 54.0 °F, 83% RH, dew point 48.9 °F.\n"
+            f"Indoors 74.5 °F, 72% RH, dew point {dp_c * 9 / 5 + 32:.1f} °F.\n"
             f"Outdoor air warmed to the indoor temperature: {s[RHI][0]}% RH.")
     check("readings, 11-04 in °F", r(readings), want)
+    check("readings: no °C", "°C" in r(readings), False)
     s = derived({T_IN: ("23.6", "°C"), RH_IN: ("72", "%"), T_OUT: ("12.2", "°C"), RH_OUT: ("83", "%"),
                  DP_OUT: ("9.4", "°C"), RAIN: ("0", "mm/h")})
-    check("readings, same in °C", r(readings).splitlines()[0], "Outdoors 54.0 °F (12.2 °C), 83% RH, dew point 48.9 °F (9.4 °C).")
+    check("readings, from °C sensors: shown in °F", r(readings).splitlines()[0], "Outdoors 54.0 °F, 83% RH, dew point 48.9 °F.")
     check("readings: 41%", r(readings).splitlines()[2], "Outdoor air warmed to the indoor temperature: 41% RH.")
     put(BASE | {DP_OUT: ("unavailable", "°F"), RH_OUT: ("unknown", "%")})
-    check("readings: missing values", r(readings).splitlines()[0], "Outdoors 54.0 °F (12.2 °C), RH unavailable, dew point unavailable.")
+    check("readings: missing values", r(readings).splitlines()[0], "Outdoors 54.0 °F, RH unavailable, dew point unavailable.")
     check("script: body is message, blank line, readings",
           r(seq[1]["data"]["message"], message="Do this.", readings="R1\nR2"), "Do this.\n\nR1\nR2")
 
@@ -402,7 +437,7 @@ class InPinnedImage(unittest.TestCase):
 
 
 LIVE = r'''
-import asyncio, sys, time
+import asyncio, datetime, sys, time
 from homeassistant import bootstrap, runner
 
 DRY = "binary_sensor.outdoor_air_can_dry_the_house"
@@ -455,6 +490,20 @@ async def main():
     check("live: stop helper set", hass.states.get(STOP_H).attributes.get("timestamp") != stop0, True)
     await skip(30)
     check("live: still one stop notice 30 min on", len(sent), 1)
+    # Wet outside from the last rain runs out with the clock alone: now() makes Home Assistant
+    # render the templates again at each whole minute (wall clock; a real wait, under a minute).
+    hass.states.async_set("sensor.mke_dew_point", "48.9", {"unit_of_measurement": "°F"})
+    if 60 - time.time() % 60 < 3:
+        await asyncio.sleep(60 - time.time() % 60 + 0.5)
+    m = int(time.time() // 60 * 60 + 60)  # the next whole minute, at least 3 s ahead
+    last = datetime.datetime.fromtimestamp(m - 3601, datetime.timezone.utc).isoformat(timespec="seconds")
+    hass.states.async_set("sensor.mke_last_rain", last)
+    await skip(0)
+    check("live: last rain 60 min old in under a minute: wet outside",
+          hass.states.get(DRY).attributes.get("reasons"), "wet outside")
+    await asyncio.sleep(max(0, m - time.time()) + 3)
+    check("live: past that minute, no state change: wet outside cleared",
+          hass.states.get(DRY).attributes.get("reasons"), "")
     await hass.async_stop(force=True)
 
 asyncio.run(main())

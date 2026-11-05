@@ -215,8 +215,9 @@ for name, got, want in cases:
 sys.exit(1 if bad else 0)
 '''
 
-# The gate through Home Assistant's own numeric_state condition, and the title's low, with the
-# statistics sensor in °F (d01: it follows sensor.mke_temperature) and in °C.
+# The gate through Home Assistant's own numeric_state condition, and the title's low (shown in °F
+# only: the operator reads °F), with the statistics sensor in °F (d01: it follows
+# sensor.mke_temperature) and in °C.
 UNITS = r'''
 import asyncio, sys, yaml
 from homeassistant.core import HomeAssistant
@@ -237,9 +238,9 @@ async def main():
         return (async_numeric_state(hass, E, below=gate["below"], value_template=vt),
                 Template(low, hass).async_render(parse_result=False).strip())
     for state, unit, want in (
-            ("31.0", "°F", (True, "31.0 °F (-0.6 °C)")), ("32.0", "°F", (False, "32.0 °F (0.0 °C)")),
-            ("5.0", "°F", (True, "5.0 °F (-15.0 °C)")), ("-0.5", "°C", (True, "31.1 °F (-0.5 °C)")),
-            ("3.0", "°C", (False, "37.4 °F (3.0 °C)")), ("270", "K", (False, "270")),
+            ("31.0", "°F", (True, "31.0 °F")), ("32.0", "°F", (False, "32.0 °F")),
+            ("5.0", "°F", (True, "5.0 °F")), ("-0.5", "°C", (True, "31.1 °F")),
+            ("3.0", "°C", (False, "37.4 °F")), ("270", "K", (False, "270")),
             ("unavailable", "°F", (False, "unavailable")), ("31.0", None, (False, "31.0"))):
         cases.append((f"{state} {unit}: gate, title low", at(state, unit), want))
 asyncio.run(main())

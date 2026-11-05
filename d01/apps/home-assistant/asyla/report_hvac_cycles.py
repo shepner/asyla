@@ -214,6 +214,11 @@ def fmt_row(label: str, s: dict) -> str:
             f"most/h {s['most_per_hour']}")
 
 
+def fahrenheit(c: float) -> float:
+    """A °C reading (the trends Prometheus series) as °F to one decimal: the operator reads °F."""
+    return round(c * 9 / 5 + 32, 1)
+
+
 def print_report(r: dict) -> None:
     iso = lambda t: dt.datetime.fromtimestamp(t, dt.timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
     print(f"HVAC runs {iso(r['start'])} to {iso(r['end'])} ({r['minutes']} minutes); days are Chicago time")
@@ -222,8 +227,8 @@ def print_report(r: dict) -> None:
     for d, v in r["days"].items():
         line = f"  {d}"
         if "outdoor_c" in v:
-            o = v["outdoor_c"]
-            line += f"  outdoor {o['min']}..{o['max']} °C (mean {o['mean']}, {o['minutes']} min)"
+            o = {k: fahrenheit(v["outdoor_c"][k]) for k in ("min", "max", "mean")}
+            line += f"  outdoor {o['min']}..{o['max']} °F (mean {o['mean']}, {v['outdoor_c']['minutes']} min)"
         print(line)
         for c in CLASSES:
             print(fmt_row(c, v[c]))
@@ -283,6 +288,11 @@ def selftest() -> int:
     finally:
         MAX_POINTS = saved
     tot, day = r["total"], r["days"]["2026-10-22"]
+    import contextlib
+    import io
+    shown = io.StringIO()
+    with contextlib.redirect_stdout(shown):
+        print_report(r)
     checks = [
         ("chunked queries", len(calls) == 12),
         ("one heat pump run of 10 min", (tot["heat_pump"]["runs"], tot["heat_pump"]["minutes"]) == (1, 10)),
@@ -295,6 +305,9 @@ def selftest() -> int:
         ("start in local time", tot["heat_pump"]["starts"] == ["10-22 08:19 10m"]),
         ("idle action dropped", day["ha_action_minutes"] == {"climate.downstairs_hallway": {"heating": 10}}),
         ("outdoor min/max", (day["outdoor_c"]["min"], day["outdoor_c"]["max"]) == (6.5, 8.5)),
+        ("report shows the outdoor temperature in °F only",
+         "outdoor 43.7..47.3 °F (mean 45.5, 2 min)" in shown.getvalue() and "°C" not in shown.getvalue()),
+        ("°F on output", (fahrenheit(6.5), fahrenheit(8.5), fahrenheit(-20), fahrenheit(0)) == (43.7, 47.3, -4.0, 32.0)),
         ("missing minute splits a run", runs([1, 2, None, 4]) == [(1, 2), (4, 1)]),
     ]
     # The deadline: a request near it waits only what is left; past it, none is sent.

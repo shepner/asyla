@@ -104,14 +104,15 @@ data (operator, 2026-10-28). Read-only: nothing here changes a thermostat.
   - `input_datetime.hvac_cold_spell_report_last_success`: when the last successful report ran
     (local date and time). It has no `initial`, so Home Assistant restores it at every start. With
     nothing to restore it starts as today 00:00:00, which the automation reads as never set.
-  - Automation "HVAC cold-spell report": daily at 09:00, when that minimum is below 0 °C (the gate
-    converts it to °C by its `unit_of_measurement`; until 2026-11-04 a bare `below: 0` on the °F
-    reading meant below −17.8 °C; any other unit never passes) and the last successful report is 7 or more days
+  - Automation "HVAC cold-spell report": daily at 09:00, when that minimum is below 32 °F (the gate
+    converts it to °C by its `unit_of_measurement` and compares with 0 °C; until 2026-11-04 a bare
+    `below: 0` on the °F reading meant below 0 °F; any other unit never passes) and the last successful report is 7 or more days
     old by local date, or never happened (unknown, unavailable or the 00:00:00 start value). It
     runs the report and, only when the script exits 0, sets the `input_datetime` to now. A failed
     run (Prometheus down, a timeout) leaves it alone, so the report is tried again at 09:00 the
     next day. Either way it puts the output, or the failure, in a persistent notification, then
-    mails it to `notify.hvac_report`; the title gives the low in °F and °C.
+    mails it to `notify.hvac_report`; the title gives the low in °F only (the operator reads °F,
+    2026-11-04), and so does the report body: it reads °C from the trends Prometheus and prints °F.
 - `asyla/report_hvac_cycles.py`: the report (standard library only). This is its only copy; the
   asyla hub's `tools/report_hvac_cycles.py` runs this file from the hub's clone of this repo. It
   reads theOrg's trends Prometheus on d06 at `https://prometheus-trends.asyla.org` with GET only
@@ -143,21 +144,29 @@ Home Assistant tells the operator when to air the house and when to run the base
 (operator, 2026-11-04). Advice only: it switches no device.
 
 - `packages/dry_air.yaml`. Inputs: the Ecobee `sensor.downstairs_hallway_temperature` and
-  `_humidity`, the Ambient Weather `sensor.mke_temperature`, `_humidity`, `_dew_point` and
-  `_precipitation_intensity`. Every template converts a temperature by that entity's
-  `unit_of_measurement` (°F and °C; anything else counts as unavailable): on d01 they read °F,
-  and Home Assistant shows any temperature-class sensor, `sensor.indoor_dew_point` included, in
-  the system's unit. Thresholds are in °C.
+  `_humidity`, the Ambient Weather `sensor.mke_temperature`, `_humidity`, `_dew_point`,
+  `_precipitation_intensity` and `_last_rain` (a timestamp, ISO 8601 in UTC to the minute on d01).
+  Every template converts a temperature by that entity's `unit_of_measurement` (°F and °C;
+  anything else counts as unavailable): on d01 they read °F, and Home Assistant shows any
+  temperature-class sensor, `sensor.indoor_dew_point` included, in the system's unit. Thresholds
+  and maths are in °C; every temperature a notice shows is in °F.
   - `sensor.indoor_dew_point`: Magnus formula (a 17.62, b 243.12), computed in °C.
   - `sensor.outdoor_air_rh_indoors`: the RH outdoor air reads once warmed to the indoor
-    temperature (2026-11-04: 83% at 12.2 °C outdoors reads about 41% at 23.6 °C indoors).
-  - `binary_sensor.outdoor_air_can_dry_the_house`: outdoor dew point at least 3 °C under the
-    indoor one, 5 °C to the indoor temperature outdoors, no rain; held 30 min before it turns on
+    temperature (2026-11-04: 83% at 54 °F outdoors reads about 41% at 74.5 °F indoors).
+  - `binary_sensor.outdoor_air_can_dry_the_house`: outdoor dew point at least 5.4 °F (3 °C) under
+    the indoor one, 41 °F (5 °C) to the indoor temperature outdoors, not wet outside; held 30 min
+    before it turns on
     and 15 min before it turns off, so a reading near a bound does not flap. Its `reasons`
     attribute says why not, from the live readings (so during a hold it can differ from the
     state): humid (outdoor dew point at or above the indoor one), house nearly as dry as outdoors
-    (under it by less than 3 °C, which airing itself leads to), rain, too cold, warmer outside, or
-    readings unavailable (then the sensor is unavailable at once, with no hold).
+    (under it by less than 5.4 °F, which airing itself leads to), wet outside, too cold, warmer
+    outside, or readings unavailable (then the sensor is unavailable at once, with no hold; the
+    last-rain sensor is not needed: missing, it counts as no recent rain). **Wet outside**: a rain
+    rate over 0, the station's last rain 60 min ago or less, or outdoor RH 95% or more. Mist does
+    not register on the rain gauge (2026-11-04: 0 in/h while misting, after 0.02 in/h earlier, at
+    88% RH), so light mist the gauge does not catch, at under 95% RH, still gets through. The
+    templates call `now()`, so Home Assistant renders them again at each minute and the last-rain
+    hour runs out with no state change.
   - `binary_sensor.indoor_humidity_high` (RH 60% or more, held 6 h) and
     `binary_sensor.indoor_humidity_dry_enough` (50% or less, held 3 h).
   - Four `input_datetime.dry_air_last_*_notice` helpers: when each notice was last sent (no
@@ -177,11 +186,12 @@ Home Assistant tells the operator when to air the house and when to run the base
     script.
   - `script.dry_air_notice`: a persistent notification (`asyla_dry_air_airing` or
     `asyla_dry_air_dehumidifier`, so a later notice in a thread replaces the earlier one), then
-    mail to `notify.hvac_report`. Every notice ends with the live readings in °F and °C and the
+    mail to `notify.hvac_report`. Every notice ends with the live readings in °F and the
     converted RH. Until the SMTP integration exists (Mail, above), only the UI shows them.
 - Test on WS01: `python3 scripts/tests/test_home_assistant_dry_air.py` (with the image pulled, it
   runs `check_config`, every template in Home Assistant's own template engine, and one boot with
-  the package alone: readings out for 15 min after an air notice send one stop notice).
+  the package alone: readings out for 15 min after an air notice send one stop notice, and a last
+  rain turning 60 min old clears "wet outside" at the next minute).
 - To see one now: Settings → Automations → a "Dry air" automation → Run actions (this skips the
   conditions and sets its helper).
 
