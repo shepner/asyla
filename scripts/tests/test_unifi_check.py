@@ -68,7 +68,7 @@ def run(hosts=HOSTS, devs=None, wan=None, state=None, t=T, cfg=CFG, hourly=None)
     state = {} if state is None else state
     found, read, summary = uc.evaluate(cfg, hosts, devs or devices(), isp("h-day", healthy_wan() if wan is None else wan),
                                        state, t, None if hourly is None else isp("h-day", hourly, "1h"))
-    return {k: (s, m) for k, s, m in found}, read, summary, state
+    return {k: (s, m) for k, s, m, *_ in found}, read, summary, state
 
 
 class Findings(unittest.TestCase):
@@ -91,11 +91,28 @@ class Findings(unittest.TestCase):
         found, *_ = run(devs=devices(day=[dev("AA", "AP-Hall", status="offline")]))
         self.assertEqual(found["device:DAY:AA:offline"], ("urgent", "UniFi DAY: AP-Hall (AC LR) is offline"))
 
-    def test_recent_restart_is_a_warning_for_a_day(self):
-        found, *_ = run(devs=devices(day=[dev("AA", "AP-Hall", start=T - dt.timedelta(hours=3))]))
-        self.assertEqual(found["device:DAY:AA:restarted"][0], "warn")
+    def test_one_recent_restart_is_an_event_for_a_day(self):
+        # Over once the device is online: info, the digest's FYI, not NEEDS ATTENTION (operator 2026-11-05).
+        start = T - dt.timedelta(hours=3)
+        found, *_ = uc.evaluate(CFG, HOSTS, devices(day=[dev("AA", "AP-Hall", start=start)]),
+                                isp("h-day", healthy_wan()), {}, T)
+        self.assertEqual(found, [("device:DAY:AA:restarted", "info", "UniFi DAY: AP-Hall (AC LR) restarted at 2026-10-22T17:00:00Z",
+                                  {"at": "2026-10-22T17:00:00Z", "what": "AP-Hall", "event": "restarted"})])
         found, *_ = run(devs=devices(day=[dev("AA", "AP-Hall", start=T - dt.timedelta(hours=25))]))
         self.assertNotIn("device:DAY:AA:restarted", found)
+
+    def test_a_second_restart_in_a_day_is_a_warning(self):
+        state = {}
+        first = devices(day=[dev("AA", "AP-Hall", start=T - dt.timedelta(hours=3))])
+        self.assertEqual(run(devs=first, state=state)[0]["device:DAY:AA:restarted"][0], "info")
+        self.assertEqual(run(devs=first, state=state, t=T + dt.timedelta(minutes=5))[0]["device:DAY:AA:restarted"][0],
+                         "info", "the same restart read again")
+        again = devices(day=[dev("AA", "AP-Hall", start=T + dt.timedelta(hours=1))])
+        found, *_ = run(devs=again, state=state, t=T + dt.timedelta(hours=1, minutes=5))
+        self.assertEqual(found["device:DAY:AA:restarted"],
+                         ("warn", "UniFi DAY: AP-Hall (AC LR) restarted 2 times in 24 h, last at 2026-10-22T21:00:00Z"))
+        found, *_ = run(devs=again, state=state, t=T + dt.timedelta(hours=22))
+        self.assertEqual(found["device:DAY:AA:restarted"][0], "info", "the first restart is out of the day")
 
     def test_firmware_waiting_a_week_is_a_warning(self):
         state = {}
@@ -203,6 +220,12 @@ class LocalTime(unittest.TestCase):
         self.assertTrue(self.restart("MKE", "BB", at).endswith("2026-10-22 02:30 CDT (07:30Z)"),
                         "the same instant is 02:30 in Chicago: not MKE's update hour")
         self.assertTrue(self.restart("MKE", "BB", at + dt.timedelta(hours=1)).endswith(", during its 03:00 auto-update"))
+
+    def test_a_planned_restart_says_so_in_its_event(self):
+        at = dt.datetime(2026, 10, 22, 7, 30, 8, tzinfo=dt.timezone.utc)
+        found, *_ = uc.evaluate(CFG, self.ZONED, devices(day=[dev("AA", "AP-Hall", start=at)]), isp("h-day", healthy_wan()), {}, T)
+        self.assertEqual([x for *_, x in found], [{"at": "2026-10-22T07:30:08Z", "what": "AP-Hall",
+                                                   "event": "restarted in its 03:00 auto-update"}])
 
     def test_disconnected_since_in_local_time(self):
         found, *_ = run(hosts=[host("h-day", "DAY", "disconnected", tz="America/New_York"), self.ZONED[1]])

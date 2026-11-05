@@ -108,13 +108,20 @@ def run(text=None, prev=None, t=T, release=None, cfg=CFG, scfg=S1):
     """One evaluate() of switch1: ({key: (severity, message)} of found + held, summary, new prev)."""
     found, held, summary, new = sc.evaluate(cfg, "switch1", scfg, sc.samples(text or scrape()),
                                             {} if prev is None else prev, t, release)
-    return {k: (s, m) for k, s, m in found + held}, summary, new
+    return {k: (s, m) for k, s, m, *_ in found + held}, summary, new
 
 
 def two(first, second, **kw):
     """Two cycles five minutes apart: the findings of the second."""
     _, _, prev = run(aged(first, -300), t=T - FIVE)
     return run(second, prev=prev, **kw)[0]
+
+
+def events(first, second, scfg=S1):
+    """Two cycles five minutes apart: {key: event} of the second's findings that carry one."""
+    _, _, prev = run(aged(first, -300), t=T - FIVE, scfg=scfg)
+    found, held, *_ = sc.evaluate(CFG, "switch1", scfg, sc.samples(second), prev, T, None)
+    return {k: x[0] for k, _, _, *x in found + held if x}
 
 
 class Samples(unittest.TestCase):
@@ -174,6 +181,16 @@ class Ports(unittest.TestCase):
         self.assertIn("went down 2 time(s) between 2026-10-25T19:55:00Z and 2026-10-25T20:00:00Z",
                       found["switch1:port:sfp-sfpplus19:flap"][1])
 
+    def test_a_flap_and_a_burst_say_what_happened_in_a_few_words(self):
+        # The digest's FYI line (host-maintenance): "switch1 sfp-sfpplus6 went down once".
+        after = scrape(ports=[port(p, downs=1 if p == "sfp-sfpplus6" else 0) for p in WATCHED]
+                       + [port("ether2", errors=50)])
+        self.assertEqual(events(scrape(ports=[port(p) for p in WATCHED] + [port("ether2")]), after), {
+            "switch1:port:sfp-sfpplus6:flap": {"what": "switch1 sfp-sfpplus6", "event": "went down once"},
+            "switch1:port:ether2:errors": {"what": "switch1 ether2", "event": "had 50 errors in 5 min"}})
+        twice = scrape(ports=[port(p, downs=2 if p == "sfp-sfpplus6" else 0) for p in WATCHED])
+        self.assertEqual(events(scrape(), twice)["switch1:port:sfp-sfpplus6:flap"]["event"], "went down 2 times")
+
     def test_flap_by_last_change_without_link_downs(self):
         before = scrape(ports=[port(p) for p in WATCHED], mikrotik=False)
         after = scrape(ports=[port(p, last_change=999 if p == "sfp-sfpplus5" else 100) for p in WATCHED], mikrotik=False)
@@ -190,11 +207,25 @@ class Ports(unittest.TestCase):
 
 
 class Restart(unittest.TestCase):
-    def test_recent_restart_is_a_warning_for_a_day(self):
-        found, *_ = run(scrape(uptime=3 * 3600))
-        self.assertEqual(found["switch1:restarted"],
-                         ("warn", "switch1: restarted at 2026-10-25T17:00:00Z (SNMP uptime 3.0 h)"))
+    def test_one_recent_restart_is_an_event_for_a_day(self):
+        # Over once the switch answers: info, the digest's FYI, not NEEDS ATTENTION (operator 2026-11-05).
+        found, _, _, new = sc.evaluate(CFG, "switch1", S1, sc.samples(scrape(uptime=3 * 3600)), {}, T, None)
+        self.assertEqual(found, [("switch1:restarted", "info",
+                                  "switch1: restarted at 2026-10-25T17:00:00Z (SNMP uptime 3.0 h)",
+                                  {"at": "2026-10-25T17:00:00Z", "what": "switch1", "event": "restarted"})])
+        self.assertEqual(new["starts"], ["2026-10-25T17:00:00Z"])
         self.assertNotIn("switch1:restarted", run(scrape(uptime=25 * 3600))[0])
+
+    def test_a_second_restart_in_a_day_is_a_warning(self):
+        _, _, prev = run(scrape(uptime=3 * 3600))
+        later = T + dt.timedelta(hours=2)
+        found, _, prev = run(scrape(uptime=5 * 3600 + 30), prev=prev, t=later)
+        self.assertEqual(found["switch1:restarted"][0], "info", "the same boot read again, 30 s apart")
+        found, _, prev = run(scrape(uptime=600), prev=prev, t=later)
+        self.assertEqual(found["switch1:restarted"],
+                         ("warn", "switch1: restarted 2 times in 24 h, last at 2026-10-25T21:50:00Z (SNMP uptime 0.2 h)"))
+        found, *_ = run(scrape(uptime=20 * 3600 + 1200), prev=prev, t=later + dt.timedelta(hours=20, minutes=10))
+        self.assertEqual(found["switch1:restarted"][0], "info", "the first restart is out of the day")
 
     def test_counters_reset_across_a_restart_give_no_rate(self):
         _, _, prev = run(scrape(ports=[port(p, errors=500, downs=3) for p in WATCHED]), t=T - FIVE)
@@ -363,12 +394,35 @@ class Confirm(unittest.TestCase):
 
 
 class Hold(unittest.TestCase):
-    def test_counter_warning_kept_for_hold_hours(self):
+    EV = {"what": "switch2 gigabitethernet0/1/0", "event": "had 3079 error octets in 5 min"}
+
+    def test_a_burst_seen_once_is_an_event_held_for_hold_hours(self):
         state = {}
-        self.assertEqual(sc.hold([("k", "warn", "m")], state, T, 24), [("k", "warn", "m")])
-        self.assertEqual(sc.hold([], state, T + dt.timedelta(hours=24), 24), [("k", "warn", "m")])
+        info = [("k", "info", "m", {"at": sc.iso(T), **self.EV})]
+        self.assertEqual(sc.hold([("k", "warn", "m", self.EV)], state, T, 24), info)
+        self.assertEqual(sc.hold([], state, T + FIVE, 24), info)
+        self.assertEqual(sc.hold([], state, T + dt.timedelta(hours=24), 24), info)
         self.assertEqual(sc.hold([], state, T + dt.timedelta(hours=24, minutes=5), 24), [])
         self.assertEqual(state["held"], {})
+
+    def test_still_going_is_a_warning_then_an_event_from_its_start(self):
+        state = {}
+        sc.hold([("k", "warn", "m1", self.EV)], state, T, 24)
+        self.assertEqual(sc.hold([("k", "warn", "m2", self.EV)], state, T + FIVE, 24), [("k", "warn", "m2")])
+        self.assertEqual(sc.hold([("k", "warn", "m3", self.EV)], state, T + 2 * FIVE, 24), [("k", "warn", "m3")])
+        self.assertEqual(sc.hold([], state, T + 3 * FIVE, 24), [("k", "info", "m3", {"at": sc.iso(T), **self.EV})])
+
+    def test_a_new_burst_after_a_gap_has_its_own_time(self):
+        state = {}
+        sc.hold([("k", "warn", "m1", self.EV)], state, T, 24)
+        sc.hold([], state, T + FIVE, 24)
+        later = T + dt.timedelta(hours=3)
+        self.assertEqual(sc.hold([("k", "warn", "m2", self.EV)], state, later, 24),
+                         [("k", "info", "m2", {"at": sc.iso(later), **self.EV})])
+
+    def test_a_finding_held_before_this_change_reads_as_an_event(self):
+        state = {"held": {"k": {"severity": "warn", "message": "m", "last": sc.iso(T - FIVE)}}}
+        self.assertEqual(sc.hold([], state, T, 24), [("k", "info", "m", {"at": sc.iso(T - FIVE)})])
 
 
 class Main(unittest.TestCase):
@@ -465,7 +519,18 @@ class Main(unittest.TestCase):
         self.cycle()
         self.answer = scrape(ports=[port(p) for p in WATCHED] + [port("ether2", errors=50)])
         s = self.cycle()
-        self.assertEqual([p["key"] for p in s["problems"]], ["switch1:port:ether2:errors"])
+        self.assertEqual(s["problems"], [{
+            "key": "switch1:port:ether2:errors", "severity": "info", "at": "2026-10-25T20:05:00Z",
+            "what": "switch1 ether2", "event": "had 50 errors in 5 min",
+            "message": "switch1: port ether2: 50 errors in 5 min (over 10/h), last seen 2026-10-25T20:05:00Z"}])
+
+    def test_errors_on_every_check_stay_a_warning(self):
+        self.cycle()
+        for n in (50, 100):
+            self.answer = scrape(ports=[port(p) for p in WATCHED] + [port("ether2", errors=n)])
+            s = self.cycle()
+        self.assertEqual([(p["key"], p["severity"]) for p in s["problems"]], [("switch1:port:ether2:errors", "warn")])
+        self.assertNotIn("at", s["problems"][0])
 
     def test_staged_alert(self):
         (self.data / "stage.json").write_text('{"until": "2026-10-25T21:00:00Z", "note": "proof"}')

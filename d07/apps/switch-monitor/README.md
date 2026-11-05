@@ -22,10 +22,14 @@ can reach d07 (section theOrg below).
 - **What it writes** in `/mnt/docker/switch-monitor/`:
   - `status.json`: `{time, checker, ok, problems: [{key, severity, message}], switches}`. The
     collection point: host-maintenance's monitor reads it on each run (`[[status]]` in its
-    `config/maintenance.toml`). `urgent` mails at once, `warn` goes to the 07:00 digest. Stale or
+    `config/maintenance.toml`). `urgent` mails at once, `warn` goes to the 07:00 digest's NEEDS
+    ATTENTION. `info` is a past event that is over, with `at`, `what` and `event` beside it: the
+    digest lists it once under FYI, one line for the events of the same few minutes (operator
+    2026-11-05: a garage GFCI trip filled NEEDS ATTENTION with five items for a day). Stale or
     unreadable is urgent there.
-  - `state.json`: what one cycle hands the next (urgent sightings, each switch's last counters and
-    uptime, counter warnings held for a day, release first-seen times, the feed's last answer).
+  - `state.json`: what one cycle hands the next (urgent sightings, each switch's last counters,
+    uptime and restart times in the last day, counter and flap findings held for a day, release
+    first-seen times, the feed's last answer).
     Rebuilt in one cycle if lost (a release's 7-day wait restarts), so a rebuild does not restore it.
 - **What it calls a problem** (thresholds in `switch-monitor.toml`; those marked initial are tuned
   from the first day of readings):
@@ -37,9 +41,9 @@ can reach d07 (section theOrg below).
   | MikroTik health: temperature 75 C or more; fan under 1000 RPM; a fan or PSU state not ok | urgent, after 2 checks in a row |
   | Aruba health: a fan or power supply not active; temperature 75 C or more | urgent, after 2 checks in a row |
   | snmp-exporter not answering | warn, urgent from the 3rd check in a row |
-  | Restarted (SNMP uptime under 24 h) | warn |
-  | Errors (in + out) over 10/h on any port (on an Aruba these are octets of bad frames: one 1522-octet giant is over); discards over 1000/h on a watched port | warn, held 24 h |
-  | A watched port went down and up between two checks (MikroTik link-down counter; elsewhere ifLastChange moved over 5 s) | warn, held 24 h |
+  | Restarted (SNMP uptime under 24 h) | info; warn from the 2nd restart in 24 h |
+  | Errors (in + out) over 10/h on any port (on an Aruba these are octets of bad frames: one 1522-octet giant is over); discards over 1000/h on a watched port | info, held 24 h; warn while seen on 2 checks in a row |
+  | A watched port went down and up between two checks (MikroTik link-down counter; elsewhere ifLastChange moved over 5 s) | info, held 24 h; warn while seen on 2 checks in a row |
   | Temperature 65 C or more | warn |
   | Optic on a watched port: rx under -10 dBm, tx under -6 dBm, over 70 C, or a transmit fault | warn |
   | switch1: a newer RouterOS in its channel (long-term), first seen 7 days ago or more | warn |
@@ -48,8 +52,10 @@ can reach d07 (section theOrg below).
   | A staged test alert (`stage`) | urgent, at once |
 
   Rates are taken between two checks of the same boot: after a restart the counters start a new
-  baseline, so a reboot never reads as an error burst. "Held 24 h" keeps a counter warning in
-  `status.json` for a day after it was last seen, so the morning digest lists one from the night.
+  baseline, so a reboot never reads as an error burst. "Held 24 h" keeps a counter or flap finding
+  in `status.json` for a day after it was last seen, so the morning digest lists one from the
+  night: at its own severity while it is still going (seen on this check and the one before), else
+  as `info` at its first sighting. A port still down is the urgent "down" finding, not a flap.
   sysUpTime is SNMP TimeTicks, a 32-bit count of hundredths of a second (RFC 2578 section 7.1.8),
   so it wraps after 497 days: a switch up that long reads as restarted for one day.
 

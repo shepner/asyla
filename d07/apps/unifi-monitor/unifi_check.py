@@ -11,11 +11,14 @@ findings came from is in each WAN message, status.json's consoles.<name>.wan and
 Writes, in UNIFI_DATA (/data, the host's /mnt/docker/unifi-monitor):
   status.json  {"time", "checker", "problems": [{"key", "severity", "message"}], "consoles"}: the
                collection point the host-maintenance monitor reads on each run ([[status]] in its
-               config/maintenance.toml); "urgent" mails at once, "warn" goes to the 07:00 digest
+               config/maintenance.toml); "urgent" mails at once, "warn" goes to the 07:00 digest's
+               NEEDS ATTENTION. "info" is a past event that is over (a device restart), with "at",
+               "what" and "event": the digest lists it once under FYI, with the others from the
+               same minutes
   unifi.prom   the same readings in Prometheus text format, for a node exporter's textfile
                collector once theOrg's observability runs on d06
   state.json   what one cycle hands the next: consecutive sightings, firmware first-seen times,
-               the device list, API failures
+               the device list with each device's restart times, API failures
 An urgent finding is written only after confirm_cycles cycles in a row (the host-maintenance
 monitor then mails at its first sighting). stage.json, written by `unifi-monitor.sh stage`, adds
 one urgent problem at once until it expires: the end-to-end test of the alert path.
@@ -44,6 +47,7 @@ KEY_ENV = "UNIFI_SITE_MANAGER_API_KEY"
 DATA = Path(os.environ.get("UNIFI_DATA", "/data"))
 CONFIG = Path(os.environ.get("UNIFI_CONFIG", Path(__file__).with_name("unifi-monitor.toml")))
 API_FAILS_URGENT = 3   # cycles in a row with a failed GET before it is urgent (a revoked key)
+SAME_START_SECONDS = 120   # two startupTime readings this close are one restart
 
 
 class ApiError(Exception):
@@ -120,7 +124,8 @@ def console_name(host: dict) -> str:
 
 def evaluate(cfg: dict, hosts: list, devices: list, isp: list, state: dict, t: dt.datetime,
              isp_hourly: list | None = None):
-    """(findings [(key, severity, message)], readings for unifi.prom, summary per console).
+    """(findings [(key, severity, message[, event])], readings for unifi.prom, summary per console).
+    An event is {"at", "what", "event"} beside an info finding.
     `isp_hourly` (ea/isp-metrics/1h) stands in for a console whose 5-minute series is empty."""
     found, read, summary = [], {"consoles": [], "devices": [], "wan": []}, {}
     by_name = {console_name(h).lower(): h for h in hosts}
@@ -148,7 +153,9 @@ def evaluate(cfg: dict, hosts: list, devices: list, isp: list, state: dict, t: d
         for d in listed:
             mac = d.get("mac") or d.get("id") or d.get("name")
             label = f"{d.get('name') or mac} ({d.get('model') or '?'})"
-            mem[mac] = {"name": label, "last_seen": iso(t)}
+            window = dt.timedelta(hours=cfg["reboot_report_hours"])
+            starts = [s for s in (mem.get(mac) or {}).get("starts") or [] if parse(s) and t - parse(s) < window]
+            mem[mac] = {"name": label, "last_seen": iso(t), "starts": starts}
             online = d.get("status") == "online"
             start = parse(d.get("startupTime"))
             update = bool(d.get("updateAvailable")) or d.get("firmwareStatus") not in (None, "upToDate")
@@ -157,11 +164,23 @@ def evaluate(cfg: dict, hosts: list, devices: list, isp: list, state: dict, t: d
                 offline += 1
                 found.append((f"device:{name}:{mac}:offline", "urgent",
                               f"UniFi {name}: {label} is {d.get('status') or 'unknown'}"))
-            if start and t - start < dt.timedelta(hours=cfg["reboot_report_hours"]):
+            if start and t - start < window:
+                # One restart is over (offline is its own finding): info, the digest's FYI. Two in the
+                # window is a device that keeps restarting: warn (operator 2026-11-05: only what
+                # persists needs him).
+                if not any(abs((parse(s) - start).total_seconds()) <= SAME_START_SECONDS for s in starts):
+                    starts.append(iso(start))
                 planned = upd is not None and tz is not None and start.astimezone(tz).hour == upd
-                found.append((f"device:{name}:{mac}:restarted", "warn",
-                              f"UniFi {name}: {label} restarted at {when(start, tz)}"
-                              + (f", during its {upd:02d}:00 auto-update" if planned else "")))
+                if len(starts) > 1:
+                    found.append((f"device:{name}:{mac}:restarted", "warn",
+                                  f"UniFi {name}: {label} restarted {len(starts)} times in "
+                                  f"{cfg['reboot_report_hours']} h, last at {when(start, tz)}"))
+                else:
+                    found.append((f"device:{name}:{mac}:restarted", "info",
+                                  f"UniFi {name}: {label} restarted at {when(start, tz)}"
+                                  + (f", during its {upd:02d}:00 auto-update" if planned else ""),
+                                  {"at": iso(start), "what": d.get("name") or mac,
+                                   "event": f"restarted in its {upd:02d}:00 auto-update" if planned else "restarted"}))
             fkey = f"{name}/{mac}"
             if update:
                 first = parse(fw_seen.setdefault(fkey, iso(t)))
@@ -237,7 +256,7 @@ def wan_findings(cfg: dict, name: str, host_id: str, isp: list, read: dict, t: d
 def confirm(found: list, state: dict, need: int) -> list:
     """Urgent findings only once seen on `need` cycles in a row; warnings at once."""
     seen = state.get("seen", {})
-    state["seen"] = {k: seen.get(k, 0) + 1 for k, sev, _ in found if sev == "urgent"}
+    state["seen"] = {k: seen.get(k, 0) + 1 for k, sev, *_ in found if sev == "urgent"}
     return [f for f in found if f[1] != "urgent" or state["seen"][f[0]] >= need]
 
 
@@ -307,7 +326,8 @@ def main() -> int:
         found = [("api", sev, f"UniFi Site Manager API failing ({state['api_fails']} checks in a row): {e}")]
         ok = False
     found += staged(t)
-    problems = [{"key": k, "severity": s, "message": m.replace(key, "<redacted>")} for k, s, m in found]
+    problems = [{"key": k, "severity": s, "message": m.replace(key, "<redacted>"), **(event[0] if event else {})}
+                for k, s, m, *event in found]
     write_atomic(DATA / "state.json", json.dumps(state, indent=1, sort_keys=True))
     write_atomic(DATA / "unifi.prom", prom(ok, t, read, problems))
     write_atomic(DATA / "status.json", json.dumps(

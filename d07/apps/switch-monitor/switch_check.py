@@ -10,9 +10,13 @@ feed for its channel. The exporter is also what theOrg's Prometheus scrapes, onc
 Writes, in SWITCH_DATA (/data, the host's /mnt/docker/switch-monitor):
   status.json  {"time", "checker", "ok", "problems": [{"key", "severity", "message"}], "switches"}:
                the collection point the host-maintenance monitor reads on each run ([[status]] in
-               its config/maintenance.toml); "urgent" mails at once, "warn" goes to the 07:00 digest
-  state.json   what one cycle hands the next: consecutive sightings, the last counters and uptime
-               of each switch, warnings held for hold_hours, release first-seen times and the feed
+               its config/maintenance.toml); "urgent" mails at once, "warn" goes to the 07:00
+               digest's NEEDS ATTENTION. "info" is a past event that is over (a restart, a port
+               that went down and came back, an error burst that stopped), with "at", "what" and
+               "event": the digest lists it once under FYI, with the others from the same minutes
+  state.json   what one cycle hands the next: consecutive sightings, the last counters, uptime and
+               restart times of each switch, findings held for hold_hours, release first-seen
+               times and the feed
 An urgent finding is written only after confirm_cycles cycles in a row. stage.json, written by
 `switch-monitor.sh stage`, adds one urgent problem at once until it expires: the end-to-end test.
 
@@ -37,6 +41,7 @@ CONFIG = Path(os.environ.get("SWITCH_CONFIG", Path(__file__).with_name("switch-m
 EXPORTER_FAILS_URGENT = 3   # cycles in a row with the exporter itself not answering
 UP = 1                      # IF-MIB ifAdminStatus / ifOperStatus up(1)
 LAST_CHANGE_JITTER = 500    # ticks (5 s): an Aruba re-reads a steady ifLastChange 100 ticks apart
+SAME_START_SECONDS = 120    # two restart times (now - uptime) this close are one restart
 GAUGE_UNITS = {1: "temp", 2: "fan", 6: "state"}   # mtxrGaugeUnit; dV, dA, dW are not watched
 ARUBA_ACTIVE = 1               # WLSX-SYSTEMEXT-MIB ArubaActiveState: 1 active, 2 inactive
 ARUBA_POE_HARDWARE_ERROR = 6   # WLSX-POE-MIB wlsxPsePortStatus offHardwareError
@@ -155,15 +160,29 @@ def ports(rows: list) -> dict:
 
 
 def evaluate(cfg: dict, name: str, scfg: dict, rows: list, prev: dict, t: dt.datetime, release: str | None):
-    """(urgent/plain findings [(key, severity, message)], counter warnings to hold, summary, new prev)."""
+    """(urgent/plain findings [(key, severity, message[, event])], counter and flap findings to hold,
+    summary, new prev). An event is {"at", "what", "event"} beside an info finding, or one to hold."""
     found, held, label = [], [], scfg.get("ports") or {}
     up = by_name(rows, "sysUpTime")
     uptime = up[0][1] / 100 if up else None
+    window = dt.timedelta(hours=cfg["reboot_report_hours"])
+    starts = [s for s in prev.get("starts") or [] if parse(s) and t - parse(s) < window]
     if uptime is None:
         found.append((f"{name}:no-uptime", "urgent", f"{name}: SNMP answered without sysUpTime"))
-    elif uptime < cfg["reboot_report_hours"] * 3600:
-        found.append((f"{name}:restarted", "warn",
-                      f"{name}: restarted at {iso(t - dt.timedelta(seconds=uptime))} (SNMP uptime {uptime / 3600:.1f} h)"))
+    elif uptime < window.total_seconds():
+        # One restart is over (the switch answers): info, the digest's FYI. Two in the window is a
+        # switch that keeps restarting: warn (operator 2026-11-05: only what persists needs him).
+        start = t - dt.timedelta(seconds=uptime)
+        if not any(abs((parse(s) - start).total_seconds()) <= SAME_START_SECONDS for s in starts):
+            starts.append(iso(start))
+        if len(starts) > 1:
+            found.append((f"{name}:restarted", "warn",
+                          f"{name}: restarted {len(starts)} times in {cfg['reboot_report_hours']} h, "
+                          f"last at {iso(start)} (SNMP uptime {uptime / 3600:.1f} h)"))
+        else:
+            found.append((f"{name}:restarted", "info",
+                          f"{name}: restarted at {iso(start)} (SNMP uptime {uptime / 3600:.1f} h)",
+                          {"at": iso(start), "what": name, "event": "restarted"}))
     pts = ports(rows)
     prev_t, prev_ports = parse(prev.get("time")), prev.get("ports") or {}
     # Counters restart with the switch: no rates across a restart, only a new baseline.
@@ -182,17 +201,18 @@ def evaluate(cfg: dict, name: str, scfg: dict, rows: list, prev: dict, t: dt.dat
         what = f"{p} ({label[p]})" if p in label else p
         # An Aruba's ifInErrors/ifOutErrors count the octets of bad frames, not frames (switch2 CLI
         # 2026-10-27: 4686238 error octets = 3079 giants x 1522): same limit, words that say so.
-        errors = ("error octets (bad frames' bytes; which kind: switch_snmp.py --show)"
-                  if scfg.get("kind") == "aruba" else "errors")
-        for field, limit, words in (("errors", cfg["errors_per_hour"], errors),
-                                    ("discards", cfg["discards_per_hour"], "discards")):
+        aruba_kind = scfg.get("kind") == "aruba"
+        errors = "error octets (bad frames' bytes; which kind: switch_snmp.py --show)" if aruba_kind else "errors"
+        for field, limit, words, short in (("errors", cfg["errors_per_hour"], errors, "error octets" if aruba_kind else "errors"),
+                                           ("discards", cfg["discards_per_hour"], "discards", "discards")):
             if field == "discards" and p not in label:
                 continue   # edge ports drop on purpose (a sleeping PC): watched ports only
             d = st.get(field, 0) - was.get(field, 0)
             if d > 0 and d / hours > limit:
                 held.append((f"{name}:port:{p}:{field}", "warn",
                              f"{name}: port {what}: {d:.0f} {words} in {hours * 60:.0f} min "
-                             f"(over {limit}/h), last seen {iso(t)}"))
+                             f"(over {limit}/h), last seen {iso(t)}",
+                             {"what": f"{name} {p}", "event": f"had {d:.0f} {short} in {hours * 60:.0f} min"}))
         if p in label:
             downs = st.get("downs", 0) - was.get("downs", 0) if "downs" in st and "downs" in was else 0
             lc, was_lc = st.get("last_change"), was.get("last_change")
@@ -201,7 +221,9 @@ def evaluate(cfg: dict, name: str, scfg: dict, rows: list, prev: dict, t: dt.dat
             if downs > 0 or moved:
                 held.append((f"{name}:port:{p}:flap", "warn",
                              f"{name}: port {what} " + (f"went down {downs:.0f} time(s)" if downs else "changed state")
-                             + f" between {iso(prev_t)} and {iso(t)}"))
+                             + f" between {iso(prev_t)} and {iso(t)}",
+                             {"what": f"{name} {p}", "event": "went down once" if downs == 1 else
+                              f"went down {downs:.0f} times" if downs else "changed state"}))
     found += health(cfg, name, rows, label)
     found += aruba(cfg, name, rows)
     found += firmware(cfg, name, scfg, rows, prev, t, release)
@@ -212,7 +234,7 @@ def evaluate(cfg: dict, name: str, scfg: dict, rows: list, prev: dict, t: dt.dat
                "ports": len(pts), "watched_up": f"{watched_up}/{len(label)}",
                "version": next((lab.get("mtxrLicVersion") for lab, _ in by_name(rows, "mtxrLicVersion")),
                                m.group(1) if m else None)}
-    new_prev = {"time": iso(t), "uptime": uptime,
+    new_prev = {"time": iso(t), "uptime": uptime, "starts": starts,
                 "ports": {p: {k: st[k] for k in ("errors", "discards", "downs", "last_change") if k in st}
                           for p, st in pts.items()},
                 "release_seen": prev.get("release_seen") or {}}   # firmware() keeps it current
@@ -340,18 +362,33 @@ def latest_release(cfg: dict, scfg: dict, running: str | None, state: dict, t: d
 def confirm(found: list, state: dict, need: int) -> list:
     """Urgent findings only once seen on `need` cycles in a row; warnings at once."""
     seen = state.get("seen", {})
-    state["seen"] = {k: seen.get(k, 0) + 1 for k, sev, _ in found if sev == "urgent"}
+    state["seen"] = {k: seen.get(k, 0) + 1 for k, sev, *_ in found if sev == "urgent"}
     return [f for f in found if f[1] != "urgent" or state["seen"][f[0]] >= need]
 
 
 def hold(new: list, state: dict, t: dt.datetime, hours: float) -> list:
-    """Counter warnings kept hold_hours after their last sighting, so the morning digest lists them."""
-    kept = state.setdefault("held", {})
-    for k, sev, msg in new:
-        kept[k] = {"severity": sev, "message": msg, "last": iso(t)}
+    """Counter and flap findings kept hold_hours after their last sighting, so the 07:00 digest lists
+    one from the night. Seen on this check and the one before, it is still going: its own severity
+    (warn, NEEDS ATTENTION). Otherwise it is over, a burst that stopped or a port that went down and
+    came back: info at its first sighting, which the digest lists once under FYI (operator 2026-11-05:
+    "I really dont like getting spammed by my own tools")."""
+    kept, before = state.setdefault("held", {}), state.get("held_at")
+    for k, sev, msg, *event in new:
+        v = kept.get(k) or {}
+        going = bool(v) and v.get("last") == before
+        kept[k] = {"severity": sev, "message": msg, "last": iso(t), "going": going,
+                   "first": v.get("first") or v.get("last") if going else iso(t), **(event[0] if event else {})}
+    state["held_at"] = iso(t)
     for k in [k for k, v in kept.items() if t - (parse(v.get("last")) or t) > dt.timedelta(hours=hours)]:
         kept.pop(k)
-    return [(k, v["severity"], v["message"]) for k, v in sorted(kept.items())]
+    out = []
+    for k, v in sorted(kept.items()):
+        if v.get("going") and v["last"] == iso(t):
+            out.append((k, v["severity"], v["message"]))
+        else:
+            out.append((k, "info", v["message"], {"at": v.get("first") or v["last"],
+                                                   **{f: v[f] for f in ("what", "event") if f in v}}))
+    return out
 
 
 def staged(t: dt.datetime) -> list:
@@ -399,7 +436,7 @@ def main() -> int:
         state["exporter_fails"] = 0
         found = confirm(found, state, cfg["confirm_cycles"]) + hold(held, state, t, cfg["hold_hours"])
     found += staged(t)
-    problems = [{"key": k, "severity": s, "message": m} for k, s, m in found]
+    problems = [{"key": k, "severity": s, "message": m, **(event[0] if event else {})} for k, s, m, *event in found]
     write_atomic(DATA / "state.json", json.dumps(state, indent=1, sort_keys=True))
     write_atomic(DATA / "status.json", json.dumps(
         {"time": iso(t), "checker": "switch-monitor", "ok": not exporter_down, "problems": problems,

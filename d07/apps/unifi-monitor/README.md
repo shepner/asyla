@@ -18,12 +18,14 @@ collects the same readings later, once it is production on d06.
 - **What it writes** in `/mnt/docker/unifi-monitor/`:
   - `status.json`: `{time, checker, ok, problems: [{key, severity, message}], consoles}`. The
     collection point: host-maintenance's monitor reads it on each run (`[[status]]` in its
-    `config/maintenance.toml`). `urgent` mails at once, `warn` goes to the 07:00 digest. Stale or
-    unreadable is urgent there.
+    `config/maintenance.toml`). `urgent` mails at once, `warn` goes to the 07:00 digest's NEEDS
+    ATTENTION. `info` is a past event that is over (a restart), with `at`, `what` and `event` beside
+    it: the digest lists it once under FYI, one line for the events of the same few minutes
+    (operator 2026-11-05). Stale or unreadable is urgent there.
   - `unifi.prom`: the same readings in Prometheus text format, for a node exporter's textfile
     collector once theOrg's observability runs on d06.
   - `state.json`: what one cycle hands the next (sightings, firmware first-seen times, the device
-    list, API failures). Rebuilt in one cycle if lost, so a rebuild does not restore it.
+    list with each device's restart times in the last day, API failures). Rebuilt in one cycle if lost, so a rebuild does not restore it.
 - **What it calls a problem** (thresholds in `unifi-monitor.toml`, with the measured baseline):
 
   | Finding | Severity |
@@ -31,7 +33,7 @@ collects the same readings later, once it is production on d06.
   | Console not connected, or not listed in Site Manager | urgent, after 2 checks in a row |
   | Device not online | urgent, after 2 checks in a row |
   | API failing (a revoked key, api.ui.com down) | warn, urgent from the 3rd check in a row |
-  | Device restarted in the last 24 h ("during its 03:00 auto-update" when it falls in the console's update hour) | warn |
+  | Device restarted in the last 24 h ("during its 03:00 auto-update" when it falls in the console's update hour) | info; warn from the 2nd restart in 24 h |
   | Firmware update waiting 7 days or more | warn |
   | Device no longer listed (warned for a day, then forgotten) | warn |
   | DAY WAN: any downtime; latency over 30 ms or loss 10+ in 3 of the hour's 5-minute periods; figures over 3 h old | warn |
