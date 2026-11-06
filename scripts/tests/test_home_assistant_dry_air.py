@@ -362,7 +362,7 @@ async def main():
     check("dehumidifier on message, station down", r(on["actions"][1]["data"]["message"])[-23:],
           "(readings unavailable).")
     check("air message", r(air["actions"][1]["data"]["message"])[:78],
-          "The outdoor air can dry the house. Leave the heat on. Open windows wide with a cr")
+          "The outdoor air can dry the house. Leave the heat on. Open windows wide with a")
 
     # --- the script: readings in °F only, persistent then mail -------------------------------------
     seq = SCRIPT["sequence"]
