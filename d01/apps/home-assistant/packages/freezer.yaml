@@ -1,0 +1,127 @@
+# Freezer alert (asyla backlog item: freezer and fridge monitor, operator 2026-11-06).
+# home-assistant.sh up installs this folder as config/packages/ on every start: edit it here.
+# Probe: the Ambient Weather station's extra sensor, channel 2 (sensor.mke_temperature_2), in the
+# freezer. Set point 0 °F. The FRIDGE (37 °F) has no probe: channel 1 (sensor.mke_temperature_1) read
+# 75 °F, so it is not in the fridge. Nothing here covers the fridge until one is placed.
+#
+# Thresholds, from the probe's last 7 days to 2026-11-06 (d06 trends Prometheus, 5 min steps, 1,023
+# points): a daily defrost cycle (and the odd door opening) lifts it to at most 6.6 °F, above 0 °F for
+# at most 70 min (7 times), above 5 °F for at most 20 min. So "warm" is above 15 °F, 8 °F over the
+# highest cycle peak, held 60 min: no cycle in the week came near either. The station reported every
+# 5 min (the longest gap in the week was 5 min), so "probe missing" is unavailable for 6 h: a long
+# outage, not a Wi-Fi blip.
+#
+# Delivery: a persistent notification (one id per cause, cleared when it clears) and one mail to
+# notify.hvac_report per cause (the cold-spell report's recipient entity, README); no mail when it
+# clears (asyla memory no-spam-from-own-tools: one cause one mail). The warm freezer's mail is
+# marked URGENT: food thaws within hours. The missing probe is not (the freezer is only unwatched).
+# Ticketing has no inbound path from Home Assistant yet; when it does, these two become work items.
+#
+# Units: the probe reads °F on d01, but every template converts by the entity's
+# unit_of_measurement (°F or °C; anything else counts as missing), as dry_air.yaml does.
+
+template:
+  - binary_sensor:
+      - name: "Freezer too warm"
+        unique_id: asyla_freezer_too_warm
+        default_entity_id: binary_sensor.freezer_too_warm
+        device_class: heat
+        delay_on: "01:00:00"
+        availability: >-
+          {%- set v = states('sensor.mke_temperature_2') | float(none) -%}{%- set u = state_attr('sensor.mke_temperature_2', 'unit_of_measurement') -%}{{- v is not none and u in ['°F', '°C'] -}}
+        state: >-
+          {%- set v = states('sensor.mke_temperature_2') | float(none) -%}{%- set u = state_attr('sensor.mke_temperature_2', 'unit_of_measurement') -%}{{- v is not none and (v if u == '°F' else v * 9 / 5 + 32) > 15 -}}
+      - name: "Freezer probe missing"
+        unique_id: asyla_freezer_probe_missing
+        default_entity_id: binary_sensor.freezer_probe_missing
+        device_class: problem
+        delay_on: "06:00:00"
+        state: >-
+          {%- set v = states('sensor.mke_temperature_2') | float(none) -%}{%- set u = state_attr('sensor.mke_temperature_2', 'unit_of_measurement') -%}{{- v is none or u not in ['°F', '°C'] -}}
+
+# Each notice is sent on the sensor's edge to on (after its hold), so a failed mail does not repeat;
+# continue_on_error keeps a mail failure (no SMTP integration yet: only a logged warning) from
+# failing the run. Another edge to on after a Home Assistant restart sends one more, which is
+# right while it is still warm.
+automation:
+  - id: asyla_freezer_warm
+    alias: "Freezer: too warm"
+    description: "Freezer probe above 15 °F for 1 h: persistent notification and one URGENT mail."
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.freezer_too_warm
+        to: "on"
+    actions:
+      - variables:
+          reading: >-
+            {%- set v = states('sensor.mke_temperature_2') | float(none) -%}{%- set u = state_attr('sensor.mke_temperature_2', 'unit_of_measurement') -%}{{- 'unavailable' if v is none else '%.1f °F' | format(v if u == '°F' else v * 9 / 5 + 32) -}}
+          message: >-
+            The freezer probe reads {{ reading }} (set to 0 °F), above 15 °F for over an hour. A
+            defrost cycle or a door opening peaks near 7 °F and is gone within the hour, so check
+            the door and the compressor now; food starts to thaw at 32 °F.
+      - action: persistent_notification.create
+        data:
+          notification_id: asyla_freezer_warm
+          title: "Freezer too warm: {{ reading }}"
+          message: "{{ message }}"
+      - action: notify.send_message
+        continue_on_error: true
+        target:
+          entity_id: notify.hvac_report
+        data:
+          title: "[URGENT] Freezer too warm: {{ reading }}"
+          message: "{{ message }}"
+
+  - id: asyla_freezer_warm_clear
+    alias: "Freezer: back to normal"
+    description: "The freezer is no longer too warm: clear the notification (no mail)."
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.freezer_too_warm
+        to: "off"
+    actions:
+      - action: persistent_notification.dismiss
+        data:
+          notification_id: asyla_freezer_warm
+
+  - id: asyla_freezer_probe_missing
+    alias: "Freezer: probe missing"
+    description: "Freezer probe unavailable for 6 h: persistent notification and one mail (not urgent)."
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.freezer_probe_missing
+        to: "on"
+    actions:
+      - variables:
+          message: >-
+            sensor.mke_temperature_2 (the Ambient Weather extra sensor in the freezer) has had no
+            reading for 6 hours, so the freezer is not being watched. Check the sensor's battery
+            and that it is paired with the station.
+      - action: persistent_notification.create
+        data:
+          notification_id: asyla_freezer_probe_missing
+          title: "Freezer probe has no reading"
+          message: "{{ message }}"
+      - action: notify.send_message
+        continue_on_error: true
+        target:
+          entity_id: notify.hvac_report
+        data:
+          title: "Freezer probe has no reading"
+          message: "{{ message }}"
+
+  - id: asyla_freezer_probe_back
+    alias: "Freezer: probe back"
+    description: "The probe reads again: clear the notification (no mail)."
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.freezer_probe_missing
+        to: "off"
+    actions:
+      - action: persistent_notification.dismiss
+        data:
+          notification_id: asyla_freezer_probe_missing

@@ -195,6 +195,25 @@ Home Assistant tells the operator when to air the house and when to run the base
 - To see one now: Settings → Automations → a "Dry air" automation → Run actions (this skips the
   conditions and sets its helper).
 
+## Freezer alert
+
+Operator, 2026-11-06: the freezer (set to 0 °F) has an Ambient Weather probe, `sensor.mke_temperature_2`
+(channel 2). The fridge (37 °F) has none: channel 1 (`sensor.mke_temperature_1`) read 75 °F, so it is
+not the fridge. Nothing covers the fridge until a probe is placed in it.
+
+- `packages/freezer.yaml`: `binary_sensor.freezer_too_warm` (above 15 °F, held 1 h) and
+  `binary_sensor.freezer_probe_missing` (unavailable, held 6 h). Values are from the probe's 7 days to
+  2026-11-06 (1,023 points at 5 min): a daily defrost cycle peaks at 6.6 °F, above 0 °F for at most
+  70 min and above 5 °F for at most 20 min, so 15 °F for 1 h was never near. The station never left a
+  gap over 5 min.
+- Delivery: a persistent notification per cause (cleared when it clears), and one mail to
+  `notify.hvac_report` per cause, none when it clears. A warm freezer is marked `[URGENT]`; a missing
+  probe is not. Ticketing has no inbound path from Home Assistant, so no work item is opened (move
+  these two to ticketing when it has one). Until the SMTP integration exists (Mail, above), only the UI
+  shows them.
+- Test on WS01: `python3 scripts/tests/test_home_assistant_freezer.py` (with the image pulled, it runs
+  `check_config` and one boot of the package: the holds, the °F and °C probe, one notice per cause).
+
 ## Restore
 
 `restore` brings back everything but `.storage`. Then `up`: Home Assistant starts as new and `up`
