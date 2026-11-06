@@ -8,13 +8,14 @@
 # points): a daily defrost cycle (and the odd door opening) lifts it to at most 6.6 °F, above 0 °F for
 # at most 70 min (7 times), above 5 °F for at most 20 min. So "warm" is above 15 °F, 8 °F over the
 # highest cycle peak, held 60 min: no cycle in the week came near either. The station reported every
-# 5 min (the longest gap in the week was 5 min), so "probe missing" is unavailable for 6 h: a long
-# outage, not a Wi-Fi blip.
+# 5 min, and a probe that is alive moves: its longest unchanged run in the week was 30 min. So "probe
+# silent" is: unavailable, or the same reading, for 3 h (6 times that run). Lithium AAs die without
+# warning (operator), so this, not the battery flag, is the alert that counts; it is urgent too.
 #
 # Delivery: a persistent notification (one id per cause, cleared when it clears) and one mail to
 # notify.hvac_report per cause (the cold-spell report's recipient entity, README); no mail when it
-# clears (asyla memory no-spam-from-own-tools: one cause one mail). The warm freezer's mail is
-# marked URGENT: food thaws within hours. The missing probe is not (the freezer is only unwatched).
+# clears (asyla memory no-spam-from-own-tools: one cause one mail). Both mails are marked URGENT: food
+# thaws within hours, and a silent probe means a warm freezer would not be seen.
 # Ticketing has no inbound path from Home Assistant yet; when it does, these two become work items.
 #
 # Units: the probe reads °F on d01, but every template converts by the entity's
@@ -31,13 +32,14 @@ template:
           {%- set v = states('sensor.mke_temperature_2') | float(none) -%}{%- set u = state_attr('sensor.mke_temperature_2', 'unit_of_measurement') -%}{{- v is not none and u in ['°F', '°C'] -}}
         state: >-
           {%- set v = states('sensor.mke_temperature_2') | float(none) -%}{%- set u = state_attr('sensor.mke_temperature_2', 'unit_of_measurement') -%}{{- v is not none and (v if u == '°F' else v * 9 / 5 + 32) > 15 -}}
-      - name: "Freezer probe missing"
-        unique_id: asyla_freezer_probe_missing
-        default_entity_id: binary_sensor.freezer_probe_missing
+      # The state started its current value (or its unavailable) 3 h ago: last_changed. A restart
+      # resets it, so a dead probe is found 3 h after the start at the latest.
+      - name: "Freezer probe silent"
+        unique_id: asyla_freezer_probe_silent
+        default_entity_id: binary_sensor.freezer_probe_silent
         device_class: problem
-        delay_on: "06:00:00"
         state: >-
-          {%- set v = states('sensor.mke_temperature_2') | float(none) -%}{%- set u = state_attr('sensor.mke_temperature_2', 'unit_of_measurement') -%}{{- v is none or u not in ['°F', '°C'] -}}
+          {%- set s = states.sensor.mke_temperature_2 -%}{{- s is not none and (now() - s.last_changed).total_seconds() >= 10800 -}}
 
 # Each notice is sent on the sensor's edge to on (after its hold), so a failed mail does not repeat;
 # continue_on_error keeps a mail failure (no SMTP integration yet: only a logged warning) from
@@ -86,42 +88,43 @@ automation:
         data:
           notification_id: asyla_freezer_warm
 
-  - id: asyla_freezer_probe_missing
-    alias: "Freezer: probe missing"
-    description: "Freezer probe unavailable for 6 h: persistent notification and one mail (not urgent)."
+  - id: asyla_freezer_probe_silent
+    alias: "Freezer: probe silent"
+    description: "Freezer probe unavailable or unchanged for 3 h: persistent notification and one URGENT mail."
     mode: single
     triggers:
       - trigger: state
-        entity_id: binary_sensor.freezer_probe_missing
+        entity_id: binary_sensor.freezer_probe_silent
         to: "on"
     actions:
       - variables:
           message: >-
-            sensor.mke_temperature_2 (the Ambient Weather extra sensor in the freezer) has had no
-            reading for 6 hours, so the freezer is not being watched. Check the sensor's battery
-            and that it is paired with the station.
+            sensor.mke_temperature_2 (the Ambient Weather extra sensor in the freezer) has been
+            unavailable or at the same reading for 3 hours; a working probe never stood still for
+            more than 30 minutes in a week. The freezer is not being watched: replace the probe's
+            battery and check that it is paired with the station.
       - action: persistent_notification.create
         data:
-          notification_id: asyla_freezer_probe_missing
-          title: "Freezer probe has no reading"
+          notification_id: asyla_freezer_probe_silent
+          title: "Freezer probe silent"
           message: "{{ message }}"
       - action: notify.send_message
         continue_on_error: true
         target:
           entity_id: notify.hvac_report
         data:
-          title: "Freezer probe has no reading"
+          title: "[URGENT] Freezer probe silent"
           message: "{{ message }}"
 
   - id: asyla_freezer_probe_back
     alias: "Freezer: probe back"
-    description: "The probe reads again: clear the notification (no mail)."
+    description: "The probe moves again: clear the notification (no mail)."
     mode: single
     triggers:
       - trigger: state
-        entity_id: binary_sensor.freezer_probe_missing
+        entity_id: binary_sensor.freezer_probe_silent
         to: "off"
     actions:
       - action: persistent_notification.dismiss
         data:
-          notification_id: asyla_freezer_probe_missing
+          notification_id: asyla_freezer_probe_silent

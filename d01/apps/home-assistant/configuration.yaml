@@ -3,7 +3,7 @@
 
 # Packages: one file per job in packages/, installed by home-assistant.sh up (packages/hvac.yaml:
 # the HVAC cold-spell report; packages/dry_air.yaml: the dry-air advice; packages/freezer.yaml: the
-# freezer alert). Only packages here: location, units and time zone stay in the UI.
+# freezer alert; packages/ambient_sensors.yaml: Ambient sensor health). Only packages here: location, units and time zone stay in the UI.
 homeassistant:
   packages: !include_dir_named packages
 

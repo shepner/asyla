@@ -1,0 +1,132 @@
+# Ambient Weather sensor health (operator 2026-11-06, of lithium AAs: "they also tend to die without
+# warning"). Two aggregate sensors, so a new channel is covered with no edit:
+#
+# 1. binary_sensor.ambient_sensors_silent: any of sensor.mke_temperature (outdoor),
+#    sensor.mke_temperature_N (channels 1-10, the freezer's channel 2 excluded: freezer.yaml, urgent)
+#    and sensor.mke_inside_temperature (the WH32B) unavailable or at the same reading for 12 h. The
+#    humidity entities share their transmitter's temperature, and sit still for long (indoor RH:
+#    655 min in a week), so only temperatures are watched. The integration (ambient_station
+#    entity.py, HA 2026.10) rewrites every entity on each station push and marks one unavailable when
+#    its field is missing; a dead transmitter's last value may stay, so "same reading" is the test:
+#    over the 7 days to 2026-11-06 the longest unchanged run was 60 min outdoors, 115 min on
+#    channel 1 and 230 min on the WH32B (d06 trends Prometheus), so 12 h is three times the longest.
+#    The AQIN Pro, once added, needs its temperature entity in the pattern below.
+# 2. binary_sensor.ambient_batteries_low: any binary_sensor.mke_* with device class battery on. On
+#    d01 these are mke_battery (outdoor), mke_battery_1, mke_battery_2 (the freezer probe),
+#    mke_interior_battery and mke_lightning_detector_battery; the integration's battery_3 to _10 and
+#    the rest appear when their transmitters pair. On is "low" (ambient_station binary_sensor.py:
+#    on_state 0), held 6 h so a reading at the edge does not flap. This is only a bonus warning: the
+#    batteries tend to die without it.
+#
+# Delivery as freezer.yaml: a persistent notification per cause and one mail to notify.hvac_report,
+# none when it clears; neither is urgent (the freezer probe has its own). A further sensor going
+# silent while the first is still listed adds to the list but does not mail again.
+# last_changed starts again at a Home Assistant restart: a dead sensor is found 12 h after the start.
+
+template:
+  - binary_sensor:
+      - name: "Ambient sensors silent"
+        unique_id: asyla_ambient_sensors_silent
+        default_entity_id: binary_sensor.ambient_sensors_silent
+        device_class: problem
+        state: >-
+          {{- (states.sensor | selectattr('entity_id', 'match', '^sensor[.]mke_(temperature(_[0-9]+)?|inside_temperature)$')
+          | rejectattr('entity_id', 'eq', 'sensor.mke_temperature_2')
+          | selectattr('last_changed', 'le', now() - timedelta(hours=12)) | list | count > 0) -}}
+        attributes:
+          entities: >-
+            {{- states.sensor | selectattr('entity_id', 'match', '^sensor[.]mke_(temperature(_[0-9]+)?|inside_temperature)$')
+            | rejectattr('entity_id', 'eq', 'sensor.mke_temperature_2')
+            | selectattr('last_changed', 'le', now() - timedelta(hours=12)) | map(attribute='entity_id') | list -}}
+      - name: "Ambient batteries low"
+        unique_id: asyla_ambient_batteries_low
+        default_entity_id: binary_sensor.ambient_batteries_low
+        device_class: problem
+        delay_on: "06:00:00"
+        state: >-
+          {{- states.binary_sensor | selectattr('entity_id', 'match', '^binary_sensor[.]mke_')
+          | selectattr('attributes.device_class', 'eq', 'battery') | selectattr('state', 'eq', 'on') | list | count > 0 -}}
+        attributes:
+          entities: >-
+            {{- states.binary_sensor | selectattr('entity_id', 'match', '^binary_sensor[.]mke_')
+            | selectattr('attributes.device_class', 'eq', 'battery') | selectattr('state', 'eq', 'on')
+            | map(attribute='entity_id') | list -}}
+
+automation:
+  - id: asyla_ambient_sensors_silent
+    alias: "Ambient sensors: silent"
+    description: "An Ambient Weather temperature sensor unavailable or unchanged for 12 h: notification and one mail (not urgent); cleared when none is."
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.ambient_sensors_silent
+        to: "on"
+        id: "on"
+      - trigger: state
+        entity_id: binary_sensor.ambient_sensors_silent
+        to: "off"
+        id: "off"
+    actions:
+      - choose:
+          - conditions: "{{ trigger.id == 'off' }}"
+            sequence:
+              - action: persistent_notification.dismiss
+                data:
+                  notification_id: asyla_ambient_sensors_silent
+        default:
+          - variables:
+              message: >-
+                No new reading for 12 hours from {{ state_attr('binary_sensor.ambient_sensors_silent', 'entities') | join(', ') }}.
+                A working sensor changes within a few hours, so its battery has probably died: replace
+                it and check that it is paired with the station.
+          - action: persistent_notification.create
+            data:
+              notification_id: asyla_ambient_sensors_silent
+              title: "Ambient Weather sensor silent"
+              message: "{{ message }}"
+          - action: notify.send_message
+            continue_on_error: true
+            target:
+              entity_id: notify.hvac_report
+            data:
+              title: "Ambient Weather sensor silent"
+              message: "{{ message }}"
+
+  - id: asyla_ambient_batteries_low
+    alias: "Ambient sensors: battery low"
+    description: "An Ambient Weather battery flag low for 6 h: notification and one mail (not urgent); cleared when none is."
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.ambient_batteries_low
+        to: "on"
+        id: "on"
+      - trigger: state
+        entity_id: binary_sensor.ambient_batteries_low
+        to: "off"
+        id: "off"
+    actions:
+      - choose:
+          - conditions: "{{ trigger.id == 'off' }}"
+            sequence:
+              - action: persistent_notification.dismiss
+                data:
+                  notification_id: asyla_ambient_batteries_low
+        default:
+          - variables:
+              message: >-
+                Low battery flag on {{ state_attr('binary_sensor.ambient_batteries_low', 'entities') | join(', ') }}
+                (binary_sensor.mke_battery is the outdoor station, mke_battery_N channel N, mke_interior_battery
+                the indoor sensor). Replace it soon: these batteries can die without further warning.
+          - action: persistent_notification.create
+            data:
+              notification_id: asyla_ambient_batteries_low
+              title: "Ambient Weather battery low"
+              message: "{{ message }}"
+          - action: notify.send_message
+            continue_on_error: true
+            target:
+              entity_id: notify.hvac_report
+            data:
+              title: "Ambient Weather battery low"
+              message: "{{ message }}"

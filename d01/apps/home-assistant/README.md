@@ -202,13 +202,12 @@ Operator, 2026-11-06: the freezer (set to 0 °F) has an Ambient Weather probe, `
 not the fridge. Nothing covers the fridge until a probe is placed in it.
 
 - `packages/freezer.yaml`: `binary_sensor.freezer_too_warm` (above 15 °F, held 1 h) and
-  `binary_sensor.freezer_probe_missing` (unavailable, held 6 h). Values are from the probe's 7 days to
+  `binary_sensor.freezer_probe_silent` (unavailable, or the same reading, for 3 h: a live probe never
+  stood still over 30 min in the week; lithium AAs die without warning, operator 2026-11-06). Values are from the probe's 7 days to
   2026-11-06 (1,023 points at 5 min): a daily defrost cycle peaks at 6.6 °F, above 0 °F for at most
-  70 min and above 5 °F for at most 20 min, so 15 °F for 1 h was never near. The station never left a
-  gap over 5 min.
+  70 min and above 5 °F for at most 20 min, so 15 °F for 1 h was never near.
 - Delivery: a persistent notification per cause (cleared when it clears), and one mail to
-  `notify.hvac_report` per cause, none when it clears. A warm freezer is marked `[URGENT]`; a missing
-  probe is not. Ticketing has no inbound path from Home Assistant, so no work item is opened (move
+  `notify.hvac_report` per cause, none when it clears. Both freezer mails are marked `[URGENT]`. Ticketing has no inbound path from Home Assistant, so no work item is opened (move
   these two to ticketing when it has one). Until the SMTP integration exists (Mail, above), only the UI
   shows them.
 - Test on WS01: `python3 scripts/tests/test_home_assistant_freezer.py` (with the image pulled, it runs

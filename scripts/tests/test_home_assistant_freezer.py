@@ -11,8 +11,8 @@
    persistent_notification actions, the event loop's clock moved on for the holds): the probe in
    °F or °C; above 15 °F for 59 min sends nothing, for 60 min one URGENT notice, and back to
    normal clears it with no mail; exactly 15 °F is not warm; a defrost peak (7 °F) never alerts;
-   unavailable for 5 h 59 min sends nothing, 6 h one notice (not urgent), the probe back clears it;
-   a probe that is unavailable while warm gives no warm alert.
+   unavailable or the same reading for under 3 h sends nothing, for 3 h one URGENT notice, the probe
+   moving again clears it; a probe that is unavailable gives no warm alert.
    Without docker and the image, 2 and 3 say skip.
 Nothing reaches a host or Home Assistant.
 """
@@ -67,16 +67,16 @@ class CheckConfig(unittest.TestCase):
         self.assertEqual(r.returncode, 0, out)
         self.assertNotRegex(out, r"Incorrect config|Failed config|Invalid config|Error")
         for want in ("id: asyla_freezer_warm", "id: asyla_freezer_warm_clear",
-                     "id: asyla_freezer_probe_missing", "id: asyla_freezer_probe_back",
+                     "id: asyla_freezer_probe_silent", "id: asyla_freezer_probe_back",
                      "- notify.hvac_report"):
             self.assertIn(want, out)
 
 
 LIVE = r'''
-import asyncio, sys
+import asyncio, sys, time
 from homeassistant import bootstrap, runner
 
-PROBE, WARM, MISSING = "sensor.mke_temperature_2", "binary_sensor.freezer_too_warm", "binary_sensor.freezer_probe_missing"
+PROBE, WARM, SILENT = "sensor.mke_temperature_2", "binary_sensor.freezer_too_warm", "binary_sensor.freezer_probe_silent"
 bad = []
 def check(name, got, want):
     bad.extend([] if got == want else [name])
@@ -107,7 +107,7 @@ async def main():
 
     # --- a defrost peak and exactly 15 °F never alert ---------------------------------------------
     probe("-2.7"); await skip(0)
-    check("normal: not warm, probe present", (st(WARM), st(MISSING)), ("off", "off"))
+    check("normal: not warm, probe present", (st(WARM), st(SILENT)), ("off", "off"))
     dismissed.clear()  # the first evaluation at start is an edge to off: a dismiss of nothing
     probe("6.8"); await skip(120)
     check("defrost peak 6.8 °F for 2 h: not warm, nothing sent", (st(WARM), seen()), ("off", (0, 0, 0)))
@@ -133,20 +133,20 @@ async def main():
     check("-12 °C (10.4 °F): off", st(WARM), "off")
     mails.clear(); notes.clear(); dismissed.clear()
 
-    # --- unavailable ------------------------------------------------------------------------------
-    probe("unavailable", None); await skip(0)
-    check("unavailable: warm sensor unavailable (no alert while unwatched)", st(WARM), "unavailable")
-    await skip(359)
-    check("unavailable 5 h 59 min: nothing sent", (st(MISSING), seen()), ("off", (0, 0, 0)))
-    await skip(2)
-    check("unavailable 6 h: one notice, not urgent",
-          (st(MISSING), seen(), mails[0]["title"]), ("on", (1, 1, 0), "Freezer probe has no reading"))
-    check("notification id", notes[0]["notification_id"], "asyla_freezer_probe_missing")
-    await skip(600)
-    check("unavailable 16 h: still one", seen(), (1, 1, 0))
+    # --- silent: unavailable or the same reading for 3 h (last_changed 10800 s ago) ---------------
+    def probe_since(v, age, u="°F"):
+        hass.states.async_set(PROBE, v, {"unit_of_measurement": u} if u else {}, timestamp=time.time() - age)
+    probe_since("unavailable", 10000, None); await skip(0)
+    check("unavailable 2.8 h: warm sensor unavailable, not silent yet", (st(WARM), st(SILENT), seen()),
+          ("unavailable", "off", (0, 0, 0)))
+    probe_since("-5.0", 10900); await skip(0)
+    check("same reading 3.03 h: silent, one URGENT notice",
+          (st(SILENT), seen()[:2], mails[0]["title"]), ("on", (1, 1), "[URGENT] Freezer probe silent"))
+    check("notification id", notes[0]["notification_id"], "asyla_freezer_probe_silent")
+    probe_since("unavailable", 11000, None); await skip(0)
+    check("then unavailable for 3 h: still silent, still one", (st(SILENT), seen()[:2]), ("on", (1, 1)))
     probe("-4.0"); await skip(0)
-    # The warm sensor also leaves unavailable for off: that edge dismisses its (absent) notification.
-    check("probe back: cleared, no mail", (st(MISSING), seen()[:2], "asyla_freezer_probe_missing" in dismissed),
+    check("probe moves again: cleared, no mail", (st(SILENT), seen()[:2], "asyla_freezer_probe_silent" in dismissed),
           ("off", (1, 1), True))
     await hass.async_stop(force=True)
 
