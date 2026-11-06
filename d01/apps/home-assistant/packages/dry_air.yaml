@@ -231,7 +231,7 @@ automation:
   - id: asyla_dry_air_air_the_house
     alias: "Dry air: air the house"
     description: >-
-      Indoor RH 55% or more and the outdoor air can dry the house: open windows for 10-15 minutes.
+      Indoor RH 55% or more and the outdoor air can dry the house: open windows for about 30 minutes.
       At most every 3 hours; 3 hours after a notice, and at start, it checks again.
     mode: single
     max_exceeded: silent
@@ -278,9 +278,8 @@ automation:
           thread: airing
           title: "Air the house"
           message: >-
-            The outdoor air can dry the house. Open windows wide with a cross draft for 10-15
-            minutes, then close them; repeat every 2-3 hours while it lasts. The next check is in
-            3 hours.
+            The outdoor air can dry the house. Leave the heat on. Open windows wide with a cross
+            draft for about 30 minutes, then close them. The next check is in 3 hours.
 
   - id: asyla_dry_air_stop_airing
     alias: "Dry air: stop airing"
