@@ -648,15 +648,17 @@ wait_reading() {
 #   which Prometheus records as up 0 (theOrg scrape-proxy/proxy.py);
 # - emporia-collector: no OpenBao failure and the channel names on (emporia_held);
 # - alert-relay: alert_relay_secret_present (its own metrics, live) 1 for the delivery check's ping
-#   URL and the Vikunja token (vikunja_token: ALERT_RELAY_VIKUNJA_KV in compose.yml), for its SMTP
-#   login with ALERT_EMAIL_TO set and for the Watchdog's ping URL with ALERT_WATCHDOG_PING set.
-#   relay_held sorts the reading (Python's sorted), so want is sorted the same way (C collation):
-#   vikunja_token comes after smtp_username. That the token reads project 170 (the ALERT_PROJECTS
-#   default) and the check took a ping is check_delivery's.
+#   URL, the Vikunja token (vikunja_token: ALERT_RELAY_VIKUNJA_KV in compose.yml) and the Loki
+#   query password (loki_password: ALERT_RELAY_LOKI_KV; without it the relay fetches no log
+#   lines), for its SMTP login with ALERT_EMAIL_TO set and for the Watchdog's ping URL with
+#   ALERT_WATCHDOG_PING set. relay_held sorts the reading (Python's sorted), so want is sorted the
+#   same way (C collation): vikunja_token comes after smtp_username. That the token reads project
+#   170 (the ALERT_PROJECTS default) and the check took a ping is check_delivery's; that a logql
+#   query returns lines is alert-test's.
 # The first scrape comes within a minute (scrape_interval 60s): one wait of VERIFY_WAIT_S for all,
 # and at least SCRAPE_GRACE_S for each.
 check_tokened() {
-  local rc=0 names="delivery_ping_url vikunja_token" want
+  local rc=0 names="delivery_ping_url loki_password vikunja_token" want
   if [ -n "$ALERT_EMAIL_TO" ]; then names="$names smtp_password smtp_username"; fi
   if [ -n "$ALERT_WATCHDOG_PING" ]; then names="$names watchdog_ping_url"; fi
   # shellcheck disable=SC2086 # one word per secret
@@ -871,6 +873,16 @@ alert_test_fingerprint() {
     | python3 -c 'import json,sys; a=json.load(sys.stdin); print(a[0]["fingerprint"] if a else "")'
 }
 
+# alert-relay's logql queries since it started, as "lines=N empty=N error=N unconfigured=N"
+# (alert_relay_logql_queries_total by result on 127.0.0.1:9111; theOrg alert-relay/relay.py
+# log_section): lines, the query returned lines and the task carries them; empty, none matched;
+# error, Loki refused or did not answer; unconfigured, no LOKI_QUERY_URL or no password. A series
+# the relay has not counted yet reads 0.
+relay_logql() {
+  curl -sf --max-time 10 http://127.0.0.1:9111/metrics \
+    | python3 -c 'import re,sys; d=dict(re.findall(r"^alert_relay_logql_queries_total\{result=\"(\w+)\"\} (\S+)$", sys.stdin.read(), re.M)); print(" ".join("%s=%d" % (k, float(d.get(k, 0))) for k in ("lines", "empty", "error", "unconfigured")))'
+}
+
 # relay_task <since> <opened|closed> <fingerprint> [task id]: "<task id> <project id>" from the
 # first `alert-relay <opened|closed> task <id> in project <pid> (<fingerprint>)` line alert-relay-1
 # logged (stdout or stderr) since <since> (theOrg alert-relay/relay.py _to_vikunja), for that task
@@ -901,12 +913,15 @@ wait_relay_task() {
 }
 
 # alert-test (theOrg piece 6, alert-relay on d06): proves that an alert from this host's
-# Alertmanager lands as a Vikunja task in the default project (default_project_id: 170) and that
-# its resolve closes the task again, read from alert-relay-1's own log lines, so no token leaves
-# the relay. Modelled on theOrg scripts/alert_routing_selftest.sh, without its Loki line and
-# logql annotation: log lines are off on d06 (compose.yml's header). One alert, severity info, so
-# it takes the base route to alert-relay and not the email piece's route (critical only): no
-# email. Its own test_run label keeps it off an earlier run's open task, and its own name label
+# Alertmanager lands as a Vikunja task in the default project (default_project_id: 170) with its
+# log lines, and that its resolve closes the task again, read from alert-relay-1's own log lines
+# and metrics, so no token leaves the relay. Modelled on theOrg scripts/alert_routing_selftest.sh
+# without its routing half (d06 has one project): it pushes one line under
+# {job="asyla-alert-test"} into Loki through loki-1's own wget to 127.0.0.1:3100, and the alert's
+# logql annotation selects it; the relay's logql query must return lines
+# (alert_relay_logql_queries_total{result="lines"} rises: relay_logql), so the task carries them.
+# One alert, severity info, so it takes the base route to alert-relay and not the email piece's
+# route (critical only): no email. Its own test_run label keeps it off an earlier run's open task, and its own name label
 # makes it a group of its own (group_by [alertname, name]) instead of waiting out an earlier
 # group's group_interval. Alertmanager sends it after group_wait (30 s); it ends 3 minutes after
 # it starts and the resolve goes at the group's next group_interval (5 m), so a run takes about
@@ -914,7 +929,7 @@ wait_relay_task() {
 # lost-resolve reconcile means the resolve's delivery failed. Any `::error::` or `task search
 # failed` the relay logs during the run, an unrelated alert's included, fails it.
 do_alert_test() {
-  local pid run now started ends deadline fp="" opened="" task got_pid errors rc=0
+  local pid run now started ends deadline fp="" opened="" task got_pid errors rc=0 body logql_before logql_after
   if is_replica; then
     echo "[ERROR] alert-test runs on $SERVING_HOST only (this is $(hostname -s))" >&2
     return 1
@@ -934,15 +949,29 @@ do_alert_test() {
   now=$(date +%s)
   started="$(date -u -d "@$now" +%Y-%m-%dT%H:%M:%SZ)"
   ends="$(date -u -d "@$((now + 180))" +%Y-%m-%dT%H:%M:%SZ)"
+  logql_before="$(relay_logql 2>/dev/null)" || logql_before=""
+  if [[ ! "$logql_before" =~ ^lines=[0-9]+\  ]]; then
+    echo "[ERROR] alert-test: alert-relay's metrics on 127.0.0.1:9111 did not answer (read '${logql_before:-nothing}')" >&2
+    return 1
+  fi
+  # The run id is [0-9A-Z-] only, so it needs no JSON or LogQL escaping.
+  body="{\"streams\":[{\"stream\":{\"job\":\"asyla-alert-test\"},\"values\":[[\"${now}000000000\",\"alert relay test $run from $SERVING_HOST\"]]}]}"
+  if ! docker exec loki-1 wget -q -O- --header 'Content-Type: application/json' --post-data "$body" \
+      http://127.0.0.1:3100/loki/api/v1/push >/dev/null 2>&1; then
+    echo "[ERROR] alert-test: loki-1 did not take the test line (a push to 127.0.0.1:3100 from inside it)" >&2
+    return 1
+  fi
+  info "alert-test $run: pushed a line under {job=\"asyla-alert-test\"} into Loki; relay logql queries before: $logql_before"
   # amtool takes a value holding '"' quoted, with its inner quotes escaped; every value is quoted.
   if ! docker exec alertmanager-1 amtool alert add --alertmanager.url=http://127.0.0.1:9093 \
       --start="$started" --end="$ends" \
       alertname=AsylaAlertRelayTest severity=info "test_run=\"$run\"" "name=\"alert-test-$run\"" \
-      "--annotation=summary=\"Alert relay test $run from $SERVING_HOST: a task in Vikunja project $pid that closes on the resolve\""; then
+      "--annotation=summary=\"Alert relay test $run from $SERVING_HOST: a task in Vikunja project $pid with its log line, closed on the resolve\"" \
+      "--annotation=logql=\"{job=\\\"asyla-alert-test\\\"} |= \\\"$run\\\"\""; then
     echo "[ERROR] alert-test: amtool did not add the alert to alertmanager-1" >&2
     return 1
   fi
-  info "alert-test $run: added AsylaAlertRelayTest (severity info) to alertmanager-1, ending $ends"
+  info "alert-test $run: added AsylaAlertRelayTest (severity info, a logql annotation) to alertmanager-1, ending $ends"
 
   deadline=$(( $(date +%s) + 30 ))
   while :; do
@@ -960,6 +989,15 @@ do_alert_test() {
     task="${opened% *}"
     got_pid="${opened#* }"
     info "alert-test $run: alert-relay opened task $task in project $got_pid ($fp)"
+    # The relay runs the logql query while it writes the task's description, before the task is
+    # opened, so the counter has risen by the time the open is logged.
+    logql_after="$(relay_logql 2>/dev/null)" || logql_after=""
+    if python3 -c 'import sys; a, b = (dict(p.split("=") for p in s.split()) for s in sys.argv[1:3]); sys.exit(0 if int(b["lines"]) >= int(a["lines"]) + 1 else 1)' "$logql_before" "$logql_after" 2>/dev/null; then
+      info "alert-test $run: task $task carries its log lines (relay logql queries: $logql_after)"
+    else
+      echo "[ERROR] alert-test $run: the relay's logql query returned no lines (relay logql queries before: $logql_before; after: ${logql_after:-nothing}; empty: Loki held no matching line; error: Loki refused or did not answer; unconfigured: no LOKI_QUERY_URL or no loki_password)" >&2
+      rc=1
+    fi
     if [ "$got_pid" != "$pid" ]; then
       echo "[ERROR] alert-test $run: task $task is in project $got_pid, not the default project $pid (the first in ALERT_PROJECTS)" >&2
       rc=1
@@ -980,7 +1018,7 @@ do_alert_test() {
     printf '%s\n' "$errors" | sed -n '1,20p' >&2
     rc=1
   fi
-  if [ "$rc" -eq 0 ]; then info "alert-test OK: task $task in Vikunja project $pid opened and closed"; else echo "[ERROR] alert-test failed" >&2; fi
+  if [ "$rc" -eq 0 ]; then info "alert-test OK: task $task in Vikunja project $pid opened with its log lines and closed"; else echo "[ERROR] alert-test failed" >&2; fi
   return "$rc"
 }
 
@@ -1059,9 +1097,10 @@ usage() {
   echo "             operations Prometheus target up, Vector's container logs in Loki, the" >&2
   echo "             tokened services' secrets, the Watchdog's healthchecks.io ping, and" >&2
   echo "             alert-relay's Vikunja self-test and delivery check ping" >&2
-  echo "  alert-test - On $SERVING_HOST: one info alert (no email) through Alertmanager; passes when" >&2
-  echo "             alert-relay opens a Vikunja task for it in the default project (the first in" >&2
-  echo "             ALERT_PROJECTS: $ALERT_PROJECTS) and closes it on the resolve (about 6 minutes)" >&2
+  echo "  alert-test - On $SERVING_HOST: one test line into Loki and one info alert (no email) whose" >&2
+  echo "             logql annotation selects it; passes when alert-relay opens a Vikunja task for" >&2
+  echo "             it in the default project (the first in ALERT_PROJECTS: $ALERT_PROJECTS) with" >&2
+  echo "             the line, and closes it on the resolve (about 6 minutes)" >&2
   echo "  status   - Containers" >&2
   echo "  logs     - Follow logs (optionally for one service)" >&2
 }

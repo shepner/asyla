@@ -139,12 +139,14 @@ IDENTITIES = [
     ("emporia-collector", "EMPORIA_OPENBAO_WRAPPED_TOKEN", ["emporia-username", "emporia-password"]),
     # The SMTP login, the Watchdog's ping URL (on: observability.sh ALERT_WATCHDOG_PING), the
     # Vikunja token for alert tasks in project 170 (user svc-alert-relay-d06's, outside KV:
-    # secrets-vault#46, 5a75b93, grants token role observability-d06 read on it), and the delivery
-    # check's ping URL (compose.yml). The minting tool reads each record, so a record not stored
-    # stops the deploy before the stack.
+    # secrets-vault#46, 5a75b93, grants token role observability-d06 read on it), the delivery
+    # check's ping URL, and its Loki query account for log lines (own/loki-clients/alert-relay,
+    # created by loki_accounts.py; compose.yml). The minting tool reads each record, so a record
+    # not stored stops the deploy before the stack.
     ("alert-relay", "ALERT_RELAY_OPENBAO_WRAPPED_TOKEN",
      ["smtp-relay-username", "smtp-relay-password", "observability-watchdog-ping-url",
-      "secret/v2/vikunja/alert-tokens/svc-alert-relay-d06", "observability-delivery-ping-url"]),
+      "secret/v2/vikunja/alert-tokens/svc-alert-relay-d06", "observability-delivery-ping-url",
+      "own/loki-clients/alert-relay"]),
 ]
 
 

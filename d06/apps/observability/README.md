@@ -21,6 +21,10 @@ the images disagree. It prints that revision and passes it to `verify`.
   only the services with nothing to reach off the host: no alert-relay, emporia-collector,
   scrape-proxy or Vector.
 - `deploy_role.py`: the deploy (below): pulls, mints the three wrapped tokens, starts the stack.
+- `loki_accounts.py` and `loki-clients.toml`: asyla's own Loki accounts for d06 (alert-relay's
+  query account), created once in OpenBao (Secrets, below).
+- Tests, offline: `python3 scripts/tests/test_d06_deploy_role.py` and
+  `python3 scripts/tests/test_d06_loki_accounts.py`.
 - `docker-credential-observability-env`: the credential helper `observability.sh` points Docker at
   for the pulls (below).
 - Data: `/mnt/docker/Observability/{alertmanager-data,loki-data,prometheus-data,prometheus-trends-data}`
@@ -66,14 +70,31 @@ under `secret/hubs/asyla/` but alert-relay's Vikunja token:
   `observability-delivery-ping-url#value`, and the Vikunja token of user `svc-alert-relay-d06`,
   `secret/v2/vikunja/alert-tokens/svc-alert-relay-d06#value`, outside `hubs/asyla/`
   (secrets-vault#46, 5a75b93, grants the role read on it; `deploy_role.py` names it by its full
-  path). A record it cannot read switches that feature off at
-  start, logged by category (never a value) (`alert-relay/relay.py`). The minting tool reads each
-  record before it wraps the token (theOrg `scripts/vault_identity.py`), so `deploy_role.py` stops
-  before the stack is touched while any of the five is not stored.
+  path), and its Loki query account `own/loki-clients/alert-relay#password` (`ALERT_RELAY_LOKI_KV`;
+  created by `loki_accounts.py`, below; secrets-vault
+  `policies/hubs/observability-d06-alert-relay.hcl` grants the role read on it). A record it
+  cannot read switches that feature off at start, logged by category (never a value)
+  (`alert-relay/relay.py`). The minting tool reads each record before it wraps the token (theOrg
+  `scripts/vault_identity.py`), so `deploy_role.py` stops before the stack is touched while any of
+  the six is not stored.
 - emporia-collector (`EMPORIA_USERNAME_KV`, `EMPORIA_PASSWORD_KV`, plain paths, field `value`):
   `emporia-username`, `emporia-password`.
 - scrape-proxy (`HOME_ASSISTANT_TOKEN_KV`, plain path, field `value`):
   `home-assistant-prometheus-token`.
+
+The Loki account record is asyla's own: `loki_accounts.py` makes it, once, before the first
+deploy that names it (a deploy without it stops at the mint), from the workstation:
+
+```sh
+cd ~/local/asyla && python3 projects/asyla-hosts/d06/apps/observability/loki_accounts.py
+```
+
+It runs theOrg's `scripts/loki_clients.py provision` (with `openbao.py`, at `deploy_role.py`'s
+`TOOL_REV`, from the local theOrg clone) on `loki-clients.toml` with asyla's hub token and
+`LOKI_CLIENTS_KV_PREFIX=secret/hubs/asyla/own/loki-clients`: for an account with no record it
+writes `username` and a generated `password` with `cas=0`, so it never overwrites; a second run
+changes nothing (`<name>: exists`). It prints no value. `--dry-run` prints the plan and contacts
+nothing.
 
 ## Deploy
 
@@ -159,6 +180,17 @@ this stack's own container logs to Loki over plain HTTP inside `observability-ne
 `CHRONICLE_EPISODE` lines to memory-system's Vector on the Mini. At 7572365 it was off, because its
 Loki sink named `/etc/loki-ca/root_ca.crt`; at f757911 no Vector file names a CA or has a tls block.
 
+alert-relay's log lines are on too: for an alert with a `logql` annotation the relay runs it
+against `LOKI_QUERY_URL`, here Loki itself at `http://loki:3100` inside `observability-net`, from
+`LOGQL_LOOKBACK_SECONDS` (900) before the alert's start to now, and puts the newest lines in the task it
+opens (theOrg `alert-relay/relay.py` `log_section` at b5bd228). Loki has `auth_enabled: false`
+(theOrg `loki-config-http.yaml` at b5bd228) and plain HTTP, as vector-1 and Prometheus reach it.
+The relay fetches only with its query password as well (`loki_password`, `ALERT_RELAY_LOKI_KV`),
+which it sends as Basic auth `alert-relay:<password>`: Loki ignores it today, and a d06 gateway
+under option B would check it. At b5bd228 the only theOrg rule with a `logql` annotation is
+`loki-rules/selftest.yml` (`LokiRulerSelfTest`), so today lines appear for the self-tests
+(`alert-test`, below) and any later rule with one.
+
 The Docker socket is bound into `vector-1` and `docker-state-exporter-1` as theOrg's
 `compose.docker-socket.yml` binds it. The bind's `:ro` does not make the Docker API read-only:
 whatever can connect to the socket has the whole API. Vector's only inputs are `internal_metrics`
@@ -194,14 +226,10 @@ Off here and nowhere else:
   (under `hubs/asyla/`), a `loki-d06` provisioner in certificate-management, and a LAN name for
   step-ca; then the service in `compose.yml` with d06's settings and its line in `deploy_role.py`.
   The volumes `loki-tls` and `loki-gateway-auth` on d06, from the first deploy, are unused now;
-  deleting them is the operator's decision.
-- alert-relay's log lines in alert tasks: `LOKI_QUERY_URL` is empty and `ALERT_RELAY_LOKI_KV` is not
-  set. Loki in the stack needs no account, but the relay fetches lines only when `LOKI_QUERY_URL`
-  and its query password are both set (theOrg `alert-relay/relay.py` `log_section` and its start
-  line, "log lines: off"), so `http://loki:3100` alone changes nothing. On: the password record
-  (secrets-vault#37, `secret/hubs/asyla/own/loki-clients/alert-relay#password`, readable after its
-  vault-auth apply) in `ALERT_RELAY_LOKI_KV`, and `LOKI_QUERY_URL` set (the gateway under option
-  B).
+  deleting them is the operator's decision. With the gateway on, alert-relay's `LOKI_QUERY_URL`
+  would name it, as theOrg's `docker-compose.yml` at b5bd228 does (the gateway on
+  `host.docker.internal:3100`), and the gateway would check the relay's account
+  (`loki-clients.toml`).
 - chat-api: `CHAT_API_URL` is empty; theOrg's, not asyla's.
 
 ## Upgrade
@@ -237,10 +265,11 @@ at least `SCRAPE_GRACE_S` (75 s, one scrape and some) for each:
   every category after an OpenBao read or a renewal that worked (the renewal since #325); the
   channel names appear only once Emporia took the login and the collector read the channels.
 - alert-relay: its own metrics (`9111`) read `alert_relay_secret_present` 1 for
-  `delivery_ping_url` and `vikunja_token`, for `smtp_username` and `smtp_password` (with
-  `ALERT_EMAIL_TO`) and for `watchdog_ping_url` (with `ALERT_WATCHDOG_PING`) (theOrg
-  `alert-relay/relay.py`). That it holds them, not that Gmail takes the login; that the token can
-  read project 170 is `check_delivery`'s.
+  `delivery_ping_url`, `loki_password` and `vikunja_token`, for `smtp_username` and
+  `smtp_password` (with `ALERT_EMAIL_TO`) and for `watchdog_ping_url` (with `ALERT_WATCHDOG_PING`)
+  (theOrg `alert-relay/relay.py`). That it holds them, not that Gmail takes the login; that the
+  token can read project 170 is `check_delivery`'s; that a `logql` query returns lines is
+  `alert-test`'s.
 
 With `ALERT_WATCHDOG_PING` on and alert-relay running, verify then checks the Watchdog's ping
 (`check_watchdog`): the running Alertmanager loaded the watchdog piece (its `/api/v2/status`
@@ -273,9 +302,13 @@ whole life, so once one failure is counted, every later standalone verify fails 
 is recreated. A deploy always recreates it, since it passes a new wrapped token; so once the cause
 is fixed, redeploy (`deploy_role.py`) to clear it.
 
-`observability.sh alert-test` proves the write, on d06 by hand: it adds one `info` alert with
-`amtool` in `alertmanager-1`, then waits for alert-relay's log line `alert-relay opened task <id>
-in project 170 (<fp>)` and then its `closed` line for that task (theOrg `alert-relay/relay.py`).
+`observability.sh alert-test` proves the write and the log lines, on d06 by hand: it pushes one
+test line under `{job="asyla-alert-test"}` into Loki (`loki-1`'s own wget to `127.0.0.1:3100`),
+adds one `info` alert with `amtool` in `alertmanager-1` whose `logql` annotation selects that
+line, then waits for alert-relay's log line `alert-relay opened task <id> in project 170 (<fp>)`,
+requires `alert_relay_logql_queries_total{result="lines"}` (`9111`) to have risen by then, and
+waits for its `closed` line for that task (theOrg `alert-relay/relay.py`; modelled on theOrg
+`scripts/alert_routing_selftest.sh` at b5bd228).
 The email route matches `severity="critical"` only (theOrg `alertmanager-pieces/email/route.yml`),
 so an `info` alert sends no email. From the workstation, on the LAN:
 

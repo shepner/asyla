@@ -849,24 +849,29 @@ def registry_cases() -> list[bool]:
 
 
 VIKUNJA_TOKEN = "secret/v2/vikunja/alert-tokens/svc-alert-relay-d06"   # outside KV (secrets-vault#46)
+LOKI_ACCOUNT = "own/loki-clients/alert-relay"   # asyla's own Loki account (loki_accounts.py)
 
 
 def relay_records_cases() -> list[bool]:
     """alert-relay's token reads its SMTP login, the Watchdog's ping URL, the Vikunja token (by its
-    full path, outside the hub's KV) and the delivery check's ping URL, each named in compose.yml
-    (the Vikunja token and the delivery ping URL by their own settings); no Gitea setting is left;
-    alerts go to Vikunja project 170 (ALERT_PROJECTS); and the watchdog piece is on."""
+    full path, outside the hub's KV), the delivery check's ping URL and its Loki query account (a
+    path under the hub's own/), each named in compose.yml (the Vikunja token, the delivery ping URL
+    and the Loki account by their own settings; the Loki account by its field password, the rest
+    by value); the relay queries Loki at loki:3100; no Gitea setting is left; alerts go to Vikunja
+    project 170 (ALERT_PROJECTS); and the watchdog piece is on."""
     records = {c: rs for c, _, rs in dr.IDENTITIES}["alert-relay"]
     compose = (dr.HERE / "compose.yml").read_text()
     live = [ln.strip() for ln in compose.splitlines() if not ln.lstrip().startswith("#")]
     sh = (dr.HERE / "observability.sh").read_text()
+    field = {LOKI_ACCOUNT: "password"}
     return [
-        check("relay: its records are the SMTP login, the Watchdog's ping URL, the Vikunja token and "
-              "the delivery ping URL",
+        check("relay: its records are the SMTP login, the Watchdog's ping URL, the Vikunja token, "
+              "the delivery ping URL and its Loki query account",
               records == ["smtp-relay-username", "smtp-relay-password", "observability-watchdog-ping-url",
-                          VIKUNJA_TOKEN, "observability-delivery-ping-url"]),
-        check("relay: compose.yml names each of its records (a secret/ one by its own path)",
-              all(any(ln.startswith("ALERT_RELAY_") and f'"{dr.kv_path(r)}#value"' in ln for ln in live)
+                          VIKUNJA_TOKEN, "observability-delivery-ping-url", LOKI_ACCOUNT]),
+        check("relay: compose.yml names each of its records (a secret/ one by its own path) with its field",
+              all(any(ln.startswith("ALERT_RELAY_") and f'"{dr.kv_path(r)}#{field.get(r, "value")}"' in ln
+                      for ln in live)
                   for r in records)
               and all(dr.kv_path(r) == (r if r.startswith("secret/") else f"secret/hubs/asyla/{r}")
                       for r in records)),
@@ -874,6 +879,13 @@ def relay_records_cases() -> list[bool]:
               f'ALERT_RELAY_VIKUNJA_KV: "{VIKUNJA_TOKEN}#value"' in live
               and 'ALERT_RELAY_DELIVERY_PING_KV: "secret/hubs/asyla/observability-delivery-ping-url#value"'
               in live),
+        check("relay: compose.yml gives the Loki account its setting (field password) and queries loki:3100",
+              'ALERT_RELAY_LOKI_KV: "secret/hubs/asyla/own/loki-clients/alert-relay#password"' in live
+              and 'LOKI_QUERY_URL: "http://loki:3100"' in live
+              and sum(ln.startswith("LOKI_QUERY_URL:") for ln in live) == 1
+              and not any(ln.startswith("LOKI_QUERY_USER:") for ln in live)),
+        check("relay: verify wants loki_password held (check_tokened)",
+              'names="delivery_ping_url loki_password vikunja_token"' in sh),
         check("relay: compose.yml has no Gitea setting left (forge token, URL, alert repo, repos)",
               not any(ln.startswith(k) for ln in live
                       for k in ("ALERT_RELAY_FORGE_KV", "GITEA_ALERT_REPO", "GITEA_URL", "ALERT_REPOS"))),
@@ -914,8 +926,10 @@ results = [
     check("identities: the static list is scrape-proxy, emporia-collector, alert-relay",
           [(c, e) for c, e, _ in dr.IDENTITIES] == [("scrape-proxy", OBS_TOKENS[0]), ("emporia-collector", OBS_TOKENS[1]),
                                                     ("alert-relay", OBS_TOKENS[2])]),
-    check("identities: every record is a plain name under the hub's KV or a full secret/ path, none with #",
-          all(r and "#" not in r and ("/" not in r or r.startswith("secret/"))
+    check("identities: every record is a plain name or an own/ path under the hub's KV, or a full secret/ "
+          "path, none with #",
+          all(r and "#" not in r and ("/" not in r or r.startswith(("secret/", "own/")))
+              and all(s and s not in (".", "..") for s in r.split("/"))
               for _, _, rs in dr.IDENTITIES for r in rs)),
     stops("spec: an identity whose variable build_host would not send stops", "start_env_optional lacks",
           lambda: dr.check_spec({**SPEC, "app": [{**SPEC["app"][0], "start_env_optional": OBS_TOKENS[:2]}]},

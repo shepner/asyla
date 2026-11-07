@@ -31,12 +31,11 @@
 # SMTP login), the Watchdog ping (Alertmanager's watchdog piece, ALERT_WATCHDOG_PING "on" in
 # observability.sh; alert-relay pings healthchecks.io with the URL it reads), the delivery ping
 # (alert-relay pings its own healthchecks.io check after each delivery and its Vikunja self-test),
-# the trends Home Assistant job (through scrape-proxy), emporia-collector, and Vector's
+# the trends Home Assistant job (through scrape-proxy), emporia-collector, Vector's
 # container-log pipeline (VECTOR_DOCKER_LOGS: this stack's own logs to Loki, plain HTTP inside
-# observability-net).
+# observability-net), and alert-relay's log lines (an alert's logql annotation run against
+# loki:3100 inside observability-net, the lines put in its task; README.md, On, off).
 # Off (README.md says what turns each on). Each is off here and nowhere else:
-#   alert-relay log lines LOKI_QUERY_URL is empty: the relay needs a query password too
-#                         (relay.py), and ALERT_RELAY_LOKI_KV is not set
 #   Loki gateway          not in this file: no caller off this host pushes to or queries Loki
 #
 # Run with observability.sh: it sets OBSERVABILITY_TAG, OBSERVABILITY_ROOT and the settings below
@@ -96,12 +95,15 @@ services:
   # reads project 170) and pings the check after each self-test and each delivery:
   # success, or the check's /fail, which takes it down and pages (theOrg alert-relay/relay.py
   # delivery_selftest, record_selftest). So the two go on together: the URL without a working
-  # token pages at the first start. verify checks both (check_tokened, check_delivery). The Loki
-  # and chat-api records keep theOrg's defaults, which this token cannot read ("refused"); those
-  # features are off here (LOKI_QUERY_URL and CHAT_API_URL empty). Loki itself needs no account in
-  # the stack, but the relay fetches log lines only with LOKI_QUERY_URL and its query password
-  # both set (relay.py log_section and its start line), so loki:3100 here alone would change
-  # nothing.
+  # token pages at the first start. verify checks both (check_tokened, check_delivery).
+  # Log lines: for an alert with a logql annotation the relay queries LOKI_QUERY_URL, here Loki
+  # itself at loki:3100 inside observability-net (plain HTTP, auth_enabled false: no account, as
+  # for vector-1 and Prometheus), and puts the newest lines in the task (relay.py log_section).
+  # The relay fetches only with a query password as well, which it sends as Basic auth and Loki
+  # ignores; it is asyla's own Loki account alert-relay (loki-clients.toml beside this file,
+  # created by loki_accounts.py), the account a d06 gateway would check (README.md, On, off). The
+  # chat-api record keeps theOrg's default, which this token cannot read ("refused"); chat-api is
+  # off here (CHAT_API_URL empty).
   alert-relay:
     image: gitea.asyla.org/theorg/observability-alert-relay:${OBSERVABILITY_TAG:?}
     container_name: alert-relay-1
@@ -115,8 +117,9 @@ services:
       ALERT_RELAY_SMTP_PASSWORD_KV: "secret/hubs/asyla/smtp-relay-password#value"
       ALERT_RELAY_WATCHDOG_PING_KV: "secret/hubs/asyla/observability-watchdog-ping-url#value"
       ALERT_RELAY_DELIVERY_PING_KV: "secret/hubs/asyla/observability-delivery-ping-url#value"
+      ALERT_RELAY_LOKI_KV: "secret/hubs/asyla/own/loki-clients/alert-relay#password"
       ALERT_PROJECTS: ${ALERT_PROJECTS:?}
-      LOKI_QUERY_URL: ""
+      LOKI_QUERY_URL: "http://loki:3100"
       CHAT_API_URL: ""
       # Critical alerts by email: the recipient; the sender defaults to the SMTP username.
       ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:?}

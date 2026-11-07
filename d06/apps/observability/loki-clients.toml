@@ -1,0 +1,14 @@
+# asyla's own Loki accounts for d06, in theOrg observability's loki-clients.toml format: theOrg's
+# scripts/loki_clients.py reads this file, run by loki_accounts.py beside it. Each account's record
+# is secret/hubs/asyla/own/loki-clients/<name> (fields username and password), created once by
+# `loki_accounts.py` and never overwritten. Hub asyla writes only under hubs/asyla/own/
+# (secrets-vault policies/hubs.toml, [token_roles.observability-d06]).
+#
+# d06 has no Loki gateway (README.md, On, off), so nothing checks these accounts today: Loki in the
+# stack has auth_enabled false. A d06 gateway (theOrg's option B) would read them and check them.
+
+# alert-relay's query account: it runs an alert's logql annotation and puts the lines in the task
+# it opens. It reads the password from OpenBao itself, with its own token (compose.yml
+# ALERT_RELAY_LOKI_KV; deploy_role.py IDENTITIES).
+[clients.alert-relay]
+scope = ["query"]
