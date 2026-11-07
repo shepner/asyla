@@ -848,26 +848,37 @@ def registry_cases() -> list[bool]:
     return out
 
 
+VIKUNJA_TOKEN = "secret/v2/vikunja/alert-tokens/svc-alert-relay-d06"   # outside KV (secrets-vault#46)
+
+
 def relay_records_cases() -> list[bool]:
-    """alert-relay's token reads its SMTP login, the Watchdog's ping URL, the forge token and the
-    delivery check's ping URL, each named in compose.yml (the forge token and the delivery ping URL
-    by their own settings), and the watchdog piece is on."""
+    """alert-relay's token reads its SMTP login, the Watchdog's ping URL, the Vikunja token (by its
+    full path, outside the hub's KV) and the delivery check's ping URL, each named in compose.yml
+    (the Vikunja token and the delivery ping URL by their own settings); no Gitea setting is left;
+    alerts go to Vikunja project 170 (ALERT_PROJECTS); and the watchdog piece is on."""
     records = {c: rs for c, _, rs in dr.IDENTITIES}["alert-relay"]
     compose = (dr.HERE / "compose.yml").read_text()
     live = [ln.strip() for ln in compose.splitlines() if not ln.lstrip().startswith("#")]
     sh = (dr.HERE / "observability.sh").read_text()
     return [
-        check("relay: its records are the SMTP login, the Watchdog's ping URL, the forge token and "
+        check("relay: its records are the SMTP login, the Watchdog's ping URL, the Vikunja token and "
               "the delivery ping URL",
               records == ["smtp-relay-username", "smtp-relay-password", "observability-watchdog-ping-url",
-                          "observability-alert-relay-gitea-token", "observability-delivery-ping-url"]),
-        check("relay: compose.yml names each of its records",
-              all(any(ln.startswith("ALERT_RELAY_") and f'"secret/hubs/asyla/{r}#value"' in ln for ln in live)
-                  for r in records)),
-        check("relay: compose.yml gives the forge token and the delivery ping URL their settings",
-              'ALERT_RELAY_FORGE_KV: "secret/hubs/asyla/observability-alert-relay-gitea-token#value"' in live
+                          VIKUNJA_TOKEN, "observability-delivery-ping-url"]),
+        check("relay: compose.yml names each of its records (a secret/ one by its own path)",
+              all(any(ln.startswith("ALERT_RELAY_") and f'"{dr.kv_path(r)}#value"' in ln for ln in live)
+                  for r in records)
+              and all(dr.kv_path(r) == (r if r.startswith("secret/") else f"secret/hubs/asyla/{r}")
+                      for r in records)),
+        check("relay: compose.yml gives the Vikunja token and the delivery ping URL their settings",
+              f'ALERT_RELAY_VIKUNJA_KV: "{VIKUNJA_TOKEN}#value"' in live
               and 'ALERT_RELAY_DELIVERY_PING_KV: "secret/hubs/asyla/observability-delivery-ping-url#value"'
               in live),
+        check("relay: compose.yml has no Gitea setting left (forge token, URL, alert repo, repos)",
+              not any(ln.startswith(k) for ln in live
+                      for k in ("ALERT_RELAY_FORGE_KV", "GITEA_ALERT_REPO", "GITEA_URL", "ALERT_REPOS"))),
+        check("relay: alerts go to Vikunja project 170 (compose.yml takes ALERT_PROJECTS from observability.sh)",
+              "ALERT_PROJECTS: ${ALERT_PROJECTS:?}" in live and '\nALERT_PROJECTS="asyla=170"\n' in sh),
         check("relay: the watchdog piece is on in observability.sh",
               '\nALERT_WATCHDOG_PING="on"\n' in sh),
     ]
@@ -895,13 +906,17 @@ results = [
           dr.identity_args([("a", "A_T", ["r1", "r2"]), ("b", "B_T", ["r3"])])
           == ["--identity", "component=a,env=A_T,kv=secret/hubs/asyla/r1,kv=secret/hubs/asyla/r2",
               "--identity", "component=b,env=B_T,kv=secret/hubs/asyla/r3"]),
+    check("identities: a secret/ record is a full path, passed through unchanged",
+          dr.identity_args([("a", "A_T", ["r1", "secret/v2/x/y"])])
+          == ["--identity", "component=a,env=A_T,kv=secret/hubs/asyla/r1,kv=secret/v2/x/y"]),
     stops("identities: one with no record stops (take its line out instead)", "no KV record",
           lambda: dr.identity_args([("a", "A_T", [])])),
     check("identities: the static list is scrape-proxy, emporia-collector, alert-relay",
           [(c, e) for c, e, _ in dr.IDENTITIES] == [("scrape-proxy", OBS_TOKENS[0]), ("emporia-collector", OBS_TOKENS[1]),
                                                     ("alert-relay", OBS_TOKENS[2])]),
-    check("identities: every name and path is a plain path under the hub's KV",
-          all(r and "#" not in r and "/" not in r for _, _, rs in dr.IDENTITIES for r in rs)),
+    check("identities: every record is a plain name under the hub's KV or a full secret/ path, none with #",
+          all(r and "#" not in r and ("/" not in r or r.startswith("secret/"))
+              for _, _, rs in dr.IDENTITIES for r in rs)),
     stops("spec: an identity whose variable build_host would not send stops", "start_env_optional lacks",
           lambda: dr.check_spec({**SPEC, "app": [{**SPEC["app"][0], "start_env_optional": OBS_TOKENS[:2]}]},
                                 dr.IDENTITIES)),

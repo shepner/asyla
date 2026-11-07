@@ -58,7 +58,7 @@ REGISTRY="gitea.asyla.org"
 LOKI_IMAGE="$REGISTRY/theorg/observability-loki:$OBSERVABILITY_TAG"
 
 # The host this folder belongs to. On any other host (test01 as a replica of d06) the stack runs
-# the services below only: no alert-relay (it files issues on the forge), no emporia-collector or
+# the services below only: no alert-relay (it files tasks in Vikunja), no emporia-collector or
 # scrape-proxy (they read production's OpenBao records) and no Vector (its chronicle episodes would
 # reach production's memory-system).
 SERVING_HOST="d06"
@@ -73,9 +73,10 @@ VAULT_READERS="alert-relay emporia-collector scrape-proxy"
 # asyla's settings (asyla hub, the observability-on-d06 item).
 PROMETHEUS_EXTERNAL_URL="${PROMETHEUS_EXTERNAL_URL:-https://prometheus.asyla.org}"
 ALERTMANAGER_EXTERNAL_URL="${ALERTMANAGER_EXTERNAL_URL:-https://alertmanager.asyla.org}"
-GITEA_URL="https://gitea.asyla.org"
-GITEA_ALERT_REPO="asyla/alerts"
-ALERT_REPOS=""
+# The Vikunja projects alert-relay files alerts in, name=id (theOrg DEPLOY.md, "alert-relay on d06
+# (asyla)"): 170 is asyla's child of theOrg's Alerts project. The only entry is the default, so
+# every alert goes there, whatever its alert_repo label.
+ALERT_PROJECTS="asyla=170"
 # memory-system's Vector on the Mini (theOrg lead, 2026-11-03).
 CHRONICLE_VECTOR_ADDRESS="10.0.0.150:6000"
 COMPOSE_PROJECT_NAME="observability"
@@ -122,14 +123,15 @@ EMPORIA_WANT='openbao_failure=0 channel_info=[1-9][0-9]*'
 # (1m) tick, so up to about 6 minutes after a deploy; 7.5 with Prometheus's first evaluation (15 s)
 # and some margin. theOrg alertmanager-pieces/watchdog/route.yml at the running revision.
 WATCHDOG_WAIT_S="${OBSERVABILITY_WATCHDOG_WAIT_S:-450}"
-# How long after alert-relay-1 started its forge self-test and the delivery check's ping may take
-# (check_delivery): the relay runs the self-test as it starts (a forge search with a 20 s timeout,
-# once more after a 401), then pings; a ping that errors is tried again after 5, 10, 20, 40 s ...
-# (theOrg alert-relay/relay.py delivery_selftest, _request, PING_RETRY_FIRST_SECONDS).
+# How long after alert-relay-1 started its Vikunja self-test and the delivery check's ping may take
+# (check_delivery): the relay runs the self-test as it starts (a read of the default project with
+# a 20 s timeout, once more after a 401, and up to 3 more on a locked database), then pings; a ping
+# that errors is tried again after 5, 10, 20, 40 s ... (theOrg alert-relay/relay.py
+# delivery_selftest, _request, PING_RETRY_FIRST_SECONDS).
 DELIVERY_WAIT_S="${OBSERVABILITY_DELIVERY_WAIT_S:-180}"
 
 export DOCKER_DL OBSERVABILITY_ROOT OBSERVABILITY_TAG PROMETHEUS_EXTERNAL_URL ALERTMANAGER_EXTERNAL_URL \
-  GITEA_URL GITEA_ALERT_REPO ALERT_REPOS CHRONICLE_VECTOR_ADDRESS COMPOSE_PROJECT_NAME \
+  ALERT_PROJECTS CHRONICLE_VECTOR_ADDRESS COMPOSE_PROJECT_NAME \
   OPENBAO_ADDR ALERT_EMAIL_TO ALERT_WATCHDOG_PING HOME_ASSISTANT_URL
 
 info() { echo "[INFO] $*"; }
@@ -585,18 +587,30 @@ relay_watchdog_pings() {
     | python3 -c 'import re,sys; d=dict(re.findall(r"^alert_relay_watchdog_pings_total\{result=\"(sent|error)\"\} (\S+)$", sys.stdin.read(), re.M)); print("sent=%d error=%d" % (float(d["sent"]), float(d["error"])))'
 }
 
-# alert-relay's forge self-tests, delivery check pings and failed forge deliveries since it
+# alert-relay's Vikunja self-tests, delivery check pings and failed Vikunja deliveries since it
 # started, as "selftest_ok=N selftest_failed=N success_sent=N fail_sent=N fail_error=N
-# gitea_failures=N" (127.0.0.1:9111; theOrg alert-relay/relay.py SELFTESTS, PINGS, FAILED):
+# vikunja_failures=N" (127.0.0.1:9111; theOrg alert-relay/relay.py SELFTESTS, PINGS, FAILED):
 # alert_relay_delivery_selftests_total by result; alert_relay_delivery_pings_total by kind,
 # success or fail (its /fail), with result "sent" (the check's endpoint took it) and, for fail,
 # "error" (the endpoint did not: a failure the check has not heard of); and
-# alert_relay_delivery_failures_total{sink="gitea"} (an alert the relay did not get to the forge).
+# alert_relay_delivery_failures_total{sink="vikunja"} (an alert the relay did not get into
+# Vikunja: no token, no project, a failed task search or a refused write).
 # The relay makes a series only when it first counts one, so a missing series reads 0. Counters of
 # the running relay, so they start at 0 with the container.
 relay_delivery() {
   curl -sf --max-time 10 http://127.0.0.1:9111/metrics \
-    | python3 -c 'import re,sys; t=sys.stdin.read(); s=dict(re.findall(r"^alert_relay_delivery_selftests_total\{result=\"(ok|failed)\"\} (\S+)$", t, re.M)); p={k + "_" + r: v for k, r, v in re.findall(r"^alert_relay_delivery_pings_total\{kind=\"(success|fail)\",result=\"(sent|error)\"\} (\S+)$", t, re.M)}; f=dict(re.findall(r"^alert_relay_delivery_failures_total\{sink=\"(gitea)\"\} (\S+)$", t, re.M)); print("selftest_ok=%d selftest_failed=%d success_sent=%d fail_sent=%d fail_error=%d gitea_failures=%d" % tuple(float(d.get(k, 0)) for d, k in ((s, "ok"), (s, "failed"), (p, "success_sent"), (p, "fail_sent"), (p, "fail_error"), (f, "gitea"))))'
+    | python3 -c 'import re,sys; t=sys.stdin.read(); s=dict(re.findall(r"^alert_relay_delivery_selftests_total\{result=\"(ok|failed)\"\} (\S+)$", t, re.M)); p={k + "_" + r: v for k, r, v in re.findall(r"^alert_relay_delivery_pings_total\{kind=\"(success|fail)\",result=\"(sent|error)\"\} (\S+)$", t, re.M)}; f=dict(re.findall(r"^alert_relay_delivery_failures_total\{sink=\"(vikunja)\"\} (\S+)$", t, re.M)); print("selftest_ok=%d selftest_failed=%d success_sent=%d fail_sent=%d fail_error=%d vikunja_failures=%d" % tuple(float(d.get(k, 0)) for d, k in ((s, "ok"), (s, "failed"), (p, "success_sent"), (p, "fail_sent"), (p, "fail_error"), (f, "vikunja"))))'
+}
+
+# The default project's id: the first ALERT_PROJECTS entry (name=id, comma or space separated),
+# which alert-relay's self-test reads and where it files an alert whose alert_repo label names no
+# listed project (theOrg alert-relay/relay.py alert_projects, default_project; compose.yml sets no
+# ALERT_PROJECT). Fails when that entry is not name=<project id>.
+default_project_id() {
+  local first
+  first="$(printf '%s\n' "$ALERT_PROJECTS" | tr ',' ' ' | awk '{print $1}')"
+  [[ "$first" =~ ^[A-Za-z0-9_.-]+=[1-9][0-9]*$ ]] || return 1
+  printf '%s\n' "${first#*=}"
 }
 
 # "on" when the running Alertmanager loaded the watchdog piece, else "off": its loaded
@@ -634,17 +648,20 @@ wait_reading() {
 #   which Prometheus records as up 0 (theOrg scrape-proxy/proxy.py);
 # - emporia-collector: no OpenBao failure and the channel names on (emporia_held);
 # - alert-relay: alert_relay_secret_present (its own metrics, live) 1 for the delivery check's ping
-#   URL and the forge token, for its SMTP login with ALERT_EMAIL_TO set and for the Watchdog's ping
-#   URL with ALERT_WATCHDOG_PING set. relay_held sorts the reading, so want keeps that order.
-#   That the token can read GITEA_ALERT_REPO and the check took a ping is check_delivery's.
+#   URL and the Vikunja token (vikunja_token: ALERT_RELAY_VIKUNJA_KV in compose.yml), for its SMTP
+#   login with ALERT_EMAIL_TO set and for the Watchdog's ping URL with ALERT_WATCHDOG_PING set.
+#   relay_held sorts the reading (Python's sorted), so want is sorted the same way (C collation):
+#   vikunja_token comes after smtp_username. That the token reads project 170 (the ALERT_PROJECTS
+#   default) and the check took a ping is check_delivery's.
 # The first scrape comes within a minute (scrape_interval 60s): one wait of VERIFY_WAIT_S for all,
 # and at least SCRAPE_GRACE_S for each.
 check_tokened() {
-  local rc=0 names="delivery_ping_url forge_token" want="delivery_ping_url=1 forge_token=1"
-  if [ -n "$ALERT_EMAIL_TO" ]; then
-    names="$names smtp_password smtp_username"; want="$want smtp_password=1 smtp_username=1"
-  fi
-  if [ -n "$ALERT_WATCHDOG_PING" ]; then names="$names watchdog_ping_url"; want="$want watchdog_ping_url=1"; fi
+  local rc=0 names="delivery_ping_url vikunja_token" want
+  if [ -n "$ALERT_EMAIL_TO" ]; then names="$names smtp_password smtp_username"; fi
+  if [ -n "$ALERT_WATCHDOG_PING" ]; then names="$names watchdog_ping_url"; fi
+  # shellcheck disable=SC2086 # one word per secret
+  want="$(printf '%s=1\n' $names | LC_ALL=C sort | tr '\n' ' ')"
+  want="${want% }"
   TOKENED_DEADLINE=$(( $(date +%s) + VERIFY_WAIT_S ))
   if [ "$(service_state scrape-proxy)" != missing ]; then
     if wait_reading 1 trends_up asyla-home-assistant scrape-proxy-1; then
@@ -709,12 +726,14 @@ check_watchdog() {
 }
 
 # The delivery check's ping (theOrg DEPLOY.md, "Watching the watcher"), where alert-relay runs:
-# since the running relay started, its forge self-test passed (its token searched
-# GITEA_ALERT_REPO's issues and the forge answered 200: a read, not a write) and the delivery
-# check's endpoint took a success ping, with no failed self-test, no ping to the check's /fail
-# (sent or errored) and no failed delivery to the forge. The relay runs the self-test as it starts
-# when it holds the check's URL (check_tokened has said whether it does), then daily, and a
-# passing one pings success. A healthchecks.io check that never got a ping stays "new" and never
+# since the running relay started, its Vikunja self-test passed (its Vikunja token read the
+# default project, the first ALERT_PROJECTS entry (170), and Vikunja answered 200: a read, not a
+# write; theOrg alert-relay/relay.py delivery_selftest) and the delivery check's endpoint took a
+# success ping, with no failed self-test, no ping to the check's /fail (sent or errored) and no
+# failed delivery to Vikunja (vikunja_failures: no token, no project, a failed task search or a
+# refused write). That a delivery files a task is shown by alert-test (do_alert_test). The relay
+# runs the self-test as it starts when it holds the check's URL (check_tokened has said whether it
+# does), then daily, and a passing one pings success. A healthchecks.io check that never got a ping stays "new" and never
 # alerts, so that first ping arms it. It may come up to DELIVERY_WAIT_S after alert-relay-1
 # started; a verify run later reads once. A failure of any of those is counted for good, so it
 # fails at once.
@@ -731,12 +750,12 @@ check_delivery() {
   deadline=$(( ${since%.*} + DELIVERY_WAIT_S ))
   while :; do
     got="$(relay_delivery 2>/dev/null)" || got=""
-    if [[ "$got" =~ ^selftest_ok=[1-9][0-9]*\ selftest_failed=0\ success_sent=[1-9][0-9]*\ fail_sent=0\ fail_error=0\ gitea_failures=0$ ]]; then
-      info "alert-relay: delivery since it started: $got (its token can read GITEA_ALERT_REPO's issues, a read only; no delivery to the forge failed; the delivery check's endpoint took a success ping)"
+    if [[ "$got" =~ ^selftest_ok=[1-9][0-9]*\ selftest_failed=0\ success_sent=[1-9][0-9]*\ fail_sent=0\ fail_error=0\ vikunja_failures=0$ ]]; then
+      info "alert-relay: delivery since it started: $got (the self-test read the default project, $(default_project_id || echo "the first in ALERT_PROJECTS"), with its Vikunja token: a read only; no delivery to Vikunja failed; the delivery check's endpoint took a success ping)"
       return 0
     fi
-    if [[ "$got" =~ selftest_failed=[1-9]|fail_sent=[1-9]|fail_error=[1-9]|gitea_failures=[1-9] ]]; then
-      echo "[ERROR] alert-relay: delivery since it started reads '$got': a failed forge self-test or a ping to the delivery check's /fail (sent or errored), or a failed delivery to the forge (alert-relay-1's log says why: 'delivery self-test', 'delivery ping', 'gitea issue search failed', 'gitea alert delivery failed', 'could not deliver'). The counters last as long as the container: redeploy to clear them once the cause is fixed" >&2
+    if [[ "$got" =~ selftest_failed=[1-9]|fail_sent=[1-9]|fail_error=[1-9]|vikunja_failures=[1-9] ]]; then
+      echo "[ERROR] alert-relay: delivery since it started reads '$got': a failed Vikunja self-test or a ping to the delivery check's /fail (sent or errored), or a failed delivery to Vikunja (alert-relay-1's log says why: 'delivery self-test', 'delivery ping', 'vikunja alert delivery failed', 'vikunja task search failed', 'could not deliver'). The counters last as long as the container: redeploy to clear them once the cause is fixed" >&2
       return 1
     fi
     [ "$(date +%s)" -lt "$deadline" ] || break
@@ -780,7 +799,7 @@ check_vector_logs() {
 # What runs: the services, Prometheus and its Alertmanager, docker-state-exporter, the trends
 # retention, the blackbox self-probes, every operations Prometheus target up, Vector's container
 # logs in Loki (not on a replica: no Vector), the tokened services' secrets (check_tokened), the
-# Watchdog's ping (check_watchdog) and alert-relay's forge self-test and delivery ping
+# Watchdog's ping (check_watchdog) and alert-relay's Vikunja self-test and delivery ping
 # (check_delivery). The pieces that are off (compose.yml's header) have nothing to check.
 do_verify() {
   local rc=0 svc state n body off
@@ -841,6 +860,130 @@ do_status() {
   run_compose ps -a --format 'table {{.Name}}\t{{.Status}}'
 }
 
+# Alertmanager's fingerprint for alert-test run $1's alert (127.0.0.1:9093/api/v2/alerts, filtered
+# on its alertname and test_run label); alert-relay's opened and closed lines carry it. Empty when
+# Alertmanager does not list it.
+alert_test_fingerprint() {
+  curl -sf --max-time 10 -G \
+    --data-urlencode 'filter=alertname="AsylaAlertRelayTest"' \
+    --data-urlencode "filter=test_run=\"$1\"" \
+    http://127.0.0.1:9093/api/v2/alerts \
+    | python3 -c 'import json,sys; a=json.load(sys.stdin); print(a[0]["fingerprint"] if a else "")'
+}
+
+# relay_task <since> <opened|closed> <fingerprint> [task id]: "<task id> <project id>" from the
+# first `alert-relay <opened|closed> task <id> in project <pid> (<fingerprint>)` line alert-relay-1
+# logged (stdout or stderr) since <since> (theOrg alert-relay/relay.py _to_vikunja), for that task
+# id when one is given; nothing when there is none yet. The lost-resolve reconcile's
+# `alert-relay reconcile: closed task` line does not match. grep without -q: -q would SIGPIPE
+# docker logs.
+relay_task() {
+  docker logs --since "$1" alert-relay-1 2>&1 \
+    | grep -E "alert-relay $2 task ${4:-[0-9]+} in project [0-9]+ " | grep -F "($3)" \
+    | sed -n '1s/.*alert-relay [a-z]* task \([0-9][0-9]*\) in project \([0-9][0-9]*\) .*/\1 \2/p'
+}
+
+# wait_relay_task <seconds> <relay_task arguments ...>: waits up to <seconds> for relay_task to
+# print, and prints that.
+wait_relay_task() {
+  local deadline got
+  deadline=$(( $(date +%s) + $1 ))
+  shift
+  while :; do
+    got="$(relay_task "$@" 2>/dev/null)" || got=""
+    if [ -n "$got" ]; then
+      printf '%s\n' "$got"
+      return 0
+    fi
+    [ "$(date +%s)" -lt "$deadline" ] || return 1
+    sleep 10
+  done
+}
+
+# alert-test (theOrg piece 6, alert-relay on d06): proves that an alert from this host's
+# Alertmanager lands as a Vikunja task in the default project (default_project_id: 170) and that
+# its resolve closes the task again, read from alert-relay-1's own log lines, so no token leaves
+# the relay. Modelled on theOrg scripts/alert_routing_selftest.sh, without its Loki line and
+# logql annotation: log lines are off on d06 (compose.yml's header). One alert, severity info, so
+# it takes the base route to alert-relay and not the email piece's route (critical only): no
+# email. Its own test_run label keeps it off an earlier run's open task, and its own name label
+# makes it a group of its own (group_by [alertname, name]) instead of waiting out an earlier
+# group's group_interval. Alertmanager sends it after group_wait (30 s); it ends 3 minutes after
+# it starts and the resolve goes at the group's next group_interval (5 m), so a run takes about
+# 6 minutes (theOrg alertmanager.yml). Only the relay's own close counts: a close by its
+# lost-resolve reconcile means the resolve's delivery failed. Any `::error::` or `task search
+# failed` the relay logs during the run, an unrelated alert's included, fails it.
+do_alert_test() {
+  local pid run now started ends deadline fp="" opened="" task got_pid errors rc=0
+  if is_replica; then
+    echo "[ERROR] alert-test runs on $SERVING_HOST only (this is $(hostname -s))" >&2
+    return 1
+  fi
+  case "$(service_state alert-relay)" in
+    running\ *) ;;
+    *)
+      echo "[ERROR] alert-test: alert-relay-1 is not running ($(service_state alert-relay)); deploy it first (README.md, Deploy)" >&2
+      return 1
+      ;;
+  esac
+  pid="$(default_project_id)" || {
+    echo "[ERROR] alert-test: ALERT_PROJECTS ('$ALERT_PROJECTS') does not start with name=<project id>" >&2
+    return 1
+  }
+  run="$(date -u +%Y%m%dT%H%M%SZ)-$RANDOM"
+  now=$(date +%s)
+  started="$(date -u -d "@$now" +%Y-%m-%dT%H:%M:%SZ)"
+  ends="$(date -u -d "@$((now + 180))" +%Y-%m-%dT%H:%M:%SZ)"
+  # amtool takes a value holding '"' quoted, with its inner quotes escaped; every value is quoted.
+  if ! docker exec alertmanager-1 amtool alert add --alertmanager.url=http://127.0.0.1:9093 \
+      --start="$started" --end="$ends" \
+      alertname=AsylaAlertRelayTest severity=info "test_run=\"$run\"" "name=\"alert-test-$run\"" \
+      "--annotation=summary=\"Alert relay test $run from $SERVING_HOST: a task in Vikunja project $pid that closes on the resolve\""; then
+    echo "[ERROR] alert-test: amtool did not add the alert to alertmanager-1" >&2
+    return 1
+  fi
+  info "alert-test $run: added AsylaAlertRelayTest (severity info) to alertmanager-1, ending $ends"
+
+  deadline=$(( $(date +%s) + 30 ))
+  while :; do
+    fp="$(alert_test_fingerprint "$run" 2>/dev/null)" || fp=""
+    if [[ "$fp" =~ ^[0-9a-f]+$ ]]; then break; fi
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      echo "[ERROR] alert-test $run: Alertmanager does not list the alert (read '${fp:-nothing}' from 127.0.0.1:9093/api/v2/alerts)" >&2
+      return 1
+    fi
+    sleep 2
+  done
+  info "alert-test $run: fingerprint $fp; waiting up to 240s for alert-relay to open a task"
+
+  if opened="$(wait_relay_task 240 "$started" opened "$fp")"; then
+    task="${opened% *}"
+    got_pid="${opened#* }"
+    info "alert-test $run: alert-relay opened task $task in project $got_pid ($fp)"
+    if [ "$got_pid" != "$pid" ]; then
+      echo "[ERROR] alert-test $run: task $task is in project $got_pid, not the default project $pid (the first in ALERT_PROJECTS)" >&2
+      rc=1
+    elif wait_relay_task 600 "$started" closed "$fp" "$task" >/dev/null; then
+      info "alert-test $run: alert-relay closed task $task in project $pid on the resolve"
+    else
+      echo "[ERROR] alert-test $run: alert-relay logged no 'alert-relay closed task $task in project $pid ($fp)' within 600s of the open (its log says why: 'vikunja alert delivery failed', 'vikunja task search failed', 'could not deliver'; 'alert-relay reconcile: closed task' is a resolve that did not get through)" >&2
+      rc=1
+    fi
+  else
+    echo "[ERROR] alert-test $run: alert-relay logged no 'alert-relay opened task <id> in project <pid> ($fp)' within 240s (its log says why: 'vikunja alert delivery failed', 'vikunja task search failed', 'could not deliver')" >&2
+    rc=1
+  fi
+
+  errors="$(docker logs --since "$started" alert-relay-1 2>&1 | grep -E '::error::|task search failed' || true)"
+  if [ -n "$errors" ]; then
+    echo "[ERROR] alert-test $run: alert-relay-1 logged an error during the run:" >&2
+    printf '%s\n' "$errors" | sed -n '1,20p' >&2
+    rc=1
+  fi
+  if [ "$rc" -eq 0 ]; then info "alert-test OK: task $task in Vikunja project $pid opened and closed"; else echo "[ERROR] alert-test failed" >&2; fi
+  return "$rc"
+}
+
 # --- switches -------------------------------------------------------------------------------------
 
 run_cmd() {
@@ -884,6 +1027,9 @@ run_cmd() {
     verify)
       do_verify
       ;;
+    alert-test)
+      do_alert_test
+      ;;
     status)
       do_status
       ;;
@@ -912,7 +1058,10 @@ usage() {
   echo "             docker-state-exporter, trends retention, the blackbox self-probes, every" >&2
   echo "             operations Prometheus target up, Vector's container logs in Loki, the" >&2
   echo "             tokened services' secrets, the Watchdog's healthchecks.io ping, and" >&2
-  echo "             alert-relay's forge self-test and delivery check ping" >&2
+  echo "             alert-relay's Vikunja self-test and delivery check ping" >&2
+  echo "  alert-test - On $SERVING_HOST: one info alert (no email) through Alertmanager; passes when" >&2
+  echo "             alert-relay opens a Vikunja task for it in the default project (the first in" >&2
+  echo "             ALERT_PROJECTS: $ALERT_PROJECTS) and closes it on the resolve (about 6 minutes)" >&2
   echo "  status   - Containers" >&2
   echo "  logs     - Follow logs (optionally for one service)" >&2
 }

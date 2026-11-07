@@ -16,9 +16,10 @@ the images disagree. It prints that revision and passes it to `verify`.
   is off: credential-probe, the Ollama log and the other stacks' jobs and rules are theOrg's, not
   here. Project, container, volume and network names are theOrg's. No build sections.
 - `observability.sh`: `up`, `down`, `restart`, `verify`, `update`, `pull`, `images`, `logs`,
-  `status`, `digests`. It names the tag (`latest`), sets the settings, creates the data directories
-  and keeps the start order. A replica (a host with `[replica] of = "d06"`) runs only the services
-  with nothing to reach off the host: no alert-relay, emporia-collector, scrape-proxy or Vector.
+  `status`, `digests`, `alert-test`. It names the tag (`latest`), sets the settings, creates the
+  data directories and keeps the start order. A replica (a host with `[replica] of = "d06"`) runs
+  only the services with nothing to reach off the host: no alert-relay, emporia-collector,
+  scrape-proxy or Vector.
 - `deploy_role.py`: the deploy (below): pulls, mints the three wrapped tokens, starts the stack.
 - `docker-credential-observability-env`: the credential helper `observability.sh` points Docker at
   for the pulls (below).
@@ -57,13 +58,15 @@ environment variables that the workstation sends at use over SSH stdin (build_ho
   spent wrapping token. A wrapping token lapses 300 s after it is minted.
 
 Each component reads only the records its role policy grants (secrets-vault
-`policies/hubs.toml`, `[token_roles.observability-d06.components]`), all under
-`secret/hubs/asyla/`, named in `compose.yml`:
+`policies/hubs.toml`, `[token_roles.observability-d06.components]`), named in `compose.yml`, all
+under `secret/hubs/asyla/` but alert-relay's Vikunja token:
 
 - alert-relay (`ALERT_RELAY_<X>_KV`, `PATH#FIELD`): `smtp-relay-username#value`,
   `smtp-relay-password#value`, `observability-watchdog-ping-url#value`,
-  `observability-alert-relay-gitea-token#value` (the forge token of the relay's gitea account) and
-  `observability-delivery-ping-url#value`. A record it cannot read switches that feature off at
+  `observability-delivery-ping-url#value`, and the Vikunja token of user `svc-alert-relay-d06`,
+  `secret/v2/vikunja/alert-tokens/svc-alert-relay-d06#value`, outside `hubs/asyla/`
+  (secrets-vault#46, 5a75b93, grants the role read on it; `deploy_role.py` names it by its full
+  path). A record it cannot read switches that feature off at
   start, logged by category (never a value) (`alert-relay/relay.py`). The minting tool reads each
   record before it wraps the token (theOrg `scripts/vault_identity.py`), so `deploy_role.py` stops
   before the stack is touched while any of the five is not stored.
@@ -138,12 +141,14 @@ with the operator.
 
 ## On, off, and what turns each on
 
-On: alert issues (alert-relay files each alert as an issue in `GITEA_ALERT_REPO`, `asyla/alerts`
-on `GITEA_URL`, with its forge token; `ALERT_REPOS` is empty, so every alert goes there), critical
+On: alert tasks (alert-relay files each alert as a task in Vikunja project 170, asyla's child of
+theOrg's `Alerts` project, on `https://vikunja.asyla.org`, the relay's `VIKUNJA_URL` default, with
+its Vikunja token; `ALERT_PROJECTS="asyla=170"` in `observability.sh` has one entry, the default,
+so every alert goes there; theOrg `DEPLOY.md` at b5bd228, "alert-relay on d06 (asyla)"), critical
 alerts by email (Alertmanager's email piece posts them to alert-relay, which sends them to
 `ALERT_EMAIL_TO` through `smtp.gmail.com:587` with the SMTP login), the delivery ping (alert-relay
 pings its healthchecks.io check with `observability-delivery-ping-url` after each delivery and
-after its forge self-test, at start and then daily: success, or the check's `/fail` when the forge
+after its Vikunja self-test, at start and then daily: success, or the check's `/fail` when Vikunja
 refused; theOrg `alert-relay/relay.py` `record_delivery`, `record_selftest`), the Watchdog ping
 (Alertmanager's watchdog piece, `ALERT_WATCHDOG_PING="on"` in `observability.sh`: the always-firing
 Watchdog goes to alert-relay's `/watchdog` every 5 to 6 minutes, and the relay pings the
@@ -160,17 +165,22 @@ whatever can connect to the socket has the whole API. Vector's only inputs are `
 and `docker_logs` limited to compose project `observability` (theOrg `vector.toml` and
 `vector-docker-logs.toml` at f757911). A socket proxy in front of it would be theOrg's change.
 
-The delivery ping and the alert issues go on together. Holding the ping URL without a token that
-can read `asyla/alerts`, the relay's self-test fails at its first start and pings the check's `/fail`, which
-takes the check down and pages (theOrg `alert-relay/relay.py` `delivery_selftest`,
-`record_selftest`). So the gitea account, its token in `observability-alert-relay-gitea-token` and
-`asyla/alerts` come before the deploy that names them. To turn the ping off, drop
+The delivery ping and the Vikunja token go on together. Holding the ping URL without a token that
+can read project 170, the relay's self-test fails at its first start and pings the check's
+`/fail`, which takes the check down and pages (theOrg `alert-relay/relay.py` `delivery_selftest`,
+`record_selftest`). So user `svc-alert-relay-d06`, its token record and the vault grant
+(secrets-vault#46) come before the deploy that names them. To turn the ping off, drop
 `ALERT_RELAY_DELIVERY_PING_KV` from `compose.yml` and the record from `deploy_role.py`'s
 `IDENTITIES`, and want `delivery_ping_url=0` in `check_tokened` and no `check_delivery`.
 
-`GITEA_URL`, `GITEA_ALERT_REPO` and `ALERT_REPOS` go to alert-relay only. theOrg `DEPLOY.md` lists
-`alertmanager` as a reader too, but at fdad0b7 no Alertmanager file reads them (its two pieces
-require only `ALERT_EMAIL_TO` and `ALERT_WATCHDOG_PING`), so `compose.yml` gives Alertmanager none.
+`ALERT_PROJECTS` goes to alert-relay only, as in theOrg's `docker-compose.yml` at b5bd228.
+`GITEA_URL`, `GITEA_ALERT_REPO`, `ALERT_REPOS` and `ALERT_RELAY_FORGE_KV` are gone: the relay no
+longer reads them and has no Gitea fallback (theOrg `DEPLOY.md` at b5bd228).
+
+`asyla/alerts`, the gitea user `asyla-alert-relay`, its team `alert-filers` and the vault record
+`secret/hubs/asyla/observability-alert-relay-gitea-token` are no longer read; retiring them is a
+separate step, the operator's decision (theOrg: once a d06 test alert has landed as a task in
+project 170).
 
 Off here and nowhere else:
 
@@ -185,7 +195,7 @@ Off here and nowhere else:
   step-ca; then the service in `compose.yml` with d06's settings and its line in `deploy_role.py`.
   The volumes `loki-tls` and `loki-gateway-auth` on d06, from the first deploy, are unused now;
   deleting them is the operator's decision.
-- alert-relay's log lines in issues: `LOKI_QUERY_URL` is empty and `ALERT_RELAY_LOKI_KV` is not
+- alert-relay's log lines in alert tasks: `LOKI_QUERY_URL` is empty and `ALERT_RELAY_LOKI_KV` is not
   set. Loki in the stack needs no account, but the relay fetches lines only when `LOKI_QUERY_URL`
   and its query password are both set (theOrg `alert-relay/relay.py` `log_section` and its start
   line, "log lines: off"), so `http://loki:3100` alone changes nothing. On: the password record
@@ -227,10 +237,10 @@ at least `SCRAPE_GRACE_S` (75 s, one scrape and some) for each:
   every category after an OpenBao read or a renewal that worked (the renewal since #325); the
   channel names appear only once Emporia took the login and the collector read the channels.
 - alert-relay: its own metrics (`9111`) read `alert_relay_secret_present` 1 for
-  `delivery_ping_url` and `forge_token`, for `smtp_username` and `smtp_password` (with
+  `delivery_ping_url` and `vikunja_token`, for `smtp_username` and `smtp_password` (with
   `ALERT_EMAIL_TO`) and for `watchdog_ping_url` (with `ALERT_WATCHDOG_PING`) (theOrg
   `alert-relay/relay.py`). That it holds them, not that Gmail takes the login; that the token can
-  read `asyla/alerts` is `check_delivery`'s.
+  read project 170 is `check_delivery`'s.
 
 With `ALERT_WATCHDOG_PING` on and alert-relay running, verify then checks the Watchdog's ping
 (`check_watchdog`): the running Alertmanager loaded the watchdog piece (its `/api/v2/status`
@@ -243,25 +253,35 @@ in `alertmanager-data` across a restart and sends again only once `repeat_interv
 at a `group_interval` (1m) tick (theOrg `alertmanager-pieces/watchdog/route.yml`). A later verify
 reads once. The relay's `error` count alone is a failure.
 
-With alert-relay running, verify then checks its forge self-test and the delivery ping
+With alert-relay running, verify then checks its Vikunja self-test and the delivery ping
 (`check_delivery`), from the relay's own metrics (`9111`; a series the relay has not counted yet
 reads 0): `alert_relay_delivery_selftests_total{result="ok"}` 1 or more and `{result="failed"}` 0;
 `alert_relay_delivery_pings_total{kind="success",result="sent"}` 1 or more, and
 `{kind="fail",result="sent"}` and `{kind="fail",result="error"}` (a `/fail` ping the endpoint did
-not take) 0; and `alert_relay_delivery_failures_total{sink="gitea"}` (an alert the relay did not
-get to the forge) 0. Holding the ping URL, the relay runs the self-test as it starts: its token
-searches `GITEA_ALERT_REPO`'s open issues, a GET, which passes on HTTP 200 (theOrg
+not take) 0; and `alert_relay_delivery_failures_total{sink="vikunja"}` (an alert the relay did not
+get into Vikunja) 0. Holding the ping URL, the relay runs the self-test as it starts: its token
+reads project 170 (the `ALERT_PROJECTS` default), a GET, which passes on HTTP 200 (theOrg
 `alert-relay/relay.py` `delivery_selftest`, `selftest_loop`), and a pass pings the check's URL, a
-ping its endpoint took (`_send_ping`). So it proves that the token can read `asyla/alerts` and the
-path to the forge, not that it can write there: verify creates no issue. Write is proven once, at
-go-live, by a synthetic alert that files an issue in `asyla/alerts`. That first ping also arms the
-healthchecks.io check. It waits until `DELIVERY_WAIT_S` (180 s) after `alert-relay-1`'s
-`.State.StartedAt` (the search may take 20 s and once more after a 401; an errored ping is tried
-again after 5, 10, 20 s ...). A later verify reads once. A failed self-test, a `/fail` ping (sent
-or errored) or a failed forge delivery since the start fails at once: a counter never falls. The
-counters cover the relay's whole life, so once one failure is counted, every later standalone
-verify fails until alert-relay is recreated. A deploy always recreates it, since it passes a new
-wrapped token; so once the cause is fixed, redeploy (`deploy_role.py`) to clear it.
+ping its endpoint took (`_send_ping`). So it proves that the token can read project 170 and the
+path to Vikunja, not that it can write there: verify creates no task. `alert-test` (below) proves
+the write. That first ping also arms the healthchecks.io check. It waits until `DELIVERY_WAIT_S`
+(180 s) after `alert-relay-1`'s `.State.StartedAt` (the read may take 20 s, once more after a 401
+and up to 3 more on a locked database; an errored ping is tried again after 5, 10, 20 s ...). A
+later verify reads once. A failed self-test, a `/fail` ping (sent or errored) or a failed Vikunja
+delivery since the start fails at once: a counter never falls. The counters cover the relay's
+whole life, so once one failure is counted, every later standalone verify fails until alert-relay
+is recreated. A deploy always recreates it, since it passes a new wrapped token; so once the cause
+is fixed, redeploy (`deploy_role.py`) to clear it.
+
+`observability.sh alert-test` proves the write, on d06 by hand: it adds one `info` alert with
+`amtool` in `alertmanager-1`, then waits for alert-relay's log line `alert-relay opened task <id>
+in project 170 (<fp>)` and then its `closed` line for that task (theOrg `alert-relay/relay.py`).
+The email route matches `severity="critical"` only (theOrg `alertmanager-pieces/email/route.yml`),
+so an `info` alert sends no email. From the workstation, on the LAN:
+
+```sh
+ssh -o BatchMode=yes -o ConnectTimeout=10 -i ~/.ssh/docker_rsa docker@d06 '~/scripts/d06/apps/observability/observability.sh alert-test'
+```
 
 The self-probes and the trends readings count only samples taken after the containers involved
 started: `timestamp(...) > S` in the query, S the later `.State.StartedAt` of the service and the

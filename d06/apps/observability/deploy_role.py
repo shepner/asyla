@@ -131,17 +131,20 @@ INDEX_ACCEPT = ", ".join(("application/vnd.oci.image.index.v1+json",
                           "application/vnd.oci.image.manifest.v1+json"))
 VERIFY_TIMEOUT = 1800   # s: verify waits up to VERIFY_WAIT_S (300 s) per wait, a few in a row
 
-# (component, the variable observability.sh up receives its wrapping token in, KV records under KV).
+# (component, the variable observability.sh up receives its wrapping token in, KV records): a
+# record is a name under KV, or a full mount-first path when it starts with "secret/" (kv_path).
 # Plain paths: vault_identity.py kv= takes no #field. One line per component.
 IDENTITIES = [
     ("scrape-proxy", "SCRAPE_PROXY_OPENBAO_WRAPPED_TOKEN", ["home-assistant-prometheus-token"]),
     ("emporia-collector", "EMPORIA_OPENBAO_WRAPPED_TOKEN", ["emporia-username", "emporia-password"]),
-    # The SMTP login, the Watchdog's ping URL (on: observability.sh ALERT_WATCHDOG_PING), the forge
-    # token for alert issues in asyla/alerts, and the delivery check's ping URL (compose.yml). The
-    # minting tool reads each record, so a record not stored stops the deploy before the stack.
+    # The SMTP login, the Watchdog's ping URL (on: observability.sh ALERT_WATCHDOG_PING), the
+    # Vikunja token for alert tasks in project 170 (user svc-alert-relay-d06's, outside KV:
+    # secrets-vault#46, 5a75b93, grants token role observability-d06 read on it), and the delivery
+    # check's ping URL (compose.yml). The minting tool reads each record, so a record not stored
+    # stops the deploy before the stack.
     ("alert-relay", "ALERT_RELAY_OPENBAO_WRAPPED_TOKEN",
      ["smtp-relay-username", "smtp-relay-password", "observability-watchdog-ping-url",
-      "observability-alert-relay-gitea-token", "observability-delivery-ping-url"]),
+      "secret/v2/vikunja/alert-tokens/svc-alert-relay-d06", "observability-delivery-ping-url"]),
 ]
 
 
@@ -167,6 +170,11 @@ def stack_registry(script: Path) -> str:
     return m.group(1)
 
 
+def kv_path(record: str) -> str:
+    """A record's mount-first KV path: as given when it starts with "secret/", else under KV."""
+    return record if record.startswith("secret/") else f"{KV}/{record}"
+
+
 def identity_args(identities: list) -> list[str]:
     """One --identity per component: component=, env=, and a plain-path kv= per record."""
     out = []
@@ -174,7 +182,7 @@ def identity_args(identities: list) -> list[str]:
         if not records:
             raise Stop(f"{component}: no KV record; take its line out of IDENTITIES to turn it off")
         out += ["--identity", ",".join([f"component={component}", f"env={env}"]
-                                       + [f"kv={KV}/{r}" for r in records])]
+                                       + [f"kv={kv_path(r)}" for r in records])]
     return out
 
 
@@ -627,7 +635,7 @@ def show_plan(spec: dict, tag: str, registry: str, identities: list, given_token
     print(f"4. {who} as BAO_TOKEN in the minting tool's environment only; {', '.join(CALLER_TOKENS)} removed")
     print(f"5. vault_identity.py --token-role {VAULT_ROLE}:")
     for component, env, records in identities:
-        print(f"     {component:18} -> {env}  kv: {', '.join(f'{KV}/{r}' for r in records)}")
+        print(f"     {component:18} -> {env}  kv: {', '.join(kv_path(r) for r in records)}")
     start = start_argv(spec)
     print(f"   then: {' '.join(['python3', str(Path(start[1]).relative_to(REPO))] + start[2:])}")
     print(f"   (observability.sh up gets {', '.join(e for _, e, _ in identities)} over SSH stdin)")

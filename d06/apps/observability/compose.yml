@@ -25,11 +25,12 @@
 #   (the role's policies, secrets-vault policies/hubs.toml). A tokened service starts only with its
 #   token (observability.sh); after a reboot or a Docker restart it loops until the next deploy.
 #
-# On: alert issues (alert-relay files each alert in GITEA_ALERT_REPO, asyla/alerts, with the forge
-# token it reads), the email receiver (Alertmanager's email piece, sent by alert-relay with the
+# On: alert tasks (alert-relay files each alert as a task in Vikunja project 170, asyla's child of
+# theOrg's Alerts project, ALERT_PROJECTS in observability.sh, with the Vikunja token it reads),
+# the email receiver (Alertmanager's email piece, sent by alert-relay with the
 # SMTP login), the Watchdog ping (Alertmanager's watchdog piece, ALERT_WATCHDOG_PING "on" in
 # observability.sh; alert-relay pings healthchecks.io with the URL it reads), the delivery ping
-# (alert-relay pings its own healthchecks.io check after each delivery and its forge self-test),
+# (alert-relay pings its own healthchecks.io check after each delivery and its Vikunja self-test),
 # the trends Home Assistant job (through scrape-proxy), emporia-collector, and Vector's
 # container-log pipeline (VECTOR_DOCKER_LOGS: this stack's own logs to Loki, plain HTTP inside
 # observability-net).
@@ -81,13 +82,18 @@ services:
     networks:
       - observability-net
 
-  # Files every alert as an issue in GITEA_ALERT_REPO (asyla/alerts) on the forge, off this host,
-  # and sends the critical ones by email. It reads every secret from OpenBao in-process
+  # Files every alert as a task in Vikunja (VIKUNJA_URL, the relay's default
+  # https://vikunja.asyla.org), off this host, in the ALERT_PROJECTS project (asyla=170: every
+  # alert, since asyla is the only entry and so the default), and sends the critical ones by email.
+  # Since theOrg b5bd228 the relay has no Gitea sink and no Gitea fallback (theOrg DEPLOY.md,
+  # "alert-relay on d06 (asyla)"). It reads every secret from OpenBao in-process
   # (alert-relay/relay.py): ALERT_RELAY_<SECRET>_KV is PATH#FIELD. A record it cannot read switches
-  # that feature off, logged at start (the category, never a value). The forge token is the
-  # relay's gitea account's; the delivery ping URL is the delivery check's on healthchecks.io.
-  # Holding that URL, the relay runs its forge self-test at start and then daily (the token
-  # searches asyla/alerts' issues) and pings the check after each self-test and each delivery:
+  # that feature off, logged at start (the category, never a value). The Vikunja token is user
+  # svc-alert-relay-d06's (theOrg ticketing provisions it; the record's last path segment names the
+  # user, so the reconcile's own-task user, VIKUNJA_ALERT_USER, needs no setting); the delivery
+  # ping URL is the delivery check's on healthchecks.io.
+  # Holding that URL, the relay runs its Vikunja self-test at start and then daily (the token
+  # reads project 170) and pings the check after each self-test and each delivery:
   # success, or the check's /fail, which takes it down and pages (theOrg alert-relay/relay.py
   # delivery_selftest, record_selftest). So the two go on together: the URL without a working
   # token pages at the first start. verify checks both (check_tokened, check_delivery). The Loki
@@ -104,14 +110,12 @@ services:
     environment:
       OPENBAO_ADDR: ${OPENBAO_ADDR:?}
       OPENBAO_WRAPPED_TOKEN: ${ALERT_RELAY_OPENBAO_WRAPPED_TOKEN:-}
-      ALERT_RELAY_FORGE_KV: "secret/hubs/asyla/observability-alert-relay-gitea-token#value"
+      ALERT_RELAY_VIKUNJA_KV: "secret/v2/vikunja/alert-tokens/svc-alert-relay-d06#value"
       ALERT_RELAY_SMTP_USERNAME_KV: "secret/hubs/asyla/smtp-relay-username#value"
       ALERT_RELAY_SMTP_PASSWORD_KV: "secret/hubs/asyla/smtp-relay-password#value"
       ALERT_RELAY_WATCHDOG_PING_KV: "secret/hubs/asyla/observability-watchdog-ping-url#value"
       ALERT_RELAY_DELIVERY_PING_KV: "secret/hubs/asyla/observability-delivery-ping-url#value"
-      GITEA_URL: ${GITEA_URL:?}
-      GITEA_ALERT_REPO: ${GITEA_ALERT_REPO:?}
-      ALERT_REPOS: ${ALERT_REPOS:-}
+      ALERT_PROJECTS: ${ALERT_PROJECTS:?}
       LOKI_QUERY_URL: ""
       CHAT_API_URL: ""
       # Critical alerts by email: the recipient; the sender defaults to the SMTP username.
