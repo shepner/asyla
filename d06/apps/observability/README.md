@@ -209,10 +209,12 @@ can read project 170, the relay's self-test fails at its first start and pings t
 `GITEA_URL`, `GITEA_ALERT_REPO`, `ALERT_REPOS` and `ALERT_RELAY_FORGE_KV` are gone: the relay no
 longer reads them and has no Gitea fallback (theOrg `DEPLOY.md` at b5bd228).
 
-`asyla/alerts`, the gitea user `asyla-alert-relay`, its team `alert-filers` and the vault record
-`secret/hubs/asyla/observability-alert-relay-gitea-token` are no longer read; retiring them is a
-separate step, the operator's decision (theOrg: once a d06 test alert has landed as a task in
-project 170).
+The Gitea alert side was retired on 2026-11-07, on the operator's go-ahead (asyla hub backlog
+`2026-11-07-d06-retire-the-gitea-alert-side`). secrets-vault#48 dropped the vault read grants on
+`secret/hubs/asyla/observability-alert-relay-gitea-token`. `asyla/alerts` is archived and kept
+with its 5 closed issues, which other backlog items cite. The gitea user `asyla-alert-relay` and
+its team `asyla/alert-filers` are deleted, and the user's token with them. The vault record is
+left holding that dead token: only root can delete it.
 
 Off here and nowhere else:
 
