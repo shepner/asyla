@@ -69,8 +69,35 @@ Three package cleanup rules, turned on 2026-11-04 with the operator's approval, 
   still references it. Everything else older than 7 days is deleted with its files
   ([cleanup.go](https://github.com/go-gitea/gitea/blob/v1.27.3/services/packages/cleanup/cleanup.go),
   [container/cleanup.go](https://github.com/go-gitea/gitea/blob/v1.27.3/services/packages/container/cleanup.go)).
-- **When:** Gitea's `cleanup_packages` job, at `@midnight` (America/Chicago) and at every start, so
-  also when the nightly backup starts Gitea again. The same job frees blobs nothing references.
+- **When:** Gitea's `cleanup_packages` job, once a night at 01:30 America/Chicago, and never at
+  start (operator, 2026-11-06). app.ini `[cron.cleanup_packages]` sets `RUN_AT_START = false` and
+  `SCHEDULE = 30 1 * * *`. Gitea's defaults are `@midnight` and at every start
+  ([tasks_basic.go](https://github.com/go-gitea/gitea/blob/146cc3eec57174711eac0e0a0c7b38670c6e3922/services/cron/tasks_basic.go#L145-L157);
+  Gitea reads each job's keys from its `cron.<name>` section,
+  [setting/cron.go](https://github.com/go-gitea/gitea/blob/146cc3eec57174711eac0e0a0c7b38670c6e3922/modules/setting/cron.go#L13-L14),
+  and runs a job at start only when `RUN_AT_START` is on,
+  [cron.go](https://github.com/go-gitea/gitea/blob/146cc3eec57174711eac0e0a0c7b38670c6e3922/services/cron/cron.go#L41-L45)).
+  A schedule of fewer than 6 fields is a standard 5-field crontab, minute first
+  ([tasks.go](https://github.com/go-gitea/gitea/blob/146cc3eec57174711eac0e0a0c7b38670c6e3922/services/cron/tasks.go#L227-L244)),
+  in Gitea's local time
+  ([cron.go](https://github.com/go-gitea/gitea/blob/146cc3eec57174711eac0e0a0c7b38670c6e3922/services/cron/cron.go#L24)):
+  the container's `/etc/localtime` is d04's, America/Chicago. Links are to v1.27.3; the keys are
+  also in the [config cheat sheet](https://gitea.com/gitea/docs/src/commit/0ddb9a20710a0e3f040f87f35054b76da897db1b/versioned_docs/version-1.27/administration/config-cheat-sheet.md#L1102-L1108).
+  The same job frees blobs nothing references.
+- **Why that time:** at Gitea's defaults the job ran two to four times a night (midnight, and
+  at each start after the 03:35 backup), and each run held the sqlite database for 6 to 15
+  minutes. Meanwhile issue creation, runner job fetches and scheduled Actions failed with
+  `database is locked`. Details: asyla hub backlog
+  `2026-11-06-hosts-gitea-nightly-package-cleanup-locks-the-forge`.
+- **Set by `gitea.sh cron-config`:** it sets the two keys and changes no other line of app.ini,
+  after a backup `app.ini.bak-<UTC time>Z` beside it. It prints only those keys, never the rest of
+  app.ini (Gitea's secrets), and does nothing when they are already set. Gitea reads app.ini at
+  start, so the change applies at Gitea's next start, the nightly backup's stop and start. It needs
+  no extra restart, and `cron-config` never restarts Gitea. `gitea.sh verify` prints the two keys,
+  warns when they differ or `ENABLED` is off, and notes when app.ini changed after Gitea started.
+- **Revisit before mid-March:** theOrg's deploy-all runs at 06:00 UTC: 00:00 CST, but 01:00 CDT,
+  until about 02:20. From mid-March (CDT), a 01:30 run would overlap it, so choose the time again
+  before then.
 - **Why:** the registry grew about 2 GB a day from per-commit images (theOrg pushes every image
   tagged with the commit on each push to main), filling d04's disk and slowing the nightly backup.
   Hosts follow `latest` and are redeployed weekly, so none runs a version the rules remove.
