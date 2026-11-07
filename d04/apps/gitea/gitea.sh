@@ -1,11 +1,13 @@
 #!/bin/bash
-# Gitea on d04 (copied from d03/apps/gitea at the move; verify differs). Usage: gitea.sh [switch ...] e.g. backup|restore|update|refresh|up|down|restart|logs
+# Gitea on d04 (copied from d03/apps/gitea at the move; verify differs). Usage: gitea.sh [switch ...] e.g. backup|restore|update|refresh|up|down|restart|verify|cron-config|logs
 # Switches can be combined (e.g. down backup up). Run from anywhere; loads ~/scripts/docker/common.env.
 # Data under /mnt/docker/Gitea; backup mirrors it to /mnt/nas/data1/docker/Gitea/mirror (Gitea briefly stopped).
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# ${BASH_SOURCE[0]:-$0}: also runs when piped (`ssh ... 'bash -s -- cron-config' < gitea.sh`), where
+# BASH_SOURCE is empty. SCRIPT_DIR is then the cwd, so compose switches need the installed copy.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 COMPOSE_FILE="$SCRIPT_DIR/compose.yml"
 SCREEN_APP="gitea"
 
@@ -21,6 +23,9 @@ DOCKER_D1="${DOCKER_D1:-/mnt/nas/data1/docker}"
 APP_NAME="Gitea"
 APP_ROOT="$DOCKER_DL/Gitea"
 BACKUP_DIR="$DOCKER_D1/Gitea/mirror"
+# Gitea's config on the host (/data/gitea/conf/app.ini in the container). A variable so
+# scripts/tests/test_gitea_cron_config.sh and test_gitea_verify.sh can point at a fixture.
+GITEA_APP_INI="${GITEA_APP_INI:-$APP_ROOT/data/gitea/conf/app.ini}"
 
 export DOCKER_DL
 export DOCKER_D1
@@ -189,6 +194,7 @@ do_verify() {
     rc=1
   fi
   check_cleanup_rules
+  check_cron_config
   return "$rc"
 }
 
@@ -225,6 +231,188 @@ check_cleanup_rules() {
   else
     echo "[INFO] Cleanup rules for ${GITEA_CLEANUP_OWNERS// /, } as in the README"
   fi
+}
+
+# Registry retention, when (README): Gitea's cleanup_packages job runs once a night at 01:30 local
+# time (the container's /etc/localtime, America/Chicago) and never at start (operator, 2026-11-06).
+# Gitea's defaults are @midnight and at every start, and each run held the sqlite database for 6-15
+# min, 2-4 times a night (asyla hub backlog 2026-11-06-hosts-gitea-nightly-package-cleanup-locks-
+# the-forge). Gitea 1.27.3 reads [cron.cleanup_packages] RUN_AT_START and SCHEDULE; a 5-field
+# SCHEDULE is a standard crontab, minute first. Gitea reads app.ini only at start, so the change
+# applies at its next start (the nightly backup's stop and start); cron-config never restarts it.
+# ENABLED is not managed: its default is true, and verify warns if the section turns it off.
+GITEA_CRON_SECTION="cron.cleanup_packages"
+GITEA_CRON_SETTINGS=("RUN_AT_START=false" "SCHEDULE=30 1 * * *")
+
+# cron_ini check|apply [container StartedAt]: check prints the managed keys' values and warns on
+# drift (always exit 0); apply sets them, changing no other line: a timestamped backup beside
+# app.ini first (same owner, mode and times), then a temp file in the same directory renamed over
+# it, with app.ini's owner, group and mode. Prints only the managed keys' values, never any other
+# app.ini content (it holds Gitea's secrets).
+cron_ini() {
+  python3 - "$1" "$GITEA_APP_INI" "$GITEA_CRON_SECTION" "${2:-}" "${GITEA_CRON_SETTINGS[@]}" <<'PY'
+import datetime, os, re, sys, tempfile, time
+
+mode, path, section, started = sys.argv[1:5]
+want = dict(a.split("=", 1) for a in sys.argv[5:])
+# Gitea's defaults for this job (services/cron/tasks_basic.go, registerCleanupPackages).
+DEFAULTS = {"ENABLED": "true", "RUN_AT_START": "true", "SCHEDULE": "@midnight"}
+TRUE = {"1", "t", "true", "y", "yes", "on"}   # go-ini's Bool() true words, lower-cased
+HEADER = re.compile(r"^\s*\[\s*([^\]]*?)\s*\]\s*$")
+KEYLINE = re.compile(r"^\s*([^=:\s;#\[][^=:]*?)\s*[=:]\s*(.*?)\s*$")
+where = f"app.ini [{section}]"
+
+def show(k, v):
+    return repr(v) if v is not None else f"unset (Gitea's default {DEFAULTS.get(k, '?')})"
+
+def fail(msg):
+    level = "WARN" if mode == "check" else "ERROR"
+    print(f"[{level}] {msg}", file=sys.stderr)
+    sys.exit(0 if mode == "check" else 1)
+
+try:
+    with open(path, "rb") as f:
+        st = os.fstat(f.fileno())
+        raw = f.read()
+except OSError as e:
+    fail(f"Could not read {path}: {e.strerror}; nothing changed" if mode == "apply"
+         else f"Could not read {path}: {e.strerror}")
+
+# Lines end at \n only, as go-ini reads them (str.splitlines would also split at \f, \x1c, U+2028).
+lines = re.findall(r"[^\n]*\n|[^\n]+\Z", raw.decode("utf-8", "surrogateescape"))
+nl = "\r\n" if lines and lines[0].endswith("\r\n") else "\n"
+
+# The section's key lines, wherever it appears; go-ini merges repeats and the last value wins.
+found, keylines, first, last_in_first = {}, [], None, None
+cur, in_first = None, False
+for i, line in enumerate(lines):
+    s = line.rstrip("\r\n")
+    m = HEADER.match(s)
+    if m:
+        cur = m.group(1)
+        in_first = cur == section and first is None
+        if in_first:
+            first = last_in_first = i
+        continue
+    if cur != section:
+        continue
+    m = KEYLINE.match(s)
+    if not m:
+        continue
+    found[m.group(1)] = m.group(2)
+    keylines.append((i, m.group(1), m.group(2)))
+    if in_first:
+        last_in_first = i
+
+drift = [k for k, v in want.items() if found.get(k) != v]
+enabled = found.get("ENABLED")
+enabled_off = enabled is not None and enabled.lower() not in TRUE
+
+if mode == "check":
+    if drift:
+        print(f"[WARN] {where} differs from the README (Registry retention): "
+              + "; ".join(f"{k} is {show(k, found.get(k))}, want {want[k]!r}" for k in drift)
+              + "; gitea.sh cron-config sets it", file=sys.stderr)
+    else:
+        print(f"[INFO] {where}: " + ", ".join(f"{k} = {v}" for k, v in want.items())
+              + " as in the README")
+        if started:
+            try:
+                t = datetime.datetime.strptime(started[:19], "%Y-%m-%dT%H:%M:%S")
+                t = t.replace(tzinfo=datetime.timezone.utc).timestamp()
+            except ValueError:
+                t = None
+            if t is not None and st.st_mtime > t:
+                print(f"[INFO] app.ini changed after Gitea started ({started[:19]}Z): "
+                      "the running Gitea has the old schedule until its next start")
+    if enabled_off:
+        print(f"[WARN] {where} ENABLED is {enabled!r}: the cleanup job does not run, so the "
+              "registry is not pruned", file=sys.stderr)
+    sys.exit(0)
+
+# apply
+new = list(lines)
+for i, k, v in keylines:
+    if k in want and v != want[k]:
+        eol = lines[i][len(lines[i].rstrip("\r\n")):]
+        new[i] = f"{k} = {want[k]}{eol or nl}"
+missing = [k for k in want if k not in found]
+if first is None:
+    if new and not new[-1].endswith("\n"):
+        new[-1] += nl
+    if new and new[-1].strip():
+        new.append(nl)
+    new.append(f"[{section}]{nl}")
+    new += [f"{k} = {want[k]}{nl}" for k in want]
+elif missing:
+    if not new[last_in_first].endswith("\n"):
+        new[last_in_first] += nl
+    new[last_in_first + 1:last_in_first + 1] = [f"{k} = {want[k]}{nl}" for k in missing]
+
+if new == lines:
+    print(f"[INFO] {where} already set: " + ", ".join(f"{k} = {v}" for k, v in want.items())
+          + "; nothing changed, Gitea not restarted")
+else:
+    data = "".join(new).encode("utf-8", "surrogateescape")
+    d = os.path.dirname(os.path.abspath(path))
+    perm = st.st_mode & 0o7777
+    tmp = bak = None
+    try:
+        # The temp file first: if this user cannot give it app.ini's owner, stop before any write.
+        fd, tmp = tempfile.mkstemp(prefix=".app.ini.", suffix=".tmp", dir=d)
+        with os.fdopen(fd, "wb") as f:
+            os.fchown(f.fileno(), st.st_uid, st.st_gid)
+            os.fchmod(f.fileno(), perm)
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        bak = f"{path}.bak-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
+        fd = os.open(bak, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            os.fchown(f.fileno(), st.st_uid, st.st_gid)
+            os.fchmod(f.fileno(), perm)
+            f.write(raw)
+            f.flush()
+            os.fsync(f.fileno())
+        os.utime(bak, ns=(st.st_atime_ns, st.st_mtime_ns))
+        now = os.stat(path)
+        if (now.st_ino, now.st_size, now.st_mtime_ns) != (st.st_ino, st.st_size, st.st_mtime_ns):
+            raise RuntimeError("app.ini changed while this ran")
+        os.replace(tmp, path)
+        tmp = None
+    except (OSError, RuntimeError) as e:
+        for p in (tmp, bak):
+            if p:
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+        why = f"{e.strerror} ({e.filename})" if isinstance(e, OSError) and e.strerror else str(e)
+        fail(f"Could not write {path}: {why}; app.ini not changed")
+    try:   # make the rename durable; app.ini is already replaced either way
+        dfd = os.open(d, os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except OSError:
+        pass
+    for k in want:
+        if found.get(k) != want[k]:
+            print(f"[INFO] {where} {k}: {show(k, found.get(k))} -> {want[k]!r}")
+    print(f"[INFO] Backup of the previous app.ini: {bak}")
+    print("[INFO] Gitea reads app.ini at start: this applies at Gitea's next start (gitea.sh "
+          "backup stops and starts it nightly). Gitea was not restarted.")
+if enabled_off:
+    print(f"[WARN] {where} ENABLED is {enabled!r}: the cleanup job does not run; not changed "
+          "(set it to true by hand if that was not intended)", file=sys.stderr)
+PY
+}
+
+check_cron_config() {
+  local started
+  started="$(docker inspect -f '{{.State.StartedAt}}' gitea 2>/dev/null)" || started=""
+  cron_ini check "$started" || echo "[WARN] Could not check $GITEA_APP_INI [$GITEA_CRON_SECTION]" >&2
 }
 
 run_cmd() {
@@ -266,6 +454,10 @@ run_cmd() {
     verify)
       do_verify
       ;;
+    # Exits on failure: the dispatcher would print the usage for a return 1.
+    cron-config)
+      cron_ini apply || exit 1
+      ;;
     logs)
       run_compose logs -f
       ;;
@@ -288,7 +480,9 @@ if [ $# -eq 0 ]; then
   echo "  down     - Stop and remove containers" >&2
   echo "  restart  - Down then up" >&2
   echo "  verify   - curl local :3000 /api/healthz (fatal) and https://gitea.asyla.org;" >&2
-  echo "             print the package cleanup rules (read-only; warns on drift)" >&2
+  echo "             print the package cleanup rules and app.ini's [cron.cleanup_packages] (read-only; warns on drift)" >&2
+  echo "  cron-config - set app.ini [cron.cleanup_packages] RUN_AT_START = false, SCHEDULE = 30 1 * * * (01:30 local);" >&2
+  echo "             backup beside it first; applies at Gitea's next start, never restarts Gitea" >&2
   echo "  logs     - Follow logs (optionally for one service)" >&2
   exit 1
 fi
@@ -300,7 +494,7 @@ fi
 
 for cmd in "$@"; do
   if ! run_cmd "$cmd"; then
-    echo "Usage: $0 backup|restore|update|refresh|up|down|restart|verify|logs [ ... ]" >&2
+    echo "Usage: $0 backup|restore|update|refresh|up|down|restart|verify|cron-config|logs [ ... ]" >&2
     exit 1
   fi
 done
