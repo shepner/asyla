@@ -1,8 +1,14 @@
 #!/bin/bash
 # d06/apps/ticketing/ticketing.sh against stubs (docker, hostname, getent): the start order, the tag (latest) and
 # up pulling only missing images, the replica mode, the restore refusal build_host.py reads as a skip, the seeded restore, and the backup host guard.
+# verify's wait for vikunja-mcp after `up` recreated it (2026-11-08 14:35Z: 000 for both, Uvicorn up
+# 2 s later): sleep and date are stubs on a fake clock, so the 60 s cases take no real time.
 # Nothing here reaches a registry, the vault or a host. Run: bash scripts/tests/test_ticketing_sh.sh
+# TICKETING_SH=PATH tests another copy of ticketing.sh, for example the one before the wait, to see
+# those cases fail.
 set -uo pipefail
+# A value exported in the caller's shell must not reach a case that does not set it.
+unset TICKETING_MCP_WAIT_S STUB_MCP STUB_MCP_DOWN STUB_MCP_NO_CONTAINER
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 T="$(mktemp -d)"
@@ -21,7 +27,8 @@ skip() { echo "skip $1 (needs bash >= 4.1 and flock; run on a host)"; }
 mkdir -p "$T/home/scripts/docker" "$T/bin" "$T/app" "$T/dl" "$T/d1"
 cp "$REPO/docker/backup_lib.sh" "$T/home/scripts/docker/"
 printf 'DOCKER_DL=%s\nDOCKER_D1=%s\n' "$T/dl" "$T/d1" > "$T/home/scripts/docker/common.env"
-cp "$REPO"/d06/apps/ticketing/{ticketing.sh,compose.yml,compose.vault.yml,docker-credential-ticketing-env} "$T/app/"
+cp "$REPO"/d06/apps/ticketing/{compose.yml,compose.vault.yml,docker-credential-ticketing-env} "$T/app/"
+cp "${TICKETING_SH:-$REPO/d06/apps/ticketing/ticketing.sh}" "$T/app/ticketing.sh"
 # The names the workstation hands ticketing.sh at deploy. A case sets them (to a plain stand-in
 # word) by listing names in STUB_SET; no value is written here.
 DEX_NAMES="TICKETING_DEPLOY_DEX_CLIENT_SECRET TICKETING_MCP_DEX_CLIENT_SECRET"
@@ -29,7 +36,9 @@ PULL_NAME="TICKETING_REGISTRY_PULL_TOKEN"
 
 # docker: logs every call; `image inspect` says present unless STUB_MISSING; `compose ... config
 # --images` names one image; a pull logs its DOCKER_CONFIG and asks the credential helper there, as
-# Docker would; `exec -T vikunja-mcp` prints STUB_MCP ("200 401" by default). Like
+# Docker would; `exec -T vikunja-mcp` prints STUB_MCP ("200 401" by default), after its first
+# STUB_MCP_DOWN tries ("never": every try) have printed "000 000" (Uvicorn not listening yet) or,
+# with STUB_MCP_NO_CONTAINER, failed as an exec into a container that is not running does. Like
 # compose, any compose call fails when a `${...:?}` the files use is empty: compose interpolates
 # the whole file, unused services included. Each compose call also logs the tag it would use (TAG ...).
 cat > "$T/bin/docker" <<'EOF'
@@ -49,8 +58,27 @@ case "$*" in
     printf 'gitea.asyla.org' | docker-credential-ticketing-env get | grep -q '"Username":"theorg-registry"' \
       && echo "HELPER_OK" >> "$STUB_LOG" ;;
   *"ps -q vikunja"*) if [ -n "${STUB_RUNNING:-}" ]; then echo abc; fi ;;
-  *"exec -T vikunja-mcp python -c"*) echo "${STUB_MCP:-200 401}" ;;
+  *"exec -T vikunja-mcp python -c"*)
+    n=$(( $(cat "$STUB_MCP_TRIES" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$STUB_MCP_TRIES"
+    echo "MCPTRY $n t=$(cat "$STUB_CLOCK")" >> "$STUB_LOG"
+    if [ "${STUB_MCP_DOWN:-0}" = never ] || [ "$n" -le "${STUB_MCP_DOWN:-0}" ]; then
+      if [ -n "${STUB_MCP_NO_CONTAINER:-}" ]; then echo 'service "vikunja-mcp" is not running' >&2; exit 1; fi
+      echo "000 000"; exit 0
+    fi
+    echo "${STUB_MCP:-200 401}" ;;
 esac
+EOF
+# sleep moves the fake clock that date +%s reads. Past 600 fake seconds it stops the script under
+# test (its parent), so a wait with no bound fails the case instead of hanging the test.
+cat > "$T/bin/sleep" <<'EOF'
+#!/bin/bash
+[ -n "${STUB_CLOCK:-}" ] || exec /bin/sleep "$@"
+c=$(( $(cat "$STUB_CLOCK") + ${1%%.*} )); echo "$c" > "$STUB_CLOCK"
+[ "$c" -le 600 ] || { echo "unexpected: fake clock past 600 s" >> "$STUB_LOG"; kill "$PPID"; }
+EOF
+cat > "$T/bin/date" <<'EOF'
+#!/bin/bash
+if [ "$*" = "+%s" ] && [ -n "${STUB_CLOCK:-}" ]; then cat "$STUB_CLOCK"; else exec /bin/date "$@"; fi
 EOF
 cat > "$T/bin/hostname" <<'EOF'
 #!/bin/bash
@@ -65,13 +93,24 @@ cat > "$T/bin/curl" <<'EOF'
 exit 0
 EOF
 chmod +x "$T/bin/"*
+# bash skips a file on PATH it cannot run (a noexec temp dir) and takes the next one: the real
+# docker would then act on this machine. Refuse to run then.
+for s in docker hostname getent curl sleep date; do
+  [ "$(PATH="$T/bin:$PATH" command -v "$s")" = "$T/bin/$s" ] || { echo "stub $s not runnable in $T/bin" >&2; exit 2; }
+done
 
-run() {   # run HOST SWITCH...: output in $OUT, docker calls in $T/log, status returned
-  : > "$T/log"
-  local set=() n
+run() {   # run HOST SWITCH...: output in $OUT, docker calls in $T/log, status returned;
+          # vikunja-mcp probes in $MCP_TRIES and the fake clock in $CLOCK, read after
+  : > "$T/log"; echo 0 > "$T/clock"; rm -f "$T/mcptries"
+  local set=() n rc
   for n in ${STUB_SET:-}; do set+=("$n=stand-in"); done
   OUT="$(env ${set[@]+"${set[@]}"} HOME="$T/home" PATH="$T/bin:$PATH" STUB_LOG="$T/log" STUB_HOST="$1" \
+    STUB_CLOCK="$T/clock" STUB_MCP_TRIES="$T/mcptries" \
     TICKETING_VERIFY_WAIT_S=0 bash "$T/app/ticketing.sh" "${@:2}" 2>&1)"
+  rc=$?
+  MCP_TRIES="$(cat "$T/mcptries" 2>/dev/null || echo 0)"
+  CLOCK="$(cat "$T/clock")"
+  return "$rc"
 }
 
 # Start order on d06: DEPLOY.md 1-4, configure before vikunja-mcp, with the vault file.
@@ -153,8 +192,43 @@ STUB_SET="$DEX_NAMES" STUB_IP=10.0.0.69 run test01 configure; rc=$?
 STUB_IP=10.0.0.65 run d06 verify; rc=$?
 [ "$rc" -eq 0 ] && grep -q 'compose.vault.yml exec -T vikunja-mcp python -c' "$T/log" && echo "$OUT" | grep -q '(401)' \
   && ok "verify on d06: vikunja-mcp /metrics 200 and /mcp 401 from inside its container" || bad "verify d06" "rc=$rc; $OUT"
+[ "$MCP_TRIES" -eq 1 ] && [ "$CLOCK" -eq 0 ] && ! echo "$OUT" | grep -q 'answered after' \
+  && ok "verify on d06: vikunja-mcp answering at once is one probe, no wait" || bad "verify d06 no wait" "tries=$MCP_TRIES clock=$CLOCK; $OUT"
 STUB_MCP="200 200" STUB_IP=10.0.0.65 run d06 verify; rc=$?
 [ "$rc" -ne 0 ] && echo "$OUT" | grep -q 'answered 200, not 401' && ok "verify on d06: an open /mcp fails" || bad "verify open mcp" "rc=$rc; $OUT"
+[ "$MCP_TRIES" -eq 1 ] && [ "$CLOCK" -eq 0 ] && ! echo "$OUT" | grep -q 'waited' \
+  && ok "verify on d06: a wrong answer (not 000) is judged at once, no wait" || bad "verify wrong answer waits" "tries=$MCP_TRIES clock=$CLOCK; $OUT"
+STUB_MCP="503 401" STUB_IP=10.0.0.65 run d06 verify; rc=$?
+[ "$rc" -ne 0 ] && [ "$MCP_TRIES" -eq 1 ] && echo "$OUT" | grep -qF '[ERROR] vikunja-mcp /metrics answered 503, not 200' \
+  && ok "verify on d06: /metrics 503 fails at once" || bad "verify metrics 503" "rc=$rc tries=$MCP_TRIES; $OUT"
+
+# 2026-11-08 14:35Z: `up` recreated vikunja-mcp and verify probed it before Uvicorn listened (000
+# for both); it answered 2 s later. verify now asks again while an answer is 000, up to 60 s.
+STUB_MCP_DOWN=2 STUB_IP=10.0.0.65 run d06 verify; rc=$?
+[ "$rc" -eq 0 ] && [ "$MCP_TRIES" -eq 3 ] && [ "$CLOCK" -eq 4 ] && echo "$OUT" | grep -qF '[INFO] vikunja-mcp answered after 4s, try 3 (starting up)' \
+  && echo "$OUT" | grep -qF '[INFO] vikunja-mcp /metrics OK' && echo "$OUT" | grep -q '(401)' && ! echo "$OUT" | grep -q ERROR \
+  && ok "verify on d06: vikunja-mcp answers 4 s after up (2026-11-08): waits, passes" || bad "verify mcp late" "rc=$rc tries=$MCP_TRIES clock=$CLOCK; $OUT"
+STUB_MCP_DOWN=2 STUB_MCP_NO_CONTAINER=1 STUB_IP=10.0.0.65 run d06 verify; rc=$?
+[ "$rc" -eq 0 ] && [ "$MCP_TRIES" -eq 3 ] && ! echo "$OUT" | grep -q ERROR \
+  && ok "verify on d06: exec fails while vikunja-mcp is not running yet: waits, passes" || bad "verify mcp no container" "rc=$rc tries=$MCP_TRIES; $OUT"
+STUB_MCP_DOWN=29 STUB_IP=10.0.0.65 run d06 verify; rc=$?
+[ "$rc" -eq 0 ] && [ "$MCP_TRIES" -eq 30 ] && [ "$CLOCK" -eq 58 ] \
+  && ok "verify on d06: vikunja-mcp answers at 58 s, inside the 60 s wait" || bad "verify mcp 58 s" "rc=$rc tries=$MCP_TRIES clock=$CLOCK; $OUT"
+# Still 000 at the deadline: fatal, as before, and the error says how long it waited.
+STUB_MCP_DOWN=never STUB_IP=10.0.0.65 run d06 verify; rc=$?
+[ "$rc" -ne 0 ] && [ "$CLOCK" -ge 60 ] && [ "$CLOCK" -le 62 ] \
+  && echo "$OUT" | grep -qF '[ERROR] vikunja-mcp /metrics answered 000, not 200 (waited 60s)' \
+  && echo "$OUT" | grep -qF '[ERROR] vikunja-mcp /mcp with no bearer answered 000, not 401 (waited 60s)' \
+  && ! grep -q '^unexpected' "$T/log" \
+  && ok "verify on d06: vikunja-mcp never answers: fails after the 60 s wait" || bad "verify mcp never" "rc=$rc tries=$MCP_TRIES clock=$CLOCK; $OUT"
+STUB_MCP_DOWN=never TICKETING_MCP_WAIT_S=10 STUB_IP=10.0.0.65 run d06 verify; rc=$?
+[ "$rc" -ne 0 ] && [ "$CLOCK" -ge 10 ] && [ "$CLOCK" -le 12 ] && echo "$OUT" | grep -qF '(waited 10s)' \
+  && ok "verify on d06: TICKETING_MCP_WAIT_S=10 waits 10 s" || bad "verify mcp wait 10" "rc=$rc clock=$CLOCK; $OUT"
+# One answer 000 is still no answer: asked again; once both answer, judged as before.
+STUB_MCP_DOWN=1 STUB_MCP="200 000" TICKETING_MCP_WAIT_S=4 STUB_IP=10.0.0.65 run d06 verify; rc=$?
+[ "$rc" -ne 0 ] && [ "$MCP_TRIES" -eq 3 ] && echo "$OUT" | grep -qF '[INFO] vikunja-mcp /metrics OK' \
+  && echo "$OUT" | grep -qF 'answered 000, not 401 (waited 4s)' \
+  && ok "verify on d06: /mcp alone 000 is asked again, fatal at the deadline" || bad "verify mcp half" "rc=$rc tries=$MCP_TRIES; $OUT"
 STUB_IP=10.0.0.69 run test01 verify; rc=$?
 [ "$rc" -eq 0 ] && ! grep -q 'exec' "$T/log" && ok "verify on a replica: vikunja only" || bad "verify replica" "rc=$rc; $OUT"
 

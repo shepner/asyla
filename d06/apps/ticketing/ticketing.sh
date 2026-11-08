@@ -229,6 +229,7 @@ do_update() {
 }
 
 TICKETING_VERIFY_WAIT_S="${TICKETING_VERIFY_WAIT_S:-120}"
+TICKETING_MCP_WAIT_S="${TICKETING_MCP_WAIT_S:-60}"
 LOCAL_VIKUNJA="${TICKETING_LOCAL_VIKUNJA:-http://127.0.0.1:3456}"
 PUBLIC_URL="${TICKETING_PUBLIC_URL:-https://vikunja.asyla.org}"
 
@@ -257,10 +258,34 @@ wait_ready() {
   done
 }
 
+# Sets MCP_CODES to MCP_PROBE's "METRICS MCP" from inside vikunja-mcp ("000 000" when the exec
+# fails: the container is not running yet), and MCP_WAITED to the seconds it waited for them.
+# A 000 is no answer: right after `up` recreates vikunja-mcp, Uvicorn listens only once its
+# startup is complete. 2026-11-08: redeploy_apps.py --app ticketing's verify got 000 for both at
+# 14:35:38Z; Uvicorn logged "Application startup complete" at 14:35:39.95Z, then GET /metrics 200.
+# So while either answer is 000 it asks again, for up to TICKETING_MCP_WAIT_S (60 s); any other
+# answer is returned at once, to be judged as before. MCP_TIMED_OUT=true: still 000 at the deadline.
+# MCP_TRIES counts the probes.
+probe_mcp() {
+  local start now
+  start=$(date +%s)
+  MCP_TIMED_OUT=false
+  MCP_TRIES=0
+  while :; do
+    MCP_TRIES=$(( MCP_TRIES + 1 ))
+    MCP_CODES="$(run_compose exec -T vikunja-mcp python -c "$MCP_PROBE" 2>/dev/null)" || MCP_CODES="000 000"
+    now=$(date +%s)
+    MCP_WAITED=$(( now - start ))
+    case " $MCP_CODES " in *" 000 "*) ;; *) return 0 ;; esac
+    if [ "$MCP_WAITED" -ge "$TICKETING_MCP_WAIT_S" ]; then MCP_TIMED_OUT=true; return 0; fi
+    sleep 2
+  done
+}
+
 # DEPLOY.md, Health checks. Local checks are fatal. The public name reaches the Mini until the
 # cutover, so it is reported, as d04's gitea.sh does, and fails only when it does not answer.
 do_verify() {
-  local rc=0 codes metrics mcp
+  local rc=0 metrics mcp waited=""
   wait_ready || true
   if curl -sf -o /dev/null --max-time 15 "$LOCAL_VIKUNJA/api/v1/info"; then
     echo "[INFO] vikunja $LOCAL_VIKUNJA/api/v1/info OK"
@@ -272,19 +297,25 @@ do_verify() {
     echo "[INFO] Replica: vikunja-mcp and $PUBLIC_URL not checked (not run here / production's name)"
     return "$rc"
   fi
-  # vikunja-mcp is not published: checked from inside its container, with its own python.
-  codes="$(run_compose exec -T vikunja-mcp python -c "$MCP_PROBE" 2>/dev/null)" || codes="000 000"
-  read -r metrics mcp <<< "$codes"
+  # vikunja-mcp is not published: checked from inside its container, with its own python, on its
+  # loopback (127.0.0.1:8766; no name lookup).
+  probe_mcp
+  read -r metrics mcp <<< "$MCP_CODES"
+  if $MCP_TIMED_OUT; then
+    waited=" (waited ${MCP_WAITED}s)"
+  elif [ "$MCP_TRIES" -gt 1 ]; then
+    echo "[INFO] vikunja-mcp answered after ${MCP_WAITED}s, try $MCP_TRIES (starting up)"
+  fi
   if [ "${metrics:-}" = "200" ]; then
     echo "[INFO] vikunja-mcp /metrics OK"
   else
-    echo "[ERROR] vikunja-mcp /metrics answered ${metrics:-nothing}, not 200" >&2
+    echo "[ERROR] vikunja-mcp /metrics answered ${metrics:-nothing}, not 200$waited" >&2
     rc=1
   fi
   if [ "${mcp:-}" = "401" ]; then
     echo "[INFO] vikunja-mcp refuses a call with no bearer (401)"
   else
-    echo "[ERROR] vikunja-mcp /mcp with no bearer answered ${mcp:-nothing}, not 401" >&2
+    echo "[ERROR] vikunja-mcp /mcp with no bearer answered ${mcp:-nothing}, not 401$waited" >&2
     rc=1
   fi
   if curl -sf -o /dev/null --max-time 20 "$PUBLIC_URL/api/v1/info"; then
@@ -363,8 +394,10 @@ usage() {
   echo "  configure - Run theOrg's configure converge alone (d06 only; same environment as up)" >&2
   echo "  down      - Stop and remove the containers" >&2
   echo "  restart   - Down then up (checks the environment first, as up)" >&2
-  echo "  verify    - Vikunja on 127.0.0.1:3456 (fatal); on d06 also vikunja-mcp from inside its container" >&2
-  echo "              (/metrics 200, /mcp with no bearer 401; fatal) and $PUBLIC_URL" >&2
+  echo "  verify    - Vikunja on 127.0.0.1:3456 (fatal; waits up to TICKETING_VERIFY_WAIT_S, 120 s, for it)" >&2
+  echo "              on d06 also vikunja-mcp from inside its container (/metrics 200, /mcp with no bearer" >&2
+  echo "              401; fatal; asks again while there is no answer, up to TICKETING_MCP_WAIT_S, 60 s)" >&2
+  echo "              and $PUBLIC_URL" >&2
   echo "  logs      - Follow logs (optionally for one service)" >&2
 }
 
