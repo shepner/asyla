@@ -113,7 +113,10 @@ data (operator, 2026-10-28). Read-only: nothing here changes a thermostat.
     next day. Either way it puts the output, or the failure, in a persistent notification, then
     mails it to `notify.hvac_report`; the title gives the low in °F only (the operator reads °F,
     2026-11-04), and so does the report body: it reads °C from the trends Prometheus and prints °F.
-- `asyla/report_hvac_cycles.py`: the report (standard library only). This is its only copy; the
+- `asyla/report_hvac_cycles.py`: the report (standard library only). The mail opens with what it found in plain sentences (the heat pump's
+  coldest start and the gas furnace runs below it, short runs, a thermostat left off, garage boiler
+  bursts), then house heat by outdoor temperature and one line per day; the per-class table it
+  replaced was "really hard to read" (operator, 2026-11-07). This is its only copy; the
   asyla hub's `tools/report_hvac_cycles.py` runs this file from the hub's clone of this repo. It
   reads theOrg's trends Prometheus on d06 at `https://prometheus-trends.asyla.org` with GET only
   (reached from this container, certificate trusted: `/-/healthy` 200, 2026-11-04T02:20Z). It
