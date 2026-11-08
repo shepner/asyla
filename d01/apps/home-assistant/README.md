@@ -130,11 +130,17 @@ one Ecobee threshold for a winter experiment (operator, 2026-11-08).
     records the Ecobee's own outdoor feed.
   - To stop it, turn on "HVAC experiment stop" (`input_boolean.hvac_experiment_stop`), which sets 35
     at once. To remove it, set 35 first, then delete the file and run `home-assistant.sh up`.
-  - Tests: `scripts/tests/test_home_assistant_hvac_experiment.py`.
+  - Results: the cold-spell mail opens with the experiment's section (`asyla/hvac_experiment.py`)
+    from 2026-11-12 to 2027-04-07.
+  - Tests: `scripts/tests/test_home_assistant_hvac_experiment.py`, and for the mail section
+    `scripts/tests/test_home_assistant_hvac_experiment_report.py`.
 - `asyla/report_hvac_cycles.py`: the report (standard library only). The mail opens with what it found in plain sentences (the heat pump's
   coldest start and the gas furnace runs below it, short runs, a thermostat left off, garage boiler
   bursts), then house heat by outdoor temperature and one line per day; the per-class table it
-  replaced was "really hard to read" (operator, 2026-11-07). This is its only copy; the
+  replaced was "really hard to read" (operator, 2026-11-07). From 2026-11-12 to 2027-04-07 a
+  winter-experiment section from `asyla/hvac_experiment.py` comes first: any stop rule that fired,
+  the week's heat pump and gas nights, then one line per 5 °F band (COP, energy saved, extra cost,
+  CO2); if it cannot be read in its 30 s share, one line says so and the rest still goes out. This is its only copy; the
   asyla hub's `tools/report_hvac_cycles.py` runs this file from the hub's clone of this repo. It
   reads theOrg's trends Prometheus on d06 at `https://prometheus-trends.asyla.org` with GET only
   (reached from this container, certificate trusted: `/-/healthy` 200, 2026-11-04T02:20Z). It

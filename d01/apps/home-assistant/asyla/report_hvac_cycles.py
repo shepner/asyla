@@ -417,8 +417,8 @@ def findings(r: dict) -> list[str]:
                        f"{deg_range([x['outdoor_f'] for x in cold])} outdoors."
                        + (f" The furnace also ran {'once' if rest == 1 else f'{rest} times'} at warmer "
                           "temperatures." if rest else ""))
-            out.append("An Ecobee compressor lockout near that temperature would do this "
-                       "(inference: the report cannot read Ecobee settings).")
+            out.append("The Ecobee's compressor lockout does this: it was 35 °F on the Ecobee's own airport "
+                       "weather feed when read on 2026-11-08, and the winter experiment changes it on its nights.")
         else:
             out.append(f"Heat pump {runs_min(hp)}, at {deg_range([x['outdoor_f'] for x in hp])} outdoors; "
                        f"gas furnace {runs_min(fu)}, at {deg_range([x['outdoor_f'] for x in fu])}.")
@@ -595,8 +595,8 @@ def selftest() -> int:
         "HVAC report, Thu 10-22 08:00 to 10:59 (Chicago time)",
         "- The heat pump never started below 47.3 °F (Thu 10-22 08:19). Below that, every call for house heat "
         "was the gas furnace: 2 runs, 6 min, at 33.8 °F outdoors.",
-        "- An Ecobee compressor lockout near that temperature would do this (inference: the report cannot "
-        "read Ecobee settings).",
+        "- The Ecobee's compressor lockout does this: it was 35 °F on the Ecobee's own airport weather feed "
+        "when read on 2026-11-08, and the winter experiment changes it on its nights.",
         "- 2 house heat runs were shorter than 5 minutes: Thu 10-22 09:00 (3 min), Thu 10-22 09:10 (3 min).",
         "- The house thermostat was off from Thu 10-22 09:20 to 10:21, so no house heat ran then.",
         "- The garage boiler started 7 times (33 min), 6 of them for under 5 minutes.",
