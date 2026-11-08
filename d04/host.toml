@@ -19,7 +19,7 @@ cloudinit_storage = "local-data2"                       # as d03 on vmh01
 startup = "order=10"                                    # set at create, checked by verify
 
 [setup]
-steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "bashrc.sh"]   # build/setup/, sent by the build
+steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "container_dns.sh", "bashrc.sh"]   # build/setup/, sent by the build
 
 # The proxy's and the tunnel's, as d03's. Gitea's own secrets are inside its restored data (app.ini).
 [[secret]]

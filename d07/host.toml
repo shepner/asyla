@@ -24,7 +24,7 @@ bridge = "vmbr0"           # vmh03's only bridge, untagged (vlan 0): no host net
 vlan = 0                   # with no console (10.0.0.0/24 untagged, vmh03's own segment)
 
 [setup]
-steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "bashrc.sh", "node_exporter.sh", "port_proxy.sh"]   # build/setup/, sent by the build
+steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "container_dns.sh", "bashrc.sh", "node_exporter.sh", "port_proxy.sh"]   # build/setup/, sent by the build
 
 # Node exporter (build/setup/node_exporter.sh) for theOrg's trends Prometheus (asyla standard
 # ASY-TRD): port 9100 from these addresses only, and the .prom files it serves. theOrg's job

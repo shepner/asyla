@@ -26,7 +26,7 @@ cloudinit_storage = "local-data2"
 startup = "order=20"                                    # set at create, checked by verify
 
 [setup]
-steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "bashrc.sh"]   # build/setup/, sent by the build
+steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "container_dns.sh", "bashrc.sh"]   # build/setup/, sent by the build
 
 # No [[secret]]: d06 keeps no secret on disk (the operator's rule, 2026-10-18). Ticketing's values
 # and the proxy's Cloudflare key are resolved from OpenBao on the workstation at use (its [[app]],
