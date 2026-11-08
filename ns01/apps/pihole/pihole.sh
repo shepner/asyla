@@ -190,9 +190,11 @@ do_update() {
 # only where it should be on. Names and records are never printed (the hosts file is a map of the
 # network).
 do_verify() {
-  local bad=0 alias line ip name ans self dhcp l67 d allowed
+  local bad=0 alias line ip name ans self dhcp l67 d allowed ttl=
   fail() { echo "[FAIL] pihole: $1" >&2; bad=1; }
   ask() { docker exec "$APP" dig +short +time=2 +tries=1 "$1" @127.0.0.1 2>/dev/null; }
+  # The TTL of a local answer: 0 means clients cannot cache it (compose's local-ttl not applied).
+  ttl_of() { docker exec "$APP" dig +noall +answer +time=2 +tries=1 "$1" @127.0.0.1 2>/dev/null | awk 'NR == 1 {print $2}'; }
   wait_started || { echo "[FAIL] pihole: container $APP is '$st'" >&2; return 1; }
   if ! mountpoint -q "$DOCKER_D2" || [ ! -f "$HOSTS_FILE" ]; then
     fail "the NAS hosts file $HOSTS_FILE is not there"
@@ -212,6 +214,9 @@ do_verify() {
     fail "no IPv4 entry in the NAS hosts file"
   elif ! ask "$name" | grep -qxF "$ip"; then
     fail "a hosts-file name does not answer with its address"
+  else
+    ttl=$(ttl_of "$name")
+    [ "${ttl:-0}" -gt 0 ] 2>/dev/null || fail "a hosts-file name answers with TTL '${ttl:-none}', not more than 0 (compose's FTLCONF_misc_dnsmasq_lines local-ttl)"
   fi
   # Asked at this host's LAN address, Pi-hole answers its own name with that address; with
   # dns.reply.host.force4 true and no IPv4 it answers 0.0.0.0 (a restored pihole.toml, 2026-10-19).
@@ -242,7 +247,7 @@ do_verify() {
   # stdout, before the [OK] line: build_host.py's verify line shows stdout, and stderr arrives apart.
   password_is_set || echo "[WARN] pihole: no admin password set (pihole.sh password)"
   [ "$bad" -eq 0 ] || return 1
-  echo "[OK] pihole: $APP $st; NAS hosts file mounted; CNAME, hosts-file and own-name answers$([ "$THIS_HOST" = "$TREE_HOST" ] && echo ", outside answer"); dhcp.active $dhcp, udp/67 $([ "$l67" = true ] && echo listening || echo closed); wpad; allowlist"
+  echo "[OK] pihole: $APP $st; NAS hosts file mounted; CNAME, hosts-file (TTL ${ttl}s) and own-name answers$([ "$THIS_HOST" = "$TREE_HOST" ] && echo ", outside answer"); dhcp.active $dhcp, udp/67 $([ "$l67" = true ] && echo listening || echo closed); wpad; allowlist"
 }
 
 [ $# -gt 0 ] || { echo "Usage: $0 up|down|restart|backup|restore|verify|password|update|refresh|logs ..." >&2; exit 1; }

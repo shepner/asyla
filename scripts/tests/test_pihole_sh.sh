@@ -1,7 +1,7 @@
 #!/bin/bash
 # ns02/apps/pihole/pihole.sh and ns01/apps/pihole/pihole.sh against stubs (docker, hostname,
 # mountpoint, sudo, ss, ip): the DHCP guard, the NAS hosts-file refusal, the backup filter and host guard,
-# restore, verify's checks (its own name not 0.0.0.0; ns01: the udp/67 listener), the force4 pin, the admin password (stdin only; the value
+# restore, verify's checks (its own name not 0.0.0.0; local answers' TTL above 0; ns01: the udp/67 listener), the force4 pin, the admin password (stdin only; the value
 # never in a docker argument) and the allowlist; ns01's copy against ns02's (only DHCP may differ).
 # Nothing here reaches a host, the NAS or a registry.
 # Run: bash scripts/tests/test_pihole_sh.sh [ns02|ns01]   (no argument: both trees)
@@ -68,6 +68,8 @@ case "$*" in
   "exec $STUB_APP dig "*)
     name=$(echo "$*" | awk '{print $(NF-1)}')
     if [ "$name" = example.com ]; then [ -n "${STUB_NO_OUTSIDE:-}" ] || echo 203.0.113.5
+    elif [[ " $* " == *" +answer "* ]]; then
+      awk -v n="$name" -v t="${STUB_LOCAL_TTL-60}" '$1 == n {print n ". " t " IN A " $2}' "${STUB_ANSWERS:?}"
     else awk -v n="$name" '$1 == n {print $2}' "${STUB_ANSWERS:?}"; fi ;;
 esac
 exit 0
@@ -183,6 +185,14 @@ echo "$OUT" | grep -q '^\[OK\] .*own-name answers' && grep -q "dig +short +time=
 run test01 verify; rc=$?
 [ "$rc" -eq 0 ] && echo "$OUT" | grep -q 'outside names not checked' && ! grep -q 'example.com' "$T/log" \
   && ok "verify on a replica: local answers only (egress blocked)" || bad "verify replica" "rc=$rc; $OUT"
+STUB_LOCAL_TTL=0 run $TREE verify; rc=$?
+[ "$rc" -ne 0 ] && echo "$OUT" | grep -q "a hosts-file name answers with TTL '0'" && ! echo "$OUT" | grep -q 'host-a\|192.0.2' \
+  && ok "verify with local answers at TTL 0 (local-ttl not applied): FAIL, no name printed" || bad "verify ttl 0" "rc=$rc; $OUT"
+run $TREE verify; rc=$?
+[ "$rc" -eq 0 ] && echo "$OUT" | grep -q '^\[OK\] .*hosts-file (TTL 60s)' \
+  && ok "verify reports the local-answer TTL" || bad "verify ttl ok" "rc=$rc; $OUT"
+grep -qxF '      - FTLCONF_misc_dnsmasq_lines=local-ttl=60' "$REPO/$TREE/apps/pihole/compose.yml" \
+  && ok "compose pins local-ttl=60 (misc.dnsmasq_lines)" || bad "compose local-ttl" "not pinned"
 STUB_DHCP=true run ns02 verify; rc=$?
 [ "$rc" -ne 0 ] && echo "$OUT" | grep -q "dhcp.active is 'true', this host should have false" \
   && ok "verify on ns02 with DHCP on: FAIL" || bad "verify dhcp on" "rc=$rc; $OUT"

@@ -30,7 +30,7 @@ other name server and also the LAN's DHCP server; this copy never serves DHCP (b
   any host but ns02, so a replica never writes ns02's mirror
 - `pihole.sh restore`: from the mirror into an empty data dir (stop the app first); refuses over data
 - `pihole.sh verify`: the container healthy, the NAS hosts file mounted, a CNAME and a hosts-file
-  name answering, the host's own name answering its address (not 0.0.0.0), an outside name answering
+  name answering (with a TTL above 0: compose pins `local-ttl=60`), the host's own name answering its address (not 0.0.0.0), an outside name answering
   (not on a replica), `dhcp.active` as the host should have
   it, `wpad`, the allowlist; warns when no admin password is set
 - `pihole.sh password`: set the admin password from stdin (below)

@@ -55,6 +55,13 @@ services:
       # and no IPv4, and the host's own name answered 0.0.0.0 (verify checks the self-answer).
       - FTLCONF_dns_reply_host_force4=false
       - FTLCONF_misc_etc_dnsmasq_d=true
+      # Local answers (the NAS hosts file, CNAMEs, own name) carry a 60 s TTL, not dnsmasq's default 0,
+      # so a client's own cache absorbs a retry loop instead of sending every lookup here. On
+      # 2026-11-08 Camera UI on d01 looked up a camera's name about 14 times a second; with TTL 0
+      # d01's systemd-resolved cached nothing, Pi-hole's per-client limit (1000 per 60 s) tripped,
+      # and every container on d01 lost DNS for hours (asyla backlog 2026-11-08 d01 DNS REFUSED,
+      # operator yes). A local change reaches caching clients within 60 s. verify checks it.
+      - FTLCONF_misc_dnsmasq_lines=local-ttl=60
       - FTLCONF_database_busytimeout=60000
       # IPv4 upstreams only: the hosts have no IPv6 (IPv6 upstreams log "Network unreachable").
     volumes:
