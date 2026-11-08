@@ -217,8 +217,7 @@ not the fridge. Nothing covers the fridge until a probe is placed in it.
   freezers and fall under that generic alert as they appear.
 - Delivery: a persistent notification per cause (cleared when it clears), and one mail to
   `notify.hvac_report` per cause, none when it clears. Both freezer mails are marked `[URGENT]`. Ticketing has no inbound path from Home Assistant, so no work item is opened (move
-  these two to ticketing when it has one). Until the SMTP integration exists (Mail, above), only the UI
-  shows them.
+  these two to ticketing when it has one). The SMTP integration exists (operator, 2026-11-08), so the mail is sent too.
 - Test on WS01: `python3 scripts/tests/test_home_assistant_freezer.py` (with the image pulled, it runs
   `check_config` and one boot of the package: the holds, the °F and °C probe, one notice per cause).
 
