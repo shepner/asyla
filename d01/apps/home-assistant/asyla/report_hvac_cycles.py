@@ -47,6 +47,12 @@ not as an air-handler run. Findings, in this order:
 - Any outdoor-unit run without the blower.
 - A source with data for under 95 % of the minutes.
 
+From 2026-11-12 through 2027-04-07 the mail opens, right after its title, with the winter
+experiment's section (hvac_experiment.py beside this file: heat pump nights against gas nights),
+and --json has it under "experiment" (null outside those dates). It is read after the rest; if it
+fails, or would start a request more than 30 s after it began, it is one line saying it could not
+be read, and the rest of the mail goes out as usual.
+
 Exit 0 report printed, 2 the Prometheus query failed or the run passed its deadline. Each request
 waits at most 10 s and the whole run at most 45 s from its start, so under shell_command's 60 s
 Home Assistant mails this script's own [ERROR] line instead of "did not finish".
@@ -98,6 +104,7 @@ HOUSE_KINDS = {"heat_pump": "heat pump", "furnace": "gas furnace", "fan_only": "
 QUIET = {"idle", "off"}
 REQUEST_TIMEOUT = 10.0  # s per Prometheus request
 DEADLINE = 45.0         # s for the whole run, from the script's start; shell_command allows 60
+EXPERIMENT_SHARE = 30.0  # s after the rest is read in which the experiment section may start requests
 STARTED = time.monotonic()
 
 
@@ -319,7 +326,32 @@ def report(start: int, end: int, base: str = PROM, get=http_get) -> dict:
             out["days"][d]["outdoor_c"] = {"min": round(min(t), 1), "max": round(max(t), 1),
                                            "mean": round(sum(t) / len(t), 1), "minutes": len(t)}
     out["findings"] = findings(out)
+    out["experiment"] = experiment(start, end, base, get)
     return out
+
+
+def experiment(start: int, end: int, base: str, get, share: float = EXPERIMENT_SHARE,
+               clock=time.monotonic) -> dict | None:
+    """The winter experiment's section (hvac_experiment.py), None outside its dates; never raises.
+
+    A failure, or a request it would start more than share s after it began, makes it one plain line.
+    """
+    limit = clock() + share
+
+    def share_get(url: str) -> dict:
+        if clock() >= limit:
+            raise DeadlinePassed(f"it would have run past its {share:g} s share of the time limit")
+        return get(url)
+    try:
+        import hvac_experiment as hx  # beside this file; main() registers this copy for its import of us
+        exp = hx.section(start, end, base, share_get, hx.FIRST_NIGHT)
+    except Exception as e:  # noqa: BLE001 - the rest of the mail still goes out
+        exp = {"error": f"{type(e).__name__}: {e}"}
+    if exp is not None and exp.get("error"):
+        why = exp["error"].removeprefix(f"{DeadlinePassed.__name__}: ")
+        exp["lines"] = [f"The winter experiment section could not be read this time: {why.rstrip('.')}. "
+                        f"The rest of this report is complete."]
+    return exp
 
 
 # ---- text -------------------------------------------------------------------------------------
@@ -470,6 +502,10 @@ def day_line(d: str, v: dict, r: dict) -> str:
 def print_report(r: dict) -> None:
     print(f"HVAC report, {span(r['start'], r['end'])} (Chicago time)")
     print()
+    if r.get("experiment"):
+        for line in r["experiment"]["lines"]:
+            print(line)
+        print()
     print("What it found")
     for f in r["findings"]:
         print(f if f.startswith("  ") else f"- {f}")
@@ -638,6 +674,7 @@ def selftest() -> int:
         ("no request past the deadline", refused and len(sent) == 2),
         ("a request waits at most REQUEST_TIMEOUT", sent[1:] == [REQUEST_TIMEOUT]),
     ]
+    checks += experiment_checks(r, text)
     bad = [name for name, ok in checks if not ok]
     for name, ok in checks:
         print(f"{'ok  ' if ok else 'FAIL'} {name}")
@@ -646,7 +683,61 @@ def selftest() -> int:
     return 1 if bad else 0
 
 
+def experiment_checks(r: dict, text: str) -> list[tuple[str, bool]]:
+    """The winter experiment section in the mail, then hvac_experiment's own stand-in nights."""
+    import contextlib
+    import io
+    import hvac_experiment as hx
+
+    def shown(rep: dict) -> list[str]:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            print_report(rep)
+        return out.getvalue().splitlines()
+
+    def expr(url: str) -> str:
+        return urllib.parse.parse_qs(urllib.parse.urlparse(url).query)["query"][0]
+    empty = {"status": "success", "data": {"result": []}}
+    stand = hx.standin_get(hx.standin())
+
+    def section_only(url: str) -> dict:  # the section's queries all start with max(...); the rest's do not
+        return stand(url) if expr(url).startswith("max") else empty
+
+    def section_fails(url: str) -> dict:
+        if expr(url).startswith("max"):
+            raise OSError("stand-in: no answer")
+        return empty
+    end = hx.STANDIN_END
+    start = end - 7 * 86400 + STEP
+    full = report(start, end, base="http://stub", get=section_only)
+    full_lines = shown(full)
+    failed = report(start, end, base="http://stub", get=section_fails)
+    failed_lines = shown(failed)
+    t = [0.0]
+
+    def slow(url: str) -> dict:  # each request takes 20 s of a 30 s share: the third is not sent
+        t[0] += 20.0
+        return stand(url)
+    late = experiment(start, end, "http://stub", slow, clock=lambda: t[0])
+    unread = "The winter experiment section could not be read this time: "
+    return [
+        ("experiment: absent outside its dates", r["experiment"] is None and "Winter experiment" not in text),
+        ("experiment: at the top, right after the title", full_lines[1:4] == [
+            "", "Winter experiment: heat pump nights against gas nights (Thu 11-12 to Wed 03-31)",
+            full["experiment"]["lines"][1]] and full_lines.index("What it found") == len(full["experiment"]["lines"]) + 3),
+        ("experiment: in --json", json.loads(json.dumps(full))["experiment"]["bands"][1]["cop"] == 2.04),
+        ("experiment: a failure is one line, the rest goes out",
+         failed_lines[2:5] == [unread + "OSError: stand-in: no answer. The rest of this report is complete.", "",
+                               "What it found"] and "Day by day" in failed_lines),
+        ("experiment: past its share of the deadline", late["lines"] == [
+            unread + "it would have run past its 30 s share of the time limit. The rest of this report is complete."]
+         and t[0] == 40.0),
+    ] + hx.selftest_checks()
+
+
 def main() -> int:
+    # hvac_experiment imports report_hvac_cycles: let it find this copy, not load a second one.
+    sys.modules.setdefault("report_hvac_cycles", sys.modules["__main__"])
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--days", type=int, default=7, help="window ending now (default 7)")
     p.add_argument("--start", help="ISO time; no zone means Chicago (overrides --days)")

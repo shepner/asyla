@@ -589,3 +589,196 @@ def section(start: int, end: int, base: str, get, first: dt.date = FIRST_NIGHT) 
         exp = {"error": f"{type(e).__name__}: {e}"}
         exp["lines"] = text_lines(exp)
         return exp
+
+
+# ---- stand-in nights (report_hvac_cycles.py --selftest runs selftest_checks) --------------------
+
+STANDIN_FIRST = dt.date(2026, 11, 12)
+STANDIN_END = int(dt.datetime(2026, 11, 20, 9, 0, tzinfo=TZ).timestamp())  # a mail on Fri 11-20 09:00
+
+
+def standin() -> dict[str, dict[int, float]]:
+    """Stand-in series for the nights 11-12 to 11-19, each night one case:
+
+    11-12 heat pump, 45.5 °F, a long dip from 23:40 (before the week: an earlier-this-season line)
+    11-13 gas, 32 °F, 8 low-stage cycles of 20 min
+    11-14 heat pump, 32 °F, 300 min, a 3-minute defrost at 23:00
+    11-15 gas, 32 °F, 6 low cycles of 20 min and 2 high of 15 min at 199 W
+    11-16 heat pump, 31.1 °F, mixed: a 20-minute low furnace cycle at 05:00; Ecobee frozen 02:00-03:55
+          (the rooms read 20 °C, Ambient 18.5: the indoor figure is 19.0 there)
+    11-17 gas, 22.1 °F, 6 high cycles of 25 min
+    11-18 comfort-stopped at 03:00, 22.1 °F: 3 defrosts from 22:10, 25 min at standby in a call from
+          00:00, then 3 high furnace cycles of 25 min
+    11-19 no lockout readings: not running
+    Rooms 20 °C (one room and the thermostat alternate 20.1 and 19.9), Ambient indoor 0.5 below.
+    """
+    first = STANDIN_FIRST
+    night = {i: first + dt.timedelta(days=i) for i in range(8)}
+    lo, hi = night_bounds(night[0])[0] - 2 * MARGIN, night_bounds(night[7])[1] + 2 * MARGIN
+    data: dict[str, dict[int, float]] = {k: {} for k in SERIES}
+
+    def at(i: int, h: int, m: int = 0) -> int:
+        day = night[i] + dt.timedelta(days=0 if h >= 12 else 1)
+        return int(dt.datetime.combine(day, dt.time(h, m), TZ).timestamp())
+
+    def put(i, a, b, w98=None, w7=None, call=False):  # minutes a..b, (h, m) on night i, inclusive
+        for m in range(at(i, *a), at(i, *b) + 1, MINUTE):
+            if w98 is not None:
+                data["98"][m] = w98
+            if w7 is not None:
+                data["7"][m] = w7
+            if call:
+                data["heat"][m] = 1.0
+
+    def furnace(i, starts, minutes, w):
+        for h, m in starts:
+            s = at(i, h, m)
+            put(i, (h, m), dt.datetime.fromtimestamp(s + (minutes - 1) * MINUTE, TZ).timetuple()[3:5], w7=w, call=True)
+
+    hourly = [(h, 30) for h in (21, 22, 23, 0, 1, 2, 3, 4)]
+    for m in range(lo, hi, MINUTE):
+        data["98"][m], data["7"][m] = 60.0, 2.0
+    put(0, (22, 0), (23, 39), 2400.0, 200.0, True)
+    put(0, (23, 40), (23, 59), 800.0)
+    furnace(1, hourly, 20, 112.0)
+    put(2, (22, 0), (2, 59), 2400.0, 200.0, True)
+    put(2, (23, 0), (23, 2), 800.0)
+    furnace(3, hourly[:6], 20, 112.0)
+    furnace(3, hourly[6:], 15, 199.0)
+    put(4, (22, 0), (2, 59), 2400.0, 200.0, True)
+    furnace(4, [(5, 0)], 20, 112.0)
+    furnace(5, hourly[:6], 25, 176.0)
+    put(6, (21, 30), (23, 59), 2400.0, 200.0, True)
+    for m in (10, 25, 40):
+        put(6, (22, m), (22, m + 2), 800.0)
+    put(6, (0, 0), (0, 24), call=True)
+    put(6, (0, 25), (2, 59), 2400.0, 200.0, True)
+    furnace(6, [(3, 5), (4, 5), (5, 5)], 25, 176.0)
+
+    out_c = {0: 7.5, 1: 0.0, 2: 0.0, 3: 0.0, 4: -0.5, 5: -5.5, 6: -5.5, 7: 4.5}
+    lock_c = {0: -26.1, 1: 18.3, 2: -26.1, 3: 18.3, 4: -26.1, 5: 18.3, 6: -26.1}
+    for t in range(lo, hi, SLOW):
+        i = (dt.datetime.fromtimestamp(t, TZ) - dt.timedelta(hours=12)).date().toordinal() - first.toordinal()
+        frozen = at(4, 2, 0) <= t <= at(4, 3, 55)
+        up = 20.0 if frozen else 20.0 + (0.1 if (t // SLOW) % 2 == 0 else -0.1)
+        for r in ROOMS:
+            data[r][t] = up if r == ROOMS[0] else 20.0
+        data["tstat"][t], data["target"][t] = up, 20.0
+        data["amb"][t] = 18.5 if frozen else (up + 4 * 20.0) / 5 - 0.5
+        data["out"][t] = out_c.get(i, 4.5)
+        if i in night and night_bounds(night[i])[0] <= t < night_bounds(night[i])[1]:
+            if i in lock_c:
+                data["lock"][t] = 1.7 if i == 6 and t >= at(6, 3, 0) else lock_c[i]
+        else:
+            data["lock"][t] = 1.7
+    return data
+
+
+def standin_get(data: dict[str, dict[int, float]]):
+    """A get(url) answering fetch's query_range requests from data, as Prometheus would."""
+    import urllib.parse
+
+    def get(url: str) -> dict:
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+        expr, s, e, step = q["query"][0], int(q["start"][0]), int(q["end"][0]), int(q["step"][0])
+
+        def series(metric: dict, values: dict[int, float]) -> dict:
+            return {"metric": metric, "values": [[t, str(v)] for t, v in sorted(values.items())
+                                                 if s <= t <= e and (t - s) % step == 0]}
+        if "emporia" in expr:
+            res = [series({"channel": c}, data[c]) for c in ("7", "98")]
+        elif "climate_action" in expr:
+            res = [series({}, data["heat"])]
+        elif "sensor_temperature" in expr:
+            res = [series({"entity": ent}, data[k]) for ent, k in SENSORS.items()]
+        elif "current_temperature" in expr:
+            res = [series({}, data["tstat"])]
+        elif "target_temperature" in expr:
+            res = [series({}, data["target"])]
+        else:
+            raise ValueError(f"unexpected query {expr}")
+        return {"status": "success", "data": {"result": res}}
+    return get
+
+
+def selftest_checks() -> list[tuple[str, bool]]:
+    """(name, passed) for the stand-in nights, through fetch with a stub get."""
+    end = STANDIN_END
+    start = end - 7 * 86400 + MINUTE
+    exp = section(start, end, "http://stub", standin_get(standin()), STANDIN_FIRST)
+    if exp.get("error"):
+        return [(f"stand-in section runs: {exp['error']}", False)]
+    n = {x["night"][5:]: x for x in exp["nights"]}
+    b = {x["band_f"][0]: x for x in exp["bands"]}
+    when = lambda ts: hm(ts) if ts else None  # noqa: E731
+    checks = [
+        ("kinds", [(k, x["kind"]) for k, x in n.items()] == [
+            ("11-12", "heat_pump"), ("11-13", "gas"), ("11-14", "heat_pump"), ("11-15", "gas"), ("11-16", "heat_pump"),
+            ("11-17", "gas"), ("11-18", "comfort_stopped"), ("11-19", "not_running")]),
+        ("comfort stop at 03:00", when(n["11-18"]["stopped_at"]) == "03:00"),
+        ("heat pump night: kWh, no furnace", (n["11-14"]["kwh"], n["11-14"]["furnace_kwh"]) == (12.92, 0.0)),
+        ("gas night: 8 low cycles, burner 148 min", (n["11-13"]["furnace_minutes"], n["11-13"]["furnace_low_min"],
+                                                     n["11-13"]["furnace_kwh"]) == ({"low": 160, "high": 0, "cycles": 8}, 148.0, 27.47)),
+        ("high stage at 199 W counts", (n["11-15"]["furnace_minutes"], n["11-15"]["furnace_kwh"])
+         == ({"low": 120, "high": 30, "cycles": 8}, 28.25)),
+        ("mixed night: furnace minutes on a heat pump night", (n["11-16"]["furnace_minutes"], n["11-16"]["furnace_low_min"],
+                                                              n["11-16"]["furnace_kwh"], n["11-16"]["kwh"])
+         == ({"low": 20, "high": 0, "cycles": 1}, 18.5, 3.43, 13.0)),
+        ("furnace after a comfort stop, guard kept", n["11-18"]["furnace_minutes"] == {"low": 0, "high": 75, "cycles": 3}),
+        ("a defrost", [(hm(x["start"]), x["minutes"], x["outdoor_f"]) for x in n["11-14"]["defrosts"]] == [("23:00", 3, 32.0)]
+         and n["11-14"]["defrost_burst_at"] is None),
+        ("3 defrosts in an hour", when(n["11-18"]["defrost_burst_at"]) == "22:10" and len(n["11-18"]["defrosts"]) == 3),
+        ("long dip, not a defrost", ([hm(t) for t in n["11-12"]["long_dips"]], n["11-12"]["defrosts"]) == (["23:40"], [])),
+        ("standby in a call", [(hm(x["start"]), x["minutes"]) for x in n["11-18"]["standby_stretches"]] == [("00:00", 25)]),
+        ("frozen Ecobee: span and Ambient offset", (n["11-16"]["frozen_min"], [[hm(a), hm(z)] for a, z in n["11-16"]["frozen_spans"]],
+                                                   n["11-16"]["ambient_offset_f"]) == (120, [["02:00", "04:00"]], 0.9)),
+        ("frozen Ecobee: Ambient stands in (19.0 °C there, not 20)", n["11-16"]["deg_f_hours"] == 439.2
+         and n["11-16"]["complete"]),
+        ("°F-hours", [n[k]["deg_f_hours"] for k in ("11-12", "11-13", "11-17")] == [270.0, 432.0, 550.8]),
+        ("08:30 held", all(x["held_0830"] and x["gap_0830_f"] == 0.2 for x in n.values())),
+        ("band 30-35 has 2+2: need and COP", (b[30]["gas_nights"], b[30]["hp_nights"], b[30]["need_kwh_per_deg_f_hour"],
+                                              b[30]["hp_heat_kwh"], b[30]["cop"]) == (2, 2, 0.0645, [27.86, 24.89], 2.04)),
+        ("band 20-25 has 1+1: no COP", (b[20]["gas_nights"], b[20]["hp_nights"], b[20]["cop"]) == (1, 1, None)),
+        ("week", exp["week"] == [f"2026-11-{d}" for d in range(13, 20)]),
+    ]
+    want = [
+        "Winter experiment: heat pump nights against gas nights (Thu 11-12 to Wed 03-31)",
+        "- The heat pump night of Wed 11-18 ended early at 03:00: the comfort stop (or the stop switch) set 35 °F and "
+        "the gas furnace took over.",
+        "- On the heat pump night of Wed 11-18 the outdoor unit sat at standby for 25 minutes from 00:00 while the "
+        "thermostat called for heat: turn on HVAC experiment stop and check the outdoor unit.",
+        "- Possible icing on the heat pump night of Wed 11-18: 3 defrosts within an hour from 22:10: turn on HVAC "
+        "experiment stop and look at the coil.",
+        "- Earlier this season: possible icing Thu 11-12.",
+        "- This week: 3 heat pump nights and 3 gas nights. The coldest heat pump night was Wed 11-18 at 22.1 °F; the "
+        "comfort stop handed it to the gas furnace at 03:00. 1 night without the experiment: Thu 11-19 (the lockout "
+        "was not -15 or 65 °F: stopped, or no data).",
+        "- By night mean outdoor temperature (estimates: each night's heat need is taken from gas nights in the same "
+        "5 °F band):",
+        "  20-25 °F: 1 gas night and 1 heat pump night so far; a COP needs 2 of each.",
+        "  30-35 °F: COP about 2.0 over 2 nights; it saved 14 kWh a night for $1.88 more, $0.13 per kWh saved; "
+        "about 0.7 kg more CO2.",
+        "  45-50 °F: 0 gas nights and 1 heat pump night so far; a COP needs 2 of each.",
+        "- Season so far, against gas every night: the heat pump nights cost about $3.76 more and saved about 28 kWh "
+        "of site energy (estimate, 2 of 4 heat pump nights).",
+        f"- Prices used: electricity ${E_PRICE}/kWh (We Energies Rg-1, 2026); gas ${GAS_PRICE}/therm "
+        f"(Wisconsin Gas Rg-1, {GAS_PRICE_MONTH}; it changes monthly).",
+        "- The Ecobee readings froze on Mon 11-16 (2.0 h); the Ambient indoor sensor stood in, shifted by each "
+        "night's median difference from the Ecobee rooms.",
+    ]
+    checks.append(("section lines, in order", exp["lines"] == want))
+    checks += [(f"line: {w[:50]}", w in exp["lines"]) for w in want if w not in exp["lines"]]
+    # The low COP stop: the same nights with three times the heat pump kWh.
+    low = compute([dict(x, kwh=x["kwh"] * 3) if x["kind"] in HP_KINDS else x for x in exp["nights"]], start, end)
+    checks.append(("low COP stop line", low["lines"][2] == (
+        "- At 30-35 °F the heat pump's COP was about 0.7 over 2 nights, under 1.0: recommend raising the heat pump "
+        "nights' floor above 35 °F; that is your call.")))
+    checks.append(("low COP band line", "  30-35 °F: COP about 0.7 over 2 nights; it used 12 kWh more a night and "
+                                         "cost $6.96 more; about 11.8 kg more CO2." in low["lines"]))
+    # No stop tripped; the coldest heat pump night is the mixed one.
+    calm = compute([n[k] for k in ("11-13", "11-14", "11-15", "11-16")], start, end)
+    checks.append(("nothing needs action", calm["lines"][1] == "- Nothing in the experiment needs action now."))
+    checks.append(("mixed night in the week line", calm["lines"][2] == (
+        "- This week: 2 heat pump nights and 2 gas nights. The coldest heat pump night was Mon 11-16 at 31.1 °F; "
+        "the gas furnace also ran 18 min.")))
+    return [(f"experiment: {name}", ok) for name, ok in checks]
