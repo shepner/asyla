@@ -209,6 +209,12 @@ not the fridge. Nothing covers the fridge until a probe is placed in it.
   stood still over 30 min in the week; lithium AAs die without warning, operator 2026-11-06). Values are from the probe's 7 days to
   2026-11-06 (1,023 points at 5 min): a daily defrost cycle peaks at 6.6 °F, above 0 °F for at most
   70 min and above 5 °F for at most 20 min, so 15 °F for 1 h was never near.
+- Basement deep freezer (operator, 2026-11-08): a WH31E on channel 3, `sensor.mke_temperature_3`, with
+  its own `binary_sensor.basement_freezer_too_warm` and `_probe_silent` and the same values and
+  URGENT notices. Its set point (0 °F) is assumed and it has no history, so re-check 15 °F / 1 h /
+  3 h against its first week. Until it is paired the entity does not exist and these stay off.
+  Channel 3 is left out of the generic sensor-health alert below. The two other new WH31Es are not
+  freezers and fall under that generic alert as they appear.
 - Delivery: a persistent notification per cause (cleared when it clears), and one mail to
   `notify.hvac_report` per cause, none when it clears. Both freezer mails are marked `[URGENT]`. Ticketing has no inbound path from Home Assistant, so no work item is opened (move
   these two to ticketing when it has one). Until the SMTP integration exists (Mail, above), only the UI

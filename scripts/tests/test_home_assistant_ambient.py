@@ -112,11 +112,12 @@ async def main():
     for e in ("sensor.mke_temperature", "sensor.mke_temperature_1", "sensor.mke_inside_temperature"):
         put(e, "60.0", 100, unit_of_measurement="°F")
     put("sensor.mke_temperature_2", "-3.0", 40 * H, unit_of_measurement="°F")    # the freezer: freezer.yaml
+    put("sensor.mke_temperature_3", "-3.0", 40 * H, unit_of_measurement="°F")    # the basement freezer
     put("sensor.mke_humidity_indoor", "40", 40 * H, unit_of_measurement="%")      # humidity never counts
     put("sensor.mke_temperature_24_h_minimum", "50", 40 * H, unit_of_measurement="°F")
     put("sensor.indoor_dew_point", "10", 40 * H)
     await skip(0)
-    check("all moving; the freezer, humidity and 24 h minimum, however old, do not count", (st(SIL), seen()), ("off", (0, 0)))
+    check("all moving; the freezers, humidity and 24 h minimum, however old, do not count", (st(SIL), seen()), ("off", (0, 0)))
     put("sensor.mke_temperature_1", "61.0", 12 * H - 60, unit_of_measurement="°F"); await skip(0)
     check("channel 1 unchanged 11 h 59 min: not yet", (st(SIL), seen()), ("off", (0, 0)))
     put("sensor.mke_temperature_1", "62.0", 12 * H + 60, unit_of_measurement="°F"); await skip(0)

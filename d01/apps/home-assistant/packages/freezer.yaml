@@ -1,4 +1,8 @@
-# Freezer alert (asyla backlog item: freezer and fridge monitor, operator 2026-11-06).
+# Freezer alerts (asyla backlog item: freezer and fridge monitor, operator 2026-11-06). Channel 2 is
+# one freezer; channel 3 (sensor.mke_temperature_3, a WH31E from 2026-11-08) is the basement deep
+# freezer, with the same values: its set point is assumed 0 °F and it has no history yet, so
+# re-check 15 °F / 1 h / 3 h against its first week. Until channel 3 is paired its entity does not
+# exist and its sensors stay off.
 # home-assistant.sh up installs this folder as config/packages/ on every start: edit it here.
 # Probe: the Ambient Weather station's extra sensor, channel 2 (sensor.mke_temperature_2), in the
 # freezer. Set point 0 °F. The FRIDGE (37 °F) has no probe: channel 1 (sensor.mke_temperature_1) read
@@ -40,6 +44,23 @@ template:
         device_class: problem
         state: >-
           {%- set s = states.sensor.mke_temperature_2 -%}{{- s is not none and (now() - s.last_changed).total_seconds() >= 10800 -}}
+      - name: "Basement freezer too warm"
+        unique_id: asyla_basement_freezer_too_warm
+        default_entity_id: binary_sensor.basement_freezer_too_warm
+        device_class: heat
+        delay_on: "01:00:00"
+        availability: >-
+          {%- set v = states('sensor.mke_temperature_3') | float(none) -%}{%- set u = state_attr('sensor.mke_temperature_3', 'unit_of_measurement') -%}{{- v is not none and u in ['°F', '°C'] -}}
+        state: >-
+          {%- set v = states('sensor.mke_temperature_3') | float(none) -%}{%- set u = state_attr('sensor.mke_temperature_3', 'unit_of_measurement') -%}{{- v is not none and (v if u == '°F' else v * 9 / 5 + 32) > 15 -}}
+      # The state started its current value (or its unavailable) 3 h ago: last_changed. A restart
+      # resets it, so a dead probe is found 3 h after the start at the latest.
+      - name: "Basement freezer probe silent"
+        unique_id: asyla_basement_freezer_probe_silent
+        default_entity_id: binary_sensor.basement_freezer_probe_silent
+        device_class: problem
+        state: >-
+          {%- set s = states.sensor.mke_temperature_3 -%}{{- s is not none and (now() - s.last_changed).total_seconds() >= 10800 -}}
 
 # Each notice is sent on the sensor's edge to on (after its hold), so a failed mail does not repeat;
 # continue_on_error keeps a mail failure (no SMTP integration yet: only a logged warning) from
@@ -128,3 +149,86 @@ automation:
       - action: persistent_notification.dismiss
         data:
           notification_id: asyla_freezer_probe_silent
+
+  - id: asyla_basement_freezer_warm
+    alias: "Basement freezer: too warm"
+    description: "Basement freezer probe above 15 °F for 1 h: persistent notification and one URGENT mail."
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.basement_freezer_too_warm
+        to: "on"
+    actions:
+      - variables:
+          reading: >-
+            {%- set v = states('sensor.mke_temperature_3') | float(none) -%}{%- set u = state_attr('sensor.mke_temperature_3', 'unit_of_measurement') -%}{{- 'unavailable' if v is none else '%.1f °F' | format(v if u == '°F' else v * 9 / 5 + 32) -}}
+          message: >-
+            The basement freezer probe reads {{ reading }} (assumed set to 0 °F), above 15 °F for over an hour. A
+            defrost cycle or a door opening peaks near 7 °F and is gone within the hour, so check
+            the door and the compressor now; food starts to thaw at 32 °F.
+      - action: persistent_notification.create
+        data:
+          notification_id: asyla_basement_freezer_warm
+          title: "Basement freezer too warm: {{ reading }}"
+          message: "{{ message }}"
+      - action: notify.send_message
+        continue_on_error: true
+        target:
+          entity_id: notify.hvac_report
+        data:
+          title: "[URGENT] Basement freezer too warm: {{ reading }}"
+          message: "{{ message }}"
+
+  - id: asyla_basement_freezer_warm_clear
+    alias: "Basement freezer: back to normal"
+    description: "The freezer is no longer too warm: clear the notification (no mail)."
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.basement_freezer_too_warm
+        to: "off"
+    actions:
+      - action: persistent_notification.dismiss
+        data:
+          notification_id: asyla_basement_freezer_warm
+
+  - id: asyla_basement_freezer_probe_silent
+    alias: "Basement freezer: probe silent"
+    description: "Basement freezer probe unavailable or unchanged for 3 h: persistent notification and one URGENT mail."
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.basement_freezer_probe_silent
+        to: "on"
+    actions:
+      - variables:
+          message: >-
+            sensor.mke_temperature_3 (the Ambient Weather WH31E in the basement freezer) has been
+            unavailable or at the same reading for 3 hours; a working probe never stood still for
+            more than 30 minutes in a week. The basement freezer is not being watched: replace the probe's
+            battery and check that it is paired with the station.
+      - action: persistent_notification.create
+        data:
+          notification_id: asyla_basement_freezer_probe_silent
+          title: "Basement freezer probe silent"
+          message: "{{ message }}"
+      - action: notify.send_message
+        continue_on_error: true
+        target:
+          entity_id: notify.hvac_report
+        data:
+          title: "[URGENT] Basement freezer probe silent"
+          message: "{{ message }}"
+
+  - id: asyla_basement_freezer_probe_back
+    alias: "Basement freezer: probe back"
+    description: "The probe moves again: clear the notification (no mail)."
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.basement_freezer_probe_silent
+        to: "off"
+    actions:
+      - action: persistent_notification.dismiss
+        data:
+          notification_id: asyla_basement_freezer_probe_silent
