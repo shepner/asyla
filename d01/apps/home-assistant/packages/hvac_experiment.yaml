@@ -1,0 +1,289 @@
+# HVAC winter experiment (asyla backlog
+# 2026-10-27-home-automation-hvac-schedule-optimiser-lowest-energy-heating-and-cooling-sc; operator
+# approved 2026-11-08). home-assistant.sh up installs this folder as config/packages/ on every start:
+# edit it here.
+#
+# What it is: alternate nights between the heat pump and the gas furnace, so their cost and comfort
+# can be compared on like nights. The only setting it ever writes is the Ecobee's Compressor Min
+# Outdoor Temp, number.downstairs_hallway_compressor_minimum_temperature (native °F, -25 to 66, step
+# 5), and only through script.hvac_experiment_set_lockout, which takes -15, 30, 35 or 65 and nothing
+# else. A write shows only after the next Ecobee cloud poll reads it back. No mail, no notify, no
+# other entity is written.
+#
+# Dates (local time, America/Chicago). A "night" runs 21:00 to 08:59 and carries the date of the
+# evening it started. Nights from 2026-11-12 to 2027-03-31: on a heat pump night (an even number of
+# days after 2026-11-12, so 11-12 is one and 11-13 is gas) 21:00 sets -15 (the compressor runs at
+# any outdoor temperature); on a gas night it sets 65 (the compressor is locked out, the furnace
+# heats). Each morning from 2026-11-13 to 2027-04-01, 09:00 sets the normal 35. If the house is more
+# than 2 °F below the sleep setpoint for 30 min on a heat pump night, it sets 35 for the rest of that
+# night (the comfort stop). A one-time write test (30, then 35) proves a write lands before the first
+# night.
+#
+# Why 65 and not the approved 66: 66 is the top of the range but off the 5 °F step, and the Ecobee
+# may refuse it; 65 does the same on a winter night (the compressor is locked out unless it is above
+# 65 °F outside).
+#
+# To stop it: turn on input_boolean.hvac_experiment_stop ("HVAC experiment stop"). That sets 35 at
+# once and nothing switches again until it is turned off. Or remove this file and run
+# home-assistant.sh up; the setting then stays as last written, so set it back to 35 first.
+
+input_boolean:
+  # No `initial`, so Home Assistant restores all three at every start.
+  hvac_experiment_stop:
+    name: "HVAC experiment stop"
+    icon: mdi:stop-circle-outline
+  hvac_experiment_write_tested:
+    name: "HVAC experiment write tested"
+  # The comfort stop fired tonight; the 21:00 night and 09:00 morning runs clear it.
+  hvac_experiment_comfort_stopped:
+    name: "HVAC experiment comfort stopped"
+
+script:
+  # The only number.set_value in this file. A value other than -15, 30, 35 or 65, or the entity in a
+  # unit other than °F, ends the run with nothing written.
+  hvac_experiment_set_lockout:
+    alias: "HVAC experiment: set compressor lockout"
+    description: >-
+      Set the Ecobee's Compressor Min Outdoor Temp to -15, 30, 35 or 65 °F. Anything else, or the
+      entity not in °F, writes nothing.
+    mode: queued
+    fields:
+      value:
+        description: "Compressor Min Outdoor Temp in °F: -15, 30, 35 or 65."
+        required: true
+        example: 35
+    sequence:
+      - condition: template
+        value_template: >-
+          {%- set v = value | float(none) if value is defined else none -%}
+          {{- v in [-15, 30, 35, 65] and is_state_attr('number.downstairs_hallway_compressor_minimum_temperature', 'unit_of_measurement', '°F') -}}
+      - action: number.set_value
+        target:
+          entity_id: number.downstairs_hallway_compressor_minimum_temperature
+        data:
+          value: "{{ value | float | int }}"
+
+  # Proves a write lands and reads back: 30, wait, then the normal 35. The flag is set whatever the
+  # outcome, so it runs once; the readings it got are in the trends Prometheus
+  # (sensor.hvac_experiment_lockout).
+  hvac_experiment_write_test:
+    alias: "HVAC experiment: write test"
+    description: >-
+      Set the compressor lockout to 30, wait for the Ecobee to read it back (at most 5 min), wait
+      2 min, set 35 and wait again, then mark the write test done.
+    mode: single
+    sequence:
+      - action: script.hvac_experiment_set_lockout
+        continue_on_error: true
+        data:
+          value: 30
+      - wait_template: "{{ states('number.downstairs_hallway_compressor_minimum_temperature') | float(none) == 30 }}"
+        timeout: "00:05:00"
+        continue_on_timeout: true
+      - delay: "00:02:00"
+      - action: script.hvac_experiment_set_lockout
+        continue_on_error: true
+        data:
+          value: 35
+      - wait_template: "{{ states('number.downstairs_hallway_compressor_minimum_temperature') | float(none) == 35 }}"
+        timeout: "00:05:00"
+        continue_on_timeout: true
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.hvac_experiment_write_tested
+
+automation:
+  - id: asyla_hvac_experiment_night
+    alias: "HVAC experiment: night"
+    description: >-
+      At 21:00 on a night from 2026-11-12 to 2027-03-31, unless stopped: clear the comfort-stop
+      flag, then set -15 on a heat pump night or 65 on a gas night.
+    mode: single
+    triggers:
+      - trigger: time
+        at: "21:00:00"
+    # The night's date, its place in the window, and its value: here once, reused by the start
+    # automation below (YAML alias). A night runs 21:00-08:59 and carries the date of its evening.
+    variables: &experiment_night
+      night_day: >-
+        {{ ((now() - timedelta(hours=9)).date() - strptime('2026-11-12', '%Y-%m-%d').date()).days }}
+      night_in_window: >-
+        {{ 0 <= night_day <= (strptime('2027-03-31', '%Y-%m-%d').date() - strptime('2026-11-12', '%Y-%m-%d').date()).days }}
+      night_value: "{{ -15 if night_day % 2 == 0 else 65 }}"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.hvac_experiment_stop
+        state: "off"
+      - condition: template
+        value_template: "{{ night_in_window }}"
+    actions:
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.hvac_experiment_comfort_stopped
+      - action: script.hvac_experiment_set_lockout
+        data:
+          value: "{{ night_value }}"
+
+  - id: asyla_hvac_experiment_morning
+    alias: "HVAC experiment: morning"
+    description: "At 09:00 from 2026-11-13 to 2027-04-01, unless stopped: set the normal 35 and clear the comfort-stop flag."
+    mode: single
+    triggers:
+      - trigger: time
+        at: "09:00:00"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.hvac_experiment_stop
+        state: "off"
+      - condition: template
+        value_template: >-
+          {{ strptime('2026-11-13', '%Y-%m-%d').date() <= now().date() <= strptime('2027-04-01', '%Y-%m-%d').date() }}
+    actions:
+      - action: script.hvac_experiment_set_lockout
+        data:
+          value: 35
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.hvac_experiment_comfort_stopped
+
+  # Sleep preset only: the morning recovery shows as the preset changing to Morning (71 °F), not as
+  # sleep with a raised setpoint, so this cannot fire during recovery. On the 10 nights 10-29 to
+  # 11-08 it held 0 minutes, the 11-07 recovery included.
+  - id: asyla_hvac_experiment_comfort_stop
+    alias: "HVAC experiment: comfort stop"
+    description: >-
+      Heating in the sleep preset with the house (sensor.mke_inside_temperature) more than 2 °F
+      below the setpoint for 30 min, on a heat pump night (the lockout reads -15), unless stopped:
+      set 35 and flag the comfort stop for the rest of the night.
+    mode: single
+    triggers:
+      - trigger: template
+        value_template: >-
+          {%- set c = 'climate.downstairs_hallway' -%}
+          {%- set target = state_attr(c, 'temperature') | float(none) -%}
+          {%- set inside = states('sensor.mke_inside_temperature') | float(none) -%}
+          {{- is_state(c, 'heat') and is_state_attr(c, 'preset_mode', 'sleep') and target is not none and inside is not none and inside < target - 2 -}}
+        for: "00:30:00"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.hvac_experiment_stop
+        state: "off"
+      - condition: template
+        value_template: "{{ states('number.downstairs_hallway_compressor_minimum_temperature') | float(none) == -15 }}"
+    actions:
+      - action: script.hvac_experiment_set_lockout
+        data:
+          value: 35
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.hvac_experiment_comfort_stopped
+
+  - id: asyla_hvac_experiment_stop
+    alias: "HVAC experiment: stop"
+    description: "The stop helper turned on: set the normal 35."
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: input_boolean.hvac_experiment_stop
+        to: "on"
+    actions:
+      - action: script.hvac_experiment_set_lockout
+        data:
+          value: 35
+
+  # After a restart (3 min, for the Ecobee integration to load), put the setting where it belongs
+  # now: the write test if it is still due in the day, tonight's value on an experiment night, else
+  # the normal 35 (this clears a leftover -15, 65 or 30).
+  - id: asyla_hvac_experiment_start
+    alias: "HVAC experiment: start"
+    description: >-
+      3 min after Home Assistant starts: run the write test if it is not done (09:15-20:45);
+      on an experiment night (21:00-09:00) set that night's value unless stopped or comfort-stopped;
+      otherwise set 35 if the setting reads anything else.
+    mode: single
+    triggers:
+      - trigger: homeassistant
+        event: start
+    actions:
+      - delay: "00:03:00"
+      # Rendered after the delay, so a start at 08:58 is not taken for the night.
+      - variables: *experiment_night
+      - choose:
+          - conditions:
+              - condition: state
+                entity_id: input_boolean.hvac_experiment_write_tested
+                state: "off"
+              - condition: state
+                entity_id: input_boolean.hvac_experiment_stop
+                state: "off"
+              - condition: time
+                after: "09:15:00"
+                before: "20:45:00"
+            sequence:
+              - action: script.hvac_experiment_write_test
+          - conditions:
+              - condition: time
+                after: "21:00:00"
+                before: "09:00:00"
+              - condition: template
+                value_template: "{{ night_in_window }}"
+              - condition: state
+                entity_id: input_boolean.hvac_experiment_stop
+                state: "off"
+              - condition: state
+                entity_id: input_boolean.hvac_experiment_comfort_stopped
+                state: "off"
+            sequence:
+              - action: script.hvac_experiment_set_lockout
+                data:
+                  value: "{{ night_value }}"
+          - conditions:
+              - condition: template
+                value_template: "{{ states('number.downstairs_hallway_compressor_minimum_temperature') | float(none) != 35 }}"
+            sequence:
+              - action: script.hvac_experiment_set_lockout
+                data:
+                  value: 35
+
+  - id: asyla_hvac_experiment_write_test_fallback
+    alias: "HVAC experiment: write test fallback"
+    description: "At 12:00, if the write test is not done and the experiment is not stopped: run it."
+    mode: single
+    triggers:
+      - trigger: time
+        at: "12:00:00"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.hvac_experiment_write_tested
+        state: "off"
+      - condition: state
+        entity_id: input_boolean.hvac_experiment_stop
+        state: "off"
+    actions:
+      - action: script.hvac_experiment_write_test
+
+# Read-only copies for the Prometheus export (d06 trends): the setting as the Ecobee reads it back,
+# and the outdoor temperature the Ecobee itself uses (its weather feed, not the station). Each
+# converts by its source's unit and is unavailable, never 0, when the source is.
+template:
+  - sensor:
+      - name: "HVAC experiment lockout"
+        unique_id: asyla_hvac_experiment_lockout
+        default_entity_id: sensor.hvac_experiment_lockout
+        unit_of_measurement: "°F"
+        device_class: temperature
+        state_class: measurement
+        availability: >-
+          {%- set e = 'number.downstairs_hallway_compressor_minimum_temperature' -%}{%- set v = states(e) | float(none) -%}{%- set u = state_attr(e, 'unit_of_measurement') -%}{{- v is not none and u in ['°F', '°C'] -}}
+        state: >-
+          {%- set e = 'number.downstairs_hallway_compressor_minimum_temperature' -%}{%- set v = states(e) | float(none) -%}{%- set u = state_attr(e, 'unit_of_measurement') -%}{{- v if u == '°F' else v * 9 / 5 + 32 -}}
+      - name: "Ecobee outdoor feed temperature"
+        unique_id: asyla_hvac_experiment_ecobee_outdoor_temperature
+        default_entity_id: sensor.ecobee_outdoor_feed_temperature
+        unit_of_measurement: "°F"
+        device_class: temperature
+        state_class: measurement
+        availability: >-
+          {%- set w = 'weather.downstairs_hallway' -%}{%- set v = state_attr(w, 'temperature') | float(none) -%}{%- set u = state_attr(w, 'temperature_unit') -%}{{- v is not none and u in ['°F', '°C'] -}}
+        state: >-
+          {%- set w = 'weather.downstairs_hallway' -%}{%- set v = state_attr(w, 'temperature') | float(none) -%}{%- set u = state_attr(w, 'temperature_unit') -%}{{- v if u == '°F' else v * 9 / 5 + 32 -}}
