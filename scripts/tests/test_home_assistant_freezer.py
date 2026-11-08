@@ -152,15 +152,15 @@ async def main():
     # --- the basement freezer, channel 3: same values, its own sensors and notices -----------------
     mails.clear(); notes.clear(); dismissed.clear()
     probe("-3.0"); await skip(0)
-    hass.states.async_set("sensor.mke_temperature_3", "-1.0", {"unit_of_measurement": "°F"}); await skip(0)
+    hass.states.async_set("sensor.outside_mke_temperature_3", "-1.0", {"unit_of_measurement": "°F"}); await skip(0)
     check("ch3 normal: nothing sent", (st("binary_sensor.basement_freezer_too_warm"), seen()[:2]), ("off", (0, 0)))
     dismissed.clear()  # a new entity's first edge to off dismisses a notification that is not there
-    hass.states.async_set("sensor.mke_temperature_3", "21.0", {"unit_of_measurement": "°F"}); await skip(61)
+    hass.states.async_set("sensor.outside_mke_temperature_3", "21.0", {"unit_of_measurement": "°F"}); await skip(61)
     check("ch3 21 °F for 61 min: one URGENT mail naming it, ch2 untouched",
           (st("binary_sensor.basement_freezer_too_warm"), st(WARM), [m["title"] for m in mails]),
           ("on", "off", ["[URGENT] Basement freezer too warm: 21.0 °F"]))
     check("ch3 notification id", notes[0]["notification_id"], "asyla_basement_freezer_warm")
-    hass.states.async_set("sensor.mke_temperature_3", "unavailable", {}, timestamp=time.time() - 11000); await skip(0)
+    hass.states.async_set("sensor.outside_mke_temperature_3", "unavailable", {}, timestamp=time.time() - 11000); await skip(0)
     check("ch3 unavailable 3 h: silent, a second mail (another cause)",
           (st("binary_sensor.basement_freezer_probe_silent"), st(SILENT), len(mails)), ("on", "off", 2))
     await hass.async_stop(force=True)

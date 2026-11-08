@@ -112,7 +112,9 @@ async def main():
     for e in ("sensor.mke_temperature", "sensor.mke_temperature_1", "sensor.mke_inside_temperature"):
         put(e, "60.0", 100, unit_of_measurement="°F")
     put("sensor.mke_temperature_2", "-3.0", 40 * H, unit_of_measurement="°F")    # the freezer: freezer.yaml
-    put("sensor.mke_temperature_3", "-3.0", 40 * H, unit_of_measurement="°F")    # the basement freezer
+    put("sensor.outside_mke_temperature_3", "-3.0", 40 * H, unit_of_measurement="°F")    # the basement freezer
+    put("sensor.outside_mke_humidity_3", "40", 40 * H, unit_of_measurement="%")
+    put("sensor.outside_mke_temperature_4", "55.0", 100, unit_of_measurement="°F")
     put("sensor.mke_humidity_indoor", "40", 40 * H, unit_of_measurement="%")      # humidity never counts
     put("sensor.mke_temperature_24_h_minimum", "50", 40 * H, unit_of_measurement="°F")
     put("sensor.indoor_dew_point", "10", 40 * H)
@@ -126,6 +128,10 @@ async def main():
     check("not urgent, names the entity", ("URGENT" in mails[0]["title"], "sensor.mke_temperature_1" in mails[0]["message"]),
           (False, True))
     check("notification id", notes[0]["notification_id"], "asyla_ambient_sensors_silent")
+    put("sensor.outside_mke_temperature_4", "56.0", 12 * H + 60, unit_of_measurement="°F"); await skip(0)
+    check("outside_mke_ channel 4 unchanged 12 h: listed too", ents(SIL),
+          ["sensor.mke_temperature_1", "sensor.outside_mke_temperature_4"])
+    put("sensor.outside_mke_temperature_4", "57.0", 5, unit_of_measurement="°F"); await skip(0)
     # A channel added later is picked up with no edit; the mail is not repeated.
     put("sensor.mke_temperature_7", "unavailable", 13 * H); await skip(0)
     check("channel 7 added, unavailable 13 h: listed, no second mail",
@@ -144,19 +150,20 @@ async def main():
     put("binary_sensor.mke_battery", "off", 0, device_class="battery")
     put("binary_sensor.mke_battery_2", "off", 0, device_class="battery")
     put("binary_sensor.mke_interior_battery", "off", 0, device_class="battery")
+    put("binary_sensor.outside_mke_battery_3", "off", 0, device_class="battery")
     put("binary_sensor.other_thing", "on", 0, device_class="battery")      # not the station's
     put("binary_sensor.mke_something_else", "on", 0, device_class="problem")
     await skip(0)
     check("no station battery low: off", (st(BAT), seen()), ("off", (0, 0)))
-    put("binary_sensor.mke_battery_2", "on", 0, device_class="battery"); await skip(0)
-    check("freezer probe battery low: off until 6 h", st(BAT), "off")
+    put("binary_sensor.outside_mke_battery_3", "on", 0, device_class="battery"); await skip(0)
+    check("deep-freezer probe battery low (outside_mke_): off until 6 h", st(BAT), "off")
     await skip(5 * 60 + 59)
     check("5 h 59 min: not yet", (st(BAT), seen()), ("off", (0, 0)))
     await skip(2)
     check("6 h: one notice naming it, not urgent", (st(BAT), ents(BAT), seen(), "URGENT" in mails[0]["title"]),
-          ("on", ["binary_sensor.mke_battery_2"], (1, 1), False))
+          ("on", ["binary_sensor.outside_mke_battery_3"], (1, 1), False))
     check("notification id", notes[0]["notification_id"], "asyla_ambient_batteries_low")
-    put("binary_sensor.mke_battery_2", "off", 0, device_class="battery"); await skip(0)
+    put("binary_sensor.outside_mke_battery_3", "off", 0, device_class="battery"); await skip(0)
     check("battery replaced: cleared, no mail", (st(BAT), seen(), dismissed), ("off", (1, 1), ["asyla_ambient_batteries_low"]))
     await hass.async_stop(force=True)
 

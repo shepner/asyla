@@ -2,7 +2,8 @@
 # warning"). Two aggregate sensors, so a new channel is covered with no edit:
 #
 # 1. binary_sensor.ambient_sensors_silent: any of sensor.mke_temperature (outdoor),
-#    sensor.mke_temperature_N (channels 1-10, the freezers' channels 2 and 3 excluded: freezer.yaml, urgent)
+#    sensor.mke_temperature_N (channels 1-10, also as sensor.outside_mke_temperature_N: Home Assistant named channels 3 to 5 that
+#    way on 2026-11-08; the freezers' channels 2 and 3 excluded: freezer.yaml, urgent)
 #    and sensor.mke_inside_temperature (the WH32B) unavailable or at the same reading for 12 h. The
 #    humidity entities share their transmitter's temperature, and sit still for long (indoor RH:
 #    655 min in a week), so only temperatures are watched. The integration (ambient_station
@@ -11,7 +12,7 @@
 #    over the 7 days to 2026-11-06 the longest unchanged run was 60 min outdoors, 115 min on
 #    channel 1 and 230 min on the WH32B (d06 trends Prometheus), so 12 h is three times the longest.
 #    The AQIN Pro, once added, needs its temperature entity in the pattern below.
-# 2. binary_sensor.ambient_batteries_low: any binary_sensor.mke_* with device class battery on. On
+# 2. binary_sensor.ambient_batteries_low: any binary_sensor.mke_* or outside_mke_* with device class battery on. On
 #    d01 these are mke_battery (outdoor), mke_battery_1, mke_battery_2 (the freezer probe),
 #    mke_interior_battery and mke_lightning_detector_battery; the integration's battery_3 to _10 and
 #    the rest appear when their transmitters pair. On is "low" (ambient_station binary_sensor.py:
@@ -30,13 +31,13 @@ template:
         default_entity_id: binary_sensor.ambient_sensors_silent
         device_class: problem
         state: >-
-          {{- (states.sensor | selectattr('entity_id', 'match', '^sensor[.]mke_(temperature(_[0-9]+)?|inside_temperature)$')
-          | rejectattr('entity_id', 'in', ['sensor.mke_temperature_2', 'sensor.mke_temperature_3'])
+          {{- (states.sensor | selectattr('entity_id', 'match', '^sensor[.](outside_)?mke_(temperature(_[0-9]+)?|inside_temperature)$')
+          | rejectattr('entity_id', 'in', ['sensor.mke_temperature_2', 'sensor.outside_mke_temperature_3'])
           | selectattr('last_changed', 'le', now() - timedelta(hours=12)) | list | count > 0) -}}
         attributes:
           entities: >-
-            {{- states.sensor | selectattr('entity_id', 'match', '^sensor[.]mke_(temperature(_[0-9]+)?|inside_temperature)$')
-            | rejectattr('entity_id', 'in', ['sensor.mke_temperature_2', 'sensor.mke_temperature_3'])
+            {{- states.sensor | selectattr('entity_id', 'match', '^sensor[.](outside_)?mke_(temperature(_[0-9]+)?|inside_temperature)$')
+            | rejectattr('entity_id', 'in', ['sensor.mke_temperature_2', 'sensor.outside_mke_temperature_3'])
             | selectattr('last_changed', 'le', now() - timedelta(hours=12)) | map(attribute='entity_id') | list -}}
       - name: "Ambient batteries low"
         unique_id: asyla_ambient_batteries_low
@@ -44,11 +45,11 @@ template:
         device_class: problem
         delay_on: "06:00:00"
         state: >-
-          {{- states.binary_sensor | selectattr('entity_id', 'match', '^binary_sensor[.]mke_')
+          {{- states.binary_sensor | selectattr('entity_id', 'match', '^binary_sensor[.](outside_)?mke_')
           | selectattr('attributes.device_class', 'eq', 'battery') | selectattr('state', 'eq', 'on') | list | count > 0 -}}
         attributes:
           entities: >-
-            {{- states.binary_sensor | selectattr('entity_id', 'match', '^binary_sensor[.]mke_')
+            {{- states.binary_sensor | selectattr('entity_id', 'match', '^binary_sensor[.](outside_)?mke_')
             | selectattr('attributes.device_class', 'eq', 'battery') | selectattr('state', 'eq', 'on')
             | map(attribute='entity_id') | list -}}
 
