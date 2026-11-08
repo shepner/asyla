@@ -94,7 +94,8 @@ vendored at one reviewed commit; no HACS. `PIN.txt` records the commit, version 
 
 asyla backlog `2026-10-27-home-automation-hvac-schedule-optimiser-lowest-energy-heating-and-cooling-sc`:
 the HVAC run report is re-run when the weather turns cold, triggered by Home Assistant's own weather
-data (operator, 2026-10-28). Read-only: nothing here changes a thermostat.
+data (operator, 2026-10-28). Read-only, except `packages/hvac_experiment.yaml` below, which changes
+one Ecobee threshold for a winter experiment (operator, 2026-11-08).
 
 - `packages/hvac.yaml` (loaded through `homeassistant: packages:` in `configuration.yaml`):
   - `sensor.mke_temperature_24_h_minimum`: a `statistics` sensor, the lowest
@@ -113,6 +114,23 @@ data (operator, 2026-10-28). Read-only: nothing here changes a thermostat.
     next day. Either way it puts the output, or the failure, in a persistent notification, then
     mails it to `notify.hvac_report`; the title gives the low in °F only (the operator reads °F,
     2026-11-04), and so does the report body: it reads °C from the trends Prometheus and prints °F.
+- `packages/hvac_experiment.yaml`: the winter heat pump experiment the operator approved on
+  2026-11-08 (hub backlog, HVAC optimiser item, "Winter heat pump experiment design"). It writes
+  only the Ecobee's Compressor Min Outdoor Temp (`number.downstairs_hallway_compressor_minimum_temperature`),
+  and only through `script.hvac_experiment_set_lockout`, which takes -15, 30, 35 or 65 °F.
+  - Nights from 2026-11-12 to 2027-03-31 alternate. At 21:00 it sets -15 on a heat pump night
+    (11-12 is one) or 65 on a gas night. At 09:00, from 11-13 to 2027-04-01, it sets the normal 35.
+    Gas nights use 65, not the approved 66: 66 is off the setting's 5 °F step and the Ecobee may
+    refuse it, and 65 does the same on a winter night.
+  - Comfort stop: on a heat pump night, if `sensor.mke_inside_temperature` stays more than 2 °F
+    below the target in the sleep preset for 30 minutes, it sets 35 for the rest of that night.
+  - 3 minutes after each start, it puts back the setting that belongs now (tonight's value, or 35).
+  - A one-time write test (30, then 35) runs at the first daytime start, or at 12:00; the
+    readings are in `sensor.hvac_experiment_lockout` on d06 trends. `sensor.ecobee_outdoor_feed_temperature`
+    records the Ecobee's own outdoor feed.
+  - To stop it, turn on "HVAC experiment stop" (`input_boolean.hvac_experiment_stop`), which sets 35
+    at once. To remove it, set 35 first, then delete the file and run `home-assistant.sh up`.
+  - Tests: `scripts/tests/test_home_assistant_hvac_experiment.py`.
 - `asyla/report_hvac_cycles.py`: the report (standard library only). The mail opens with what it found in plain sentences (the heat pump's
   coldest start and the gas furnace runs below it, short runs, a thermostat left off, garage boiler
   bursts), then house heat by outdoor temperature and one line per day; the per-class table it
