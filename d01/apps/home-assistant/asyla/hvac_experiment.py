@@ -20,9 +20,10 @@ one night from those series alone (no I/O), so stand-in series can test it. Per 
     °F-hours   indoor (the mean of the five Ecobee room sensors) minus outdoor, every 5 minutes
     kWh        the outdoor unit over 150 W (standby reads about 60 W) plus the air handler (over
                40 W) when it is not a furnace minute
-    furnace    air handler 95-145 W (low stage, about 112 W) or 145-190 W (high, about 176 W) with
-               the outdoor unit under 500 W from 2 minutes before to 2 after (the heat pump's blower
-               draws 190-200 W, and its lead and run-on minutes are the heat pump's). Burner minutes
+    furnace    air handler 95-145 W (low stage, about 112 W) or 145 W and over (high, about 176 W;
+               191 and 199 W seen) with the outdoor unit under 500 W from 2 minutes before to 2 after
+               (the heat pump's blower also draws 190-200 W, but only next to an outdoor-unit run:
+               its lead and run-on minutes are the heat pump's). Burner minutes
                are those less 1.5 per cycle, in the cycle's last stage (the blower runs on after the
                burner stops). Heat: 38,000 Btu/h low, 58,000 high (output, Carrier 59TP7A-01PD p.4).
     defrosts   the outdoor unit below 1.2 kW (not at standby) for 2-10 minutes right after a run
@@ -89,7 +90,7 @@ LOCK_GAS_C = 15.0          # 65 °F is 18.3 °C
 LOCK_NORMAL_C = (0.5, 3.0)  # 35 °F is 1.7 °C (the write test's 30 °F is -1.1)
 LOCK_HP_MIN_READINGS = 3   # 15 minutes at -15 °F before a return to 35 counts as a comfort stop
 STANDBY_W, HP_W, ICED_W, RUN_W = 150, 500, 1000, 1200
-BLOWER_ON_W, LOW_W, HIGH_W, HP_BLOWER_W = 40, 95, 145, 190
+BLOWER_ON_W, LOW_W, HIGH_W = 40, 95, 145
 FURNACE_GUARD_MIN = 2      # the outdoor unit under HP_W this many minutes either side
 DEFROST_MIN = (2, 10)
 LONG_DIP_MIN = 15
@@ -276,7 +277,7 @@ def night_record(d: dt.date, data: dict[str, dict[int, float]]) -> dict:
     # Power: furnace stages, kWh.
     def stage(m: int) -> str | None:
         w7, w98 = p7.get(m), p98.get(m)
-        if w7 is None or w98 is None or not LOW_W <= w7 < HP_BLOWER_W:
+        if w7 is None or w98 is None or w7 < LOW_W:
             return None
         if any(p98.get(m + k * MINUTE, 0) >= HP_W for k in range(-FURNACE_GUARD_MIN, FURNACE_GUARD_MIN + 1)):
             return None
