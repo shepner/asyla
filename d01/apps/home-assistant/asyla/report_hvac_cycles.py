@@ -125,13 +125,13 @@ def http_get(url: str) -> dict:
     return deadline_get(STARTED + DEADLINE)(url)
 
 
-def query_range(base: str, expr: str, start: int, end: int, get=http_get) -> list[dict]:
-    """Every series of expr on the minute grid start..end (inclusive), in chunks under the point limit."""
+def query_range(base: str, expr: str, start: int, end: int, get=http_get, step: int = STEP) -> list[dict]:
+    """Every series of expr on the grid start..end (inclusive, step s apart), in chunks under the point limit."""
     out: dict[tuple, dict] = {}
     t = start
     while t <= end:
-        t_end = min(end, t + (MAX_POINTS - 1) * STEP)
-        q = urllib.parse.urlencode({"query": expr, "start": t, "end": t_end, "step": STEP})
+        t_end = min(end, t + (MAX_POINTS - 1) * step)
+        q = urllib.parse.urlencode({"query": expr, "start": t, "end": t_end, "step": step})
         body = get(f"{base}/api/v1/query_range?{q}")
         if body.get("status") != "success":
             raise RuntimeError(f"query failed: {body.get('errorType')}: {body.get('error')}")
@@ -139,7 +139,7 @@ def query_range(base: str, expr: str, start: int, end: int, get=http_get) -> lis
             key = tuple(sorted(s["metric"].items()))
             out.setdefault(key, {"metric": s["metric"], "values": {}})["values"].update(
                 {int(float(ts)): float(v) for ts, v in s["values"]})
-        t = t_end + STEP
+        t = t_end + step
     return list(out.values())
 
 
