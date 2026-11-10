@@ -12,7 +12,9 @@
 # DEPLOY.md, last read at main f757911; its images follow `latest` (observability.sh), and the
 # revision is read from the images' provenance at deploy (deploy_role.py). The communications
 # [[app]] is from theOrg communications DEPLOY.md at beff7c55, its images pinned to that commit.
-# No external-access: every name here is LAN-only, so d06 has no tunnel (yet).
+# external-access deploys d06's own tunnel `d06` (cloudflared-d06, running since 2026-11-10, no routes
+# yet) into ~/scripts/d06/apps/external-access/, kept by d06/apps/.gitignore; theorg.asyla.org moves to
+# it at the C4 cutover. Every other name here is LAN-only.
 
 # Operator's values, 2026-10-18. order=20: after d04 (10) and d03 (15) when vmh01 boots.
 [vm]
