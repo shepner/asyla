@@ -1,0 +1,204 @@
+# theOrg's communications on d06: NATS (JetStream, WebSocket), the web chat (chat-api with its
+# PostgreSQL message store), the Vikunja webhook bridge and the stack's vector. Written by asyla
+# from theOrg communications docker-compose.yml and DEPLOY.md at beff7c55 (the asyla hub backlog
+# item "d06: deploy theOrg communications at beff7c55"). Changes from theOrg's file, each asyla's:
+# - images only, no build: (theOrg's publish-images pushes them to gitea.asyla.org/theorg);
+# - no mail-relay and no cloudflared (not part of this hand-off);
+# - no container_name but vector's, so containers are communications-<service>-1 (the anonymous
+#   check's NATS_CONTAINER=communications-nats-1); vector keeps the name vector-http.toml excludes;
+# - the network is named communications_net, so internal-access hosts/d06 can join it; vector is
+#   also on observability's network, where Loki is loki:3100 (plain HTTP, no account);
+# - published on 127.0.0.1 only: chat-api 9098, nats monitoring 8222, the exporter 7777 (verify
+#   reads 9098 and 8222 on the host). 4222, 8080 (NATS over WebSocket) and 9092 are not published;
+# - nothing scrapes communications yet: the prometheus.* labels below are theOrg's and do nothing
+#   here (d06's Prometheus has no Docker socket, so no Docker discovery, and sits on
+#   observability's network, where 127.0.0.1 is its own); scraping is a later observability item;
+# - data in bind mounts under COMMS_ROOT (/mnt/docker/Communications), not named volumes.
+# No secret is in this file: each `${COMMS_...:-}` below is filled from the environment of
+# communications.sh, which the workstation hands the values at deploy and which refuses to start
+# when one is empty. nats gets its users' passwords from a compose override communications.sh
+# generates at each start (environment NAMES only); without it nats refuses to start (fail closed).
+# Run with communications.sh (it sets COMMS_ROOT, COMMS_REGISTRY and COMMS_TAG and keeps the order).
+name: communications
+
+services:
+  nats:
+    image: ${COMMS_REGISTRY:?}/communications-nats:${COMMS_TAG:?}
+    command: ["-c", "/etc/nats/server.conf"]
+    ports:
+      # Monitoring (no auth): verify's /healthz and the exporter. 4222 and 8080 stay inside
+      # communications_net; internal-access serves 8080 as wss://nats.asyla.org later.
+      - "127.0.0.1:8222:8222"
+    volumes:
+      - ${COMMS_ROOT:?}/nats-data:/data
+      # users.conf, written by communications.sh: user names and $NATS_PW_<i> references only.
+      - ${COMMS_ROOT:?}/nats-runtime:/etc/nats/runtime
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8222/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 18
+      start_period: 90s
+    restart: unless-stopped
+    networks: [communications_net]
+
+  nats-exporter:
+    image: natsio/prometheus-nats-exporter:0.20.2
+    command: ["-varz", "-connz", "-subz", "-routez", "-healthz", "-jsz", "all", "http://nats:8222"]
+    depends_on:
+      nats:
+        condition: service_started
+    ports:
+      - "127.0.0.1:7777:7777"
+    restart: unless-stopped
+    labels:
+      prometheus.scrape: "true"
+      prometheus.port: "7777"
+      prometheus.job: "nats"
+    networks: [communications_net]
+
+  # The message store: the system of record for chat. Not published.
+  comms-postgres:
+    # Pinned by digest, as ticketing pins vikunja: the multi-arch index of postgres:16-bookworm
+    # (16.15) as `docker buildx imagetools inspect` read it on 2026-11-10.
+    image: postgres:16-bookworm@sha256:5264710be20f409750ac6dc4e5706dcef929c87e241605463f0f9aefa932a8d9
+    environment:
+      POSTGRES_USER: comms
+      POSTGRES_PASSWORD: ${COMMS_POSTGRES_PASSWORD:-}
+      POSTGRES_DB: comms
+    volumes:
+      - ${COMMS_ROOT:?}/pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U comms -d comms"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    restart: unless-stopped
+    networks: [communications_net]
+
+  chat-api:
+    image: ${COMMS_REGISTRY:?}/communications-chat-api:${COMMS_TAG:?}
+    depends_on:
+      nats:
+        condition: service_started
+      comms-postgres:
+        condition: service_healthy
+    environment:
+      # theOrg's defaults at beff7c55. 'chat-smoke' has no Staff subscriber (verify's chat_smoke.py
+      # posts there); one 'staff-<role_key>-1' per enabled Staff instance (staff's fleet.json).
+      CHAT_CHANNELS: proj-1,chat-smoke,staff-delivery-manager-1,staff-qa-1,staff-alert-triage-1
+      CHAT_DEFAULT_CHANNEL: proj-1
+      CHAT_SPACES_PATH: ""
+      CHAT_SMOKE_CHANNEL: chat-smoke
+      CHAT_SENDER: human:operator
+      CHAT_AUTH_MODE: token
+      CHAT_API_TOKEN: ${COMMS_CHAT_API_TOKEN:-}
+      CHAT_REPLY_TIMEOUT_SECONDS: "300"
+      CHAT_HISTORY_LIMIT: "200"
+      NATS_HOST: nats:4222
+      NATS_USER: ${COMMS_NATS_WEBHOOK_MQ_USERNAME:-}
+      NATS_PASSWORD: ${COMMS_NATS_WEBHOOK_MQ_PASSWORD:-}
+      POSTGRES_HOST: comms-postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: comms
+      POSTGRES_PASSWORD: ${COMMS_POSTGRES_PASSWORD:-}
+      POSTGRES_DB: comms
+      LOG_LEVEL: INFO
+    ports:
+      # Host-local only (theOrg publishes it on every interface on the Mini): verify curls it;
+      # internal-access serves theorg.asyla.org over communications_net.
+      - "127.0.0.1:9098:9098"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:9098/health', timeout=4).status == 200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    labels:
+      prometheus.scrape: "true"
+      prometheus.port: "9098"
+      prometheus.job: "chat-api"
+    networks: [communications_net]
+
+  # Vikunja's webhook target. Not published (Vikunja reaching it is later work); verify checks
+  # /health from inside the container.
+  webhook-to-mq-vikunja:
+    image: ${COMMS_REGISTRY:?}/communications-webhook-to-mq:${COMMS_TAG:?}
+    depends_on:
+      nats:
+        condition: service_started
+    environment:
+      NATS_HOST: nats:4222
+      NATS_USER: ${COMMS_NATS_WEBHOOK_MQ_USERNAME:-}
+      NATS_PASSWORD: ${COMMS_NATS_WEBHOOK_MQ_PASSWORD:-}
+      SOURCE: vikunja
+      # The HMAC key Vikunja signs with; empty would accept unsigned posts (communications.sh refuses).
+      VIKUNJA_WEBHOOK_SECRET: ${COMMS_VIKUNJA_WEBHOOK_SECRET:-}
+      WEBHOOK_BUFFER_PATH: /var/lib/webhook-to-mq/buffer.sqlite3
+      WEBHOOK_BUFFER_MAX_EVENTS: "10000"
+      WEBHOOK_PUBLISH_TIMEOUT_SECONDS: "5"
+    volumes:
+      - ${COMMS_ROOT:?}/webhook-buffer:/var/lib/webhook-to-mq
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:9092/health', timeout=4).status == 200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    labels:
+      prometheus.scrape: "true"
+      prometheus.port: "9092"
+      prometheus.job: "webhook-to-mq-vikunja"
+    networks: [communications_net]
+
+  # One-shot backup | verify | restore of the message store (theOrg scripts/comms_backup.py), run
+  # only by communications.sh. Runs as uid 999; COMMS_ROOT/backup is 999-owned, mode 0700.
+  backup:
+    image: ${COMMS_REGISTRY:?}/communications-backup:${COMMS_TAG:?}
+    profiles: ["ops"]
+    restart: "no"
+    environment:
+      PGHOST: comms-postgres
+      PGPORT: "5432"
+      PGUSER: comms
+      PGDATABASE: comms
+      PGPASSWORD: ${COMMS_POSTGRES_PASSWORD:-}
+    volumes:
+      - ${COMMS_ROOT:?}/backup:/backup
+    networks: [communications_net]
+
+  vector:
+    image: ${COMMS_REGISTRY:?}/communications-vector:${COMMS_TAG:?}
+    # vector-http.toml excludes its own logs by this name.
+    container_name: communications-vector-1
+    user: root
+    environment:
+      VECTOR_LOG: info
+      # No loki-ca volume, so the image takes vector-http.toml: plain HTTP inside observability's
+      # network on this host. chronicle-ingest is memory-system's, off the host.
+      LOKI_ADDRESS: loki:3100
+      CHRONICLE_VECTOR_ADDRESS: 10.0.0.150:6000
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${COMMS_ROOT:?}/vector:/var/lib/vector
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:9598/metrics >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    networks: [communications_net, observability]
+
+networks:
+  communications_net:
+    name: communications_net
+    driver: bridge
+  # d06/apps/observability's network (its project's observability-net). COMMS_OBSERVABILITY_NET
+  # names another one for a lab only.
+  observability:
+    name: ${COMMS_OBSERVABILITY_NET:-observability_observability-net}
+    external: true

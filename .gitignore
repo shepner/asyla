@@ -68,6 +68,8 @@ tags
 !/d06/apps/ticketing/docker-credential-ticketing-env
 # Exception: observability's Docker credential helper (as ticketing's; it holds no value)
 !/d06/apps/observability/docker-credential-observability-env
+# Exception: communications' Docker credential helper (as ticketing's; it holds no value)
+!/d06/apps/communications/docker-credential-communications-env
 *password*
 *.key
 *.pem

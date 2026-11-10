@@ -913,12 +913,17 @@ results = [
                       "docker" in d["runner"]["labels"])
            == ("vmh01", 106, "10.0.0.65/24", 8, 16384, {"storage": "local-data2", "size": "64G"},
                {"storage": "local-data2", "size": "64G"}, False, False))(build_host.load_spec("d06"))),
-    check("d06 runs ticketing and observability, each verified by its own verify; values come at use, none is a file",
+    check("d06 runs ticketing, observability and communications, each verified by its own verify; values come at "
+          "use, none is a file",
           (lambda d: [(a["name"], a.get("verify"), a.get("pull_token_env"), a.get("start_env"),
                        sorted(a.get("start_env_optional", [])), a.get("restore", True)) for a in d["app"]]
            == [("ticketing", ["verify"], "THEORG_REGISTRY_PULL_TOKEN",
                 ["TICKETING_DEPLOY_DEX_CLIENT_SECRET", "TICKETING_MCP_DEX_CLIENT_SECRET"], [], True),
-               ("observability", ["verify"], "THEORG_REGISTRY_PULL_TOKEN", None, D06_OBS_TOKENS, False)]
+               ("observability", ["verify"], "THEORG_REGISTRY_PULL_TOKEN", None, D06_OBS_TOKENS, False),
+               ("communications", ["verify"], "THEORG_REGISTRY_PULL_TOKEN",
+                ["COMMS_POSTGRES_PASSWORD", "COMMS_NATS_WEBHOOK_MQ_USERNAME", "COMMS_NATS_WEBHOOK_MQ_PASSWORD",
+                 "COMMS_CHAT_API_TOKEN", "COMMS_VIKUNJA_WEBHOOK_SECRET"], [], False)]
+           and [a.get("start") for a in d["app"] if a["name"] == "communications"] == [["pull", "up"]]
            and d.get("secret", []) == []
            and [(e["name"], e.get("env")) for e in d["external"]] == [("internal-access", ["D06_CF_API_TOKEN"])])(
                build_host.load_spec("d06"))),
