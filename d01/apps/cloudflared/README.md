@@ -90,6 +90,13 @@ After that, visiting any of those URLs from the internet will show the Cloudflar
 
 ## Adding Apps
 
+**On the live d01 tunnel, publish one name with external-access, not `setup-tunnel-api.py`:**
+`TUNNEL_ID=<d01 tunnel id> scripts/public-hostname.py add --host <name> --like sonarr --service http://<container>:<port>`
+from `asyla/projects/external-access` on the workstation (dry run first, then `--apply`). It adds the ingress rule,
+the DNS record and the name in the `d01 media` Access app, and changes nothing else. `setup-tunnel-api.py` would
+publish every `apps.yml` entry (homebridge, cameraui and duplicati are deliberately not public) and replace the
+whole tunnel config and the Access app's settings. Still add the name to `apps.yml`, which records what is public.
+
 When you add an app that should be exposed via the tunnel:
 
 1. Ensure the app’s compose uses a network that cloudflared is attached to (e.g. `media_net`), and add that network to cloudflared’s `networks` in `apps/cloudflared/docker-compose.yml` if needed.

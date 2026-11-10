@@ -9,6 +9,12 @@
 #       service: Docker service/container name
 #       port: Port the service listens on
 #       access: true/false - Enable Cloudflare Access (default: true)
+#
+# Publishing on d01 today is one name at a time, with external-access scripts/public-hostname.py add
+# (asyla/projects/external-access; ingress rule, DNS record and Access hostname, nothing else changed).
+# Do not run setup-tunnel-api.py against the live tunnel: it publishes every entry below (homebridge,
+# cameraui and duplicati are listed but deliberately not public) and replaces the tunnel's whole config
+# (dropping warp-routing) and the "d01 media" Access app (session, identity providers).
 
 domain: asyla.org
 
@@ -37,6 +43,11 @@ apps:
     hostname: transmission
     service: transmission
     port: 9091
+    access: true
+  - app: media
+    hostname: where-to-stream
+    service: where-to-stream
+    port: 8080
     access: true
   - app: calibre
     hostname: calibre

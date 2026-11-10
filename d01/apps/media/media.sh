@@ -1,5 +1,5 @@
 #!/bin/bash
-# Media stack on d01: Sonarr, Radarr, Overseerr, Jackett, Transmission.
+# Media stack on d01: Sonarr, Radarr, Overseerr, Jackett, Transmission, where-to-stream.
 # Usage: media.sh [switch ...] e.g. backup|up|down|logs|refresh|update|restart
 # Switches can be combined (e.g. down backup up). Run from anywhere; loads ~/scripts/docker/common.env.
 # Backups: per-service rsync snapshots with hardlinks, under ${DOCKER_D1}/media-<service>/<stamp>/.
@@ -29,13 +29,17 @@ export DATA1
 export LOCAL_TZ
 
 # Services in the media stack and the per-service config subdir under DOCKER_DL.
+# where-to-stream is not here: it has no config to back up (its source is shipped by
+# push-where-to-stream.sh, its /data is a rebuildable cache), and restore would refuse its empty dir.
 MEDIA_SERVICES=(sonarr radarr overseerr jackett transmission)
 
-# Directories that need to exist for `up`/`refresh`/`restart`.
+# Directories that need to exist for `up`/`refresh`/`restart`. overseerr/config/db is where-to-stream's
+# read-only mount of Overseerr's database dir; made here so docker does not create it as root.
 MEDIA_UP_DIRS=(
   sonarr/config radarr/config overseerr/config jackett/config jackett/downloads
   transmission/config transmission/watch transmission/downloads
   transmission/downloads/complete transmission/downloads/incomplete
+  overseerr/config/db where-to-stream/src where-to-stream/data
 )
 
 run_compose() {
@@ -47,6 +51,11 @@ ensure_dirs() {
   for dir in "${MEDIA_UP_DIRS[@]}"; do
     mkdir -p "${DOCKER_DL}/${dir}"
   done
+  # where-to-stream runs as the docker user with no root entrypoint to fix ownership (unlike the
+  # linuxserver images), so its writable /data must belong to that user when root made the dir.
+  if [ "$(id -u)" -eq 0 ]; then
+    chown "${DOCKER_UID:-1003}:${DOCKER_GID:-1000}" "${DOCKER_DL}/where-to-stream/data"
+  fi
 }
 
 do_backup() {

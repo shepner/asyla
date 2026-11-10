@@ -1,5 +1,8 @@
-# Media stack on d01: Sonarr, Radarr, Overseerr, Jackett, Transmission
-# Working dirs under /mnt/docker (sonarr, radarr, overseerr, jackett, transmission).
+# Media stack on d01: Sonarr, Radarr, Overseerr, Jackett, Transmission, where-to-stream
+# Working dirs under /mnt/docker (sonarr, radarr, overseerr, jackett, transmission, where-to-stream).
+# where-to-stream (personal project, gitea personal/where-to-stream): stock python image running the
+# source that push-where-to-stream.sh ships to /mnt/docker/where-to-stream/src; reads the Radarr,
+# Sonarr and Overseerr databases read-only and serves a page of where the wishlist streams.
 # Run: ~/scripts/d01/apps/media/media.sh up
 # Access via cloudflared tunnel or internal proxy (no published ports except Transmission peer port).
 # Requires: DOCKER_DL (/mnt/docker), DOCKER_UID, DOCKER_GID, LOCAL_TZ; /mnt/nas/data1/media for library.
@@ -141,3 +144,43 @@ services:
     ports:
       - "51413:51413"
       - "51413:51413/udp"
+
+  # Personal project (~/local/personal/projects/where-to-stream; README "Container (d01 media stack)").
+  # No image is built: python:3.13-alpine runs /app, the source push-where-to-stream.sh ships (git
+  # archive of its HEAD). The three apps' config dirs are mounted read-only as directories, not files:
+  # their SQLite databases are in WAL mode and need the -wal/-shm files beside them. Everything it
+  # writes (JustWatch cache, the page) goes to /data. Outbound HTTPS to apis.justwatch.com.
+  where-to-stream:
+    image: python:3.13-alpine
+    container_name: where-to-stream
+    restart: unless-stopped
+    command: ["python3", "/app/serve.py"]
+    user: "${DOCKER_UID:-1003}:${DOCKER_GID:-1000}"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=5)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      - radarr
+      - sonarr
+      - overseerr
+    environment:
+      - TZ=${LOCAL_TZ:-America/Chicago}
+    volumes:
+      - ${DOCKER_DL:-/mnt/docker}/where-to-stream/src:/app:ro
+      - ${DOCKER_DL:-/mnt/docker}/radarr/config:/dbs/radarr:ro
+      - ${DOCKER_DL:-/mnt/docker}/sonarr/config:/dbs/sonarr:ro
+      - ${DOCKER_DL:-/mnt/docker}/overseerr/config/db:/dbs/overseerr:ro
+      - ${DOCKER_DL:-/mnt/docker}/where-to-stream/data:/data
+    networks:
+      - media_net
+    # Port 8080, not published: cloudflared-d01 and caddy-internal-d01 reach it on media_net.

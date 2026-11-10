@@ -6,7 +6,7 @@ Folders deployed here by other repos must be listed in `apps/.gitignore`, or `up
 
 | App | Script | Notes |
 |-----|--------|--------|
-| **media** | `~/scripts/d01/apps/media/media.sh` | Sonarr, Radarr, Overseerr, Jackett, Transmission |
+| **media** | `~/scripts/d01/apps/media/media.sh` | Sonarr, Radarr, Overseerr, Jackett, Transmission, where-to-stream (source via `push-where-to-stream.sh`) |
 | **cloudflared** | `~/scripts/d01/apps/cloudflared/cloudflared.sh` | Cloudflare Tunnel; needs `.env` with TUNNEL_TOKEN |
 | **internal-access** | `~/scripts/d01/apps/internal-access/internal-access.sh` | Caddy for split-DNS (ports 80/443). Source: `asyla/projects/internal-access` (`deploy-host.sh d01`), not this repo |
 | **calibre** | `~/scripts/d01/apps/calibre/calibre.sh` | Calibre e-book manager (tunnel + Access) |
