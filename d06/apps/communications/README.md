@@ -16,7 +16,10 @@ theOrg's own deploy does not target d06.
   `images`, `logs`; switches combine (`backup update up verify`). `up` starts in DEPLOY.md's order:
   nats, nats-exporter, comms-postgres, chat-api, webhook-to-mq-vikunja, vector. vector starts only
   when observability's network (`observability_observability-net`) exists; otherwise `up` warns
-  and the stack's logs and chronicle episodes are lost until it is started again.
+  and the stack's logs and chronicle episodes are lost until it is started again. `import PATH`
+  stands alone (C4: another host's backup into the mirror; below, Import).
+- `compose.no-ticketing.yml`: added by `up` only when ticketing's network is missing (below).
+- `import_from_host.sh`: runs on the workstation; the Mini's final backup into d06's mirror (Import).
 - `docker-credential-communications-env`: a read-only Docker credential helper (a copy of
   ticketing's) for the pulls.
 - `theorg/`: theOrg's anonymous-refusal check, vendored unchanged (below).
@@ -26,6 +29,12 @@ theOrg's own deploy does not target d06.
 - Compose project `communications`, so containers are `communications-<service>-1`. Network
   `communications_net`; vector is also on `observability_observability-net`, where Loki is
   `loki:3100` (plain HTTP). Chronicle episodes go to `10.0.0.150:6000` (memory-system, off the host).
+- webhook-to-mq-vikunja alone also joins ticketing's network (`ticketing_net`, external: ticketing's
+  compose owns it, nothing here creates it; `COMMS_TICKETING_NET` names another for a lab), with the
+  alias `webhook-to-mq-vikunja`, so Vikunja posts to `http://webhook-to-mq-vikunja:9092/webhook/vikunja`.
+  nats, chat-api and the store stay off it. When `ticketing_net` does not exist, `up` warns and
+  starts webhook-to-mq on `communications_net` only (`compose.no-ticketing.yml`, compose's
+  `!override`); start ticketing, then run `up` again to put it on both.
 - Published on `127.0.0.1` only: chat-api `9098`, nats monitoring `8222` (no auth: `verify` and the
   exporter), the exporter `7777`. Not published: nats `4222`, NATS over WebSocket `8080`,
   webhook-to-mq `9092`. d06 already used 3456, 9090, 9091, 9093, 9099, 9107, 9111, 9598, 80 and
@@ -143,6 +152,38 @@ advances config_load_time and keeps auth; env unset -> nats refuses to start (fa
 - `d06/host.toml` sets `restore = false` for now: there is no data on d06 before the cutover, and
   no nightly backup schedule yet.
 
+### Import
+
+`communications.sh import PATH` puts another host's backup (C4: the Mini's final one) into the
+mirror, where `restore` reads it. `PATH`, on d06, is a tar of, or a directory holding, the four
+files of theOrg's backup: `STATUS`, `comms.dump`, `tables.tsv`, `manifest.sha256`. It copies them
+owner-only into a work directory under `/mnt/docker/Communications/import/` (removed at exit),
+checks them as theOrg's restore will (`STATUS` starts `OK `; the manifest lists exactly `comms.dump`
+and `tables.tsv`, each with a matching sha256; `tables.tsv` names `public.messages`, whose row count
+it prints), and mirrors them with backup_lib's `do_rsync_mirror_backup`, so `.backup-status` reads
+`IN PROGRESS` until the copy is whole. It refuses a mirror that already holds anything unless
+`IMPORT_FORCE=1` (the NAS snapshots keep the one replaced). It needs no start value and no
+container, and it never restores: that is `RESTORE_FORCE=1 ... restore`, its own approval.
+
+`import_from_host.sh MINI_PATH` runs on the workstation: `ssh 10.0.0.150` (as this user) packs the
+four files in `MINI_PATH` as a tar, piped through the workstation's memory into `ssh docker@d06`,
+which writes `/mnt/docker/Communications/import/mini-<UTC time>.tar` under umask 077; then it runs
+`import` on d06 and removes the tar (kept for a retry when import fails). `IMPORT_FORCE=1` is
+passed on. It uses no root container, so the Mini's ssh user must be able to read the four files;
+if tar says Permission denied, theOrg makes them readable (not worked around here). `MINI_SSH`,
+`D06_SSH`, `D06_IMPORT_DIR` and `D06_SCRIPT` name others for a lab.
+
+C4 steps 3-4 (each its own approval; `<MINI_DIR>` is the Mini's `COMMS_BACKUP_DIR` from step 2):
+
+```sh
+cd ~/local/asyla/projects/asyla-hosts && d06/apps/communications/import_from_host.sh <MINI_DIR>
+cd ~/local/asyla && ssh docker@d06 'RESTORE_FORCE=1 ~/scripts/d06/apps/communications/communications.sh restore'
+```
+
+Step 3 checks: import prints the manifest OK and `public.messages` N rows, and the mirror's
+`.backup-status` reads `OK`. Step 4 takes the password from the running comms-postgres (no start
+values); then `verify`.
+
 ## Verify
 
 DEPLOY.md, After a restore, checks 1-4, each fatal: chat-api `/health` 200 on `127.0.0.1:9098`
@@ -174,6 +215,6 @@ a lab maps `theorg.asyla.org` to its own address (`--add-host`).
 - No mq-users: the Staff workers' NATS users (`COMMS_MQ_USER_<X>_USERNAME`/`_PASSWORD`, to be
   `start_env_optional`) wait for theOrg to name the principals (one exact vault path each).
 - The C4 cutover: the names (`theorg.asyla.org` and `nats.asyla.org` CNAMEs, the off-LAN tunnel
-  on d06), Vikunja's webhook target moved to d06's webhook-to-mq (9092 is not reachable from
-  Vikunja today), Staff's `NATS_URL=wss://nats.asyla.org`, the Mini's final message-store copy put
-  into the mirror, `restore = true`, and a nightly backup schedule.
+  on d06), Vikunja's webhook target moved to d06's webhook-to-mq (reachable over `ticketing_net`
+  once deployed; Vikunja's setting is theOrg's), Staff's `NATS_URL=wss://nats.asyla.org`, the Mini's
+  final message-store copy put into the mirror (Import), `restore = true`, and a nightly backup schedule.

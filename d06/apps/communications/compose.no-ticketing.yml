@@ -1,0 +1,8 @@
+# Added by communications.sh up only when ticketing's network (ticketing_net) does not exist:
+# webhook-to-mq-vikunja then starts on communications_net alone, and up warns that Vikunja cannot
+# reach it. The next up with the network present recreates it on both (compose sees its networks
+# change). As vector is left out when observability's network is missing. Needs compose's
+# !override (2.24.4 or later; d06 has 5.7.0, read 2026-11-10).
+services:
+  webhook-to-mq-vikunja:
+    networks: !override [communications_net]

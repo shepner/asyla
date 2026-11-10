@@ -122,8 +122,11 @@ services:
       prometheus.job: "chat-api"
     networks: [communications_net]
 
-  # Vikunja's webhook target. Not published (Vikunja reaching it is later work); verify checks
-  # /health from inside the container.
+  # Vikunja's webhook target. Not published: Vikunja (d06/apps/ticketing, on ticketing_net) posts
+  # to http://webhook-to-mq-vikunja:9092/webhook/vikunja over ticketing_net, which this service
+  # alone joins (C4 P1); nats, chat-api and the store stay off it. verify checks /health from
+  # inside the container. When ticketing_net does not exist, communications.sh up starts it on
+  # communications_net only (compose.no-ticketing.yml) and warns.
   webhook-to-mq-vikunja:
     image: ${COMMS_REGISTRY:?}/communications-webhook-to-mq:${COMMS_TAG:?}
     depends_on:
@@ -152,7 +155,11 @@ services:
       prometheus.scrape: "true"
       prometheus.port: "9092"
       prometheus.job: "webhook-to-mq-vikunja"
-    networks: [communications_net]
+    networks:
+      communications_net: {}
+      ticketing:
+        # The name Vikunja's webhook URL uses, set here rather than left to compose's defaults.
+        aliases: [webhook-to-mq-vikunja]
 
   # One-shot backup | verify | restore of the message store (theOrg scripts/comms_backup.py), run
   # only by communications.sh. Runs as uid 999; COMMS_ROOT/backup is 999-owned, mode 0700.
@@ -201,4 +208,11 @@ networks:
   # names another one for a lab only.
   observability:
     name: ${COMMS_OBSERVABILITY_NET:-observability_observability-net}
+    external: true
+  # d06/apps/ticketing's network (its compose names it ticketing_net), for Vikunja's webhooks only.
+  # External: ticketing's compose owns it, so communications never creates it (one made here would
+  # lack the labels ticketing's compose looks for: inferred, not tested). COMMS_TICKETING_NET names
+  # another for a lab only.
+  ticketing:
+    name: ${COMMS_TICKETING_NET:-ticketing_net}
     external: true

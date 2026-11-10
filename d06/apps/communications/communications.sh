@@ -1,7 +1,8 @@
 #!/bin/bash
 # theOrg's communications on d06 (NATS, chat-api and its message store, webhook-to-mq, vector).
 # Usage: communications.sh [switch ...], e.g. up|down|restart|backup|restore|verify|update|logs;
-# switches can be combined. Loads ~/scripts/docker/common.env. No file asyla writes, here or on the
+# switches can be combined; `import PATH` stands alone (C4: another host's backup into the mirror,
+# never restored by it). Loads ~/scripts/docker/common.env. No file asyla writes, here or on the
 # host, holds a secret: the workstation resolves the five values below from OpenBao at deploy and
 # hands them to this process's environment (build_host.py [[app]] start_env); up and restart refuse
 # without them.
@@ -78,9 +79,14 @@ ensure_dirs() {
   fi
 }
 
-# The temp directory of this run: the pull config and the generated nats override. Removed at exit.
+# The temp directory of this run: the pull config and the generated nats override. Removed at exit,
+# as is the work directory of an import (IMPORT_WORK, a copy of the chat history).
 RUN_TMP=""
-remove_run_tmp() { if [ -n "$RUN_TMP" ]; then rm -rf "$RUN_TMP"; fi; }
+IMPORT_WORK=""
+remove_run_tmp() {
+  if [ -n "$RUN_TMP" ]; then rm -rf "$RUN_TMP"; fi
+  if [ -n "$IMPORT_WORK" ]; then rm -rf "$IMPORT_WORK"; fi
+}
 trap remove_run_tmp EXIT
 run_tmp() {
   if [ -z "$RUN_TMP" ]; then RUN_TMP="$(mktemp -d)" || return; fi
@@ -88,13 +94,16 @@ run_tmp() {
 
 # Set by prepare_nats: the override naming nats's NATS_PW_<i> (names only, no value).
 NATS_OVERRIDE=""
+# Set by do_up when ticketing's network is missing: webhook-to-mq-vikunja on communications_net only.
+NO_TICKETING_OVERRIDE=""
+# Vikunja's network (d06/apps/ticketing/compose.yml names it ticketing_net); compose.yml's ticketing.
+TICKETING_NET="${COMMS_TICKETING_NET:-ticketing_net}"
 
 run_compose() {
-  if [ -n "$NATS_OVERRIDE" ]; then
-    docker compose -f "$COMPOSE_FILE" -f "$NATS_OVERRIDE" --project-directory "$SCRIPT_DIR" "$@"
-  else
-    docker compose -f "$COMPOSE_FILE" --project-directory "$SCRIPT_DIR" "$@"
-  fi
+  local files=(-f "$COMPOSE_FILE")
+  if [ -n "$NATS_OVERRIDE" ]; then files+=(-f "$NATS_OVERRIDE"); fi
+  if [ -n "$NO_TICKETING_OVERRIDE" ]; then files+=(-f "$NO_TICKETING_OVERRIDE"); fi
+  docker compose "${files[@]}" --project-directory "$SCRIPT_DIR" "$@"
 }
 
 # The value as nats reads it from its environment: a double-quoted NATS string, \ and " escaped
@@ -262,6 +271,12 @@ do_up() {
   run_compose up -d nats-exporter || return
   run_compose up -d --wait --wait-timeout "$COMMS_WAIT_S" comms-postgres || return
   run_compose up -d --wait --wait-timeout "$COMMS_WAIT_S" chat-api || return
+  # Vikunja reaches webhook-to-mq over ticketing's network. Never created here (ticketing's compose
+  # owns it): without it webhook-to-mq starts on communications_net alone, as vector below.
+  if ! docker network inspect "$TICKETING_NET" >/dev/null 2>&1; then
+    echo "[WARN] network $TICKETING_NET does not exist (d06/apps/ticketing down?): webhook-to-mq-vikunja starts on communications_net only, so Vikunja's webhooks cannot reach it; start ticketing, then run up again" >&2
+    NO_TICKETING_OVERRIDE="$SCRIPT_DIR/compose.no-ticketing.yml"
+  fi
   run_compose up -d --wait --wait-timeout "$COMMS_WAIT_S" webhook-to-mq-vikunja || return
   if docker network inspect "${COMMS_OBSERVABILITY_NET:-observability_observability-net}" >/dev/null 2>&1; then
     run_compose up -d vector || return
@@ -375,6 +390,142 @@ do_restore() {
     run_compose start chat-api || return
     echo "[INFO] chat-api started again; run verify"
   fi
+}
+
+# C4 P2: another host's copy of the message store (the Mini's final backup) into the mirror, where
+# restore reads it. How it reaches d06: import_from_host.sh, run on the workstation, streams the
+# four files from the source host over ssh, as a tar, into $IMPORT_DIR, then runs this (README.md,
+# Import). `import PATH` takes that tar, or a directory holding the four files, already on this
+# host. It checks the copy as theOrg's restore will (STATUS starts "OK "; manifest.sha256 lists
+# exactly comms.dump and tables.tsv, each with its sha256; tables.tsv is schema<TAB>table<TAB>rows
+# and names public.messages), owner-only in a work directory owned by this user (files 0600, the
+# directory 0700: as the stage after a backup), then mirrors it with backup_lib's
+# do_rsync_mirror_backup. Its .backup-status reads IN PROGRESS until the copy is complete and OK
+# after, and restore takes only an OK mirror, so restore never sees a half copy. A mirror that
+# already holds anything is refused unless IMPORT_FORCE=1 (the NAS snapshots keep the one it
+# replaces). Needs no start value, no container and no compose call. Never restores: that is
+# `RESTORE_FORCE=1 communications.sh restore`, its own approval.
+IMPORT_DIR="$APP_ROOT/import"
+IMPORT_FILES=(STATUS comms.dump tables.tsv manifest.sha256)
+
+# cat as this user, or through sudo -n when the file is another user's owner-only (the image's 999).
+read_file() {
+  if [ -r "$1" ]; then cat -- "$1"; else as_root cat -- "$1"; fi
+}
+
+# theOrg's _read_status, _check_manifest, _read_tables and its expected public.messages
+# (scripts/comms_backup.py at beff7c55). Sets IMPORT_STATUS and IMPORT_MESSAGES; prints one [ERROR]
+# line on a failure.
+check_backup_copy() {
+  local d="$1" f line digest name got names=" " n=0 tables
+  for f in "${IMPORT_FILES[@]}"; do
+    if [ -L "$d/$f" ] || [ ! -f "$d/$f" ]; then
+      echo "[ERROR] import: $f is missing or not a regular file" >&2
+      return 1
+    fi
+  done
+  IMPORT_STATUS="$(head -1 "$d/STATUS")"
+  case "$IMPORT_STATUS" in
+    "OK "*) ;;
+    *) echo "[ERROR] import: STATUS does not start with \"OK \" (${IMPORT_STATUS:0:60}); not a completed backup" >&2; return 1 ;;
+  esac
+  while IFS= read -r line || [ -n "$line" ]; do
+    n=$((n + 1))
+    digest="${line%%  *}"
+    name="${line#*  }"
+    if [ "$digest" = "$line" ] || ! [[ "$digest" =~ ^[0-9a-f]{64}$ ]]; then
+      echo "[ERROR] import: manifest.sha256 line $n is malformed" >&2
+      return 1
+    fi
+    case "$name" in
+      comms.dump|tables.tsv) ;;
+      *) echo "[ERROR] import: manifest.sha256 line $n names ${name:0:60}, not comms.dump or tables.tsv" >&2; return 1 ;;
+    esac
+    case "$names" in *" $name "*)
+      echo "[ERROR] import: manifest.sha256 names $name twice" >&2
+      return 1 ;;
+    esac
+    names="$names$name "
+    got="$(sha256sum < "$d/$name")" || return
+    if [ "${got%% *}" != "$digest" ]; then
+      echo "[ERROR] import: sha256 mismatch: $name (a damaged or partial copy)" >&2
+      return 1
+    fi
+  done < "$d/manifest.sha256"
+  if [ "$n" -ne 2 ]; then
+    echo "[ERROR] import: manifest.sha256 lists $n files, expected comms.dump and tables.tsv" >&2
+    return 1
+  fi
+  tables="$(awk -F'\t' 'NF != 3 || $3 !~ /^[0-9]+$/ { print "bad " NR; exit }
+    $1 == "public" && $2 == "messages" { m = $3 } END { if (m != "") print "messages " m; else print "none" }' "$d/tables.tsv")" || return
+  case "$tables" in
+    "messages "*) IMPORT_MESSAGES="${tables#messages }" ;;
+    "bad "*) echo "[ERROR] import: tables.tsv line ${tables#bad } is malformed" >&2; return 1 ;;
+    *) echo "[ERROR] import: tables.tsv does not name public.messages" >&2; return 1 ;;
+  esac
+}
+
+import_copy() {
+  local src="$1" f theirs="" their_mark="" newer=""
+  if [ -L "$src" ] || { [ ! -f "$src" ] && [ ! -d "$src" ]; }; then
+    echo "[ERROR] import: $src is not a file or a directory on this host (import_from_host.sh copies it here: README.md, Import)" >&2
+    return 1
+  fi
+  mkdir -p "$IMPORT_DIR" || return
+  chmod 0700 "$IMPORT_DIR" || return
+  IMPORT_WORK="$(mktemp -d "$IMPORT_DIR/import.XXXXXX")" || return
+  if [ -d "$src" ]; then
+    for f in "${IMPORT_FILES[@]}"; do
+      if [ -L "$src/$f" ] || [ ! -f "$src/$f" ]; then
+        echo "[ERROR] import: $src/$f is missing or not a regular file" >&2
+        return 1
+      fi
+      read_file "$src/$f" > "$IMPORT_WORK/$f" || return
+    done
+  else
+    # Only the four names, at the top of the tar, as this user: no other member, owner or mode lands.
+    if ! read_file "$src" | tar -xf - -C "$IMPORT_WORK" --no-same-owner --no-same-permissions "${IMPORT_FILES[@]}"; then
+      echo "[ERROR] import: $src is not a tar holding ${IMPORT_FILES[*]} at its top (as import_from_host.sh writes it)" >&2
+      return 1
+    fi
+    # Before the chmod below, which would follow a symlink member out of the work directory.
+    for f in "${IMPORT_FILES[@]}"; do
+      if [ -L "$IMPORT_WORK/$f" ] || [ ! -f "$IMPORT_WORK/$f" ]; then
+        echo "[ERROR] import: $f in $src is not a regular file" >&2
+        return 1
+      fi
+    done
+  fi
+  chmod 0600 "${IMPORT_FILES[@]/#/$IMPORT_WORK/}" || return
+  chmod 0700 "$IMPORT_WORK" || return
+  check_backup_copy "$IMPORT_WORK" || return
+  echo "[INFO] import: manifest OK; STATUS $IMPORT_STATUS; public.messages $IMPORT_MESSAGES rows (tables.tsv)"
+  if [ -e "$BACKUP_DIR" ] && [ -n "$(ls -A "$BACKUP_DIR" 2>/dev/null)" ]; then
+    theirs="$(head -1 "$BACKUP_DIR/STATUS" 2>/dev/null)" || theirs=""
+    their_mark="$(head -1 "$BACKUP_DIR/.backup-status" 2>/dev/null)" || their_mark=""
+    if [[ "$theirs" > "$IMPORT_STATUS" ]]; then newer=", newer than this import's"; fi
+    if [ "${IMPORT_FORCE:-0}" != 1 ]; then
+      echo "[ERROR] import: $BACKUP_DIR already holds a backup (STATUS ${theirs:-none}$newer; .backup-status ${their_mark:-none}); not overwriting it (IMPORT_FORCE=1 replaces it; the NAS snapshots keep the old one)" >&2
+      return 1
+    fi
+    echo "[WARN] import: IMPORT_FORCE=1: replacing the backup in $BACKUP_DIR (STATUS ${theirs:-none}$newer)" >&2
+  fi
+  do_rsync_mirror_backup "$IMPORT_WORK" "$BACKUP_DIR" -- "${STAGE_EXCLUDES[@]}" || return
+  case "$(head -1 "$BACKUP_DIR/.backup-status" 2>/dev/null)" in
+    OK*) ;;
+    *) echo "[ERROR] import: $BACKUP_DIR/.backup-status is not OK after the mirror" >&2; return 1 ;;
+  esac
+  echo "[INFO] import: in $BACKUP_DIR ($(head -1 "$BACKUP_DIR/.backup-status")); not restored: RESTORE_FORCE=1 $0 restore puts it into the live store (its own approval)"
+}
+
+# umask 077 for the import only, so no copy of the chat history is ever readable by another user.
+do_import() {
+  local um rc=0
+  um="$(umask)"
+  umask 077
+  import_copy "$@" || rc=$?
+  umask "$um"
+  return "$rc"
 }
 
 # build_host.py's replica guard: pull what is missing (with the workstation's pull token), then
@@ -512,6 +663,9 @@ usage() {
   echo "  restore  - $BACKUP_DIR into an empty $APP_ROOT/pg-data through theOrg's restore (rebuilt host);" >&2
   echo "             RESTORE_FORCE=1 replaces the live database (theOrg keeps it in backup/.pre-restore-*);" >&2
   echo "             the password as for backup" >&2
+  echo "  import PATH - alone: another host's backup (a tar from import_from_host.sh, or a directory of" >&2
+  echo "             STATUS comms.dump tables.tsv manifest.sha256) already on this host, checked, into" >&2
+  echo "             $BACKUP_DIR; refused over one there unless IMPORT_FORCE=1; never restores" >&2
   echo "  update   - Pull the images for COMMS_TAG (screen if interactive); use up/restart to start" >&2
   echo "  pull     - Pull the images now (inline)" >&2
   echo "  images   - Pull missing images, then list the default services' images (build_host.py's replica guard)" >&2
@@ -532,6 +686,16 @@ fi
 
 if [ "$1" = "logs" ]; then
   run_compose logs -f "${@:2}"
+  exit 0
+fi
+
+# import takes a path, so it combines with no other switch.
+if [ "$1" = "import" ]; then
+  if [ $# -ne 2 ] || [ -z "$2" ]; then
+    usage
+    exit 1
+  fi
+  do_import "$2" || exit 1
   exit 0
 fi
 
