@@ -26,6 +26,12 @@ services:
       VIKUNJA_RATELIMIT_ENABLED: "false"
       VIKUNJA_CORS_ENABLE: "true"
       VIKUNJA_CORS_ORIGINS: https://vikunja.asyla.org
+      # Webhooks may call private addresses, so Vikunja reaches communications' relay at
+      # http://webhook-to-mq-vikunja:9092/webhook/vikunja on ticketing_net. Vikunja 2.2.2 has no
+      # allowlist: this lets every webhook reach the LAN. Registration is off, so only existing accounts
+      # can make one. The operator: "Yes, allow it" (2026-11-10, asyla session local_379bb45f). It
+      # takes effect at the next ticketing up (the C4 cutover).
+      VIKUNJA_OUTGOINGREQUESTS_ALLOWNONROUTABLEIPS: "true"
     volumes:
       - ${TICKETING_ROOT:?}/db:/db
     # Healthcheck: asyla backlog 2026-10-20-hosts-observability-through-theorg (operator, 2026-10-20).
