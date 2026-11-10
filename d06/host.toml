@@ -76,8 +76,11 @@ start_env_optional = ["ALERT_RELAY_OPENBAO_WRAPPED_TOKEN", "EMPORIA_OPENBAO_WRAP
 # theOrg's secrets-vault lets hub asyla read those records. No restore: d06 holds no chat data
 # before the cutover (C4), when the Mini's final copy goes into the mirror. A replica of d06 gets
 # no start_env, so communications.sh up refuses there: leave it out with [replica] apps.
-# The Staff workers' NATS users (COMMS_MQ_USER_<X>_USERNAME/_PASSWORD) join start_env_optional
-# once theOrg names them.
+# The Staff workers' NATS users (COMMS_MQ_USER_<X>_USERNAME/_PASSWORD) are start_env_optional. theOrg
+# named the four principals on 2026-11-10 (secrets-vault #55, 6e7fc854): v2/communications/mq-users/
+# <name>, username = uid. Optional, so an unprovisioned record is skipped and does not fail the deploy.
+# Pass a pair only once identity-platform has provisioned it. Order: provision, then render on d06 and
+# the Mini, then redeploy Staff, or that worker gets Authorization Violation.
 [[app]]
 name = "communications"
 start = ["pull", "up"]
@@ -85,6 +88,7 @@ verify = ["verify"]
 restore = false
 pull_token_env = "THEORG_REGISTRY_PULL_TOKEN"
 start_env = ["COMMS_POSTGRES_PASSWORD", "COMMS_NATS_WEBHOOK_MQ_USERNAME", "COMMS_NATS_WEBHOOK_MQ_PASSWORD", "COMMS_CHAT_API_TOKEN", "COMMS_VIKUNJA_WEBHOOK_SECRET"]
+start_env_optional = ["COMMS_MQ_USER_STAFF_WORKER_1_USERNAME", "COMMS_MQ_USER_STAFF_WORKER_1_PASSWORD", "COMMS_MQ_USER_STAFF_ALERT_TRIAGE_1_USERNAME", "COMMS_MQ_USER_STAFF_ALERT_TRIAGE_1_PASSWORD", "COMMS_MQ_USER_STAFF_DELIVERY_MANAGER_1_USERNAME", "COMMS_MQ_USER_STAFF_DELIVERY_MANAGER_1_PASSWORD", "COMMS_MQ_USER_STAFF_QA_1_USERNAME", "COMMS_MQ_USER_STAFF_QA_1_PASSWORD"]
 
 [[external]]
 name = "internal-access"
