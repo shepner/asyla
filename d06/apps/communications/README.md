@@ -169,14 +169,18 @@ container, and it never restores: that is `RESTORE_FORCE=1 ... restore`, its own
 four files in `MINI_PATH` as a tar, piped through the workstation's memory into `ssh docker@d06`,
 which writes `/mnt/docker/Communications/import/mini-<UTC time>.tar` under umask 077; then it runs
 `import` on d06 and removes the tar (kept for a retry when import fails). `IMPORT_FORCE=1` is
-passed on. It uses no root container, so the Mini's ssh user must be able to read the four files;
-if tar says Permission denied, theOrg makes them readable (not worked around here). `MINI_SSH`,
-`D06_SSH`, `D06_IMPORT_DIR` and `D06_SCRIPT` name others for a lab.
+passed on. `import_from_host.sh --volume NAME` reads the four files from the named Docker volume
+`NAME` on the Mini instead (exactly one of the two modes): on Docker Desktop a volume has no host
+path the Mac user can read, so the Mini runs `docker run --rm -v NAME:/b:ro IMAGE tar -C /b -cf -
+...`, a throwaway read-only mount (`IMAGE` is `IMPORT_TAR_IMAGE`, default `alpine:3.20`). In
+`MINI_PATH` mode no container runs, so the Mini's ssh user must be able to read the four files.
+`MINI_SSH`, `D06_SSH`, `D06_IMPORT_DIR` and `D06_SCRIPT` name others for a lab.
 
-C4 steps 3-4 (each its own approval; `<MINI_DIR>` is the Mini's `COMMS_BACKUP_DIR` from step 2):
+C4 steps 3-4 (each its own approval; theOrg's final `backup.yml` on the Mini writes the volume
+`communications-final-backup` in step 2):
 
 ```sh
-cd ~/local/asyla/projects/asyla-hosts && d06/apps/communications/import_from_host.sh <MINI_DIR>
+cd ~/local/asyla/projects/asyla-hosts && d06/apps/communications/import_from_host.sh --volume communications-final-backup
 cd ~/local/asyla && ssh docker@d06 'RESTORE_FORCE=1 ~/scripts/d06/apps/communications/communications.sh restore'
 ```
 

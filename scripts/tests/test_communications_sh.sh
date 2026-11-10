@@ -86,7 +86,7 @@ cat > "$T/bin/ssh" <<'EOF'
 #!/bin/bash
 echo "ssh $*" >> "$STUB_LOG"
 case "$*" in
-  *"tar --no-xattrs -cf -"*) echo "$STUB_TAR_BYTES" ;;
+  *"tar --no-xattrs -cf -"*|*"tar -C /b -cf -"*) echo "$STUB_TAR_BYTES" ;;
   *"cat > "*) cat > "$STUB_RECEIVED" ;;
   *" import "*) exit "${STUB_IMPORT_RC:-0}" ;;
 esac
@@ -335,5 +335,35 @@ elif has "$LOG" "IMPORT_FORCE=1 ~/scripts/" && ! has "$LOG" "rm -f" && has "$OUT
   ok "import_from_host.sh passes IMPORT_FORCE=1 on and keeps the tar when import fails"
 else bad "import_from_host.sh passes IMPORT_FORCE=1 on and keeps the tar when import fails" "$LOG
 $OUT"; fi
+
+# 18. --volume NAME: the Mini reads the volume through a throwaway read-only container; the rest
+# (d06's import dir, import, removal) is as for a path.
+if run_helper -- --volume communications-final-backup; then
+  l12="$(sed -n 1,2p <<< "$LOG")"; l1="$(grep -F 10.0.0.150 <<< "$l12")"
+  if has "$l1" "ssh -o BatchMode=yes 10.0.0.150 PATH=/usr/local/bin:\$PATH docker run --rm -v communications-final-backup:/b:ro alpine:3.20 tar -C /b -cf - STATUS comms.dump tables.tsv manifest.sha256" \
+      && has "$LOG" "communications.sh import '/mnt/docker/Communications/import/mini-" \
+      && has "$LOG" "docker@d06 rm -f '/mnt/docker/Communications/import/mini-" \
+      && [ "$(cat "$T/received")" = "$TAR_BYTES" ]; then
+    ok "import_from_host.sh --volume reads the volume read-only through docker run, then imports as for a path"
+  else bad "import_from_host.sh --volume reads the volume read-only through docker run" "$LOG"; fi
+else bad "import_from_host.sh --volume with a good name succeeds" "$OUT"; fi
+if run_helper IMPORT_TAR_IMAGE=busybox:1.36 -- --volume v1 && has "$LOG" "-v v1:/b:ro busybox:1.36 tar -C /b"; then
+  ok "import_from_host.sh --volume takes IMPORT_TAR_IMAGE"
+else bad "import_from_host.sh --volume takes IMPORT_TAR_IMAGE" "$LOG"; fi
+
+# 19. --volume refusals, each before any ssh: a bad name (leading dot or dash, a space, a quote, a
+# ;, a /, a $), a bad IMPORT_TAR_IMAGE, both modes, --volume without a name, and neither mode.
+refused=0
+for n in ".v" "-v" "a b" "a'b" "a;b" "a/b" 'a$b' ""; do
+  run_helper -- --volume "$n" && refused=1; has "$LOG" "ssh" && refused=1
+done
+run_helper "IMPORT_TAR_IMAGE=alpine;id" -- --volume v1 && refused=1; has "$LOG" "ssh" && refused=1
+run_helper -- --volume v1 /Users/x/comms-backup && refused=1; has "$LOG" "ssh" && refused=1
+run_helper -- /Users/x/comms-backup --volume v1 && refused=1; has "$LOG" "ssh" && refused=1
+run_helper -- --volume && refused=1; has "$LOG" "ssh" && refused=1
+run_helper -- && refused=1; has "$LOG" "ssh" && refused=1
+if [ "$refused" = 0 ] && has "$OUT" "exactly one"; then
+  ok "import_from_host.sh refuses a bad volume name or image, both modes, and neither, before any ssh"
+else bad "import_from_host.sh refuses a bad volume name or image, both modes, and neither" "$OUT"; fi
 
 exit "$fail"
