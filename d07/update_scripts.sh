@@ -19,8 +19,8 @@
 # Mirror rule: a path under ~/scripts/<host>/ or ~/scripts/docker/ is deleted
 # unless the repo tracks it or one of the repo's .gitignore files matches it.
 # .gitignore is the preserve list: secrets (*.env), runtime files (__pycache__/)
-# and app folders that other repos deploy onto this host (none on d07: no other repo
-# deploys onto it, so d07/apps/ has no .gitignore of its own).
+# and app folders that other repos deploy onto this host (on d07: external-access's
+# cloudflared, listed in d07/apps/.gitignore).
 #
 # Replica: when <host>/host.toml has [replica] of = "dNN" (test01 or d04 as a d03 replica; d03 is none), the source
 # host's tree is checked out, pruned and installed too, as ~/scripts/dNN/, so its app scripts run

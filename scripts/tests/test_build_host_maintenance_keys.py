@@ -151,11 +151,11 @@ check("no legacy spec has [host_maintenance] (none is left)",
               if (build_host.REPO / h / "host.toml").is_file()))
 d03 = build_host.load_spec("d03")
 d03_hm = d03.get("host_maintenance", {})
-check("d03: the interim key set: D03_HOST_MAINTENANCE_SSH_KEY's path, user docker, d01, d02, d04, d06, ns02, ns01, d07 and the hypervisors "
+check("d03: the interim key set: D03_HOST_MAINTENANCE_SSH_KEY's path, user docker, d01, d02, d04, d06, ns02, ns01, d07, d05 and the hypervisors "
       "vmh03, vmh01, vmh02 pinned, its own key at 10.0.0.62",
       [x["var"] for x in d03["secret"] if x["path"] == d03_hm.get("identity")] == ["D03_HOST_MAINTENANCE_SSH_KEY"]
       and d03_hm.get("user") == "docker"
-      and [p.split()[0] for p in d03_hm.get("known_hosts", [])] == ["10.0.0.60", "10.0.0.61", "10.0.0.63", "10.0.0.65", "10.0.0.11", "10.0.0.10", "10.0.0.66",
+      and [p.split()[0] for p in d03_hm.get("known_hosts", [])] == ["10.0.0.60", "10.0.0.61", "10.0.0.63", "10.0.0.65", "10.0.0.11", "10.0.0.10", "10.0.0.66", "10.0.0.64",
                                                                  "10.0.0.37", "10.0.0.35", "10.0.0.36"]
       and d03_hm.get("self_address") == "10.0.0.62"
       and not any(e.get("name") == "host-maintenance key set" for e in d03.get("external", [])), str(d03_hm))

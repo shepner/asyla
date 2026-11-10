@@ -5,7 +5,9 @@
 # (asyla hub decisions/vmc01-quorum-third-vote.md), and d07 is a plain Docker host built like the
 # others (decisions/host-layout.md). d07 is not disposable: a build or a destroy needs --confirm d07
 # and the operator's approval of the exact action.
-# Nothing on d07 serves people: no runner, no GitLab runner, no proxy, no tunnel, no internal names.
+# Nothing on d07 serves people: no runner, no GitLab runner, no proxy, no internal names. Its own
+# Cloudflare tunnel `d07` (external-access hosts/d07, deployed into ~/scripts/d07/apps/external-access/,
+# kept by d07/apps/.gitignore) is for later remote access and carries no routes yet (2026-11-10).
 # nas01's SMART textfile stays on d03, whose NFS mount it uses.
 
 # The hub item's "The VM" table. order=10: vmh03's only guest.
