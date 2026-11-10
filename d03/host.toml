@@ -105,6 +105,9 @@ known_hosts = [
   "10.0.0.10 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIJMVQ2YlCOlx/1LVb7D6fAH+Ze6ecbBBXMLiIG0oRUe",
   # 10.0.0.66: d07 (VM 107 on vmh03, built 2026-11-02); keyscan from d03 = its own /etc/ssh key.
   "10.0.0.66 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEYR3lSE35BqGd/wKl+qc/UPqwlYNxBAfKrG4o/Tcvpe",
+  # 10.0.0.64: d05 (VM 105 on vmh02, built 2026-11-10); keyscan from d03 = its own /etc/ssh key
+  # = a workstation keyscan by address and by name (2026-11-10).
+  "10.0.0.64 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFAObV/DenGddDbnJQNPxgjm2Nou01BXVF+tckWpnFgc",
   # The Proxmox nodes vmh03 (10.0.0.37), vmh01 (.35), vmh02 (.36): host-maintenance's [hypervisors.*],
   # pinned live by `add-host.sh --hypervisor` (vmh03 testbed); written here 2026-11-02 so a d03
   # build keeps them. Each equals d03's live line and a workstation keyscan, 2026-11-02 20:56Z.
