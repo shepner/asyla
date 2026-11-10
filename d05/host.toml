@@ -1,0 +1,41 @@
+# d05 build spec, read by scripts/build_host.py: theOrg's secrets and identity host (asyla hub
+# decisions/host-layout.md, Decision 1, 2026-10-13: "d05 secrets and identity"). First tenant:
+# theOrg's Keycloak (identity-platform, realm theorg, https://id.asyla.org), its keycloak-db and the
+# openldap it federates, moved from the Mac Mini (theOrg decisions/service-placement.md, Amendment
+# 2026-11-10; asyla hub backlog 2026-11-09-d05-deploy-theorg-s-keycloak-keycloak-db-and-openldap-on-d05).
+# OpenBao (secrets-vault) and step-ca (certificate-management) follow when theOrg moves them (asyla
+# hub backlog 2026-10-17-hosts-d05-build-it-and-move-theorg-s-openbao-and-step-ca-onto-it-a).
+# Built as every other Docker host (host-layout decision 6). d05 is not disposable: a build or a
+# destroy needs --confirm d05 and the operator's approval of the exact action.
+# No [[app]] and no [[external]] yet: the identity-platform app (from its DEPLOY.md "Production on
+# d05" at the commit theOrg names), the proxy (internal-access hosts/d05) and the tunnel
+# (external-access hosts/d05, one public name, id.asyla.org, outside Access) are added when theOrg
+# declares the deploy, each proven on test01 as a replica first.
+# No runner: host-layout's rule for this host is no general job runner (only jobs naming d05).
+
+# vmh02, so the vault and identity host is not on the forge's node (d04 is on vmh01; host-layout
+# Sizes). VMID and address follow the dNN pattern (d04 104 .63, d06 106 .65, d07 107 .66).
+# Size: host-layout's d05 row (2 cores, 4 GiB, 32G + 16G); RAM and cores change with a restart.
+# order=22: after d01 (20), before d02 (25), when vmh02 boots.
+[vm]
+node = "vmh02"
+vmid = 105
+sockets = 1
+cores = 2
+memory_mb = 4096
+ip = "10.0.0.64/24"
+os_disk = { storage = "local-data2", size = "32G" }
+data_disk = { storage = "local-data2", size = "16G" }   # /mnt/docker: theOrg's stacks' data (0.2 GB on the Mini)
+cloudinit_storage = "local-data2"
+startup = "order=22"                                    # set at create, checked by verify
+
+[setup]
+steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "container_dns.sh", "bashrc.sh", "node_exporter.sh"]   # build/setup/, sent by the build
+
+# Node exporter (build/setup/node_exporter.sh) for theOrg's trends Prometheus (asyla standard
+# ASY-TRD), as d07: port 9100 from the LAN only. theOrg adds a scrape job asyla-d05-node (a hand-off).
+[node_exporter]
+allow = ["10.0.0.0/24"]    # a subnet, not a host (operator, 2026-10-25): the trends Prometheus can move
+
+# No [[secret]]: d05 keeps no secret on disk, like d06 and d07. Every credential is a start_env or
+# [[external]] env value, resolved from OpenBao on the workstation and sent over SSH stdin at use.
