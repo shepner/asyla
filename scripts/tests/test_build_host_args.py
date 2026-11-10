@@ -260,6 +260,9 @@ ENV_OPT_APP = ENV_APP + 'start_env_optional = ["OPT_C"]\n'
 # d06 observability's wrapped vault tokens (deploy_role.py mints them; a plain build lacks them).
 D06_OBS_TOKENS = ["ALERT_RELAY_OPENBAO_WRAPPED_TOKEN", "EMPORIA_OPENBAO_WRAPPED_TOKEN",
                   "SCRAPE_PROXY_OPENBAO_WRAPPED_TOKEN"]
+# The Staff workers' NATS users (theOrg secrets-vault #55): optional until identity-platform provisions them.
+D06_COMMS_MQ = sorted(f"COMMS_MQ_USER_{p}_{f}" for p in ("STAFF_WORKER_1", "STAFF_ALERT_TRIAGE_1",
+                      "STAFF_DELIVERY_MANAGER_1", "STAFF_QA_1") for f in ("USERNAME", "PASSWORD"))
 
 
 def app_env_cases() -> list[bool]:
@@ -922,16 +925,17 @@ results = [
                ("observability", ["verify"], "THEORG_REGISTRY_PULL_TOKEN", None, D06_OBS_TOKENS, False),
                ("communications", ["verify"], "THEORG_REGISTRY_PULL_TOKEN",
                 ["COMMS_POSTGRES_PASSWORD", "COMMS_NATS_WEBHOOK_MQ_USERNAME", "COMMS_NATS_WEBHOOK_MQ_PASSWORD",
-                 "COMMS_CHAT_API_TOKEN", "COMMS_VIKUNJA_WEBHOOK_SECRET"], [], False)]
+                 "COMMS_CHAT_API_TOKEN", "COMMS_VIKUNJA_WEBHOOK_SECRET"], D06_COMMS_MQ, False)]
            and [a.get("start") for a in d["app"] if a["name"] == "communications"] == [["pull", "up"]]
            and d.get("secret", []) == []
            and [(e["name"], e.get("env")) for e in d["external"]] == [("internal-access", ["D06_CF_API_TOKEN"])])(
                build_host.load_spec("d06"))),
     # A full or a ticketing-only d06 build passes pre-flight without the observability tokens
     # (deploy_role.py mints them); a full one lists them as optional.
-    check("d06: a full build needs no observability token, and lists them as optional",
-          (lambda d: not set(D06_OBS_TOKENS) & {n for n, _ in build_host.env_needed(d, list(build_host.PHASES))}
-           and sorted(n for n, _ in build_host.env_optional(d, list(build_host.PHASES))) == D06_OBS_TOKENS)(
+    check("d06: a full build needs no observability token or Staff NATS user, and lists them as optional",
+          (lambda d: not set(D06_OBS_TOKENS + D06_COMMS_MQ) & {n for n, _ in build_host.env_needed(d, list(build_host.PHASES))}
+           and sorted(n for n, _ in build_host.env_optional(d, list(build_host.PHASES)))
+           == sorted(D06_OBS_TOKENS + D06_COMMS_MQ))(
                build_host.load_spec("d06"))),
     check("d06: a ticketing-only start needs only ticketing's values",
           (lambda d: sorted({n for n, _ in build_host.env_needed(d, ["apps"])} | {n for n, _ in build_host.env_optional(d, ["apps"])})
