@@ -1,0 +1,204 @@
+# theOrg's identity-platform on d05: Keycloak, keycloak-db, openldap and their one-shots, moved from
+# the Mac Mini (asyla hub backlog 2026-11-09-d05-deploy-theorg-s-keycloak-keycloak-db-and-openldap-on-d05).
+# Written by asyla from theOrg identity-platform deploy/d05/compose.example.yml at 701e893 (main,
+# the #82 merge; DEPLOY.md "Production on d05"). Run it with identity-platform.sh, which sets
+# IDENTITY_PLATFORM_ROOT and IDENTITY_PLATFORM_TAG and keeps M1's rule: only keycloak-db starts.
+# Changes from the example, each asyla's choice:
+# - both networks are external: identity-platform.sh creates them (edge with --internal), so
+#   internal-access hosts/d05's Caddy can join edge at 10.213.5.2 whichever project starts first;
+# - every secret is passed by name only, LDAP_ADMIN_PASSWORD and LDAP_CONFIG_PASSWORD included (the
+#   example's `${LDAP_ADMIN_PASSWORD:?}` makes every compose call need the value, M1's included);
+#   identity-platform.sh maps the workstation's IDP_* values onto these names;
+# - KC_BOOTSTRAP_ADMIN_USERNAME and KC_BOOTSTRAP_ADMIN_PASSWORD are left out: asyla has no read of
+#   them, and the M5 cutover restores a sealed database that already has its admin;
+# - keycloak and openldap are in the profile `cutover`, so no compose call without it (a bare
+#   `docker compose up -d` here included) can start them before the M5 cutover;
+# - keycloak-configure's non-secret settings are written here (asyla's values).
+name: identity-platform
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.2@sha256:3879c623248408de29a5303178b5816c77e8dfef3890c361f8c0bbeaa979ba3b
+    profiles: [cutover]
+    command: ["start"]
+    environment:
+      - KC_DB=postgres
+      - KC_DB_URL_HOST=keycloak-db
+      - KC_DB_URL_DATABASE=keycloak
+      - KC_DB_USERNAME=keycloak
+      # Name only: identity-platform.sh sets it from IDP_KEYCLOAK_DB_PASSWORD.
+      - KC_DB_PASSWORD
+      - KC_HOSTNAME=https://id.asyla.org
+      # Edge TLS termination at d05's Caddy (https://www.keycloak.org/server/reverseproxy).
+      - KC_HTTP_ENABLED=true
+      - KC_PROXY_HEADERS=xforwarded
+      # Caddy's one address on identity-platform-edge (internal-access hosts/d05).
+      - KC_PROXY_TRUSTED_ADDRESSES=10.213.5.2
+      # LDAPS to openldap verifies against theOrg's root, which identity-platform.sh places in ca/.
+      - KC_TRUSTSTORE_PATHS=/opt/keycloak/conf/theorg-ca/root_ca.crt
+      - KC_HEALTH_ENABLED=true
+      - KC_HTTP_MANAGEMENT_SCHEME=http
+    volumes:
+      - ${IDENTITY_PLATFORM_ROOT:?}/ca:/opt/keycloak/conf/theorg-ca:ro
+    depends_on:
+      keycloak-db:
+        condition: service_healthy
+    healthcheck:
+      # The management port (9000, never proxied) answers inside only.
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && read -r line <&3 && case \"$$line\" in *' 200 '*) exit 0 ;; *) exit 1 ;; esac"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
+    cpus: 2
+    mem_limit: 2g
+    restart: unless-stopped
+    # No ports: 8080 and 9000 are on these two networks only (the lead's condition (a)).
+    networks:
+      identity-platform-net: {}
+      identity-platform-edge:
+        ipv4_address: 10.213.5.3
+
+  # The one service M1 starts (identity-platform.sh up). An empty database: the M5 restore
+  # (keycloak_backup.sh) refuses a target only when it holds tables.
+  keycloak-db:
+    image: postgres:16.14-bookworm@sha256:64154d0babcb1741988719e703419af0382b19953706149f9872fbd0f438efa8
+    environment:
+      - POSTGRES_DB=keycloak
+      - POSTGRES_USER=keycloak
+      # Name only: identity-platform.sh sets it from IDP_KEYCLOAK_DB_PASSWORD.
+      - POSTGRES_PASSWORD
+    volumes:
+      - ${IDENTITY_PLATFORM_ROOT:?}/keycloak-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    cpus: 1
+    mem_limit: 1g
+    restart: unless-stopped
+    networks:
+      - identity-platform-net
+
+  # The directory Keycloak federates: LDAPS on d05:636 as ldap.asyla.org (straight, not through
+  # Caddy). Its first start runs osixia's bootstrap, so it is the M5 cutover's, after the restore.
+  # The leaf (SANs ldap.asyla.org, openldap) goes in openldap-tls, read-write: the image writes
+  # dhparam.pem there at first start.
+  openldap:
+    image: gitea.asyla.org/theorg/identity-platform-openldap:${IDENTITY_PLATFORM_TAG:?}
+    profiles: [cutover]
+    hostname: openldap
+    ports:
+      - "636:636"
+    environment:
+      - LDAP_ORGANISATION=theOrg
+      - LDAP_DOMAIN=theorg.local
+      - LDAP_BASE_DN=dc=theorg,dc=local
+      # Names only: identity-platform.sh sets both from IDP_LDAP_ADMIN_PASSWORD.
+      - LDAP_ADMIN_PASSWORD
+      - LDAP_CONFIG_PASSWORD
+      - LDAP_TLS=true
+      - LDAP_TLS_VERIFY_CLIENT=never
+      - LDAP_TLS_CRT_FILENAME=ldap.crt
+      - LDAP_TLS_KEY_FILENAME=ldap.key
+      - LDAP_TLS_CA_CRT_FILENAME=ca.crt
+    volumes:
+      - ${IDENTITY_PLATFORM_ROOT:?}/openldap-data:/var/lib/ldap
+      - ${IDENTITY_PLATFORM_ROOT:?}/openldap-config:/etc/ldap/slapd.d
+      - ${IDENTITY_PLATFORM_ROOT:?}/openldap-tls:/container/service/slapd/assets/certs
+    healthcheck:
+      test: ["CMD-SHELL", "ldapwhoami -x -H ldaps://localhost:636 -D \"cn=admin,dc=theorg,dc=local\" -w \"$$LDAP_ADMIN_PASSWORD\" 2>/dev/null || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    cpus: 1
+    mem_limit: 512m
+    restart: unless-stopped
+    networks:
+      - identity-platform-net
+
+  # One-shot, profile ops (DEPLOY.md "Keycloak: backup, restore and verify"). Never started by up.
+  keycloak-backup:
+    image: gitea.asyla.org/theorg/identity-platform-keycloak-backup:${IDENTITY_PLATFORM_TAG:?}
+    profiles: [ops]
+    restart: "no"
+    environment:
+      - PGHOST=keycloak-db
+      # Name only: identity-platform.sh sets it from IDP_KEYCLOAK_DB_PASSWORD.
+      - PGPASSWORD
+      - KEYCLOAK_BACKUP_FORCE
+      - KEYCLOAK_BACKUP_DUMP_TIMEOUT
+      - KEYCLOAK_BACKUP_QUERY_TIMEOUT
+    volumes:
+      - ${IDENTITY_PLATFORM_ROOT:?}/backup:/backup
+    cpus: 1
+    mem_limit: 1g
+    networks:
+      - identity-platform-net
+
+  # One-shot, profile ops (DEPLOY.md "Directory: backup, restore and verify"): no network, no
+  # secret; the data volume read-write on purpose (LMDB's reader lock), the config ro.
+  openldap-backup:
+    image: gitea.asyla.org/theorg/identity-platform-openldap-backup:${IDENTITY_PLATFORM_TAG:?}
+    profiles: [ops]
+    restart: "no"
+    network_mode: none
+    environment:
+      - OPENLDAP_BACKUP_FORCE
+      - OPENLDAP_BACKUP_TIMEOUT
+    volumes:
+      - ${IDENTITY_PLATFORM_ROOT:?}/openldap-data:/var/lib/ldap
+      - ${IDENTITY_PLATFORM_ROOT:?}/openldap-config:/etc/ldap/slapd.d:${OPENLDAP_BACKUP_CONFIG_MOUNT:-ro}
+      - ${IDENTITY_PLATFORM_ROOT:?}/openldap-backup:/backup
+    cpus: 1
+    mem_limit: 1g
+
+  # keycloak_realm.py in network mode, one-shot, profile ops. On identity-platform-net ONLY.
+  keycloak-configure:
+    image: gitea.asyla.org/theorg/identity-platform-keycloak-configure:${IDENTITY_PLATFORM_TAG:?}
+    profiles: [ops]
+    restart: "no"
+    environment:
+      - KEYCLOAK_REALM_MODE=network
+      - KEYCLOAK_URL=http://keycloak:8080
+      - KEYCLOAK_INTERNAL_SUBNET=10.213.5.64/26
+      - KEYCLOAK_CA_FILE=/run/theorg-ca/root_ca.crt
+      # SHA-256 of theorg-v2-root.crt beside this file ("theOrg-v2 Root CA", expires 2036-08-29);
+      # identity-platform.sh checks the copy against the same value before placing it.
+      - KEYCLOAK_CA_FINGERPRINT=CD:39:1A:56:AE:00:0B:01:A4:43:3A:73:F2:2D:98:A3:73:E5:BB:08:E8:D7:75:31:DF:2D:B8:6A:4F:29:87:D3
+      - KEYCLOAK_REALM=theorg
+      - KEYCLOAK_LDAP_URL=ldaps://openldap:636
+      # DEPLOY.md: defaults to KEYCLOAK_LDAP_URL; set to the same, so the leaf's SAN `openldap` is checked.
+      - KEYCLOAK_LDAP_SEARCH_URI=ldaps://openldap:636
+      # The relay on d06; not live yet (2026-11-14): configure's SMTP check fails until it is.
+      - KEYCLOAK_SMTP_HOST=mail-relay.asyla.org
+      - KEYCLOAK_SMTP_PORT=2587
+      - OPENBAO_ADDR=https://vault.asyla.org
+      # TODO: unset, as on d06 (no OPENBAO_CACERT there); passed by name so one can be set later.
+      - OPENBAO_CACERT
+      - VAULT_DEX_TOKEN_URL=https://dex.asyla.org/dex/token
+      - VAULT_DEX_CLIENT_ID=svc-identity-platform-deploy-a
+      # Name only: identity-platform.sh sets it from IDP_DEPLOY_DEX_CLIENT_SECRET.
+      - VAULT_DEX_CLIENT_SECRET
+      - VAULT_JWT_ROLE=svc-identity-platform-deploy
+    volumes:
+      - ${IDENTITY_PLATFORM_ROOT:?}/ca:/run/theorg-ca:ro
+    cpus: 1
+    mem_limit: 256m
+    networks:
+      - identity-platform-net
+
+# Created by identity-platform.sh (docker network create), never by compose:
+#   identity-platform-net   bridge, 10.213.5.64/26, with egress
+#   identity-platform-edge  bridge, --internal, 10.213.5.0/29, gateway 10.213.5.1, ip-range 10.213.5.4/30
+#                           (only Caddy at .2 and Keycloak at .3; no dynamic address takes either)
+networks:
+  identity-platform-net:
+    name: identity-platform-net
+    external: true
+  identity-platform-edge:
+    name: identity-platform-edge
+    external: true
