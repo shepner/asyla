@@ -44,11 +44,14 @@ allow = ["10.0.0.0/24"]    # a subnet, not a host (operator, 2026-10-25): the tr
 # M1: its networks, images and root CA, and keycloak-db alone; openldap and keycloak start only at
 # the M5 cutover, after a restore. Values the workstation resolves from OpenBao and sends over SSH
 # stdin at use (build_host.py, App environment): the theorg-registry pull token for the image pulls
-# (as IDENTITY_PLATFORM_REGISTRY_PULL_TOKEN); keycloak-db's password, which up needs; the LDAP admin
-# value and the deploy Dex client value, optional (M1 starts nothing that takes them). No restore:
-# M1 holds no data of its own, and identity-platform.sh restore refuses (the M5 cutover's), which
-# would stop the build. Its images are pinned (IDENTITY_PLATFORM_TAG and digests), so up's pull of
-# missing images is the only pull it needs.
+# (as IDENTITY_PLATFORM_REGISTRY_PULL_TOKEN) and keycloak-db's password, which up needs. The LDAP
+# admin value and the deploy Dex client value are not sent: M1 starts nothing that takes them (the
+# M5 cutover adds them). No restore: M1 holds no data of its own, and identity-platform.sh restore
+# refuses (the M5 cutover's), which would stop the build. Its images are pinned
+# (IDENTITY_PLATFORM_TAG and digests), so up's pull of missing images is the only pull it needs.
+# A replica (test01 as [replica] of = "d05") needs no key here, as d06's ticketing: build_host.py
+# finds identity-platform.sh's images switch for its image pull, and up, on a host not named d05,
+# starts keycloak-db with a throwaway password (a replica gets no start_env).
 [[app]]
 name = "identity-platform"
 start = ["up"]
@@ -56,4 +59,3 @@ verify = ["verify"]
 restore = false
 pull_token_env = "THEORG_REGISTRY_PULL_TOKEN"
 start_env = ["IDP_KEYCLOAK_DB_PASSWORD"]
-start_env_optional = ["IDP_LDAP_ADMIN_PASSWORD", "IDP_DEPLOY_DEX_CLIENT_SECRET"]

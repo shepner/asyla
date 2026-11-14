@@ -14,7 +14,8 @@ one-shots (backups, keycloak-configure) are never started by `up`.
   `KC_BOOTSTRAP_ADMIN_*` left out, keycloak and openldap in the profile `cutover`, and
   keycloak-configure's settings filled in (its header lists each change).
 - Networks (created by `identity-platform.sh up`, idempotent; an existing one with other settings
-  is refused, never changed): `identity-platform-net` 10.213.5.64/26, and `identity-platform-edge`
+  is refused, never changed, its IPAM compared whole): `identity-platform-net` 10.213.5.64/26,
+  gateway .65, and `identity-platform-edge`
   10.213.5.0/29, `--internal`, gateway .1, ip-range .4/30 (Caddy at .2 from internal-access
   hosts/d05, Keycloak at .3).
 - `theorg-v2-root.crt`: theOrg's root ("theOrg-v2 Root CA", expires 2036-08-29), copied from
@@ -24,10 +25,14 @@ one-shots (backups, keycloak-configure) are never started by `up`.
 - openldap leaf: `/mnt/docker/IdentityPlatform/openldap-tls/{ldap.crt,ldap.key,ca.crt}`, reported
   only. Its renewer is theOrg's (pending); the TODO in `identity-platform.sh` marks where it hooks in.
 - No secret is in any file, here or on the host. The workstation resolves them from OpenBao at
-  deploy (`d05/host.toml`: `start_env` `IDP_KEYCLOAK_DB_PASSWORD`; `start_env_optional`
-  `IDP_LDAP_ADMIN_PASSWORD`, `IDP_DEPLOY_DEX_CLIENT_SECRET`), and `identity-platform.sh` maps them
+  deploy (`d05/host.toml`: `start_env` `IDP_KEYCLOAK_DB_PASSWORD`; `IDP_LDAP_ADMIN_PASSWORD` and
+  `IDP_DEPLOY_DEX_CLIENT_SECRET` are M5's, not sent in M1), and `identity-platform.sh` maps them
   onto the compose names (its header). Images are pulled with the theorg-registry token the
   workstation hands over at use (`pull_token_env`, as `IDENTITY_PLATFORM_REGISTRY_PULL_TOKEN`)
   through `docker-credential-identity-platform-env`, under a throwaway `DOCKER_CONFIG`.
 - Data: `/mnt/docker/IdentityPlatform/{ca,keycloak-db}` in M1. No backup yet: the system of record
   stays on the Mini until M5.
+- Replica (test01 as `[replica] of = "d05"`): `images` pulls what is missing and lists keycloak-db's
+  image for build_host.py's egress probe; `up` on a host not named d05 makes the networks, places
+  the CA and starts keycloak-db alone with a throwaway password made at run time (a replica gets no
+  `start_env`; d05's value is never used there). openldap and keycloak never start on a replica.

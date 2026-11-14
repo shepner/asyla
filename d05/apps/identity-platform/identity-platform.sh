@@ -1,6 +1,6 @@
 #!/bin/bash
 # theOrg's identity-platform on d05 (Keycloak, keycloak-db, openldap). Usage:
-# identity-platform.sh [switch ...], e.g. up|pull|verify|down|logs. Switches can be combined.
+# identity-platform.sh [switch ...], e.g. up|pull|images|verify|down|logs. Switches can be combined.
 # From theOrg identity-platform DEPLOY.md "Production on d05" and deploy/d05/compose.example.yml at
 # 701e893 (main, the #82 merge). This is M1 (agreed with theOrg): networks, images, theOrg's root
 # CA, a report on the openldap leaf, and keycloak-db alone. openldap and keycloak are never started
@@ -10,13 +10,17 @@
 # openldap-data or openldap-config. start-openldap, start-keycloak and restore refuse until M5 is
 # written.
 # No secret is in any file here or on the host. The workstation resolves the values from OpenBao
-# at deploy (build_host.py start_env, start_env_optional, pull_token_env) and hands them to this
-# process's environment; this script maps them onto the names compose.yml passes by name:
+# at deploy (build_host.py start_env, pull_token_env) and hands them to this process's environment;
+# this script maps them onto the names compose.yml passes by name:
 #   IDP_KEYCLOAK_DB_PASSWORD       -> KC_DB_PASSWORD, POSTGRES_PASSWORD, PGPASSWORD (up needs it)
-#   IDP_LDAP_ADMIN_PASSWORD        -> LDAP_ADMIN_PASSWORD, LDAP_CONFIG_PASSWORD (optional; M5)
-#   IDP_DEPLOY_DEX_CLIENT_SECRET   -> VAULT_DEX_CLIENT_SECRET, keycloak-configure (optional; M5)
+#   IDP_LDAP_ADMIN_PASSWORD        -> LDAP_ADMIN_PASSWORD, LDAP_CONFIG_PASSWORD (M5; not sent in M1)
+#   IDP_DEPLOY_DEX_CLIENT_SECRET   -> VAULT_DEX_CLIENT_SECRET, keycloak-configure (M5; not sent in M1)
 # docker compose hands a name only to the services that list it, and M1 starts keycloak-db alone,
 # so in M1 only POSTGRES_PASSWORD reaches a container.
+# On any host but d05 (test01 as a replica of d05) up runs in replica mode: build_host.py sends a
+# replica no start_env, so keycloak-db gets a throwaway password made at run time (never d05's,
+# never written to a file by this script); the rest of up is as on d05, and openldap and keycloak
+# still never start.
 # Data under /mnt/docker/IdentityPlatform. No backup here yet: the data is the Mini's until M5.
 
 set -euo pipefail
@@ -54,12 +58,27 @@ EDGE_NAME="identity-platform-edge"
 EDGE_SUBNET="10.213.5.0/29"
 EDGE_GATEWAY="10.213.5.1"
 EDGE_IP_RANGE="10.213.5.4/30"
+# identity-platform-net's gateway: the subnet's first address, Docker's own default, named so that
+# the check below is exact (asyla's choice; theOrg's example names the subnet only).
+NET_GATEWAY="10.213.5.65"
+# net_state's line for each, compared whole: another driver, an extra IPAM entry (an IPv6 one
+# included), another gateway or an ip-range is refused.
+NET_WANT="bridge false $NET_SUBNET $NET_GATEWAY -"
+EDGE_WANT="bridge true $EDGE_SUBNET $EDGE_GATEWAY $EDGE_IP_RANGE"
+
+# The host this folder belongs to; on any other host (test01 as a replica of d05) up runs in
+# replica mode (the header).
+SERVING_HOST="d05"
 
 DB_WAIT_S="${IDENTITY_PLATFORM_DB_WAIT_S:-120}"
 
 # --profile cutover and ops name every service, for the image list and the pulls only; a start
 # never takes either profile.
 ALL_PROFILES=(--profile ops --profile cutover)
+
+is_replica() {
+  [ "$(hostname -s)" != "$SERVING_HOST" ]
+}
 
 run_compose() {
   docker compose -f "$COMPOSE_FILE" --project-directory "$SCRIPT_DIR" "$@"
@@ -71,6 +90,22 @@ require_db_secret() {
     echo "[ERROR] IDP_KEYCLOAK_DB_PASSWORD is not in this process's environment; it comes from OpenBao at deploy (build_host.py start_env); not starting" >&2
     exit 1
   fi
+}
+
+# Replica mode: keycloak-db's password is a throwaway made here, in this process only. d05's value
+# and M5's are never used on a replica, even when set. Never printed. A replica's keycloak-db keeps
+# whichever throwaway its first start had (postgres reads POSTGRES_PASSWORD only on an empty data
+# dir); nothing on a replica connects with it, and the healthcheck (pg_isready) needs none.
+replica_db_secret() {
+  local v
+  v="$(od -An -tx1 -N24 /dev/urandom | tr -d ' \n')" || v=""
+  if [ "${#v}" -ne 48 ]; then
+    echo "[ERROR] could not make a throwaway keycloak-db password from /dev/urandom; not starting" >&2
+    exit 1
+  fi
+  IDP_KEYCLOAK_DB_PASSWORD="$v"
+  unset IDP_LDAP_ADMIN_PASSWORD IDP_DEPLOY_DEX_CLIENT_SECRET
+  echo "[INFO] Replica of $SERVING_HOST ($(hostname -s)): keycloak-db with a throwaway password; openldap and keycloak never start"
 }
 
 map_secrets() {
@@ -117,6 +152,15 @@ do_pull() {
   pull_compose "${ALL_PROFILES[@]}" pull
 }
 
+# build_host.py's replica guard (replica_images): pull what is missing (with the workstation's pull
+# token), then print the images of the default services (keycloak-db's alone: openldap and keycloak
+# are in cutover, the one-shots in ops), one per line, on stdout only; each is probed for egress.
+# As d06's ticketing.sh images.
+do_images() {
+  pull_missing >&2 || return
+  run_compose config --images
+}
+
 # Pulls only when an image is missing; every image is pinned, so missing is the only reason.
 pull_missing() {
   local img imgs missing=false
@@ -131,14 +175,15 @@ pull_missing() {
   do_pull
 }
 
-# "DRIVER INTERNAL SUBNET GATEWAY IPRANGE" of a network, or nothing when it does not exist.
+# "DRIVER INTERNAL" then " SUBNET GATEWAY IPRANGE" for each IPAM entry ("-" for an empty gateway or
+# ip-range), or nothing when the network does not exist.
 net_state() {
-  docker network inspect -f '{{.Driver}} {{.Internal}}{{range .IPAM.Config}} {{.Subnet}} {{.Gateway}} {{.IPRange}}{{end}}' "$1" 2>/dev/null
+  docker network inspect -f '{{.Driver}} {{.Internal}}{{range .IPAM.Config}} {{.Subnet}} {{if .Gateway}}{{.Gateway}}{{else}}-{{end}} {{if .IPRange}}{{.IPRange}}{{else}}-{{end}}{{end}}' "$1" 2>/dev/null
 }
 
-# Creates NAME when missing; an existing one must already have these settings. A network that
-# differs is refused, never removed or changed here (containers of other projects may be on it).
-# ensure_network NAME PATTERN [docker network create arguments]
+# Creates NAME when missing; an existing one must already have exactly these settings. A network
+# that differs is refused, never removed or changed here (containers of other projects may be on it).
+# ensure_network NAME WANT [docker network create arguments]
 ensure_network() {
   local name="$1" want="$2" got
   shift 2
@@ -148,17 +193,18 @@ ensure_network() {
     docker network create "$@" "$name" >/dev/null || return
     got="$(net_state "$name")" || got=""
   fi
-  # shellcheck disable=SC2254
-  case "$got" in
-    $want) echo "[INFO] network $name: $got" ;;
-    *) echo "[ERROR] network $name is \"$got\", not \"$want\"; not changing it (fix it by hand)" >&2; return 1 ;;
-  esac
+  if [ "$got" = "$want" ]; then
+    echo "[INFO] network $name: $got"
+  else
+    echo "[ERROR] network $name is \"$got\", not \"$want\"; not changing it (fix it by hand)" >&2
+    return 1
+  fi
 }
 
 ensure_networks() {
-  ensure_network "$NET_NAME" "bridge false $NET_SUBNET *" \
-    --driver bridge --subnet "$NET_SUBNET" || return
-  ensure_network "$EDGE_NAME" "bridge true $EDGE_SUBNET $EDGE_GATEWAY $EDGE_IP_RANGE" \
+  ensure_network "$NET_NAME" "$NET_WANT" \
+    --driver bridge --subnet "$NET_SUBNET" --gateway "$NET_GATEWAY" || return
+  ensure_network "$EDGE_NAME" "$EDGE_WANT" \
     --driver bridge --internal --subnet "$EDGE_SUBNET" --gateway "$EDGE_GATEWAY" --ip-range "$EDGE_IP_RANGE"
 }
 
@@ -276,15 +322,17 @@ db_health() {
 do_verify() {
   local rc=0 got h
   got="$(net_state "$NET_NAME")" || got=""
-  case "$got" in
-    "bridge false $NET_SUBNET "*) echo "[INFO] network $NET_NAME OK" ;;
-    *) echo "[ERROR] network $NET_NAME is \"${got:-missing}\"" >&2; rc=1 ;;
-  esac
+  if [ "$got" = "$NET_WANT" ]; then
+    echo "[INFO] network $NET_NAME OK"
+  else
+    echo "[ERROR] network $NET_NAME is \"${got:-missing}\", not \"$NET_WANT\"" >&2
+    rc=1
+  fi
   got="$(net_state "$EDGE_NAME")" || got=""
-  if [ "$got" = "bridge true $EDGE_SUBNET $EDGE_GATEWAY $EDGE_IP_RANGE" ]; then
+  if [ "$got" = "$EDGE_WANT" ]; then
     echo "[INFO] network $EDGE_NAME OK (internal)"
   else
-    echo "[ERROR] network $EDGE_NAME is \"${got:-missing}\"" >&2
+    echo "[ERROR] network $EDGE_NAME is \"${got:-missing}\", not \"$EDGE_WANT\"" >&2
     rc=1
   fi
   check_ca || rc=1
@@ -308,12 +356,15 @@ run_cmd() {
   local cmd="$1"
   case "$cmd" in
     up)
-      require_db_secret
+      if is_replica; then replica_db_secret; else require_db_secret; fi
       map_secrets
       do_up
       ;;
     pull)
       do_pull
+      ;;
+    images)
+      do_images
       ;;
     verify)
       do_verify
@@ -326,7 +377,9 @@ run_cmd() {
       refuse_cutover "$cmd"
       ;;
     *)
-      return 1
+      echo "[ERROR] unknown switch: $cmd" >&2
+      usage
+      exit 1
       ;;
   esac
 }
@@ -339,7 +392,9 @@ usage() {
   echo "                    place theOrg's root CA (fingerprint checked), report the openldap leaf, then" >&2
   echo "                    start keycloak-db alone and wait until healthy; needs IDP_KEYCLOAK_DB_PASSWORD" >&2
   echo "                    in the environment (from OpenBao at deploy; never in a file)" >&2
+  echo "                    (replica: a throwaway password made at run time; still keycloak-db alone)" >&2
   echo "  pull            - Pull all six images now (needs IDENTITY_PLATFORM_REGISTRY_PULL_TOKEN)" >&2
+  echo "  images          - Pull missing images, then list the default services' images (build_host.py's replica guard)" >&2
   echo "  verify          - Networks, the root CA and keycloak-db healthy (fatal); the openldap leaf (reported)" >&2
   echo "  down            - Stop keycloak-db (never removes a container's data, a volume or a network)" >&2
   echo "  start-openldap, start-keycloak, restore" >&2
@@ -357,9 +412,7 @@ if [ "$1" = "logs" ]; then
   exit 0
 fi
 
+# A switch that fails has said why; usage is only for an unknown switch (run_cmd) or none.
 for cmd in "$@"; do
-  if ! run_cmd "$cmd"; then
-    usage
-    exit 1
-  fi
+  run_cmd "$cmd" || exit 1
 done
