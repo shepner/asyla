@@ -1,0 +1,15 @@
+# Runs identity-platform-leaf-renew.service every 3 hours (theOrg identity-platform DEPLOY.md item
+# 13). The leaf lives 24h and renews at half life, so a missed run or two still leaves time.
+# Persistent: a run missed while d05 was down runs at the next boot. Installed and enabled only by
+# identity-platform.sh leaf-schedule-install, with the operator's approval.
+[Unit]
+Description=identity-platform: openldap leaf renewal, every 3 hours
+
+[Timer]
+OnCalendar=*-*-* 00/3:17:00
+Persistent=true
+AccuracySec=1min
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

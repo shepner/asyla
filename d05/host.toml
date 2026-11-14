@@ -8,7 +8,8 @@
 # Built as every other Docker host (host-layout decision 6). d05 is not disposable: a build or a
 # destroy needs --confirm d05 and the operator's approval of the exact action.
 # The identity-platform [[app]] is from theOrg identity-platform DEPLOY.md "Production on d05" at
-# 701e893 (main, the #82 merge), M1 only: keycloak-db alone (d05/apps/identity-platform/README.md).
+# 701e893 (main, the #82 merge), carried to 47f65add, M1 only: keycloak-db alone
+# (d05/apps/identity-platform/README.md).
 # No [[external]] yet: the proxy (internal-access hosts/d05) and the tunnel (external-access
 # hosts/d05, one public name, id.asyla.org, outside Access) are added when theOrg declares them.
 # No runner: host-layout's rule for this host is no general job runner (only jobs naming d05).
@@ -40,7 +41,7 @@ allow = ["10.0.0.0/24"]    # a subnet, not a host (operator, 2026-10-25): the tr
 # No [[secret]]: d05 keeps no secret on disk, like d06 and d07. Every credential is a start_env or
 # [[external]] env value, resolved from OpenBao on the workstation and sent over SSH stdin at use.
 
-# theOrg's identity-platform (d05/apps/identity-platform; DEPLOY.md "Production on d05" at 701e893),
+# theOrg's identity-platform (d05/apps/identity-platform; DEPLOY.md "Production on d05" at 47f65add),
 # M1: its networks, images and root CA, and keycloak-db alone; openldap and keycloak start only at
 # the M5 cutover, after a restore. Values the workstation resolves from OpenBao and sends over SSH
 # stdin at use (build_host.py, App environment): the theorg-registry pull token for the image pulls
@@ -52,6 +53,10 @@ allow = ["10.0.0.0/24"]    # a subnet, not a host (operator, 2026-10-25): the tr
 # A replica (test01 as [replica] of = "d05") needs no key here, as d06's ticketing: build_host.py
 # finds identity-platform.sh's images switch for its image pull, and up, on a host not named d05,
 # starts keycloak-db with a throwaway password (a replica gets no start_env).
+# LDAP_PROVISIONER_PASSWORD (step-ca's `ldap` provisioner, for identity-platform.sh leaf-issue) is
+# not in start_env on purpose: start runs `up`, which must never get it or issue. build_host.py has
+# no one-off app command with its own values, so leaf-issue is run by one ssh command that carries
+# the value on stdin (the app's README); a build never issues or renews.
 [[app]]
 name = "identity-platform"
 start = ["up"]

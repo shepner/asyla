@@ -1,0 +1,15 @@
+# The openldap leaf's renewal on d05 (theOrg identity-platform DEPLOY.md item 13: openldap-leaf.sh
+# renew every 3 hours). A template: identity-platform.sh leaf-schedule-install fills in @USER@ and
+# @SCRIPT@ and installs it with identity-platform-leaf-renew.timer, only when the operator has
+# approved the exact schedule. Nothing else installs it: not up, not a build, not the updater.
+# No secret: renew needs none (it renews over mTLS with the current leaf) and refuses one.
+[Unit]
+Description=identity-platform: renew the openldap leaf (openldap-leaf.sh renew)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=@USER@
+ExecStart=@SCRIPT@ leaf-renew
+TimeoutStartSec=10min

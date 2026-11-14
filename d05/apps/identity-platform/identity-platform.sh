@@ -1,8 +1,10 @@
 #!/bin/bash
 # theOrg's identity-platform on d05 (Keycloak, keycloak-db, openldap). Usage:
-# identity-platform.sh [switch ...], e.g. up|pull|images|verify|down|logs. Switches can be combined.
+# identity-platform.sh [switch ...], e.g. up|pull|images|verify|down|logs|leaf-issue|leaf-renew.
+# Switches can be combined.
 # From theOrg identity-platform DEPLOY.md "Production on d05" and deploy/d05/compose.example.yml at
-# 701e893 (main, the #82 merge). This is M1 (agreed with theOrg): networks, images, theOrg's root
+# 701e893 (main, the #82 merge), carried to 47f65add (profile `restored`, deploy/d05/openldap-leaf.sh).
+# This is M1 (agreed with theOrg): networks, images, theOrg's root
 # CA, a report on the openldap leaf, and keycloak-db alone. openldap and keycloak are never started
 # here: their first start is the M5 cutover (DEPLOY.md steps 5-6), after a restore, and theOrg's
 # restores refuse a target that is not empty (keycloak_backup.sh counts tables; openldap_backup.sh
@@ -21,6 +23,17 @@
 # replica no start_env, so keycloak-db gets a throwaway password made at run time (never d05's,
 # never written to a file by this script); the rest of up is as on d05, and openldap and keycloak
 # still never start.
+# The openldap leaf (DEPLOY.md "Production on d05: directory (R10)"): openldap-leaf.sh beside this
+# script, a byte-identical copy of theOrg's deploy/d05/openldap-leaf.sh at 47f65add (README).
+#   leaf-issue  needs LDAP_PROVISIONER_PASSWORD (OpenBao secret/v2/certificate-management/step-ca/
+#               provisioners/ldap, field password), handed over by the workstation for this one
+#               command; never in up's environment. Run it before openldap's first start (osixia
+#               self-signs when the files are missing). Never on a replica.
+#   leaf-renew  no secret; every 3 hours once the operator approves the schedule (DEPLOY.md item 13,
+#               leaf-schedule-install). Never on a replica.
+# At start this script takes LDAP_PROVISIONER_PASSWORD out of its environment into an unexported
+# variable, so that only leaf-issue's own child (openldap-leaf.sh issue) ever gets it, whichever
+# switches run with it; up and every compose call never do.
 # Data under /mnt/docker/IdentityPlatform. No backup here yet: the data is the Mini's until M5.
 
 set -euo pipefail
@@ -39,7 +52,7 @@ IDENTITY_PLATFORM_ROOT="$APP_ROOT"
 # theOrg's four images are pinned to the commit this folder is written from; the two upstream
 # images (keycloak, postgres) are pinned by digest in compose.yml. A pin by hand:
 # IDENTITY_PLATFORM_TAG_OVERRIDE=<a theOrg main sha whose images are published>.
-IDENTITY_PLATFORM_TAG="${IDENTITY_PLATFORM_TAG_OVERRIDE:-701e89316d99a4f28637def5993f2c66bdbbae53}"
+IDENTITY_PLATFORM_TAG="${IDENTITY_PLATFORM_TAG_OVERRIDE:-47f65add39763bc3ccd086e69e4b3c571d85098a}"
 REGISTRY="gitea.asyla.org"
 export IDENTITY_PLATFORM_ROOT IDENTITY_PLATFORM_TAG
 
@@ -50,6 +63,21 @@ CA_SOURCE="$SCRIPT_DIR/theorg-v2-root.crt"
 CA_FINGERPRINT="CD:39:1A:56:AE:00:0B:01:A4:43:3A:73:F2:2D:98:A3:73:E5:BB:08:E8:D7:75:31:DF:2D:B8:6A:4F:29:87:D3"
 CA_FILE="$APP_ROOT/ca/root_ca.crt"
 LEAF_DIR="$APP_ROOT/openldap-tls"
+LEAF_SCRIPT="$SCRIPT_DIR/openldap-leaf.sh"
+
+# The renewer's systemd units: the service is a template (@USER@, @SCRIPT@), filled in and
+# installed only by leaf-schedule-install.
+LEAF_UNIT="identity-platform-leaf-renew"
+SYSTEMD_DIR="${IDENTITY_PLATFORM_SYSTEMD_DIR:-/etc/systemd/system}"
+
+# leaf-issue's value, out of the environment: no child but openldap-leaf.sh issue gets it (header).
+LEAF_PW_SET=false
+LEAF_PW=""
+if [ -n "${LDAP_PROVISIONER_PASSWORD+x}" ]; then
+  LEAF_PW_SET=true
+  LEAF_PW="$LDAP_PROVISIONER_PASSWORD"
+fi
+unset LDAP_PROVISIONER_PASSWORD
 
 # DEPLOY.md "Production on d05: networks". Both external in compose.yml; created here.
 NET_NAME="identity-platform-net"
@@ -72,9 +100,9 @@ SERVING_HOST="d05"
 
 DB_WAIT_S="${IDENTITY_PLATFORM_DB_WAIT_S:-120}"
 
-# --profile cutover and ops name every service, for the image list and the pulls only; a start
-# never takes either profile.
-ALL_PROFILES=(--profile ops --profile cutover)
+# --profile restored and ops name every service, for the image list and the pulls only; a start
+# never takes either profile, and COMPOSE_PROFILES is never set here (M1).
+ALL_PROFILES=(--profile ops --profile restored)
 
 is_replica() {
   [ "$(hostname -s)" != "$SERVING_HOST" ]
@@ -154,7 +182,7 @@ do_pull() {
 
 # build_host.py's replica guard (replica_images): pull what is missing (with the workstation's pull
 # token), then print the images of the default services (keycloak-db's alone: openldap and keycloak
-# are in cutover, the one-shots in ops), one per line, on stdout only; each is probed for egress.
+# are in restored, the one-shots in ops), one per line, on stdout only; each is probed for egress.
 # As d06's ticketing.sh images.
 do_images() {
   pull_missing >&2 || return
@@ -257,21 +285,18 @@ check_ca() {
 
 # openldap's leaf in openldap-tls: ldap.crt (the leaf, then the intermediate), ldap.key, ca.crt.
 # Reported only, never fatal in M1: openldap does not start until M5. The key is never read here,
-# only checked for presence.
-# TODO(renewer): the leaf's issue and renewal hook in here, from "identity-platform deploy/d05
-# renewer example (theOrg PR, pending)". Until it lands, nothing writes openldap-tls; this script
-# must not issue, renew, or read the vault's `ldap` provisioner or keycloak-client-* paths.
+# only checked for presence. up and verify never issue or renew: leaf-issue and leaf-renew do.
 check_leaf() {
   local f n end
   if [ ! -d "$LEAF_DIR" ]; then
-    echo "[WARN] openldap leaf: $LEAF_DIR is missing (ldap.crt, ldap.key, ca.crt; the renewer is not written yet); needed before the M5 cutover" >&2
+    echo "[WARN] openldap leaf: $LEAF_DIR is missing (ldap.crt, ldap.key, ca.crt; leaf-issue makes them); needed before openldap's first start" >&2
     return 0
   fi
   for f in ldap.crt ldap.key ca.crt; do
     if [ -s "$LEAF_DIR/$f" ]; then
       echo "[INFO] openldap leaf: $f present"
     else
-      echo "[WARN] openldap leaf: $LEAF_DIR/$f is missing or empty; needed before the M5 cutover" >&2
+      echo "[WARN] openldap leaf: $LEAF_DIR/$f is missing or empty (leaf-issue); needed before openldap's first start" >&2
     fi
   done
   if [ -s "$LEAF_DIR/ldap.crt" ]; then
@@ -350,6 +375,94 @@ do_verify() {
   return "$rc"
 }
 
+# leaf-issue: the networks (openldap-leaf.sh runs step on identity-platform-net), the checked root
+# CA at ca/root_ca.crt (step's --root, and the leaf's ca.crt), openldap-tls (the one openldap dir
+# M1 makes; never openldap-data or openldap-config), then openldap-leaf.sh issue with the value in
+# its environment alone. Refused on a replica (step-ca and its provisioner are d05's) and without
+# the value, before any docker call. openldap-leaf.sh refuses over a leaf that is still valid.
+do_leaf_issue() {
+  if is_replica; then
+    echo "[ERROR] leaf-issue: not on a replica ($(hostname -s)); the leaf is d05's" >&2
+    return 1
+  fi
+  if ! $LEAF_PW_SET || [ -z "$LEAF_PW" ]; then
+    echo "[ERROR] leaf-issue: LDAP_PROVISIONER_PASSWORD is not in this process's environment; the workstation hands it over for this one command (OpenBao secret/v2/certificate-management/step-ca/provisioners/ldap, field password); not issuing" >&2
+    return 1
+  fi
+  ensure_networks || return
+  place_ca || return
+  mkdir -p "$LEAF_DIR" || return
+  local rc=0
+  ( export LDAP_PROVISIONER_PASSWORD="$LEAF_PW"; exec "$LEAF_SCRIPT" issue ) || rc=$?
+  LEAF_PW=""; LEAF_PW_SET=false
+  [ "$rc" -eq 0 ] || { echo "[ERROR] leaf-issue: openldap-leaf.sh issue exit $rc (3: refused)" >&2; return "$rc"; }
+  check_leaf
+}
+
+# leaf-renew: openldap-leaf.sh renew, no secret (it refuses one, so this does too). Refused on a
+# replica. Exit as openldap-leaf.sh's (0 done or not due, 1 failed, 3 refused: run leaf-issue).
+do_leaf_renew() {
+  if is_replica; then
+    echo "[ERROR] leaf-renew: not on a replica ($(hostname -s)); the leaf is d05's" >&2
+    return 1
+  fi
+  if $LEAF_PW_SET; then
+    echo "[ERROR] leaf-renew: needs no provisioner password; refused while LDAP_PROVISIONER_PASSWORD is set" >&2
+    return 3
+  fi
+  "$LEAF_SCRIPT" renew
+}
+
+# The renewer's schedule (DEPLOY.md item 13), installed only by leaf-schedule-install, which the
+# operator runs once he has approved it: never by up, a build or the updater. The service runs
+# leaf-renew as this user from this folder.
+render_leaf_service() {
+  local esc
+  esc="$(printf '%s' "$SCRIPT_DIR/identity-platform.sh" | sed 's/[&|\\]/\\&/g')"
+  sed -e "s|@USER@|$(id -un)|" -e "s|@SCRIPT@|$esc|" "$SCRIPT_DIR/$LEAF_UNIT.service"
+}
+
+do_leaf_schedule_install() {
+  local tmp
+  if is_replica; then
+    echo "[ERROR] leaf-schedule-install: not on a replica ($(hostname -s))" >&2
+    return 1
+  fi
+  if [ ! -s "$LEAF_DIR/ldap.crt" ]; then
+    echo "[ERROR] leaf-schedule-install: no leaf at $LEAF_DIR/ldap.crt; run leaf-issue first (renew refuses without one)" >&2
+    return 1
+  fi
+  tmp="$(mktemp)" || return
+  render_leaf_service > "$tmp" || { rm -f "$tmp"; return 1; }
+  sudo install -m 0644 "$tmp" "$SYSTEMD_DIR/$LEAF_UNIT.service" \
+    && sudo install -m 0644 "$SCRIPT_DIR/$LEAF_UNIT.timer" "$SYSTEMD_DIR/$LEAF_UNIT.timer" \
+    || { rm -f "$tmp"; return 1; }
+  rm -f "$tmp"
+  sudo systemctl daemon-reload || return
+  sudo systemctl enable --now "$LEAF_UNIT.timer" || return
+  echo "[INFO] installed and enabled $LEAF_UNIT.timer (openldap-leaf.sh renew every 3 hours)"
+  do_leaf_schedule_status
+}
+
+# Read-only.
+do_leaf_schedule_status() {
+  local en act
+  en="$(systemctl is-enabled "$LEAF_UNIT.timer" 2>/dev/null)" || true
+  act="$(systemctl is-active "$LEAF_UNIT.timer" 2>/dev/null)" || true
+  echo "[INFO] $LEAF_UNIT.timer: ${en:-not installed}, ${act:-inactive}"
+}
+
+do_leaf_schedule_remove() {
+  if [ -e "$SYSTEMD_DIR/$LEAF_UNIT.timer" ] || [ -e "$SYSTEMD_DIR/$LEAF_UNIT.service" ]; then
+    sudo systemctl disable --now "$LEAF_UNIT.timer" || true
+    sudo rm -f "$SYSTEMD_DIR/$LEAF_UNIT.timer" "$SYSTEMD_DIR/$LEAF_UNIT.service" || return
+    sudo systemctl daemon-reload || return
+    echo "[INFO] removed $LEAF_UNIT.timer and .service"
+  else
+    echo "[INFO] $LEAF_UNIT.timer is not installed"
+  fi
+}
+
 refuse_cutover() {
   echo "[ERROR] $1: M5 cutover, not yet written (theOrg identity-platform DEPLOY.md steps 5-6, after a restore); refused" >&2
   exit 1
@@ -376,6 +489,21 @@ run_cmd() {
       # keycloak-db only: stopped, never removed, no volume or network touched; data stays.
       run_compose stop keycloak-db
       ;;
+    leaf-issue)
+      do_leaf_issue || exit $?
+      ;;
+    leaf-renew)
+      do_leaf_renew || exit $?
+      ;;
+    leaf-schedule-install)
+      do_leaf_schedule_install
+      ;;
+    leaf-schedule-status)
+      do_leaf_schedule_status
+      ;;
+    leaf-schedule-remove)
+      do_leaf_schedule_remove
+      ;;
     start-openldap|start-keycloak|restore)
       refuse_cutover "$cmd"
       ;;
@@ -400,6 +528,14 @@ usage() {
   echo "  images          - Pull missing images, then list the default services' images (build_host.py's replica guard)" >&2
   echo "  verify          - Networks, the root CA and keycloak-db healthy (fatal); the openldap leaf (reported)" >&2
   echo "  down            - Stop keycloak-db (never removes a container's data, a volume or a network)" >&2
+  echo "  leaf-issue      - Issue the openldap leaf into openldap-tls (openldap-leaf.sh issue), before" >&2
+  echo "                    openldap's first start; needs LDAP_PROVISIONER_PASSWORD in the environment" >&2
+  echo "                    (from OpenBao for this one command; never in a file). Not on a replica" >&2
+  echo "  leaf-renew      - openldap-leaf.sh renew: renew at half life, reload slapd; no secret. Not on a replica" >&2
+  echo "  leaf-schedule-install - Install and enable $LEAF_UNIT.timer (leaf-renew every 3 hours);" >&2
+  echo "                    only with the operator's approval of the schedule (DEPLOY.md item 13)" >&2
+  echo "  leaf-schedule-status  - Whether the timer is installed and active (read-only)" >&2
+  echo "  leaf-schedule-remove  - Disable and remove the timer and its service" >&2
   echo "  start-openldap, start-keycloak, restore" >&2
   echo "                  - Refused: the M5 cutover, not yet written" >&2
   echo "  logs            - Follow logs (optionally for one service)" >&2
