@@ -925,7 +925,7 @@ results = [
                ("observability", ["verify"], "THEORG_REGISTRY_PULL_TOKEN", None, D06_OBS_TOKENS, False),
                ("communications", ["verify"], "THEORG_REGISTRY_PULL_TOKEN",
                 ["COMMS_POSTGRES_PASSWORD", "COMMS_NATS_WEBHOOK_MQ_USERNAME", "COMMS_NATS_WEBHOOK_MQ_PASSWORD",
-                 "COMMS_CHAT_API_TOKEN", "COMMS_VIKUNJA_WEBHOOK_SECRET"], D06_COMMS_MQ, False)]
+                 "COMMS_CHAT_API_TOKEN", "COMMS_VIKUNJA_WEBHOOK_SECRET"], D06_COMMS_MQ, True)]
            and [a.get("start") for a in d["app"] if a["name"] == "communications"] == [["pull", "up"]]
            and d.get("secret", []) == []
            and [(e["name"], e.get("env")) for e in d["external"]] == [("internal-access", ["D06_CF_API_TOKEN"])])(
