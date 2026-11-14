@@ -32,7 +32,7 @@ PULL_NAME="IDENTITY_PLATFORM_REGISTRY_PULL_TOKEN"
 
 # docker: logs every call (paths shortened). Networks live as files in $STUB_NET: `network create`
 # writes "DRIVER INTERNAL SUBNET GATEWAY IPRANGE" from its arguments, as Docker's inspect format
-# prints it ("-" for no ip-range; a gateway left to Docker reads auto-gateway, so the script must
+# prints it ("invalid Prefix" for no ip-range, as Docker 29 does; a gateway left to Docker reads auto-gateway, so the script must
 # name its own); `network inspect` of a missing one fails. `config --images` lists both stand-in
 # images with a --profile, keycloak-db's alone without. Like compose, a compose call fails when a
 # `${...:?}` compose.yml uses is empty. `image inspect` says present unless STUB_MISSING; a pull
@@ -67,7 +67,7 @@ if [ "$1 $2" = "network create" ]; then
     esac
   done
   [ -n "$gw" ] || gw="auto-gateway"
-  [ -n "$range" ] || range="-"
+  [ -n "$range" ] || range="invalid Prefix"   # what Docker 29 prints for no ip-range (d05, ws01)
   echo "$drv $internal $subnet $gw $range" > "$STUB_NET/$1"; echo "netid-$1"; exit 0
 fi
 case "$*" in
@@ -110,6 +110,7 @@ run() {   # run SWITCH...: output in $OUT, docker calls in $T/log, status return
 }
 reset_host() { rm -rf "$T/net"/* "$T/dl"/*; }
 NET_OK="bridge false 10.213.5.64/26 10.213.5.65 -"
+NET_RAW="bridge false 10.213.5.64/26 10.213.5.65 invalid Prefix"   # as Docker 29 stores it
 EDGE_OK="bridge true 10.213.5.0/29 10.213.5.1 10.213.5.4/30"
 
 # --- compose.yml's rules (static) ---
@@ -170,7 +171,7 @@ grep -qE '^docker network create .*--internal .*identity-platform-edge$' "$T/log
 grep -E '^docker network create .*identity-platform-net$' "$T/log" | grep -q -- '--internal'; net_int=$?
 [ "$rc" -eq 0 ] && [ "$creates" -eq 2 ] && [ "$edge_int" -eq 0 ] && [ "$net_int" -ne 0 ] \
   && [ "$(cat "$T/net/identity-platform-edge")" = "$EDGE_OK" ] \
-  && [ "$(cat "$T/net/identity-platform-net")" = "$NET_OK" ] \
+  && [ "$(cat "$T/net/identity-platform-net")" = "$NET_RAW" ] \
   && ok "up on a fresh host: creates both networks, edge with --internal, net without" \
   || bad "up creates networks" "rc=$rc creates=$creates; $OUT; $(cat "$T/log")"
 STUB_SET="$DB_NAME" run up; rc=$?
@@ -241,7 +242,7 @@ starts="$(grep -E '^docker compose .* (up|run|start|create)( |$)' "$T/log" | sed
 [ "$rc" -eq 0 ] && [ "$starts" = "up -d --no-deps --wait --wait-timeout 120 keycloak-db" ] \
   && echo "$OUT" | grep -q 'Replica of d05 (test01): keycloak-db with a throwaway password' \
   && ok "up on a replica with no start_env: keycloak-db alone, a throwaway password" || bad "replica up" "rc=$rc; $OUT; $(cat "$T/log")"
-[ "$(cat "$T/net/identity-platform-net")" = "$NET_OK" ] && [ "$(cat "$T/net/identity-platform-edge")" = "$EDGE_OK" ] \
+[ "$(cat "$T/net/identity-platform-net")" = "$NET_RAW" ] && [ "$(cat "$T/net/identity-platform-edge")" = "$EDGE_OK" ] \
   && cmp -s "$SRC/theorg-v2-root.crt" "$ROOT/ca/root_ca.crt" \
   && ok "up on a replica: both networks made, the root CA placed" || bad "replica networks and CA" "$(ls "$T/net")"
 grep -q '^SET POSTGRES_PASSWORD' "$T/log" && ! grep -qE '^SET (LDAP_ADMIN_PASSWORD|VAULT_DEX_CLIENT_SECRET)' "$T/log" \

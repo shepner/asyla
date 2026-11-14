@@ -176,9 +176,12 @@ pull_missing() {
 }
 
 # "DRIVER INTERNAL" then " SUBNET GATEWAY IPRANGE" for each IPAM entry ("-" for an empty gateway or
-# ip-range), or nothing when the network does not exist.
+# ip-range), or nothing when the network does not exist. Docker 29 keeps these as netip values, so
+# an unset one prints "invalid Prefix" / "invalid IP", not empty (seen on d05, 29.9.3, 2026-11-14):
+# both read as "-".
 net_state() {
-  docker network inspect -f '{{.Driver}} {{.Internal}}{{range .IPAM.Config}} {{.Subnet}} {{if .Gateway}}{{.Gateway}}{{else}}-{{end}} {{if .IPRange}}{{.IPRange}}{{else}}-{{end}}{{end}}' "$1" 2>/dev/null
+  docker network inspect -f '{{.Driver}} {{.Internal}}{{range .IPAM.Config}} {{.Subnet}} {{if .Gateway}}{{.Gateway}}{{else}}-{{end}} {{if .IPRange}}{{.IPRange}}{{else}}-{{end}}{{end}}' "$1" 2>/dev/null \
+    | sed -e 's/invalid Prefix/-/g' -e 's/invalid IP/-/g'
 }
 
 # Creates NAME when missing; an existing one must already have exactly these settings. A network
