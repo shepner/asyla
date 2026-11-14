@@ -40,13 +40,19 @@ one-shots (backups, keycloak-configure) are never started by `up`.
     (`secret/v2/certificate-management/step-ca/provisioners/ldap`, field `password`), which the
     script takes out of its environment at start and hands only to `openldap-leaf.sh issue` (which
     passes it to docker by name and to step on stdin). Refused without it, over a valid leaf
-    (openldap-leaf.sh, exit 3) and on a replica. It is not in `host.toml`'s `start_env`:
-    build_host.py has no one-off app command, so the workstation sends it with one ssh command
-    whose stdin carries the value (as build_host.py's `env_command` does):
+    (openldap-leaf.sh, exit 3) and on a replica. It is not in `host.toml`'s `start_env` (a start
+    runs `up`, which must never get it): the operator runs the leaf switches from the workstation
+    with `scripts/app_switch.sh`, which runs one switch over one ssh as build_host.py's
+    `env_command` does, each value on ssh stdin (never in an argv), and allows only the switches and
+    values in this app's `switch_env` in `d05/host.toml`. The leaf lives 24 hours, so the schedule
+    is installed right after the first issue, in the same sitting:
 
     ```
-    cd ~/local/asyla && python3 core/tools/credentials.py exec LDAP_PROVISIONER_PASSWORD -- sh -c 'printf "%s\n" "$LDAP_PROVISIONER_PASSWORD" | ssh -i ~/.ssh/docker_rsa docker@d05 "IFS= read -r LDAP_PROVISIONER_PASSWORD && export LDAP_PROVISIONER_PASSWORD && ~/scripts/d05/apps/identity-platform/identity-platform.sh leaf-issue"'
+    cd ~/local/asyla && python3 core/tools/credentials.py exec LDAP_PROVISIONER_PASSWORD -- projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform leaf-issue LDAP_PROVISIONER_PASSWORD
+    cd ~/local/asyla && projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform leaf-schedule-install
     ```
+
+    `leaf-schedule-status`, `leaf-renew` and `leaf-schedule-remove` run the same way, with no VAR.
   - `leaf-renew`: `openldap-leaf.sh renew`, no secret (refused when one is set): renews at half
     life over mTLS with the current leaf and reloads slapd when openldap runs. Not on a replica.
   - The schedule (theOrg DEPLOY.md item 13: every 3 hours): `identity-platform-leaf-renew.timer`
@@ -55,7 +61,21 @@ one-shots (backups, keycloak-configure) are never started by `up`.
     `up`, a build or the updater: `identity-platform.sh leaf-schedule-install` installs and enables
     them (sudo), once the operator has approved the exact schedule and after `leaf-issue`;
     `leaf-schedule-status` (read-only) and `leaf-schedule-remove`. The service runs this folder's
-    `identity-platform.sh`, which the 02:30 updater keeps at master.
+    `identity-platform.sh`, which the 02:30 updater keeps at master. The updater does not touch the
+    installed units: after a change to either template here (`identity-platform-leaf-renew.service`
+    or `.timer`) reaches d05, re-run `leaf-schedule-install` (the command above). It is idempotent:
+    it installs only a unit that differs, daemon-reloads only then, and enables the timer.
+  - Status: every `leaf-issue` and `leaf-renew` past their refusals writes
+    `/mnt/docker/IdentityPlatform/leaf-status.json` atomically (a temp file, then `mv`; a failed
+    write fails the switch): `time` (UTC, `...Z`, which host-maintenance's `parse_iso`,
+    `datetime.fromisoformat` on Python 3.12, reads), `action`, `result` (ok or fail), `exit`,
+    `not_after` (the leaf's), `issued_ok` (the last successful issue; `leaf-schedule-install` needs
+    it) and `problems`: none when ok; on a failure one problem `leaf`, `warn` (a work item) while the
+    leaf has 6 hours or more left, `urgent` when it has less, has expired or cannot be read. No
+    secret is in it. host-maintenance alerts on it through its `[[status]]` entry
+    `identity-platform-leaf` (`config/maintenance.toml`, `max_age_minutes = 200`), which is there
+    commented out until the first `leaf-issue` and `leaf-schedule-install`, because a missing file
+    alerts as urgent; uncommenting it is a host-maintenance change approved with those steps.
 - No secret is in any file, here or on the host. The workstation resolves them from OpenBao at
   deploy (`d05/host.toml`: `start_env` `IDP_KEYCLOAK_DB_PASSWORD`; `IDP_LDAP_ADMIN_PASSWORD` and
   `IDP_DEPLOY_DEX_CLIENT_SECRET` are M5's, not sent in M1), and `identity-platform.sh` maps them

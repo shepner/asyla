@@ -385,7 +385,9 @@ do_verify() {
 # directory, then mv. "problems" is empty on ok; on fail it holds one problem, key "leaf": "warn"
 # (a work item) while the leaf's notAfter is LEAF_URGENT_S (6 hours) away or more, "urgent" when it
 # is nearer, past or unreadable. "issued_ok" is the time of the last successful leaf-issue, carried
-# forward by every write; leaf-schedule-install needs it. No secret is ever in it.
+# forward by every write; leaf-schedule-install needs it. No secret is ever in it. "time" is UTC
+# with a trailing Z: maint.py's parse_iso is datetime.fromisoformat (Python 3.12, its CI image),
+# which reads a Z as UTC since Python 3.11.
 LEAF_STATUS="$APP_ROOT/leaf-status.json"
 LEAF_URGENT_S=21600
 

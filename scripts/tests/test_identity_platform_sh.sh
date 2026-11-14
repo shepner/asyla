@@ -532,9 +532,165 @@ grep -qx 'OnCalendar=\*-\*-\* 00/3:17:00' "$SRC/identity-platform-leaf-renew.tim
   && ok "the timer runs every 3 hours, persistent" || bad "timer schedule"
 ! grep -qiE 'PASSWORD|Environment' "$SRC/identity-platform-leaf-renew.service" \
   && ok "the renew service carries no secret or environment" || bad "service env"
+# Idempotent: the first install above wrote both units and daemon-reloaded once; a second one
+# installs nothing and does not reload, and enables again; a changed template installs that unit
+# alone and reloads once.
+[ "$(grep -c '^systemctl daemon-reload$' "$T/log")" -eq 1 ] && [ "$(grep -c '^sudo install ' "$T/log")" -eq 2 ] \
+  && ok "leaf-schedule-install (first): both units installed, one daemon-reload" || bad "schedule first install" "$(cat "$T/log")"
+run leaf-schedule-install; rc=$?
+[ "$rc" -eq 0 ] && ! grep -q '^sudo install ' "$T/log" && ! grep -q 'daemon-reload' "$T/log" \
+  && grep -q '^systemctl enable --now identity-platform-leaf-renew.timer$' "$T/log" && echo "$OUT" | grep -q 'unchanged; no daemon-reload' \
+  && ok "leaf-schedule-install (second): nothing installed, no daemon-reload, enabled again" || bad "schedule second install" "rc=$rc; $OUT; $(cat "$T/log")"
+cp "$T/app/identity-platform-leaf-renew.timer" "$T/timer.orig"
+echo "# a template change" >> "$T/app/identity-platform-leaf-renew.timer"
+run leaf-schedule-install; rc=$?
+[ "$rc" -eq 0 ] && [ "$(grep -c '^sudo install ' "$T/log")" -eq 1 ] && grep -q '^sudo install .*leaf-renew.timer ' "$T/log" \
+  && [ "$(grep -c '^systemctl daemon-reload$' "$T/log")" -eq 1 ] && cmp -s "$T/app/identity-platform-leaf-renew.timer" "$T/systemd/identity-platform-leaf-renew.timer" \
+  && ok "leaf-schedule-install after a timer template change: the timer alone installed, one daemon-reload" || bad "schedule template change" "rc=$rc; $(cat "$T/log")"
+cp "$T/timer.orig" "$T/app/identity-platform-leaf-renew.timer"
 run leaf-schedule-remove; rc=$?
 [ "$rc" -eq 0 ] && [ -z "$(ls -A "$T/systemd")" ] && grep -q '^systemctl disable --now identity-platform-leaf-renew.timer$' "$T/log" \
   && ok "leaf-schedule-remove: disabled and removed" || bad "schedule remove" "rc=$rc; $OUT"
+
+# --- leaf-status.json: what host-maintenance's monitor reads (runner/maint.py status_problems) ---
+# A throwaway self-signed certificate as the leaf, made here at run time, ending MINUTES from now;
+# its key stays under $T/keys and is removed with $T.
+mkdir -p "$T/keys"
+mkcert() {   # mkcert MINUTES
+  local na
+  na="$(python3 -c 'import datetime as d, sys; print((d.datetime.now(d.timezone.utc) + d.timedelta(minutes=int(sys.argv[1]))).strftime("%Y%m%d%H%M%SZ"))' "$1")"
+  mkdir -p "$ROOT/openldap-tls"
+  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout "$T/keys/leaf.key" \
+    -out "$ROOT/openldap-tls/ldap.crt" -subj /CN=leaf-standin -not_after "$na" >/dev/null 2>&1
+}
+stcheck() {   # stcheck ACTION RESULT EXIT SEVERITY|- NOT_AFTER(set|null) ISSUED_OK|-: the file as maint.py reads it
+  python3 - "$ROOT/leaf-status.json" "$@" <<'PY'
+import datetime as dt, json, re, sys
+d = json.load(open(sys.argv[1]))
+action, result, rc, sev, na, issued = sys.argv[2:8]
+assert (d["action"], d["result"], d["exit"]) == (action, result, int(rc)), d
+# maint.py parse_iso is datetime.fromisoformat (python:3.12 in its CI): it reads "...Z" as UTC.
+assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", d["time"]), d["time"]
+t = dt.datetime.fromisoformat(d["time"])
+assert t.utcoffset() == dt.timedelta(0) and abs((dt.datetime.now(dt.timezone.utc) - t).total_seconds()) < 300, d["time"]
+assert (d["not_after"] is not None) == (na == "set"), d["not_after"]
+assert issued == "-" or d["issued_ok"] == issued, (d["issued_ok"], issued)
+if sev == "-":
+    assert d["problems"] == [], d["problems"]
+else:
+    assert len(d["problems"]) == 1 and d["problems"][0]["key"] == "leaf" and d["problems"][0]["severity"] == sev, d["problems"]
+    assert action in d["problems"][0]["message"] and f"exit {rc}" in d["problems"][0]["message"], d["problems"]
+PY
+}
+reset_host
+leaf_run leaf-issue >/dev/null
+issued="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["issued_ok"])' "$ROOT/leaf-status.json" 2>/dev/null)"
+if mkcert 1200 && [ -n "$issued" ]; then
+  run leaf-renew; rc=$?
+  [ "$rc" -eq 0 ] && stcheck leaf-renew ok 0 - set "$issued" \
+    && ok "leaf-renew ok: result ok, exit 0, no problem, notAfter, issued_ok carried, time ...Z (UTC, fromisoformat)" \
+    || bad "renew ok status" "rc=$rc; $(cat "$ROOT/leaf-status.json")"
+  mkcert 370   # 6h10m: outside the 6h boundary
+  STUB_LEAF_RC=1 run leaf-renew; rc=$?
+  [ "$rc" -eq 1 ] && stcheck leaf-renew fail 1 warn set "$issued" \
+    && ok "leaf-renew failed, leaf 6h10m from notAfter: result fail, exit 1, problem leaf warn" \
+    || bad "renew fail warn" "rc=$rc; $(cat "$ROOT/leaf-status.json")"
+  mkcert 350   # 5h50m: inside it
+  STUB_LEAF_RC=1 run leaf-renew; rc=$?
+  [ "$rc" -eq 1 ] && stcheck leaf-renew fail 1 urgent set "$issued" \
+    && ok "leaf-renew failed, leaf 5h50m from notAfter: problem leaf urgent" \
+    || bad "renew fail urgent" "rc=$rc; $(cat "$ROOT/leaf-status.json")"
+  mkcert -10   # past
+  STUB_LEAF_RC=1 run leaf-renew; rc=$?
+  [ "$rc" -eq 1 ] && stcheck leaf-renew fail 1 urgent set "$issued" \
+    && ok "leaf-renew failed, leaf expired: problem leaf urgent" || bad "renew fail expired" "rc=$rc; $(cat "$ROOT/leaf-status.json")"
+  echo "stand-in leaf" > "$ROOT/openldap-tls/ldap.crt"
+  STUB_LEAF_RC=1 run leaf-renew; rc=$?
+  [ "$rc" -eq 1 ] && stcheck leaf-renew fail 1 urgent null "$issued" \
+    && ok "leaf-renew failed, leaf unreadable: problem leaf urgent, not_after null" || bad "renew fail unreadable" "rc=$rc; $(cat "$ROOT/leaf-status.json")"
+  mkcert 1200
+  LEAF_EXTRA="STUB_LEAF_RC=3" leaf_run leaf-issue; rc=$?
+  [ "$rc" -eq 3 ] && stcheck leaf-issue fail 3 warn set "$issued" \
+    && ok "leaf-issue refused (3) over a valid leaf: result fail, warn, issued_ok kept" || bad "issue fail status" "rc=$rc; $(cat "$ROOT/leaf-status.json")"
+else
+  bad "a throwaway certificate with -not_after (openssl $(openssl version 2>&1)) or the first issue" "[$issued]"
+fi
+
+# The write is atomic: a temp file in the same directory, then mv. With mv failing the old file is
+# kept byte for byte, no temp file is left, and the switch exits 1 though openldap-leaf.sh passed
+# (or keeps openldap-leaf.sh's own failure).
+mkdir -p "$T/mvfail"
+printf '#!/bin/bash\nexit 1\n' > "$T/mvfail/mv"; chmod +x "$T/mvfail/mv"
+reset_host
+leaf_run leaf-issue >/dev/null
+cp "$ROOT/leaf-status.json" "$T/status.before"
+PATH="$T/mvfail:$PATH" run leaf-renew; rc=$?
+[ "$rc" -eq 1 ] && cmp -s "$T/status.before" "$ROOT/leaf-status.json" && [ -z "$(ls -A "$ROOT" | grep '^\.leaf-status')" ] \
+  && echo "$OUT" | grep -q 'ERROR\] could not write .*leaf-status.json' \
+  && ok "leaf-renew ok but mv fails: exit 1, the old status file unchanged, no temp file left" \
+  || bad "atomic mv" "rc=$rc; $(ls -A "$ROOT"); $OUT"
+STUB_LEAF_RC=3 PATH="$T/mvfail:$PATH" run leaf-renew; rc=$?
+[ "$rc" -eq 3 ] && cmp -s "$T/status.before" "$ROOT/leaf-status.json" \
+  && ok "leaf-renew refused (3) and mv fails: exit 3 kept, old file unchanged" || bad "atomic mv rc3" "rc=$rc"
+chmod 0555 "$ROOT"
+run leaf-renew; rc=$?
+chmod 0755 "$ROOT"
+[ "$rc" -eq 1 ] && cmp -s "$T/status.before" "$ROOT/leaf-status.json" && [ -z "$(ls -A "$ROOT" | grep '^\.leaf-status')" ] \
+  && ok "leaf-renew ok but no temp file can be made: exit 1, old file unchanged" || bad "atomic mktemp" "rc=$rc; $OUT"
+rm -f "$ROOT/leaf-status.json"
+PATH="$T/mvfail:$PATH" run leaf-renew; rc=$?
+[ "$rc" -eq 1 ] && [ ! -e "$ROOT/leaf-status.json" ] && [ -z "$(ls -A "$ROOT" | grep '^\.leaf-status')" ] \
+  && ok "no status file before and mv fails: none after (never a partial one)" || bad "atomic none" "rc=$rc; $(ls -A "$ROOT")"
+
+# --- LDAP_PROVISIONER_PASSWORD reaches openldap-leaf.sh issue and no other child ---
+# PATH wrappers for every outside command the script may run dump their environment to
+# $T/envdump, then run the real one; the $T/bin stubs (docker, hostname, sudo, systemctl, flock)
+# dump theirs there too; the openldap-leaf.sh stub dumps its own to $T/leafenv. common.env is a
+# probe that records whether the name is set when it is sourced, and every exported variable.
+mkdir -p "$T/envbin"
+for c in dirname basename mkdir mktemp chmod mv rm cp cmp date sed head tail grep tr cat openssl id \
+    install awk sort cut wc ls stat sleep tee touch ln readlink realpath uname whoami sha256sum shasum base64 timeout; do
+  real="$(command -v "$c" 2>/dev/null)" || continue
+  case "$real" in /*) ;; *) continue ;; esac
+  printf '#!/bin/bash\n[ -z "${STUB_ENVDUMP:-}" ] || %q >> "$STUB_ENVDUMP"\nexec %q "$@"\n' "$(command -v env)" "$real" > "$T/envbin/$c"
+  chmod +x "$T/envbin/$c"
+done
+for s in docker hostname sudo systemctl flock; do
+  sed -i.orig '1a\
+[ -z "${STUB_ENVDUMP:-}" ] || env >> "$STUB_ENVDUMP"
+' "$T/bin/$s" && rm -f "$T/bin/$s.orig"
+done
+sed -i.orig '1a\
+[ -z "${STUB_LEAF_ENV:-}" ] || env >> "$STUB_LEAF_ENV"
+' "$T/app/openldap-leaf.sh" && rm -f "$T/app/openldap-leaf.sh.orig"
+cp "$T/home/scripts/docker/common.env" "$T/common.env.orig"
+cat > "$T/home/scripts/docker/common.env" <<EOF
+DOCKER_DL=$T/dl
+echo "probe pw=\${LDAP_PROVISIONER_PASSWORD+set}" >> "\$STUB_PROBE"
+export -p >> "\$STUB_PROBE"
+EOF
+envrun() {   # envrun SWITCH...: leaf_run with the wrappers first on PATH and fresh dumps
+  : > "$T/envdump"; : > "$T/leafenv"; : > "$T/probe"
+  LEAF_EXTRA="${ENV_EXTRA:-} STUB_ENVDUMP=$T/envdump STUB_LEAF_ENV=$T/leafenv STUB_PROBE=$T/probe" PATH="$T/envbin:$PATH" leaf_run "$@"
+}
+for sw in "leaf-issue" "up leaf-issue" "leaf-issue up" "leaf-issue leaf-schedule-install"; do
+  reset_host; mkcert 1200   # a leaf on disk, as the stub issue leaves none (schedule-install needs one)
+  ENV_EXTRA="$DB_NAME=stand-in" envrun $sw; rc=$?
+  n="$(grep -c '^PATH=' "$T/envdump")"
+  [ "$rc" -eq 0 ] && [ "$n" -ge 10 ] && ! grep -qF -- "$LEAF_VAL" "$T/envdump" \
+    && grep -qxF -- "LDAP_PROVISIONER_PASSWORD=$LEAF_VAL" "$T/leafenv" && [ "$(grep -c '^PATH=' "$T/leafenv")" -eq 1 ] \
+    && ok "$sw: the value in openldap-leaf.sh issue's environment alone, none of $n other children's" \
+    || bad "$sw env" "rc=$rc; n=$n; dump=$(grep -cF -- "$LEAF_VAL" "$T/envdump"); leaf=$(grep -c '^PATH=' "$T/leafenv"); $(cat "$T/log")"
+  grep -qx 'probe pw=' "$T/probe" && ! grep -qF -- "$LEAF_VAL" "$T/probe" \
+    && ok "$sw: common.env is sourced with LDAP_PROVISIONER_PASSWORD unset and nothing exported holding the value" \
+    || bad "$sw common.env probe" "$(grep '^probe' "$T/probe")"
+done
+reset_host
+envrun leaf-renew; rc=$?
+[ "$rc" -eq 3 ] && [ "$(grep -c '^PATH=' "$T/envdump")" -ge 1 ] && ! grep -qF -- "$LEAF_VAL" "$T/envdump" && [ ! -s "$T/leafenv" ] \
+  && grep -qx 'probe pw=' "$T/probe" \
+  && ok "leaf-renew with the value set: refused (3), no child has it, openldap-leaf.sh not run" || bad "renew env" "rc=$rc"
+cp "$T/common.env.orig" "$T/home/scripts/docker/common.env"
 
 # host.toml: start is up alone; LDAP_PROVISIONER_PASSWORD is in no start_env.
 python3 - "$REPO/d05/host.toml" <<'PY' && ok "host.toml: identity-platform starts with up alone; LDAP_PROVISIONER_PASSWORD in no start_env" || bad "host.toml leaf"
