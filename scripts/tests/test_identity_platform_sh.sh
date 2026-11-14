@@ -514,6 +514,12 @@ run leaf-schedule-install; rc=$?
   && ok "leaf-schedule-install with no leaf: refused, nothing installed" || bad "schedule no leaf" "rc=$rc; $OUT"
 mkdir -p "$ROOT/openldap-tls"; echo "stand-in leaf" > "$ROOT/openldap-tls/ldap.crt"
 run leaf-schedule-install; rc=$?
+[ "$rc" -ne 0 ] && echo "$OUT" | grep -q 'records no successful leaf-issue' && [ -z "$(ls -A "$T/systemd")" ] \
+  && ok "leaf-schedule-install with a leaf but no successful leaf-issue recorded: refused" || bad "schedule no issue" "rc=$rc; $OUT"
+leaf_run leaf-issue >/dev/null; echo "stand-in leaf" > "$ROOT/openldap-tls/ldap.crt"
+grep -qE '^  "issued_ok": "[0-9]{4}-' "$ROOT/leaf-status.json" && grep -q '"result": "ok"' "$ROOT/leaf-status.json" \
+  && ok "leaf-issue writes leaf-status.json: result ok, issued_ok" || bad "issue status" "$(cat "$ROOT/leaf-status.json" 2>/dev/null)"
+run leaf-schedule-install; rc=$?
 svc_file="$T/systemd/identity-platform-leaf-renew.service"
 [ "$rc" -eq 0 ] && grep -qx "ExecStart=$T/app/identity-platform.sh leaf-renew" "$svc_file" \
   && grep -qx "User=$(id -un)" "$svc_file" && ! grep -q '@' "$svc_file" \

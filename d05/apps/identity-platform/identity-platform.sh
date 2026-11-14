@@ -31,12 +31,24 @@
 #               self-signs when the files are missing). Never on a replica.
 #   leaf-renew  no secret; every 3 hours once the operator approves the schedule (DEPLOY.md item 13,
 #               leaf-schedule-install). Never on a replica.
+#   Both write /mnt/docker/IdentityPlatform/leaf-status.json (ok or fail, exit, the leaf's notAfter)
+#   for host-maintenance's monitor; leaf-schedule-install needs a successful leaf-issue in it.
 # At start this script takes LDAP_PROVISIONER_PASSWORD out of its environment into an unexported
 # variable, so that only leaf-issue's own child (openldap-leaf.sh issue) ever gets it, whichever
 # switches run with it; up and every compose call never do.
 # Data under /mnt/docker/IdentityPlatform. No backup here yet: the data is the Mini's until M5.
 
 set -euo pipefail
+
+# leaf-issue's value, out of the environment before any child runs (dirname
+# below included) or common.env is sourced: no child but openldap-leaf.sh issue gets it (header).
+LEAF_PW_SET=false
+LEAF_PW=""
+if [ -n "${LDAP_PROVISIONER_PASSWORD+x}" ]; then
+  LEAF_PW_SET=true
+  LEAF_PW="$LDAP_PROVISIONER_PASSWORD"
+fi
+unset LDAP_PROVISIONER_PASSWORD
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="$SCRIPT_DIR/compose.yml"
@@ -69,15 +81,6 @@ LEAF_SCRIPT="$SCRIPT_DIR/openldap-leaf.sh"
 # installed only by leaf-schedule-install.
 LEAF_UNIT="identity-platform-leaf-renew"
 SYSTEMD_DIR="${IDENTITY_PLATFORM_SYSTEMD_DIR:-/etc/systemd/system}"
-
-# leaf-issue's value, out of the environment: no child but openldap-leaf.sh issue gets it (header).
-LEAF_PW_SET=false
-LEAF_PW=""
-if [ -n "${LDAP_PROVISIONER_PASSWORD+x}" ]; then
-  LEAF_PW_SET=true
-  LEAF_PW="$LDAP_PROVISIONER_PASSWORD"
-fi
-unset LDAP_PROVISIONER_PASSWORD
 
 # DEPLOY.md "Production on d05: networks". Both external in compose.yml; created here.
 NET_NAME="identity-platform-net"
@@ -375,11 +378,78 @@ do_verify() {
   return "$rc"
 }
 
+# The leaf's status file, read by host-maintenance's monitor (its config/maintenance.toml [[status]]
+# identity-platform-leaf; the format its runner/maint.py status_problems reads: "time" and
+# "problems", each problem {"key", "severity", "message"}). Written by every leaf-issue and
+# leaf-renew past their refusals (replica, value), ok or not, atomically: a temp file in the same
+# directory, then mv. "problems" is empty on ok; on fail it holds one problem, key "leaf": "warn"
+# (a work item) while the leaf's notAfter is LEAF_URGENT_S (6 hours) away or more, "urgent" when it
+# is nearer, past or unreadable. "issued_ok" is the time of the last successful leaf-issue, carried
+# forward by every write; leaf-schedule-install needs it. No secret is ever in it.
+LEAF_STATUS="$APP_ROOT/leaf-status.json"
+LEAF_URGENT_S=21600
+
+# The leaf's notAfter as openssl prints it ("Nov 15 12:00:00 2026 GMT"), or nothing.
+leaf_not_after() {
+  local end
+  [ -s "$LEAF_DIR/ldap.crt" ] && command -v openssl >/dev/null 2>&1 || return 0
+  end="$(openssl x509 -in "$LEAF_DIR/ldap.crt" -noout -enddate 2>/dev/null)" || return 0
+  printf '%s' "${end#notAfter=}" | tr -cd 'A-Za-z0-9 :'
+}
+
+json_str() { if [ -n "$1" ]; then printf '"%s"' "$1"; else printf 'null'; fi; }
+
+# write_leaf_status ACTION EXIT
+write_leaf_status() {
+  local action="$1" rc="$2" t result=ok na issued="" sev msg problems="[]" tmp
+  t="$(date -u +%Y-%m-%dT%H:%M:%SZ)" || return
+  [ "$rc" -eq 0 ] || result=fail
+  na="$(leaf_not_after)"
+  if [ "$action" = leaf-issue ] && [ "$result" = ok ]; then
+    issued="$t"
+  elif [ -f "$LEAF_STATUS" ]; then
+    issued="$(sed -nE 's/^  "issued_ok": "([0-9TZ:-]+)",?$/\1/p' "$LEAF_STATUS" | head -n 1)" || issued=""
+  fi
+  if [ "$result" = fail ]; then
+    msg="$SERVING_HOST: identity-platform $action failed (exit $rc)"
+    if [ -n "$na" ] && openssl x509 -in "$LEAF_DIR/ldap.crt" -noout -checkend "$LEAF_URGENT_S" >/dev/null 2>&1; then
+      sev=warn
+      msg="$msg; the openldap leaf is valid until $na"
+      [ "$action" != leaf-renew ] || msg="$msg; the timer retries every 3 hours"
+    elif [ -n "$na" ]; then
+      sev=urgent
+      msg="$msg; the openldap leaf expires $na, under 6 hours away (or past): renew or issue it now"
+    else
+      sev=urgent
+      msg="$msg; the openldap leaf cannot be read: renew or issue it now"
+    fi
+    problems="[{\"key\": \"leaf\", \"severity\": \"$sev\", \"message\": \"$msg\"}]"
+  fi
+  mkdir -p "$APP_ROOT" || return
+  tmp="$(mktemp "$APP_ROOT/.leaf-status.XXXXXX")" || return
+  if printf '{\n  "time": "%s",\n  "action": "%s",\n  "result": "%s",\n  "exit": %d,\n  "not_after": %s,\n  "issued_ok": %s,\n  "problems": %s\n}\n' \
+      "$t" "$action" "$result" "$rc" "$(json_str "$na")" "$(json_str "$issued")" "$problems" > "$tmp" \
+    && chmod 0644 "$tmp" && mv -f "$tmp" "$LEAF_STATUS"; then
+    echo "[INFO] $LEAF_STATUS: $action $result (exit $rc)"
+  else
+    rm -f "$tmp"
+    echo "[ERROR] could not write $LEAF_STATUS" >&2
+    return 1
+  fi
+}
+
+# A failed status write fails the switch (exit 1) even when openldap-leaf.sh succeeded: the monitor
+# would otherwise call the leaf stale.
+record_leaf() {   # record_leaf ACTION EXIT: prints the exit to return
+  if write_leaf_status "$1" "$2" >&2; then echo "$2"; elif [ "$2" -ne 0 ]; then echo "$2"; else echo 1; fi
+}
+
 # leaf-issue: the networks (openldap-leaf.sh runs step on identity-platform-net), the checked root
 # CA at ca/root_ca.crt (step's --root, and the leaf's ca.crt), openldap-tls (the one openldap dir
 # M1 makes; never openldap-data or openldap-config), then openldap-leaf.sh issue with the value in
 # its environment alone. Refused on a replica (step-ca and its provisioner are d05's) and without
-# the value, before any docker call. openldap-leaf.sh refuses over a leaf that is still valid.
+# the value, before any docker call and without a status write. openldap-leaf.sh refuses over a
+# leaf that is still valid (exit 3, recorded as fail like any other exit).
 do_leaf_issue() {
   if is_replica; then
     echo "[ERROR] leaf-issue: not on a replica ($(hostname -s)); the leaf is d05's" >&2
@@ -389,18 +459,24 @@ do_leaf_issue() {
     echo "[ERROR] leaf-issue: LDAP_PROVISIONER_PASSWORD is not in this process's environment; the workstation hands it over for this one command (OpenBao secret/v2/certificate-management/step-ca/provisioners/ldap, field password); not issuing" >&2
     return 1
   fi
-  ensure_networks || return
-  place_ca || return
-  mkdir -p "$LEAF_DIR" || return
   local rc=0
-  ( export LDAP_PROVISIONER_PASSWORD="$LEAF_PW"; exec "$LEAF_SCRIPT" issue ) || rc=$?
+  leaf_issue_steps || rc=$?
   LEAF_PW=""; LEAF_PW_SET=false
-  [ "$rc" -eq 0 ] || { echo "[ERROR] leaf-issue: openldap-leaf.sh issue exit $rc (3: refused)" >&2; return "$rc"; }
+  rc="$(record_leaf leaf-issue "$rc")"
+  [ "$rc" -eq 0 ] || { echo "[ERROR] leaf-issue: exit $rc (3: refused by openldap-leaf.sh)" >&2; return "$rc"; }
   check_leaf
 }
 
+leaf_issue_steps() {
+  ensure_networks || return
+  place_ca || return
+  mkdir -p "$LEAF_DIR" || return
+  ( export LDAP_PROVISIONER_PASSWORD="$LEAF_PW"; exec "$LEAF_SCRIPT" issue )
+}
+
 # leaf-renew: openldap-leaf.sh renew, no secret (it refuses one, so this does too). Refused on a
-# replica. Exit as openldap-leaf.sh's (0 done or not due, 1 failed, 3 refused: run leaf-issue).
+# replica. Exit as openldap-leaf.sh's (0 done or not due, 1 failed, 3 refused: run leaf-issue), or 1
+# when the status file could not be written.
 do_leaf_renew() {
   if is_replica; then
     echo "[ERROR] leaf-renew: not on a replica ($(hostname -s)); the leaf is d05's" >&2
@@ -410,7 +486,10 @@ do_leaf_renew() {
     echo "[ERROR] leaf-renew: needs no provisioner password; refused while LDAP_PROVISIONER_PASSWORD is set" >&2
     return 3
   fi
-  "$LEAF_SCRIPT" renew
+  local rc=0
+  "$LEAF_SCRIPT" renew || rc=$?
+  rc="$(record_leaf leaf-renew "$rc")"
+  return "$rc"
 }
 
 # The renewer's schedule (DEPLOY.md item 13), installed only by leaf-schedule-install, which the
@@ -422,10 +501,21 @@ render_leaf_service() {
   sed -e "s|@USER@|$(id -un)|" -e "s|@SCRIPT@|$esc|" "$SCRIPT_DIR/$LEAF_UNIT.service"
 }
 
+leaf_issued_ok() {
+  [ -f "$LEAF_STATUS" ] && grep -qE '^  "issued_ok": "[0-9]' "$LEAF_STATUS"
+}
+
+# Idempotent: each unit is rendered and compared with the installed one, installed only when it
+# differs, and daemon-reload runs only when one changed. Run it again after an update that changes
+# either template (README). Refused until the status file records a successful leaf-issue.
 do_leaf_schedule_install() {
-  local tmp
+  local tmp changed=""
   if is_replica; then
     echo "[ERROR] leaf-schedule-install: not on a replica ($(hostname -s))" >&2
+    return 1
+  fi
+  if ! leaf_issued_ok; then
+    echo "[ERROR] leaf-schedule-install: $LEAF_STATUS records no successful leaf-issue; run leaf-issue first (renew refuses without a leaf)" >&2
     return 1
   fi
   if [ ! -s "$LEAF_DIR/ldap.crt" ]; then
@@ -434,22 +524,40 @@ do_leaf_schedule_install() {
   fi
   tmp="$(mktemp)" || return
   render_leaf_service > "$tmp" || { rm -f "$tmp"; return 1; }
-  sudo install -m 0644 "$tmp" "$SYSTEMD_DIR/$LEAF_UNIT.service" \
-    && sudo install -m 0644 "$SCRIPT_DIR/$LEAF_UNIT.timer" "$SYSTEMD_DIR/$LEAF_UNIT.timer" \
-    || { rm -f "$tmp"; return 1; }
+  if ! cmp -s "$tmp" "$SYSTEMD_DIR/$LEAF_UNIT.service"; then
+    sudo install -m 0644 "$tmp" "$SYSTEMD_DIR/$LEAF_UNIT.service" || { rm -f "$tmp"; return 1; }
+    changed="$changed $LEAF_UNIT.service"
+  fi
   rm -f "$tmp"
-  sudo systemctl daemon-reload || return
+  if ! cmp -s "$SCRIPT_DIR/$LEAF_UNIT.timer" "$SYSTEMD_DIR/$LEAF_UNIT.timer"; then
+    sudo install -m 0644 "$SCRIPT_DIR/$LEAF_UNIT.timer" "$SYSTEMD_DIR/$LEAF_UNIT.timer" || return
+    changed="$changed $LEAF_UNIT.timer"
+  fi
+  if [ -n "$changed" ]; then
+    echo "[INFO] installed$changed"
+    sudo systemctl daemon-reload || return
+  else
+    echo "[INFO] $LEAF_UNIT.service and .timer unchanged; no daemon-reload"
+  fi
   sudo systemctl enable --now "$LEAF_UNIT.timer" || return
-  echo "[INFO] installed and enabled $LEAF_UNIT.timer (openldap-leaf.sh renew every 3 hours)"
+  echo "[INFO] $LEAF_UNIT.timer enabled (openldap-leaf.sh renew every 3 hours)"
   do_leaf_schedule_status
 }
 
-# Read-only.
+# Read-only: the timer, the service's last result, and the status file.
 do_leaf_schedule_status() {
-  local en act
+  local en act res
   en="$(systemctl is-enabled "$LEAF_UNIT.timer" 2>/dev/null)" || true
   act="$(systemctl is-active "$LEAF_UNIT.timer" 2>/dev/null)" || true
   echo "[INFO] $LEAF_UNIT.timer: ${en:-not installed}, ${act:-inactive}"
+  res="$(systemctl show -p Result,ExecMainStatus "$LEAF_UNIT.service" 2>/dev/null | tr '\n' ' ')" || res=""
+  echo "[INFO] $LEAF_UNIT.service last run: ${res:-unknown}"
+  if [ -f "$LEAF_STATUS" ]; then
+    echo "[INFO] $LEAF_STATUS:"
+    sed 's/^/  /' "$LEAF_STATUS"
+  else
+    echo "[INFO] $LEAF_STATUS: none yet (leaf-issue writes it)"
+  fi
 }
 
 do_leaf_schedule_remove() {
@@ -532,9 +640,10 @@ usage() {
   echo "                    openldap's first start; needs LDAP_PROVISIONER_PASSWORD in the environment" >&2
   echo "                    (from OpenBao for this one command; never in a file). Not on a replica" >&2
   echo "  leaf-renew      - openldap-leaf.sh renew: renew at half life, reload slapd; no secret. Not on a replica" >&2
-  echo "  leaf-schedule-install - Install and enable $LEAF_UNIT.timer (leaf-renew every 3 hours);" >&2
+  echo "  leaf-schedule-install - Install or update and enable $LEAF_UNIT.timer (leaf-renew every 3 hours)," >&2
+  echo "                    after a successful leaf-issue; idempotent, run again after a template change;" >&2
   echo "                    only with the operator's approval of the schedule (DEPLOY.md item 13)" >&2
-  echo "  leaf-schedule-status  - Whether the timer is installed and active (read-only)" >&2
+  echo "  leaf-schedule-status  - The timer, the service's last result and leaf-status.json (read-only)" >&2
   echo "  leaf-schedule-remove  - Disable and remove the timer and its service" >&2
   echo "  start-openldap, start-keycloak, restore" >&2
   echo "                  - Refused: the M5 cutover, not yet written" >&2
