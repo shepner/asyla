@@ -55,8 +55,9 @@ allow = ["10.0.0.0/24"]    # a subnet, not a host (operator, 2026-10-25): the tr
 # starts keycloak-db with a throwaway password (a replica gets no start_env).
 # LDAP_PROVISIONER_PASSWORD (step-ca's `ldap` provisioner, for identity-platform.sh leaf-issue) is
 # not in start_env on purpose: start runs `up`, which must never get it or issue. build_host.py has
-# no one-off app command with its own values, so leaf-issue is run by one ssh command that carries
-# the value on stdin (the app's README); a build never issues or renews.
+# no one-off app command with its own values; the operator runs the leaf switches with
+# scripts/app_switch.sh, which allows only the switches in switch_env (SWITCH -> the values it sends
+# over ssh stdin, by name; build_host.py does not read this key). A build never issues or renews.
 [[app]]
 name = "identity-platform"
 start = ["up"]
@@ -64,3 +65,4 @@ verify = ["verify"]
 restore = false
 pull_token_env = "THEORG_REGISTRY_PULL_TOKEN"
 start_env = ["IDP_KEYCLOAK_DB_PASSWORD"]
+switch_env = { "leaf-issue" = ["LDAP_PROVISIONER_PASSWORD"], "leaf-renew" = [], "leaf-schedule-install" = [], "leaf-schedule-status" = [], "leaf-schedule-remove" = [] }
