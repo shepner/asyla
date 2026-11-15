@@ -7,6 +7,7 @@
 Description=identity-platform: renew the openldap leaf (openldap-leaf.sh renew)
 After=network-online.target docker.service
 Wants=network-online.target
+RequiresMountsFor=/mnt/docker
 
 [Service]
 Type=oneshot

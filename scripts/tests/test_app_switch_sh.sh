@@ -3,9 +3,12 @@
 # key; the remote command is build_host.py's app_script and the switch alone, no export and no read),
 # stdin carrying the one value on one line (empty with no VAR), the value in no argv, log, output or
 # child environment (ssh, python3 and dirname are PATH wrappers that dump their environment), the
-# remote exit kept, and every refusal (exit 2, no ssh): a switch not in switch_env, a VAR not listed
+# remote exit kept, the value in no trace or child environment however bash is started (bash -x,
+# SHELLOPTS=xtrace or allexport, a BASH_ENV setting -x, val/var exported in the incoming
+# environment), and every refusal (exit 2, no ssh): a switch not in switch_env, a VAR not listed
 # for it, a listed VAR missing, a VAR unset, empty or holding a newline, more than one VAR (on the
-# command line or in a switch_env list), a shell variable as VAR, build_host.py's ssh override set,
+# command line or in a switch_env list), a shell variable or the script's own name (GUEST_USER, REPO,
+# SSH_KEY) as VAR, build_host.py's ssh override set,
 # an app with no switch_env, an unknown app or host, a replica.
 # Every value is a plain stand-in word made at run time. Nothing reaches a host.
 # Run: bash scripts/tests/test_app_switch_sh.sh
@@ -121,6 +124,25 @@ GO_ENV="STUB_SSH_RC=7" go "$S" d05 identity-platform leaf-renew; rc=$?
 GO_ENV="STUB_SSH_RC=5 LDAP_PROVISIONER_PASSWORD=$V1" go "$S" d05 identity-platform leaf-issue LDAP_PROVISIONER_PASSWORD; rc=$?
 [ "$rc" -eq 5 ] && nowhere && ok "the remote command's exit is app_switch's (5, with a VAR)" || bad "exit kept with VAR" "rc=$rc"
 
+# --- however the shell is started: tracing and allexport off before the value is read ---
+traced() {   # traced LABEL: the last go ran leaf-issue (0), stdin the value, the value nowhere else
+  [ "$rc" -eq 0 ] && [ "$(cat "$T/stdin")" = "$V1" ] && nowhere \
+    && ok "$1: the value in no trace, output, argv or child environment" || bad "$1 leaks the value" "rc=$rc"
+}
+GO_ENV="SHELLOPTS=xtrace LDAP_PROVISIONER_PASSWORD=$V1" go "$S" d05 identity-platform leaf-issue LDAP_PROVISIONER_PASSWORD; rc=$?
+grep -q '^+' <<< "$OUT" && traced "SHELLOPTS=xtrace inherited (tracing was on at start)" || bad "SHELLOPTS=xtrace: no trace seen at start" "$OUT"
+GO_ENV="LDAP_PROVISIONER_PASSWORD=$V1" go -x "$S" d05 identity-platform leaf-issue LDAP_PROVISIONER_PASSWORD; rc=$?
+grep -q '^+' <<< "$OUT" && traced "bash -x" || bad "bash -x: no trace seen at start" "$OUT"
+printf 'set -x\n' > "$T/bashenv"
+GO_ENV="BASH_ENV=$T/bashenv LDAP_PROVISIONER_PASSWORD=$V1" go "$S" d05 identity-platform leaf-issue LDAP_PROVISIONER_PASSWORD; rc=$?
+grep -q '^+' <<< "$OUT" && traced "a BASH_ENV that sets -x" || bad "BASH_ENV: no trace seen at start" "$OUT"
+GO_ENV="SHELLOPTS=allexport LDAP_PROVISIONER_PASSWORD=$V1" go "$S" d05 identity-platform leaf-issue LDAP_PROVISIONER_PASSWORD; rc=$?
+traced "SHELLOPTS=allexport inherited"
+# A same-named variable exported into the environment keeps its flag on assignment: unset first.
+GO_ENV="val=x var=y LDAP_PROVISIONER_PASSWORD=$V1" go "$S" d05 identity-platform leaf-issue LDAP_PROVISIONER_PASSWORD; rc=$?
+traced "val=x and var=y exported in the incoming environment"
+! grep -qE '^(val|var)=' "$T/envdump" && ok "val and var unset before any child ran" || bad "val/var in a child env" "$(grep -E '^(val|var)=' "$T/envdump" | cut -c1-5)"
+
 # --- refusals: exit 2, no ssh, no value in the output ---
 refused() {   # refused RC LABEL PATTERN: the last go refused (2) with PATTERN in its output
   local rc="$1" label="$2" pat="$3"
@@ -142,6 +164,9 @@ OUT="$(LDAP_PROVISIONER_PASSWORD="$V1
 $V2" HOME="$T/home" PATH="$T/bin:$PATH" STUB_LOG="$T/log" STUB_STDIN="$T/stdin" STUB_ENVDUMP="$T/envdump" \
   bash "$S" d05 identity-platform leaf-issue LDAP_PROVISIONER_PASSWORD 2>&1)"; refused $? "a VAR holding a newline" "holds a newline"
 go "$S" d05 identity-platform leaf-issue PATH; refused $? "a shell variable as VAR (PATH)" "shell or ssh variable"
+for own in GUEST_USER REPO SSH_KEY; do
+  GO_ENV="$own=$V1" go "$S" d05 identity-platform leaf-issue "$own"; refused $? "the script's own name as VAR ($own)" "shell or ssh variable"
+done
 GO_ENV="BUILD_HOST_SSH_KEY=$T/k" go "$S" d05 identity-platform leaf-renew; refused $? "build_host.py's ssh override set" "no ssh override"
 go "$F/scripts/app_switch.sh" h01 plain none; refused $? "an app with no switch_env" "no switch_env"
 go "$S" d05 no-such-app leaf-renew; refused $? "an unknown app" "no \[\[app\]\] 'no-such-app'"

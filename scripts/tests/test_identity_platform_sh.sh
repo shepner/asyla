@@ -561,9 +561,11 @@ run leaf-schedule-install; rc=$?
 svc_file="$T/systemd/identity-platform-leaf-renew.service"
 [ "$rc" -eq 0 ] && grep -qx "ExecStart=$T/app/identity-platform.sh leaf-renew" "$svc_file" \
   && grep -qx "User=$(id -un)" "$svc_file" && ! grep -q '@' "$svc_file" \
+  && grep -qx 'RequiresMountsFor=/mnt/docker' "$svc_file" \
+  && [ "$(sed -n '/^\[Unit\]/,/^\[/p' "$svc_file" | grep -c '^RequiresMountsFor=/mnt/docker$')" -eq 1 ] \
   && cmp -s "$SRC/identity-platform-leaf-renew.timer" "$T/systemd/identity-platform-leaf-renew.timer" \
   && grep -q '^systemctl enable --now identity-platform-leaf-renew.timer$' "$T/log" \
-  && ok "leaf-schedule-install: the service filled in (user, script, leaf-renew), the timer as committed, enabled" \
+  && ok "leaf-schedule-install: the service filled in (user, script, leaf-renew; RequiresMountsFor=/mnt/docker in [Unit]), the timer as committed, enabled" \
   || bad "schedule install" "rc=$rc; $OUT; $(cat "$svc_file" 2>/dev/null); $(cat "$T/log")"
 grep -qx 'OnCalendar=\*-\*-\* 00/3:17:00' "$SRC/identity-platform-leaf-renew.timer" \
   && grep -qx 'Persistent=true' "$SRC/identity-platform-leaf-renew.timer" \
@@ -646,10 +648,43 @@ if mkcert 1200 && [ -n "$issued" ]; then
   STUB_LEAF_RC=1 run leaf-renew; rc=$?
   [ "$rc" -eq 1 ] && stcheck leaf-renew fail 1 urgent null "$issued" \
     && ok "leaf-renew failed, leaf unreadable: problem leaf urgent, not_after null" || bad "renew fail unreadable" "rc=$rc; $(cat "$ROOT/leaf-status.json")"
+  # leaf-issue that openldap-leaf.sh refuses (3: a valid leaf, or its lock held): result refused,
+  # the previous file's problems carried forward unchanged (no new work item), issued_ok kept.
+  refcheck() {   # refcheck BEFORE ISSUED_OK: refused, exit 3, problems as in BEFORE ("[]" when none)
+    python3 - "$ROOT/leaf-status.json" "$1" "$2" <<'PY'
+import json, os, sys
+d = json.load(open(sys.argv[1]))
+before = json.load(open(sys.argv[2]))["problems"] if os.path.getsize(sys.argv[2]) else []
+assert (d["action"], d["result"], d["exit"]) == ("leaf-issue", "refused", 3), d
+assert d["problems"] == before, (d["problems"], before)
+want = None if sys.argv[3] == "null" else sys.argv[3]
+assert sys.argv[3] == "-" or d["issued_ok"] == want, d["issued_ok"]
+PY
+  }
   mkcert 1200
+  cp "$ROOT/leaf-status.json" "$T/status.before"
   LEAF_EXTRA="STUB_LEAF_RC=3" leaf_run leaf-issue; rc=$?
-  [ "$rc" -eq 3 ] && stcheck leaf-issue fail 3 warn set "$issued" \
-    && ok "leaf-issue refused (3) over a valid leaf: result fail, warn, issued_ok kept" || bad "issue fail status" "rc=$rc; $(cat "$ROOT/leaf-status.json")"
+  [ "$rc" -eq 3 ] && grep -q '"severity": "urgent"' "$T/status.before" && refcheck "$T/status.before" "$issued" \
+    && ok "leaf-issue refused (3) by openldap-leaf.sh after a failed renew: result refused, the renew's urgent problem kept as it was, issued_ok kept" \
+    || bad "issue refused status (problem kept)" "rc=$rc; $(cat "$ROOT/leaf-status.json")"
+  run leaf-renew >/dev/null
+  cp "$ROOT/leaf-status.json" "$T/status.before"
+  LEAF_EXTRA="STUB_LEAF_RC=3" leaf_run leaf-issue; rc=$?
+  [ "$rc" -eq 3 ] && grep -q '"problems": \[\]' "$T/status.before" && refcheck "$T/status.before" "$issued" \
+    && ok "leaf-issue refused (3) over a valid leaf after an ok renew: result refused, no problem (no work item), issued_ok kept" \
+    || bad "issue refused status (no problem)" "rc=$rc; $(cat "$ROOT/leaf-status.json")"
+  rm -f "$ROOT/leaf-status.json"; : > "$T/status.before"
+  LEAF_EXTRA="STUB_LEAF_RC=3" leaf_run leaf-issue; rc=$?
+  [ "$rc" -eq 3 ] && refcheck "$T/status.before" null \
+    && ok "leaf-issue refused (3) with no status file before: result refused, no problem, issued_ok null" \
+    || bad "issue refused status (no file)" "rc=$rc; $(cat "$ROOT/leaf-status.json" 2>/dev/null)"
+  LEAF_EXTRA="STUB_LEAF_RC=1" leaf_run leaf-issue; rc=$?
+  [ "$rc" -eq 1 ] && stcheck leaf-issue fail 1 warn set - \
+    && ok "leaf-issue failing otherwise (1): result fail, problem leaf warn (still a work item)" \
+    || bad "issue fail status" "rc=$rc; $(cat "$ROOT/leaf-status.json")"
+  STUB_LEAF_RC=3 run leaf-renew; rc=$?
+  [ "$rc" -eq 3 ] && stcheck leaf-renew fail 3 warn set - \
+    && ok "leaf-renew refused (3, run issue): still result fail with a problem" || bad "renew rc3 status" "rc=$rc; $(cat "$ROOT/leaf-status.json")"
 else
   bad "a throwaway certificate with -not_after (openssl $(openssl version 2>&1)) or the first issue" "[$issued]"
 fi
@@ -723,6 +758,16 @@ n="$(grep -c '^PATH=' "$T/envdump")"
 grep -qx 'probe pw=' "$T/probe" && ! grep -qF -- "$LEAF_VAL" "$T/probe" \
   && ok "leaf-issue: common.env is sourced with LDAP_PROVISIONER_PASSWORD unset and nothing exported holding the value" \
   || bad "leaf-issue common.env probe" "$(grep '^probe' "$T/probe")"
+# A same-named variable exported into the script's environment (pw=x): bash's local would keep its
+# export flag and hand the value to every child; the script unsets it and declares the local +x.
+reset_host
+ENV_EXTRA="pw=x STUB_LEAF_PW_FILE=$T/leafpw" envrun leaf-issue; rc=$?
+got="$(cat "$T/leafpw" 2>/dev/null)"; rm -f "$T/leafpw"
+[ "$rc" -eq 0 ] && [ "$got" = "$LEAF_VAL" ] && [ "$(grep -c '^PATH=' "$T/envdump")" -ge 10 ] \
+  && ! grep -qF -- "$LEAF_VAL" "$T/envdump" && ! grep -qF -- "$LEAF_VAL" "$T/leafenv" && ! grep -qF -- "$LEAF_VAL" "$T/probe" \
+  && ! grep -q '^pw=' "$T/leafenv" \
+  && ok "leaf-issue with pw=x exported in its environment: the value in no child's environment (pw unset, the local never exported)" \
+  || bad "leaf-issue exported pw" "rc=$rc; dump=$(grep -cF -- "$LEAF_VAL" "$T/envdump"); leaf=$(grep -cF -- "$LEAF_VAL" "$T/leafenv")"
 reset_host
 LEAF_IN_ENV=1 envrun leaf-issue; rc=$?
 [ "$rc" -eq 3 ] && ! grep -qF -- "$LEAF_VAL" "$T/envdump" && [ ! -s "$T/leafenv" ] && grep -qx 'probe pw=' "$T/probe" \

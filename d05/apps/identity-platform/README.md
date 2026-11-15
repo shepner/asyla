@@ -66,7 +66,8 @@ one-shots (backups, keycloak-configure) are never started by `up`.
     life over mTLS with the current leaf and reloads slapd when openldap runs. Not on a replica.
   - The schedule (theOrg DEPLOY.md item 13: every 3 hours): `identity-platform-leaf-renew.timer`
     (`OnCalendar=*-*-* 00/3:17:00`, `Persistent=true`, up to 5 min random delay) and its oneshot
-    service (a template: `User=` and `ExecStart=` filled in at install), both here. Not installed by
+    service (a template: `User=` and `ExecStart=` filled in at install; `RequiresMountsFor=/mnt/docker`,
+    where the leaf and the status file live), both here. Not installed by
     `up`, a build or the updater: `identity-platform.sh leaf-schedule-install` installs and enables
     them (sudo), once the operator has approved the exact schedule and after `leaf-issue`;
     `leaf-schedule-status` (read-only) and `leaf-schedule-remove`. The service runs this folder's
@@ -77,10 +78,12 @@ one-shots (backups, keycloak-configure) are never started by `up`.
   - Status: every `leaf-issue` and `leaf-renew` past their refusals writes
     `/mnt/docker/IdentityPlatform/leaf-status.json` atomically (a temp file, then `mv`; a failed
     write fails the switch): `time` (UTC, `...Z`, which host-maintenance's `parse_iso`,
-    `datetime.fromisoformat` on Python 3.12, reads), `action`, `result` (ok or fail), `exit`,
-    `not_after` (the leaf's), `issued_ok` (the last successful issue; `leaf-schedule-install` needs
-    it) and `problems`: none when ok; on a failure one problem `leaf`, `warn` (a work item) while the
-    leaf has 6 hours or more left, `urgent` when it has less, has expired or cannot be read. No
+    `datetime.fromisoformat` on Python 3.12, reads), `action`, `result` (ok, fail or refused),
+    `exit`, `not_after` (the leaf's), `issued_ok` (the last successful issue; `leaf-schedule-install`
+    needs it) and `problems`: none when ok; on a failure one problem `leaf`, `warn` (a work item)
+    while the leaf has 6 hours or more left, `urgent` when it has less, has expired or cannot be read.
+    A `leaf-issue` that `openldap-leaf.sh` refuses (exit 3: a valid leaf already there, or its lock
+    held) is `refused` and keeps the previous file's problems unchanged: no new work item. No
     secret is in it. host-maintenance alerts on it through its `[[status]]` entry
     `identity-platform-leaf` (`config/maintenance.toml`, `max_age_minutes = 200`), which is there
     commented out until the first `leaf-issue` and `leaf-schedule-install`, because a missing file

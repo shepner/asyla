@@ -21,13 +21,19 @@
 # -i ~/.ssh/docker_rsa docker@HOST '~/scripts/HOST/apps/APP/APP.sh SWITCH'. The override
 # (BUILD_HOST_SSH_KEY, BUILD_HOST_SSH_KNOWN_HOSTS, BUILD_HOST_SSH_BY_ADDRESS) is not implemented
 # here, so it is refused rather than ignored. A shell variable of bash's own (PATH, HOME, IFS,
-# BASH*, ...) is refused as a VAR: it is unset here before anything runs.
+# BASH*, ...), ssh's (SSH_*) or this script's own (SSH_KEY, GUEST_USER, REPO) is refused as a VAR:
+# it is unset here before anything runs. Tracing and allexport are turned off first, however this
+# shell was started (bash -x, SHELLOPTS, BASH_ENV).
 # Exit: the remote command's, or 2 for a refusal here.
 #
 # From ~/local/asyla, e.g.:
 #   python3 core/tools/credentials.py exec LDAP_PROVISIONER_PASSWORD -- \
 #     projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform leaf-issue LDAP_PROVISIONER_PASSWORD
 set -euo pipefail
+# No tracing and no allexport, whatever started this shell (`bash -x`, SHELLOPTS=xtrace or
+# allexport in the environment, a BASH_ENV that sets either): a trace would print the value.
+{ set +x; } 2>/dev/null
+set +a
 
 SSH_KEY="${HOME}/.ssh/docker_rsa"
 GUEST_USER="docker"
@@ -40,7 +46,9 @@ shift 3
 [ $# -le 1 ] || refuse "at most one VAR (one line on ssh stdin); got $#: $*"
 name_re='^[a-z][a-z0-9-]*$'
 var_re='^[A-Z_][A-Z0-9_]*$'
-reserved_re='^(PATH|HOME|IFS|PWD|OLDPWD|SHELL|USER|LOGNAME|TERM|TMPDIR|LANG|LC_[A-Z_]*|UID|EUID|PPID|SHELLOPTS|BASH[A-Z0-9_]*|SSH_[A-Z0-9_]*|BUILD_HOST_[A-Z0-9_]*)$'
+# Bash's own and ssh's names, and this script's own uppercase ones (SSH_KEY, GUEST_USER, REPO): one
+# of those as VAR would send this script's value, or be overwritten by it.
+reserved_re='^(PATH|HOME|IFS|PWD|OLDPWD|SHELL|USER|LOGNAME|TERM|TMPDIR|LANG|LC_[A-Z_]*|UID|EUID|PPID|SHELLOPTS|BASH[A-Z0-9_]*|SSH_[A-Z0-9_]*|BUILD_HOST_[A-Z0-9_]*|SSH_KEY|GUEST_USER|REPO)$'
 for o in BUILD_HOST_SSH_KEY BUILD_HOST_SSH_KNOWN_HOSTS BUILD_HOST_SSH_BY_ADDRESS; do
   [ -z "${!o+x}" ] || refuse "$o is set; this tool has no ssh override (build_host.py's), unset it"
 done
@@ -48,12 +56,15 @@ done
 [[ "$app" =~ $name_re ]] || refuse "APP must match $name_re"
 [[ "$switch" =~ $name_re ]] || refuse "SWITCH must match $name_re"
 # The VAR's value into this shell alone (never exported), then out of the environment, before any
-# child runs (dirname, python3, ssh): no other process carries it.
+# child runs (dirname, python3, ssh): no other process carries it. Unset first: an assignment keeps
+# the export flag of a same-named variable the environment brought in (val=x exported would hand
+# the value to every child).
+unset -v var val
 var="" val=""
 if [ $# -eq 1 ]; then
   var="$1"
   [[ "$var" =~ $var_re ]] || refuse "VAR $var must match $var_re"
-  [[ ! "$var" =~ $reserved_re ]] || refuse "VAR $var is a shell or ssh variable; not sent"
+  [[ ! "$var" =~ $reserved_re ]] || refuse "VAR $var is a shell or ssh variable, or this script's own; not sent"
   [ -n "${!var:-}" ] || refuse "$var is unset or empty in this environment"
   case "${!var}" in *$'\n'*|*$'\r'*) refuse "$var holds a newline; one line on stdin" ;; esac
   val="${!var}"

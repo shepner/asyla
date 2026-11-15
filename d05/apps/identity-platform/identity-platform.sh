@@ -36,7 +36,8 @@
 #               missing). Never on a replica.
 #   leaf-renew  no secret; every 3 hours once the operator approves the schedule (DEPLOY.md item 13,
 #               leaf-schedule-install). Never on a replica.
-#   Both write /mnt/docker/IdentityPlatform/leaf-status.json (ok or fail, exit, the leaf's notAfter)
+#   Both write /mnt/docker/IdentityPlatform/leaf-status.json (ok, fail, or for leaf-issue refused by
+#   openldap-leaf.sh: refused with the previous problems kept; exit, the leaf's notAfter)
 #   for host-maintenance's monitor; leaf-schedule-install needs a successful leaf-issue in it.
 # At start this script notes whether LDAP_PROVISIONER_PASSWORD is set in its environment and unsets
 # it, without reading the value, so that no child ever inherits it; leaf-issue and leaf-renew then
@@ -386,7 +387,8 @@ do_verify() {
 # identity-platform-leaf; the format its runner/maint.py status_problems reads: "time" and
 # "problems", each problem {"key", "severity", "message"}). Written by every leaf-issue and
 # leaf-renew past their refusals (replica, value), ok or not, atomically: a temp file in the same
-# directory, then mv. "problems" is empty on ok; on fail it holds one problem, key "leaf": "warn"
+# directory, then mv. "problems" is empty on ok, the previous file's on a leaf-issue that
+# openldap-leaf.sh refused (exit 3: result "refused"); on fail it holds one problem, key "leaf": "warn"
 # (a work item) while the leaf's notAfter is LEAF_URGENT_S (6 hours) away or more, "urgent" when it
 # is nearer, past or unreadable. "issued_ok" is the time of the last successful leaf-issue, carried
 # forward by every write; leaf-schedule-install needs it. No secret is ever in it. "time" is UTC
@@ -405,16 +407,24 @@ leaf_not_after() {
 
 json_str() { if [ -n "$1" ]; then printf '"%s"' "$1"; else printf 'null'; fi; }
 
-# write_leaf_status ACTION EXIT
+# write_leaf_status ACTION EXIT [refused]: "refused" (leaf-issue's EXIT 3 from openldap-leaf.sh: a
+# valid leaf already there, or its lock held) records result "refused" and carries the previous
+# file's problems forward unchanged (none when there is no file): nothing failed, so no new problem
+# (host-maintenance would turn one into a spurious work item), and a standing one is not cleared.
 write_leaf_status() {
-  local action="$1" rc="$2" t result=ok na issued="" sev msg problems="[]" tmp
+  local action="$1" rc="$2" refused="${3:-}" t result=ok na issued="" sev msg problems="[]" prev tmp
   t="$(date -u +%Y-%m-%dT%H:%M:%SZ)" || return
   [ "$rc" -eq 0 ] || result=fail
+  [ "$refused" != refused ] || [ "$rc" -eq 0 ] || result=refused
   na="$(leaf_not_after)"
   if [ "$action" = leaf-issue ] && [ "$result" = ok ]; then
     issued="$t"
   elif [ -f "$LEAF_STATUS" ]; then
     issued="$(sed -nE 's/^  "issued_ok": "([0-9TZ:-]+)",?$/\1/p' "$LEAF_STATUS" | head -n 1)" || issued=""
+  fi
+  if [ "$result" = refused ] && [ -f "$LEAF_STATUS" ]; then
+    prev="$(sed -nE 's/^  "problems": (\[.*\])$/\1/p' "$LEAF_STATUS" | head -n 1)" || prev=""
+    [ -z "$prev" ] || problems="$prev"
   fi
   if [ "$result" = fail ]; then
     msg="$SERVING_HOST: identity-platform $action failed (exit $rc)"
@@ -446,8 +456,8 @@ write_leaf_status() {
 
 # A failed status write fails the switch (exit 1) even when openldap-leaf.sh succeeded: the monitor
 # would otherwise call the leaf stale.
-record_leaf() {   # record_leaf ACTION EXIT: prints the exit to return
-  if write_leaf_status "$1" "$2" >&2; then echo "$2"; elif [ "$2" -ne 0 ]; then echo "$2"; else echo 1; fi
+record_leaf() {   # record_leaf ACTION EXIT [refused]: prints the exit to return
+  if write_leaf_status "$1" "$2" "${3:-}" >&2; then echo "$2"; elif [ "$2" -ne 0 ]; then echo "$2"; else echo 1; fi
 }
 
 # leaf-issue: the networks (openldap-leaf.sh runs step on identity-platform-net), the checked root
@@ -461,8 +471,9 @@ record_leaf() {   # record_leaf ACTION EXIT: prints the exit to return
 # environment, a file or a log. Refused (exit 3, before any docker call and without a status
 # write) when LDAP_PROVISIONER_PASSWORD was set in this script's environment, when stdin is a
 # terminal, and when the line read is empty; refused on a replica (exit 1; step-ca and its
-# provisioner are d05's). openldap-leaf.sh refuses over a leaf that is still valid (exit 3, recorded
-# as fail like any other exit).
+# provisioner are d05's). openldap-leaf.sh refuses over a leaf that is still valid or while its lock
+# is held (exit 3, kept): recorded as result "refused" with the previous problems kept, never as a
+# new failure.
 do_leaf_issue() {
   if $LEAF_PW_IN_ENV; then
     echo "[ERROR] leaf-issue: refused: LDAP_PROVISIONER_PASSWORD is set in the environment; unset it and write the password as one line to leaf-issue's stdin (scripts/app_switch.sh does); not issuing" >&2
@@ -474,7 +485,10 @@ do_leaf_issue() {
   fi
   { set +x; } 2>/dev/null
   set +a
-  local pw=""
+  # A same-named variable exported into this script's environment would make the local exported
+  # too (bash's local keeps the export flag): out of the environment first, and never exported.
+  unset -v pw
+  local +x pw=""
   IFS= read -r pw || true
   exec </dev/null
   if [ -z "$pw" ]; then
@@ -486,13 +500,14 @@ do_leaf_issue() {
     echo "[ERROR] leaf-issue: not on a replica ($(hostname -s)); the leaf is d05's" >&2
     return 1
   fi
-  local rc=0
+  local rc=0 refused=""
   { ensure_networks && place_ca && mkdir -p "$LEAF_DIR"; } || rc=$?
   if [ "$rc" -eq 0 ]; then
     printf '%s\n' "$pw" | IDENTITY_PLATFORM_ROOT="$IDENTITY_PLATFORM_ROOT" "$LEAF_SCRIPT" issue || rc=$?
+    [ "$rc" -ne 3 ] || refused=refused
   fi
   unset -v pw
-  rc="$(record_leaf leaf-issue "$rc")"
+  rc="$(record_leaf leaf-issue "$rc" "$refused")"
   [ "$rc" -eq 0 ] || { echo "[ERROR] leaf-issue: exit $rc (3: refused by openldap-leaf.sh)" >&2; return "$rc"; }
   check_leaf
 }
