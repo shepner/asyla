@@ -3,7 +3,8 @@
 # identity-platform.sh [switch ...], e.g. up|pull|images|verify|down|logs|leaf-issue|leaf-renew.
 # Switches can be combined.
 # From theOrg identity-platform DEPLOY.md "Production on d05" and deploy/d05/compose.example.yml at
-# 701e893 (main, the #82 merge), carried to 47f65add (profile `restored`, deploy/d05/openldap-leaf.sh).
+# 701e893 (main, the #82 merge), carried to 47f65add (profile `restored`, deploy/d05/openldap-leaf.sh)
+# and fcbed3fe (#85: openldap-leaf.sh issue takes the provisioner password on stdin).
 # This is M1 (agreed with theOrg): networks, images, theOrg's root
 # CA, a report on the openldap leaf, and keycloak-db alone. openldap and keycloak are never started
 # here: their first start is the M5 cutover (DEPLOY.md steps 5-6), after a restore, and theOrg's
@@ -24,29 +25,32 @@
 # never written to a file by this script); the rest of up is as on d05, and openldap and keycloak
 # still never start.
 # The openldap leaf (DEPLOY.md "Production on d05: directory (R10)"): openldap-leaf.sh beside this
-# script, a byte-identical copy of theOrg's deploy/d05/openldap-leaf.sh at 47f65add (README).
-#   leaf-issue  needs LDAP_PROVISIONER_PASSWORD (OpenBao secret/v2/certificate-management/step-ca/
-#               provisioners/ldap, field password), handed over by the workstation for this one
-#               command; never in up's environment. Run it before openldap's first start (osixia
-#               self-signs when the files are missing). Never on a replica.
+# script, a byte-identical copy of theOrg's deploy/d05/openldap-leaf.sh at fcbed3fe (README).
+#   leaf-issue  reads step-ca's `ldap` provisioner password (OpenBao secret/v2/certificate-management/
+#               step-ca/provisioners/ldap, field password) as one line on its own stdin, which the
+#               workstation writes (scripts/app_switch.sh, over ssh stdin), and writes it to
+#               openldap-leaf.sh issue's stdin with bash's builtin printf. It is never in an
+#               environment (refused, exit 3, when LDAP_PROVISIONER_PASSWORD is set in this one),
+#               an argv, a file or a log. Runs alone (refused combined with another switch).
+#               Run it before openldap's first start (osixia self-signs when the files are
+#               missing). Never on a replica.
 #   leaf-renew  no secret; every 3 hours once the operator approves the schedule (DEPLOY.md item 13,
 #               leaf-schedule-install). Never on a replica.
 #   Both write /mnt/docker/IdentityPlatform/leaf-status.json (ok or fail, exit, the leaf's notAfter)
 #   for host-maintenance's monitor; leaf-schedule-install needs a successful leaf-issue in it.
-# At start this script takes LDAP_PROVISIONER_PASSWORD out of its environment into an unexported
-# variable, so that only leaf-issue's own child (openldap-leaf.sh issue) ever gets it, whichever
-# switches run with it; up and every compose call never do.
+# At start this script notes whether LDAP_PROVISIONER_PASSWORD is set in its environment and unsets
+# it, without reading the value, so that no child ever inherits it; leaf-issue and leaf-renew then
+# refuse (exit 3).
 # Data under /mnt/docker/IdentityPlatform. No backup here yet: the data is the Mini's until M5.
 
 set -euo pipefail
 
-# leaf-issue's value, out of the environment before any child runs (dirname
-# below included) or common.env is sourced: no child but openldap-leaf.sh issue gets it (header).
-LEAF_PW_SET=false
-LEAF_PW=""
+# LDAP_PROVISIONER_PASSWORD never belongs in an environment (the value arrives on leaf-issue's
+# stdin). If it is set anyway, note that and unset it before any child runs (dirname below included)
+# or common.env is sourced, never copying the value: no child gets it (header).
+LEAF_PW_IN_ENV=false
 if [ -n "${LDAP_PROVISIONER_PASSWORD+x}" ]; then
-  LEAF_PW_SET=true
-  LEAF_PW="$LDAP_PROVISIONER_PASSWORD"
+  LEAF_PW_IN_ENV=true
 fi
 unset LDAP_PROVISIONER_PASSWORD
 
@@ -64,7 +68,7 @@ IDENTITY_PLATFORM_ROOT="$APP_ROOT"
 # theOrg's four images are pinned to the commit this folder is written from; the two upstream
 # images (keycloak, postgres) are pinned by digest in compose.yml. A pin by hand:
 # IDENTITY_PLATFORM_TAG_OVERRIDE=<a theOrg main sha whose images are published>.
-IDENTITY_PLATFORM_TAG="${IDENTITY_PLATFORM_TAG_OVERRIDE:-47f65add39763bc3ccd086e69e4b3c571d85098a}"
+IDENTITY_PLATFORM_TAG="${IDENTITY_PLATFORM_TAG_OVERRIDE:-fcbed3febc7e65bc7afbab980d6b3868a0b3fe53}"
 REGISTRY="gitea.asyla.org"
 export IDENTITY_PLATFORM_ROOT IDENTITY_PLATFORM_TAG
 
@@ -448,32 +452,49 @@ record_leaf() {   # record_leaf ACTION EXIT: prints the exit to return
 
 # leaf-issue: the networks (openldap-leaf.sh runs step on identity-platform-net), the checked root
 # CA at ca/root_ca.crt (step's --root, and the leaf's ca.crt), openldap-tls (the one openldap dir
-# M1 makes; never openldap-data or openldap-config), then openldap-leaf.sh issue with the value in
-# its environment alone. Refused on a replica (step-ca and its provisioner are d05's) and without
-# the value, before any docker call and without a status write. openldap-leaf.sh refuses over a
-# leaf that is still valid (exit 3, recorded as fail like any other exit).
+# M1 makes; never openldap-data or openldap-config), then openldap-leaf.sh issue with the value on
+# its stdin alone. The value is one line on this script's own stdin (scripts/app_switch.sh writes it
+# over ssh stdin), read with `IFS= read -r` into a local variable that is never exported (xtrace and
+# allexport off first), then this shell's stdin is pointed at /dev/null so that no later child holds
+# the pipe. bash's builtin printf writes it into a pipe to openldap-leaf.sh issue (theOrg's
+# interface since fcbed3fe), and the variable is unset after that run. Never an argv, an
+# environment, a file or a log. Refused (exit 3, before any docker call and without a status
+# write) when LDAP_PROVISIONER_PASSWORD was set in this script's environment, when stdin is a
+# terminal, and when the line read is empty; refused on a replica (exit 1; step-ca and its
+# provisioner are d05's). openldap-leaf.sh refuses over a leaf that is still valid (exit 3, recorded
+# as fail like any other exit).
 do_leaf_issue() {
+  if $LEAF_PW_IN_ENV; then
+    echo "[ERROR] leaf-issue: refused: LDAP_PROVISIONER_PASSWORD is set in the environment; unset it and write the password as one line to leaf-issue's stdin (scripts/app_switch.sh does); not issuing" >&2
+    return 3
+  fi
+  if [ -t 0 ]; then
+    echo "[ERROR] leaf-issue: refused: stdin is a terminal; leaf-issue reads the provisioner password as one line on stdin (OpenBao secret/v2/certificate-management/step-ca/provisioners/ldap, field password; scripts/app_switch.sh writes it); not issuing" >&2
+    return 3
+  fi
+  { set +x; } 2>/dev/null
+  set +a
+  local pw=""
+  IFS= read -r pw || true
+  exec </dev/null
+  if [ -z "$pw" ]; then
+    echo "[ERROR] leaf-issue: refused: no provisioner password read on stdin (OpenBao secret/v2/certificate-management/step-ca/provisioners/ldap, field password); not issuing" >&2
+    return 3
+  fi
   if is_replica; then
+    unset -v pw
     echo "[ERROR] leaf-issue: not on a replica ($(hostname -s)); the leaf is d05's" >&2
     return 1
   fi
-  if ! $LEAF_PW_SET || [ -z "$LEAF_PW" ]; then
-    echo "[ERROR] leaf-issue: LDAP_PROVISIONER_PASSWORD is not in this process's environment; the workstation hands it over for this one command (OpenBao secret/v2/certificate-management/step-ca/provisioners/ldap, field password); not issuing" >&2
-    return 1
-  fi
   local rc=0
-  leaf_issue_steps || rc=$?
-  LEAF_PW=""; LEAF_PW_SET=false
+  { ensure_networks && place_ca && mkdir -p "$LEAF_DIR"; } || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    printf '%s\n' "$pw" | IDENTITY_PLATFORM_ROOT="$IDENTITY_PLATFORM_ROOT" "$LEAF_SCRIPT" issue || rc=$?
+  fi
+  unset -v pw
   rc="$(record_leaf leaf-issue "$rc")"
   [ "$rc" -eq 0 ] || { echo "[ERROR] leaf-issue: exit $rc (3: refused by openldap-leaf.sh)" >&2; return "$rc"; }
   check_leaf
-}
-
-leaf_issue_steps() {
-  ensure_networks || return
-  place_ca || return
-  mkdir -p "$LEAF_DIR" || return
-  ( export LDAP_PROVISIONER_PASSWORD="$LEAF_PW"; exec "$LEAF_SCRIPT" issue )
 }
 
 # leaf-renew: openldap-leaf.sh renew, no secret (it refuses one, so this does too). Refused on a
@@ -484,7 +505,7 @@ do_leaf_renew() {
     echo "[ERROR] leaf-renew: not on a replica ($(hostname -s)); the leaf is d05's" >&2
     return 1
   fi
-  if $LEAF_PW_SET; then
+  if $LEAF_PW_IN_ENV; then
     echo "[ERROR] leaf-renew: needs no provisioner password; refused while LDAP_PROVISIONER_PASSWORD is set" >&2
     return 3
   fi
@@ -639,8 +660,9 @@ usage() {
   echo "  verify          - Networks, the root CA and keycloak-db healthy (fatal); the openldap leaf (reported)" >&2
   echo "  down            - Stop keycloak-db (never removes a container's data, a volume or a network)" >&2
   echo "  leaf-issue      - Issue the openldap leaf into openldap-tls (openldap-leaf.sh issue), before" >&2
-  echo "                    openldap's first start; needs LDAP_PROVISIONER_PASSWORD in the environment" >&2
-  echo "                    (from OpenBao for this one command; never in a file). Not on a replica" >&2
+  echo "                    openldap's first start; reads the provisioner password as one line on stdin" >&2
+  echo "                    (from OpenBao, written by scripts/app_switch.sh; never an environment or a" >&2
+  echo "                    file). Runs alone. Not on a replica" >&2
   echo "  leaf-renew      - openldap-leaf.sh renew: renew at half life, reload slapd; no secret. Not on a replica" >&2
   echo "  leaf-schedule-install - Install or update and enable $LEAF_UNIT.timer (leaf-renew every 3 hours)," >&2
   echo "                    after a successful leaf-issue; idempotent, run again after a template change;" >&2
@@ -660,6 +682,17 @@ fi
 if [ "$1" = "logs" ]; then
   run_compose logs -f "${@:2}"
   exit 0
+fi
+
+# leaf-issue runs alone: its stdin carries the provisioner password, and no other switch's
+# children may run before it holding that pipe.
+if [ $# -gt 1 ]; then
+  for cmd in "$@"; do
+    if [ "$cmd" = leaf-issue ]; then
+      echo "[ERROR] leaf-issue: refused: run it alone (it reads the provisioner password on stdin), not with: $*" >&2
+      exit 3
+    fi
+  done
 fi
 
 # A switch that fails has said why; usage is only for an unknown switch (run_cmd) or none.

@@ -4,8 +4,10 @@ theOrg's Keycloak (realm `theorg`, https://id.asyla.org), its keycloak-db and th
 federates, moved from the Mac Mini. asyla deploys it from theOrg identity-platform `DEPLOY.md`,
 "Production on d05", and `deploy/d05/compose.example.yml` at `701e893` (main, the #82 merge),
 carried to `47f65add` (`47f65add39763bc3ccd086e69e4b3c571d85098a`, *Publish images* run 22377
-green): keycloak and openldap in profile `restored`, and `deploy/d05/openldap-leaf.sh`. theOrg's
-four images are tagged with that sha; the two upstream digests did not change.
+green): keycloak and openldap in profile `restored`, and `deploy/d05/openldap-leaf.sh`; then to
+`fcbed3fe` (`fcbed3febc7e65bc7afbab980d6b3868a0b3fe53`, the #85 merge, *Publish images* run 22553
+green): `openldap-leaf.sh issue` takes the provisioner password on stdin only. theOrg's four images
+are tagged with that sha; the two upstream digests did not change.
 
 This folder is **M1** (agreed with theOrg): `up` creates the two networks, pulls the six images,
 places theOrg's root CA, reports on the openldap leaf, and starts **keycloak-db alone**. openldap
@@ -29,23 +31,30 @@ one-shots (backups, keycloak-configure) are never started by `up`.
 - openldap leaf: `/mnt/docker/IdentityPlatform/openldap-tls/{ldap.crt,ldap.key,ca.crt}`. `up` and
   `verify` only report it (missing is a warning, never fatal) and never issue.
   - `openldap-leaf.sh`: a byte-identical copy of theOrg identity-platform
-    `deploy/d05/openldap-leaf.sh` at `47f65add` (git blob `2a59d8431843474857cbafba37c0edf72e9f2729`,
-    SHA-256 `eb741790e24672917241d1bfa96846b18e4adaa7e029894e39545c883ddba95c`). Never edit it
+    `deploy/d05/openldap-leaf.sh` at `fcbed3fe` (git blob `1fae6b5c1c598e76e586899fca9250781825aea4`,
+    SHA-256 `2ea98d896a8c6085ea30f539883c33a543204fe994e231ef8663f2ff740681b1`). Never edit it
     here; a new version is a new copy and a new provenance line. It needs util-linux `flock` on the
     host (d05: util-linux 2.41.5, read 2026-11-14) and pulls `smallstep/step-cli:0.30.2` (pinned by
     digest in the script) from Docker Hub on its first run.
   - `leaf-issue`: networks, the checked root CA, `openldap-tls`, then `openldap-leaf.sh issue`
     (a 24h leaf from step-ca's JWK provisioner `ldap`). Before openldap's first start: osixia
-    self-signs when the files are missing. Needs `LDAP_PROVISIONER_PASSWORD`
-    (`secret/v2/certificate-management/step-ca/provisioners/ldap`, field `password`), which the
-    script takes out of its environment at start and hands only to `openldap-leaf.sh issue` (which
-    passes it to docker by name and to step on stdin). Refused without it, over a valid leaf
-    (openldap-leaf.sh, exit 3) and on a replica. It is not in `host.toml`'s `start_env` (a start
-    runs `up`, which must never get it): the operator runs the leaf switches from the workstation
-    with `scripts/app_switch.sh`, which runs one switch over one ssh as build_host.py's
-    `env_command` does, each value on ssh stdin (never in an argv), and allows only the switches and
-    values in this app's `switch_env` in `d05/host.toml`. The leaf lives 24 hours, so the schedule
-    is installed right after the first issue, in the same sitting:
+    self-signs when the files are missing. It reads step-ca's `ldap` provisioner password
+    (`secret/v2/certificate-management/step-ca/provisioners/ldap`, field `password`) as one line on
+    its own stdin, into an unexported variable, and writes it with bash's builtin `printf` into a
+    pipe to `openldap-leaf.sh issue`, which hands it to `docker run -i` on the container's stdin
+    (no `-e`); the variable is unset after that run. The value is never in an environment, an argv,
+    a file or a log. Refused (exit 3, no docker call, no status write) when
+    `LDAP_PROVISIONER_PASSWORD` is set in its environment at all (even empty), when stdin is a
+    terminal, when the line read is empty, and when another switch is given with it; refused over a
+    valid leaf (openldap-leaf.sh, exit 3) and on a replica. It is in no `host.toml` `start_env` (a
+    start runs `up`, which must never get it): the operator runs the leaf switches from the
+    workstation with `scripts/app_switch.sh`, which runs one switch over one ssh with ssh's stdin
+    passed straight to the app script and nothing exported on the host. With a VAR it reads that
+    one value from its own environment (the credentials capability puts it there), unsets it before
+    any child runs (so neither ssh nor the remote shell inherits it) and writes it with builtin
+    `printf` to ssh's stdin; it allows only the switches and the one VAR in this app's `switch_env`
+    in `d05/host.toml`. The leaf lives 24 hours, so the schedule is installed right after the first
+    issue, in the same sitting:
 
     ```
     cd ~/local/asyla && python3 core/tools/credentials.py exec LDAP_PROVISIONER_PASSWORD -- projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform leaf-issue LDAP_PROVISIONER_PASSWORD
@@ -53,7 +62,7 @@ one-shots (backups, keycloak-configure) are never started by `up`.
     ```
 
     `leaf-schedule-status`, `leaf-renew` and `leaf-schedule-remove` run the same way, with no VAR.
-  - `leaf-renew`: `openldap-leaf.sh renew`, no secret (refused when one is set): renews at half
+  - `leaf-renew`: `openldap-leaf.sh renew`, no secret (refused when `LDAP_PROVISIONER_PASSWORD` is set): renews at half
     life over mTLS with the current leaf and reloads slapd when openldap runs. Not on a replica.
   - The schedule (theOrg DEPLOY.md item 13: every 3 hours): `identity-platform-leaf-renew.timer`
     (`OnCalendar=*-*-* 00/3:17:00`, `Persistent=true`, up to 5 min random delay) and its oneshot

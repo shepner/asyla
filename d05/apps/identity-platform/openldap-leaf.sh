@@ -4,15 +4,24 @@
 # A host script, copied to d05 by asyla as Caddyfile.example is (DEPLOY.md, "Production on d05:
 # directory (R10)", is the contract; tests/test_openldap_leaf.py holds it).
 #
-#     LDAP_PROVISIONER_PASSWORD=... openldap-leaf.sh issue   # first leaf, or one that is no longer valid
-#     openldap-leaf.sh renew                                  # every 3h: renew at half life, reload slapd
+#     printf '%s\n' "$pw" | openldap-leaf.sh issue   # first leaf, or one that is no longer valid
+#     openldap-leaf.sh renew                          # every 3h: renew at half life, reload slapd
 #
 # issue: the deployer reads secret/v2/certificate-management/step-ca/provisioners/ldap (field
-#   `password`) from OpenBao in its own process and hands it over in this script's environment.
-#   It reaches docker by name (`-e LDAP_PROVISIONER_PASSWORD`) and step on stdin
-#   (`--provisioner-password-file /dev/stdin`, fed by bash's builtin printf): never an argv, a file
-#   or a log. Docker keeps the value in the one-off's configuration while it exists; `--rm` removes
-#   it when step ends. Refused while openldap-tls holds a leaf that is still valid (renew it).
+#   `password`) from OpenBao in its own process and writes it, one line, to this script's stdin
+#   (`$pw` above is the deployer's own unexported variable, written by a builtin printf). The
+#   password is never in any process's environment, this script's included: issue refuses to run
+#   when LDAP_PROVISIONER_PASSWORD is set in its environment at all, when stdin is a terminal, and
+#   when the line read is empty (exit 3, before the lock or any docker call). The script turns
+#   xtrace off (`set +x`, which also clears an inherited SHELLOPTS=xtrace) and allexport off before
+#   it reads the line with `IFS= read -r` into a shell variable it never exports, then points its
+#   own stdin at /dev/null so that no later process holds the deployer's pipe. bash's builtin
+#   printf writes the value into a pipe to `docker run -i`; inside, the one step command reads it
+#   as `--provisioner-password-file /dev/stdin` (the pipe moved to fd 3 just before step, closed
+#   just after), and every other tool there runs without it. The variable is unset after that
+#   run. Never an argv, an environment variable of any process or of the container (`docker
+#   inspect`'s Config.Env, which dockerd keeps on disk while the container exists), a file or a
+#   log. Refused while openldap-tls holds a leaf that is still valid (renew it).
 #   Run it before openldap's first start: osixia/openldap 1.5.0 makes a self-signed leaf when both
 #   ldap.crt and ldap.key are missing.
 #   The final renames (ldap.key, then ldap.crt, then ca.crt) are each atomic, the three together
@@ -61,11 +70,29 @@ SERVED="openldap:636"
 say() { printf 'openldap-leaf: %s\n' "$*" >&2; }
 die() { local code="$1"; shift; say "$*"; exit "$code"; }
 
-usage() { say "usage: openldap-leaf.sh issue|renew (issue needs LDAP_PROVISIONER_PASSWORD)"; exit 2; }
+usage() { say "usage: openldap-leaf.sh issue|renew (issue reads the provisioner password on stdin)"; exit 2; }
 
 [ "$#" -eq 1 ] || usage
 MODE="$1"
 case "$MODE" in issue|renew) ;; *) usage ;; esac
+
+# Never from an environment: its presence there means the value already sits in one.
+if [ -n "${LDAP_PROVISIONER_PASSWORD+x}" ]; then
+  [ "$MODE" = renew ] && die 3 "refused: renew needs no provisioner password; unset LDAP_PROVISIONER_PASSWORD"
+  die 3 "refused: LDAP_PROVISIONER_PASSWORD is set in the environment; unset it and write the password to issue's stdin instead"
+fi
+if [ "$MODE" = issue ]; then
+  [ ! -t 0 ] || die 3 "refused: issue reads the provisioner password on stdin, and stdin is a terminal (OpenBao secret/v2/certificate-management/step-ca/provisioners/ldap, field password, piped in by the deployer)"
+  # No trace of the value (also when xtrace came in as SHELLOPTS=xtrace or bash -x) and no export
+  # of it (allexport): both stay off for the rest of the run.
+  { set +x; } 2>/dev/null
+  set +a
+  unset -v provisioner_pw
+  IFS= read -r provisioner_pw || true
+  [ -n "$provisioner_pw" ] || die 3 "refused: issue read no provisioner password on stdin (OpenBao secret/v2/certificate-management/step-ca/provisioners/ldap, field password)"
+fi
+# No later process holds the deployer's pipe (or the scheduler's stdin).
+exec </dev/null
 
 ROOT="${IDENTITY_PLATFORM_ROOT:-}"
 [ -n "$ROOT" ] || die 2 "IDENTITY_PLATFORM_ROOT is not set"
@@ -113,7 +140,6 @@ needs_renewal() {
 }
 
 issue() {
-  [ -n "${LDAP_PROVISIONER_PASSWORD:-}" ] || die 3 "issue needs LDAP_PROVISIONER_PASSWORD in the environment (OpenBao secret/v2/certificate-management/step-ca/provisioners/ldap, field password)"
   if swap_left; then
     say "an earlier issue stopped between its renames ($TLS_DIR/$SWAP): issuing again"
   elif leaf_valid; then
@@ -122,14 +148,19 @@ issue() {
   local sans=() s rc=0
   for s in $SANS; do sans+=(--san "$s"); done
   say "issuing $LEAF_NAME (${NOT_AFTER}) from $CA_URL"
+  # The password reaches the container on its stdin only (`-i`, no `-e`). Inside, rm runs on
+  # /dev/null; then the pipe moves to fd 3 and stdin becomes /dev/null, step reads it on `<&3`,
+  # and fd 3 is closed before anything else runs: only step holds the pipe.
   # shellcheck disable=SC2016  # expanded inside the container, not here
-  step_run "$NETWORK" -e LDAP_PROVISIONER_PASSWORD "$STEP_CLI_IMAGE" bash -c '
+  builtin printf '%s' "$provisioner_pw" | step_run "$NETWORK" -i "$STEP_CLI_IMAGE" bash -c '
       set -euo pipefail
       umask 077
-      rm -f /certs/ldap.crt.new /certs/ldap.key.new /certs/ca.crt.new
-      printf "%s" "$LDAP_PROVISIONER_PASSWORD" | step ca certificate "$1" /certs/ldap.crt.new /certs/ldap.key.new \
+      rm -f /certs/ldap.crt.new /certs/ldap.key.new /certs/ca.crt.new </dev/null
+      exec 3<&0 </dev/null
+      step ca certificate "$1" /certs/ldap.crt.new /certs/ldap.key.new \
         --provisioner ldap --provisioner-password-file /dev/stdin --not-after "$2" \
-        --ca-url "$3" --root /ca/root_ca.crt --force "${@:5}"
+        --ca-url "$3" --root /ca/root_ca.crt --force "${@:5}" <&3 3<&-
+      exec 3<&-
       cp /ca/root_ca.crt /certs/ca.crt.new
       chown 911:911 /certs/ldap.crt.new /certs/ldap.key.new /certs/ca.crt.new
       chmod 0600 /certs/ldap.key.new
@@ -141,6 +172,7 @@ issue() {
       mv -f /certs/ca.crt.new /certs/ca.crt
       rm -f "/certs/$4"
       ' _ "$LEAF_NAME" "$NOT_AFTER" "$CA_URL" "$SWAP" "${sans[@]}" || rc=$?
+  unset -v provisioner_pw
   if [ "$rc" -ne 0 ]; then
     if swap_left; then
       die 1 "issue stopped between its renames (exit $rc): ldap.key may not match ldap.crt; run issue again"
@@ -151,7 +183,6 @@ issue() {
 }
 
 renew() {
-  [ -z "${LDAP_PROVISIONER_PASSWORD+x}" ] || die 3 "refused: renew needs no provisioner password; unset LDAP_PROVISIONER_PASSWORD"
   local rc=0
   if swap_left; then
     die 3 "refused: an earlier issue stopped between its renames ($TLS_DIR/$SWAP), so ldap.key may not match ldap.crt: run issue"

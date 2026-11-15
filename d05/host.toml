@@ -8,7 +8,7 @@
 # Built as every other Docker host (host-layout decision 6). d05 is not disposable: a build or a
 # destroy needs --confirm d05 and the operator's approval of the exact action.
 # The identity-platform [[app]] is from theOrg identity-platform DEPLOY.md "Production on d05" at
-# 701e893 (main, the #82 merge), carried to 47f65add, M1 only: keycloak-db alone
+# 701e893 (main, the #82 merge), carried to 47f65add and fcbed3fe, M1 only: keycloak-db alone
 # (d05/apps/identity-platform/README.md).
 # No [[external]] yet: the proxy (internal-access hosts/d05) and the tunnel (external-access
 # hosts/d05, one public name, id.asyla.org, outside Access) are added when theOrg declares them.
@@ -41,7 +41,7 @@ allow = ["10.0.0.0/24"]    # a subnet, not a host (operator, 2026-10-25): the tr
 # No [[secret]]: d05 keeps no secret on disk, like d06 and d07. Every credential is a start_env or
 # [[external]] env value, resolved from OpenBao on the workstation and sent over SSH stdin at use.
 
-# theOrg's identity-platform (d05/apps/identity-platform; DEPLOY.md "Production on d05" at 47f65add),
+# theOrg's identity-platform (d05/apps/identity-platform; DEPLOY.md "Production on d05" at fcbed3fe),
 # M1: its networks, images and root CA, and keycloak-db alone; openldap and keycloak start only at
 # the M5 cutover, after a restore. Values the workstation resolves from OpenBao and sends over SSH
 # stdin at use (build_host.py, App environment): the theorg-registry pull token for the image pulls
@@ -56,8 +56,9 @@ allow = ["10.0.0.0/24"]    # a subnet, not a host (operator, 2026-10-25): the tr
 # LDAP_PROVISIONER_PASSWORD (step-ca's `ldap` provisioner, for identity-platform.sh leaf-issue) is
 # not in start_env on purpose: start runs `up`, which must never get it or issue. build_host.py has
 # no one-off app command with its own values; the operator runs the leaf switches with
-# scripts/app_switch.sh, which allows only the switches in switch_env (SWITCH -> the values it sends
-# over ssh stdin, by name; build_host.py does not read this key). A build never issues or renews.
+# scripts/app_switch.sh, which allows only the switches in switch_env (SWITCH -> a list of at most
+# one name: the one value it writes to ssh stdin, read by the app script itself; nothing is exported
+# on the host; build_host.py does not read this key). A build never issues or renews.
 [[app]]
 name = "identity-platform"
 start = ["up"]

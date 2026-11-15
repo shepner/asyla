@@ -8,11 +8,13 @@
 # an unknown switch. Plus compose.yml's rules (networks external, secrets by name only, the restored
 # profile, keycloak's address, no ports, its proxy, theOrg's digests; the default services from a
 # real `docker compose config` when docker is here) and the pull through the credential helper.
-# The openldap leaf: leaf-issue refuses without LDAP_PROVISIONER_PASSWORD and on a replica, hands it
-# to openldap-leaf.sh alone (never to up or a compose call, never in an argv or the output; the
-# real copy passes it to docker by name), up never issues, leaf-renew takes no secret, and the
-# renew schedule is installed only by leaf-schedule-install (never by up). openldap-leaf.sh is the
-# README's provenance blob.
+# The openldap leaf: leaf-issue reads the provisioner password as one line on its stdin and writes
+# it to openldap-leaf.sh issue's stdin alone (never in an environment, an argv, the output or a
+# file; the real copy hands it to docker run -i on stdin, no -e); it refuses (exit 3, no docker call,
+# no status write) with LDAP_PROVISIONER_PASSWORD set in its environment, a terminal on stdin, an
+# empty read, or another switch beside it, and on a replica. up never issues, leaf-renew takes no
+# secret, and the renew schedule is installed only by leaf-schedule-install (never by up).
+# openldap-leaf.sh is the README's provenance blob.
 # Nothing here reaches a registry, the vault or a host; every value is a plain stand-in word made
 # at run time. Run: bash scripts/tests/test_identity_platform_sh.sh
 set -uo pipefail
@@ -33,13 +35,18 @@ mkdir -p "$T/home/scripts/docker" "$T/bin" "$T/app" "$T/dl" "$T/net" "$T/systemd
 printf 'DOCKER_DL=%s\n' "$T/dl" > "$T/home/scripts/docker/common.env"
 cp "$SRC"/{compose.yml,identity-platform.sh,docker-credential-identity-platform-env,theorg-v2-root.crt} "$T/app/"
 cp "$SRC"/identity-platform-leaf-renew.{service,timer} "$T/app/"
-# openldap-leaf.sh in the app copy is a stub that logs its argv and whether it has the value (never
-# the value: with STUB_LEAF_PW_FILE it keeps it there, a temp file read only by the checks); exit
+# openldap-leaf.sh in the app copy is a stub that logs its argv and whether LDAP_PROVISIONER_PASSWORD
+# is in its environment (never a value); for issue it reads one line on stdin, as the real one does,
+# and with STUB_LEAF_PW_FILE keeps that line there (a temp file read only by the checks); exit
 # STUB_LEAF_RC. The real copy is swapped in for its own checks below.
 cat > "$T/leaf-stub.sh" <<'EOF'
 #!/bin/bash
 echo "LEAF $* pw=${LDAP_PROVISIONER_PASSWORD+set}" >> "$STUB_LOG"
-[ -z "${STUB_LEAF_PW_FILE:-}" ] || printf '%s' "${LDAP_PROVISIONER_PASSWORD:-}" > "$STUB_LEAF_PW_FILE"
+if [ "$1" = issue ]; then
+  line=""
+  IFS= read -r line || true
+  [ -z "${STUB_LEAF_PW_FILE:-}" ] || printf '%s' "$line" > "$STUB_LEAF_PW_FILE"
+fi
 exit "${STUB_LEAF_RC:-0}"
 EOF
 chmod +x "$T/leaf-stub.sh"
@@ -94,8 +101,8 @@ case "$*" in
   "run "*"test -e"*) exit 1 ;;
   "run "*"certificate verify"*) exit 1 ;;
   "run "*"bash -c"*)
-    echo "RUNENV ${LDAP_PROVISIONER_PASSWORD:+set}" >> "$STUB_LOG"
-    [ -z "${STUB_RUN_PW_FILE:-}" ] || printf '%s' "${LDAP_PROVISIONER_PASSWORD:-}" > "$STUB_RUN_PW_FILE" ;;
+    echo "RUNENV ${LDAP_PROVISIONER_PASSWORD+set}" >> "$STUB_LOG"
+    if [ -n "${STUB_RUN_PW_FILE:-}" ]; then cat > "$STUB_RUN_PW_FILE"; else cat > /dev/null; fi ;;
   "ps -q --filter"*) ;;
   *"--profile"*"config --images"*) printf 'postgres:16@sha256:aa\ngitea.asyla.org/theorg/identity-platform-openldap:%s\n' "$IDENTITY_PLATFORM_TAG" ;;
   *"config --images"*) echo 'postgres:16@sha256:aa' ;;
@@ -188,13 +195,13 @@ awk '/^      identity-platform-edge:$/ {getline; if ($0 ~ /^        ipv4_address
 grep -qxF '      - KC_PROXY_TRUSTED_ADDRESSES=10.213.5.2' <<< "$KC" \
   && ok "compose.yml: KC_PROXY_TRUSTED_ADDRESSES=10.213.5.2 (Caddy alone)" || bad "compose.yml: KC_PROXY_TRUSTED_ADDRESSES"
 # theOrg identity-platform deploy/d05/compose.example.yml, read 2026-11-14 (git show): the same at
-# 701e893 and 47f65add.
+# 701e893, 47f65add and fcbed3fe.
 KC_IMAGE="quay.io/keycloak/keycloak:26.8.2@sha256:3879c623248408de29a5303178b5816c77e8dfef3890c361f8c0bbeaa979ba3b"
 DB_IMAGE="postgres:16.14-bookworm@sha256:64154d0babcb1741988719e703419af0382b19953706149f9872fbd0f438efa8"
 [ "$(grep -E '^    image:' <<< "$KC")" = "    image: $KC_IMAGE" ] \
-  && ok "compose.yml: keycloak's image is 47f65add's digest" || bad "compose.yml: keycloak image" "$(grep -E '^    image:' <<< "$KC")"
+  && ok "compose.yml: keycloak's image is fcbed3fe's digest" || bad "compose.yml: keycloak image" "$(grep -E '^    image:' <<< "$KC")"
 [ "$(grep -E '^    image:' <<< "$DB")" = "    image: $DB_IMAGE" ] \
-  && ok "compose.yml: keycloak-db's image is 47f65add's digest" || bad "compose.yml: keycloak-db image" "$(grep -E '^    image:' <<< "$DB")"
+  && ok "compose.yml: keycloak-db's image is fcbed3fe's digest" || bad "compose.yml: keycloak-db image" "$(grep -E '^    image:' <<< "$DB")"
 ! grep -q 'profiles:' <<< "$DB" && ok "compose.yml: keycloak-db has no profile (the one M1 service)" || bad "compose.yml: keycloak-db has a profile"
 # The real compose, when docker is here: no daemon is asked (config only), every value a stand-in.
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
@@ -398,8 +405,8 @@ STUB_MISSING=1 STUB_SET="$DB_NAME" run up; rc=$?
 STUB_MISSING=1 STUB_SET="$DB_NAME $PULL_NAME" run up; rc=$?
 [ "$rc" -eq 0 ] && grep -q HELPER_OK "$T/log" && ok "up with an image missing: pulls it through the helper, then starts" || bad "up pulls missing" "rc=$rc; $OUT"
 tags="$(awk '/^TAG / {print $2}' "$T/log" | sort -u)"
-[ "$tags" = "47f65add39763bc3ccd086e69e4b3c571d85098a" ] \
-  && ok "theOrg's images are pinned to 47f65add's full sha in every compose call" || bad "tag pin" "[$tags]"
+[ "$tags" = "fcbed3febc7e65bc7afbab980d6b3868a0b3fe53" ] \
+  && ok "theOrg's images are pinned to fcbed3fe's full sha in every compose call" || bad "tag pin" "[$tags]"
 
 # The credential helper: read-only, and it never takes a value with unexpected characters.
 H="$SRC/docker-credential-identity-platform-env"
@@ -412,12 +419,31 @@ grep -q '"Username":"theorg-registry"' <<< "$out" && ok "helper get hands Docker
 
 # --- the openldap leaf ---
 # A plain stand-in word made at run time, unlike any real value.
-LEAF_VAL="leaf-standin-$$"
-leaf_run() {   # leaf_run SWITCH...: as run, with LDAP_PROVISIONER_PASSWORD=$LEAF_VAL in the environment
+LEAF_VAL="stand-in-value-$$"
+# leaf_run SWITCH...: as run, with $LEAF_VAL as one line on the script's stdin (LEAF_STDIN, when set,
+# is written instead, as is: LEAF_STDIN= gives an empty stdin). LEAF_IN_ENV=1 also puts
+# LDAP_PROVISIONER_PASSWORD=$LEAF_VAL in its environment, LEAF_IN_ENV=empty puts it there empty.
+leaf_run() {
+  local rc envset=()
+  case "${LEAF_IN_ENV:-}" in
+    1) envset=("LDAP_PROVISIONER_PASSWORD=$LEAF_VAL") ;;
+    empty) envset=("LDAP_PROVISIONER_PASSWORD=") ;;
+  esac
+  : > "$T/log"
+  # shellcheck disable=SC2086  # LEAF_EXTRA is NAME=value words
+  OUT="$(leaf_stdin | env ${envset[@]+"${envset[@]}"} ${LEAF_EXTRA:-} HOME="$T/home" PATH="$T/bin:$PATH" STUB_LOG="$T/log" \
+    STUB_NET="$T/net" STUB_HOST="${STUB_HOST:-d05}" IDENTITY_PLATFORM_DB_WAIT_S=120 \
+    IDENTITY_PLATFORM_SYSTEMD_DIR="$T/systemd" bash "$T/app/identity-platform.sh" "$@" 2>&1)"
+  rc=$?
+  return "$rc"
+}
+leaf_stdin() { if [ -n "${LEAF_STDIN+x}" ]; then printf '%s' "$LEAF_STDIN"; else printf '%s\n' "$LEAF_VAL"; fi; }
+# tty_run SWITCH...: as leaf_run with no value anywhere, stdin a terminal (a pty python3 opens).
+tty_run() {
   local rc
   : > "$T/log"
-  OUT="$(env LDAP_PROVISIONER_PASSWORD="$LEAF_VAL" ${LEAF_EXTRA:-} HOME="$T/home" PATH="$T/bin:$PATH" STUB_LOG="$T/log" \
-    STUB_NET="$T/net" STUB_HOST="${STUB_HOST:-d05}" IDENTITY_PLATFORM_DB_WAIT_S=120 \
+  OUT="$(python3 -c 'import os, subprocess, sys; m, s = os.openpty(); sys.exit(subprocess.call(sys.argv[1:], stdin=s))' \
+    env HOME="$T/home" PATH="$T/bin:$PATH" STUB_LOG="$T/log" STUB_NET="$T/net" STUB_HOST=d05 \
     IDENTITY_PLATFORM_SYSTEMD_DIR="$T/systemd" bash "$T/app/identity-platform.sh" "$@" 2>&1)"
   rc=$?
   return "$rc"
@@ -426,28 +452,46 @@ no_value() {   # the value in no output, docker argv, leaf argv or file under th
   ! grep -qF -- "$LEAF_VAL" <<< "$OUT" && ! grep -qF -- "$LEAF_VAL" "$T/log" \
     && ! grep -rqF -- "$LEAF_VAL" "$T/dl" "$T/systemd" "$T/home"
 }
+refused3() {   # refused3 WHAT PATTERN: exit 3, PATTERN in the output, no docker or openldap-leaf.sh call, no status file
+  [ "$rc" -eq 3 ] && echo "$OUT" | grep -q -- "$2" && [ ! -s "$T/log" ] && [ ! -e "$ROOT/leaf-status.json" ] \
+    && [ ! -e "$ROOT/openldap-tls" ] && no_value \
+    && ok "leaf-issue $1: refused (3), no docker or openldap-leaf.sh call, no status file" \
+    || bad "leaf-issue $1" "rc=$rc; $OUT; $(cat "$T/log")"
+}
 
-# leaf-issue without the value: refused before any docker or openldap-leaf.sh call.
+# leaf-issue's refusals, each before any docker or openldap-leaf.sh call and without a status write.
 reset_host
-run leaf-issue; rc=$?
-[ "$rc" -ne 0 ] && echo "$OUT" | grep -q 'LDAP_PROVISIONER_PASSWORD is not in this process' && [ ! -s "$T/log" ] \
-  && [ ! -e "$ROOT/openldap-tls" ] \
-  && ok "leaf-issue without LDAP_PROVISIONER_PASSWORD: refused, no docker or openldap-leaf.sh call" || bad "leaf-issue no value" "rc=$rc; $OUT; $(cat "$T/log")"
-: > "$T/log"
-OUT="$(env LDAP_PROVISIONER_PASSWORD= HOME="$T/home" PATH="$T/bin:$PATH" STUB_LOG="$T/log" STUB_NET="$T/net" STUB_HOST=d05 \
-  bash "$T/app/identity-platform.sh" leaf-issue 2>&1)"; rc=$?
-[ "$rc" -ne 0 ] && echo "$OUT" | grep -q 'LDAP_PROVISIONER_PASSWORD is not in' && [ ! -s "$T/log" ] \
-  && ok "leaf-issue with an empty LDAP_PROVISIONER_PASSWORD: refused" || bad "leaf-issue empty value" "rc=$rc; $OUT"
+LEAF_IN_ENV=1 leaf_run leaf-issue; rc=$?
+refused3 "with LDAP_PROVISIONER_PASSWORD in its environment" 'LDAP_PROVISIONER_PASSWORD is set in the environment'
+reset_host
+LEAF_IN_ENV=empty leaf_run leaf-issue; rc=$?
+refused3 "with LDAP_PROVISIONER_PASSWORD set but empty" 'LDAP_PROVISIONER_PASSWORD is set in the environment'
+reset_host
+tty_run leaf-issue; rc=$?
+refused3 "with a terminal on stdin" 'stdin is a terminal'
+reset_host
+LEAF_STDIN= leaf_run leaf-issue; rc=$?
+refused3 "with an empty stdin" 'no provisioner password read on stdin'
+reset_host
+LEAF_STDIN=$'\n' leaf_run leaf-issue; rc=$?
+refused3 "with an empty line on stdin" 'no provisioner password read on stdin'
+for order in "up leaf-issue" "leaf-issue up" "leaf-issue leaf-schedule-install" "leaf-renew leaf-issue" "leaf-issue leaf-issue"; do
+  reset_host
+  # shellcheck disable=SC2086
+  LEAF_EXTRA="$DB_NAME=stand-in" leaf_run $order; rc=$?
+  refused3 "combined ($order)" 'leaf-issue: refused: run it alone'
+done
 
-# leaf-issue with it: networks, CA and openldap-tls, then openldap-leaf.sh issue, which alone gets it.
+# leaf-issue: networks, CA and openldap-tls, then openldap-leaf.sh issue, which alone gets the line
+# on its stdin (never in its environment).
 reset_host
 LEAF_EXTRA="STUB_LEAF_PW_FILE=$T/leafpw" leaf_run leaf-issue; rc=$?
 got="$(cat "$T/leafpw" 2>/dev/null)"; rm -f "$T/leafpw"
-[ "$rc" -eq 0 ] && grep -qx 'LEAF issue pw=set' "$T/log" && [ "$got" = "$LEAF_VAL" ] && [ -d "$ROOT/openldap-tls" ] \
+[ "$rc" -eq 0 ] && grep -qx 'LEAF issue pw=' "$T/log" && [ "$got" = "$LEAF_VAL" ] && [ -d "$ROOT/openldap-tls" ] \
   && cmp -s "$SRC/theorg-v2-root.crt" "$ROOT/ca/root_ca.crt" && [ -f "$T/net/identity-platform-net" ] \
-  && ok "leaf-issue: networks, root CA and openldap-tls in place, then openldap-leaf.sh issue gets the value" \
+  && ok "leaf-issue: networks, root CA and openldap-tls in place, then openldap-leaf.sh issue reads the value on stdin, not in its environment" \
   || bad "leaf-issue" "rc=$rc; same=$([ "$got" = "$LEAF_VAL" ] && echo yes || echo no); $OUT; $(cat "$T/log")"
-! grep -q '^ENVPW' "$T/log" && ok "leaf-issue: no docker call of identity-platform.sh's own has the value in its environment" \
+! grep -q '^ENVPW' "$T/log" && ok "leaf-issue: no docker call of identity-platform.sh's own has the name in its environment" \
   || bad "leaf-issue docker env" "$(grep '^ENVPW' "$T/log")"
 no_value && ok "leaf-issue: the value is in no output, argv or file" || bad "leaf-issue leaks the value"
 [ ! -e "$ROOT/openldap-data" ] && [ ! -e "$ROOT/openldap-config" ] \
@@ -455,39 +499,33 @@ no_value && ok "leaf-issue: the value is in no output, argv or file" || bad "lea
 # openldap-leaf.sh's exit is kept (3: refused, e.g. a valid leaf on disk).
 LEAF_EXTRA="STUB_LEAF_RC=3" leaf_run leaf-issue; rc=$?
 [ "$rc" -eq 3 ] && ok "leaf-issue keeps openldap-leaf.sh's exit status (3)" || bad "leaf-issue exit" "rc=$rc; $OUT"
-# Combined with up, in either order: up and its compose calls never get the value.
-for order in "up leaf-issue" "leaf-issue up"; do
-  reset_host
-  # shellcheck disable=SC2086
-  LEAF_EXTRA="$DB_NAME=stand-in" leaf_run $order; rc=$?
-  [ "$rc" -eq 0 ] && ! grep -q '^ENVPW' "$T/log" && [ "$(grep -c '^LEAF ' "$T/log")" -eq 1 ] && no_value \
-    && ok "$order: one issue, no compose or docker call of up's has the value" || bad "$order" "rc=$rc; $OUT; $(cat "$T/log")"
-done
 # On a replica: refused, nothing called.
 reset_host
 STUB_HOST=test01 leaf_run leaf-issue; rc=$?
-[ "$rc" -ne 0 ] && echo "$OUT" | grep -q 'leaf-issue: not on a replica' && [ ! -s "$T/log" ] \
+[ "$rc" -ne 0 ] && echo "$OUT" | grep -q 'leaf-issue: not on a replica' && [ ! -s "$T/log" ] && no_value \
   && ok "leaf-issue on a replica: refused, no call" || bad "replica leaf-issue" "rc=$rc; $OUT"
 
-# The real openldap-leaf.sh (the README's copy) under leaf-issue: the value reaches docker by name
-# (-e LDAP_PROVISIONER_PASSWORD) in its environment, never in an argv or the output.
+# The real openldap-leaf.sh (the README's copy) under leaf-issue: the value reaches docker run -i on
+# its stdin alone (no -e), never in an environment, an argv or the output.
 reset_host
 cp "$SRC/openldap-leaf.sh" "$T/app/openldap-leaf.sh"
 LEAF_EXTRA="STUB_RUN_PW_FILE=$T/runpw" leaf_run leaf-issue; rc=$?
 got="$(cat "$T/runpw" 2>/dev/null)"; rm -f "$T/runpw"
-[ "$rc" -eq 0 ] && grep -qE '^docker run --rm --network identity-platform-net .* -e LDAP_PROVISIONER_PASSWORD smallstep/step-cli' "$T/log" \
-  && grep -qx 'RUNENV set' "$T/log" && [ "$got" = "$LEAF_VAL" ] && echo "$OUT" | grep -q 'openldap is not running' \
-  && ok "real openldap-leaf.sh issue: docker gets -e LDAP_PROVISIONER_PASSWORD by name, the value in its environment" \
-  || bad "real leaf issue" "rc=$rc; $OUT; $(grep -v '^ENVPW' "$T/log" | cut -c1-200)"
+runline="$(grep -E '^docker run --rm --network identity-platform-net ' "$T/log")"
+[ "$rc" -eq 0 ] && grep -qE ' -i smallstep/step-cli[:@]' <<< "$runline" && ! grep -qE ' -e ' <<< "$runline" \
+  && ! grep -qF -- '-e LDAP_PROVISIONER_PASSWORD' "$T/log" && grep -qx 'RUNENV ' "$T/log" && ! grep -q '^ENVPW' "$T/log" \
+  && [ "$got" = "$LEAF_VAL" ] && echo "$OUT" | grep -q 'openldap is not running' \
+  && ok "real openldap-leaf.sh issue: docker run -i, no -e, the name unset; the value on the container's stdin alone" \
+  || bad "real leaf issue" "rc=$rc; same=$([ "$got" = "$LEAF_VAL" ] && echo yes || echo no); $OUT; $(cut -c1-200 "$T/log")"
 no_value && ok "real openldap-leaf.sh issue: the value is in no output, argv or file" || bad "real leaf issue leaks the value"
 cp "$T/leaf-stub.sh" "$T/app/openldap-leaf.sh"
 
-# up never issues and never hands the value on, even when it is set.
+# up never issues and never hands the value on, even when it is set in its environment.
 reset_host
-LEAF_EXTRA="$DB_NAME=stand-in" leaf_run up; rc=$?
+LEAF_IN_ENV=1 LEAF_STDIN= LEAF_EXTRA="$DB_NAME=stand-in" leaf_run up; rc=$?
 [ "$rc" -eq 0 ] && ! grep -q '^LEAF ' "$T/log" && ! grep -q '^ENVPW' "$T/log" && [ ! -e "$ROOT/openldap-tls" ] \
   && echo "$OUT" | grep -q 'WARN\] openldap leaf: .*missing (.*leaf-issue' && no_value \
-  && ok "up with LDAP_PROVISIONER_PASSWORD set: no issue, no openldap-tls, the leaf reported missing, up passes" \
+  && ok "up with LDAP_PROVISIONER_PASSWORD set: no issue, no openldap-tls, the name in no child's environment, up passes" \
   || bad "up issues" "rc=$rc; $OUT; $(cat "$T/log")"
 ! grep -qE '(^|[^a-z-])(issue|renew)\b' <(sed -n '/^do_up()/,/^}/p' "$SRC/identity-platform.sh") \
   && ok "do_up names no issue or renew" || bad "do_up mentions issue/renew"
@@ -496,7 +534,7 @@ LEAF_EXTRA="$DB_NAME=stand-in" leaf_run up; rc=$?
 reset_host
 run leaf-renew; rc=$?
 [ "$rc" -eq 0 ] && grep -qx 'LEAF renew pw=' "$T/log" && ok "leaf-renew: openldap-leaf.sh renew without any value" || bad "leaf-renew" "rc=$rc; $OUT; $(cat "$T/log")"
-leaf_run leaf-renew; rc=$?
+LEAF_IN_ENV=1 LEAF_STDIN= leaf_run leaf-renew; rc=$?
 [ "$rc" -eq 3 ] && ! grep -q '^LEAF ' "$T/log" && echo "$OUT" | grep -q 'needs no provisioner password' \
   && ok "leaf-renew with LDAP_PROVISIONER_PASSWORD set: refused (3), not run" || bad "leaf-renew with value" "rc=$rc; $OUT"
 STUB_HOST=test01 run leaf-renew; rc=$?
@@ -673,23 +711,35 @@ envrun() {   # envrun SWITCH...: leaf_run with the wrappers first on PATH and fr
   : > "$T/envdump"; : > "$T/leafenv"; : > "$T/probe"
   LEAF_EXTRA="${ENV_EXTRA:-} STUB_ENVDUMP=$T/envdump STUB_LEAF_ENV=$T/leafenv STUB_PROBE=$T/probe" PATH="$T/envbin:$PATH" leaf_run "$@"
 }
-for sw in "leaf-issue" "up leaf-issue" "leaf-issue up" "leaf-issue leaf-schedule-install"; do
-  reset_host; mkcert 1200   # a leaf on disk, as the stub issue leaves none (schedule-install needs one)
-  ENV_EXTRA="$DB_NAME=stand-in" envrun $sw; rc=$?
-  n="$(grep -c '^PATH=' "$T/envdump")"
-  [ "$rc" -eq 0 ] && [ "$n" -ge 10 ] && ! grep -qF -- "$LEAF_VAL" "$T/envdump" \
-    && grep -qxF -- "LDAP_PROVISIONER_PASSWORD=$LEAF_VAL" "$T/leafenv" && [ "$(grep -c '^PATH=' "$T/leafenv")" -eq 1 ] \
-    && ok "$sw: the value in openldap-leaf.sh issue's environment alone, none of $n other children's" \
-    || bad "$sw env" "rc=$rc; n=$n; dump=$(grep -cF -- "$LEAF_VAL" "$T/envdump"); leaf=$(grep -c '^PATH=' "$T/leafenv"); $(cat "$T/log")"
-  grep -qx 'probe pw=' "$T/probe" && ! grep -qF -- "$LEAF_VAL" "$T/probe" \
-    && ok "$sw: common.env is sourced with LDAP_PROVISIONER_PASSWORD unset and nothing exported holding the value" \
-    || bad "$sw common.env probe" "$(grep '^probe' "$T/probe")"
-done
 reset_host
-envrun leaf-renew; rc=$?
+ENV_EXTRA="STUB_LEAF_PW_FILE=$T/leafpw" envrun leaf-issue; rc=$?
+got="$(cat "$T/leafpw" 2>/dev/null)"; rm -f "$T/leafpw"
+n="$(grep -c '^PATH=' "$T/envdump")"
+[ "$rc" -eq 0 ] && [ "$n" -ge 10 ] && ! grep -qF -- "$LEAF_VAL" "$T/envdump" && ! grep -qF -- "$LEAF_VAL" "$T/leafenv" \
+  && ! grep -q '^LDAP_PROVISIONER_PASSWORD=' "$T/envdump" "$T/leafenv" && [ "$(grep -c '^PATH=' "$T/leafenv")" -eq 1 ] \
+  && [ "$got" = "$LEAF_VAL" ] \
+  && ok "leaf-issue: the value on openldap-leaf.sh issue's stdin alone, in no environment of it or of $n other children" \
+  || bad "leaf-issue env" "rc=$rc; n=$n; dump=$(grep -cF -- "$LEAF_VAL" "$T/envdump"); leaf=$(grep -c '^PATH=' "$T/leafenv"); $(cat "$T/log")"
+grep -qx 'probe pw=' "$T/probe" && ! grep -qF -- "$LEAF_VAL" "$T/probe" \
+  && ok "leaf-issue: common.env is sourced with LDAP_PROVISIONER_PASSWORD unset and nothing exported holding the value" \
+  || bad "leaf-issue common.env probe" "$(grep '^probe' "$T/probe")"
+reset_host
+LEAF_IN_ENV=1 envrun leaf-issue; rc=$?
+[ "$rc" -eq 3 ] && ! grep -qF -- "$LEAF_VAL" "$T/envdump" && [ ! -s "$T/leafenv" ] && grep -qx 'probe pw=' "$T/probe" \
+  && ok "leaf-issue with the value in its environment: refused (3), no child has it, openldap-leaf.sh not run" \
+  || bad "leaf-issue env refused" "rc=$rc; dump=$(grep -cF -- "$LEAF_VAL" "$T/envdump")"
+reset_host
+LEAF_IN_ENV=1 LEAF_STDIN= envrun leaf-renew; rc=$?
 [ "$rc" -eq 3 ] && [ "$(grep -c '^PATH=' "$T/envdump")" -ge 1 ] && ! grep -qF -- "$LEAF_VAL" "$T/envdump" && [ ! -s "$T/leafenv" ] \
   && grep -qx 'probe pw=' "$T/probe" \
   && ok "leaf-renew with the value set: refused (3), no child has it, openldap-leaf.sh not run" || bad "renew env" "rc=$rc"
+
+# identity-platform.sh never traces and never exports the name (comments aside).
+code="$(grep -vE '^[[:space:]]*#' "$SRC/identity-platform.sh")"
+! grep -qE 'set -[a-z]*x|set -o xtrace|bash -x' <<< "$code" \
+  && ok "identity-platform.sh: no set -x (xtrace) anywhere" || bad "identity-platform.sh traces" "$(grep -nE 'set -[a-z]*x|xtrace' "$SRC/identity-platform.sh")"
+! grep -qE 'export[^#]*LDAP_PROVISIONER_PASSWORD|declare -[a-z]*x[^#]*LDAP_PROVISIONER_PASSWORD' <<< "$code" \
+  && ok "identity-platform.sh: LDAP_PROVISIONER_PASSWORD is never exported" || bad "identity-platform.sh exports the name"
 cp "$T/common.env.orig" "$T/home/scripts/docker/common.env"
 
 # host.toml: start is up alone; LDAP_PROVISIONER_PASSWORD is in no start_env.
