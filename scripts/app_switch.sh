@@ -23,12 +23,17 @@
 # here, so it is refused rather than ignored. A shell variable of bash's own (PATH, HOME, IFS,
 # BASH*, ...), ssh's (SSH_*) or this script's own (SSH_KEY, GUEST_USER, REPO) is refused as a VAR:
 # it is unset here before anything runs. Tracing and allexport are turned off first, however this
-# shell was started (bash -x, SHELLOPTS, BASH_ENV).
+# shell was started (bash -x, SHELLOPTS, BASH_ENV). The value passes only through builtins, keywords
+# ([[ ]], case) and the ssh program (`builtin exec ssh`), never a function: a printf, [ or ssh
+# function brought in by the environment (export -f) or BASH_ENV is never called with it.
 # Exit: the remote command's, or 2 for a refusal here.
 #
 # From ~/local/asyla, e.g.:
 #   python3 core/tools/credentials.py exec LDAP_PROVISIONER_PASSWORD -- \
 #     projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform leaf-issue LDAP_PROVISIONER_PASSWORD
+# This script's path, before any command runs: bash 3.2 (ws01's /bin/bash) loses BASH_SOURCE once
+# a function imported from the environment has been called (an exported [, say).
+self="${BASH_SOURCE[0]}"
 set -euo pipefail
 # No tracing and no allexport, whatever started this shell (`bash -x`, SHELLOPTS=xtrace or
 # allexport in the environment, a BASH_ENV that sets either): a trace would print the value.
@@ -65,13 +70,13 @@ if [ $# -eq 1 ]; then
   var="$1"
   [[ "$var" =~ $var_re ]] || refuse "VAR $var must match $var_re"
   [[ ! "$var" =~ $reserved_re ]] || refuse "VAR $var is a shell or ssh variable, or this script's own; not sent"
-  [ -n "${!var:-}" ] || refuse "$var is unset or empty in this environment"
+  [[ -n ${!var:-} ]] || refuse "$var is unset or empty in this environment"
   case "${!var}" in *$'\n'*|*$'\r'*) refuse "$var holds a newline; one line on stdin" ;; esac
   val="${!var}"
   unset "$var"
 fi
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO="$(cd "$(dirname "$self")/.." && pwd)"
 spec="$REPO/$host/host.toml"
 [ -f "$spec" ] || refuse "$host has no host.toml in this repo"
 
@@ -116,7 +121,9 @@ ssh_cmd=(ssh -o BatchMode=yes -o ConnectTimeout=10 -i "$SSH_KEY" "$GUEST_USER@$h
 if [ -n "$var" ]; then
   echo "app_switch: $host $app $switch (over ssh stdin: $var)" >&2
   rc=0
-  printf '%s\n' "$val" | "${ssh_cmd[@]}" || rc=$?
+  # `builtin exec` in its own subshell: the ssh program, never a function, and its exit status kept
+  # (bash 3.2 exits the shell under set -e when a program run by `builtin command` fails).
+  builtin printf '%s\n' "$val" | (builtin exec "${ssh_cmd[@]}") || rc=$?
   val=""
   unset -v val
   exit "$rc"

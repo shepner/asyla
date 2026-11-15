@@ -787,6 +787,35 @@ code="$(grep -vE '^[[:space:]]*#' "$SRC/identity-platform.sh")"
   && ok "identity-platform.sh: LDAP_PROVISIONER_PASSWORD is never exported" || bad "identity-platform.sh exports the name"
 cp "$T/common.env.orig" "$T/home/scripts/docker/common.env"
 
+# --- a function in common.env named like a command the value passes through ---
+# common.env is sourced before leaf-issue runs, so a function it defines shadows a command of the
+# same name. Each case defines one recording function: printf and [ (the value as an argument),
+# read and openldap-leaf.sh's own path (the value on their stdin). leaf-issue uses bash's builtin
+# read and printf, [[ ]], and runs openldap-leaf.sh with `builtin exec` (never a function), so
+# the value reaches the stub alone. printf and [ also run elsewhere in the script: their record
+# shows the function was in force.
+LEAF_FN="$(cd "$T/app" && pwd)/openldap-leaf.sh"
+for shadow in printf '[' read leaf; do
+  case "$shadow" in
+    printf) def='printf() { builtin printf "printf %s\n" "$*" >> "$STUB_SHADOW"; builtin printf "$@"; }' ;;
+    '[') def='[() { builtin printf "[ %s\n" "$*" >> "$STUB_SHADOW"; builtin [ "$@"; }' ;;
+    read) def='read() { { builtin printf "read stdin "; cat; } >> "$STUB_SHADOW"; }' ;;
+    leaf) def="$LEAF_FN"'() { { builtin printf "leaf stdin "; cat; } >> "$STUB_SHADOW"; }' ;;
+  esac
+  { cat "$T/common.env.orig"; printf '%s\n' "$def"; } > "$T/home/scripts/docker/common.env"
+  : > "$T/shadow"
+  reset_host
+  LEAF_EXTRA="STUB_LEAF_PW_FILE=$T/leafpw STUB_SHADOW=$T/shadow" leaf_run leaf-issue; rc=$?
+  got="$(cat "$T/leafpw" 2>/dev/null)"; rm -f "$T/leafpw"
+  inforce=true
+  case "$shadow" in printf) grep -q '^printf ' "$T/shadow" || inforce=false ;; '[') grep -q '^\[ ' "$T/shadow" || inforce=false ;; esac
+  [ "$rc" -eq 0 ] && [ "$got" = "$LEAF_VAL" ] && ! grep -qF -- "$LEAF_VAL" "$T/shadow" && $inforce && no_value \
+    && ok "leaf-issue with a $shadow function in common.env: the function never sees the value; openldap-leaf.sh issue gets it" \
+    || bad "leaf-issue $shadow function" "rc=$rc; same=$([ "$got" = "$LEAF_VAL" ] && echo yes || echo no); in-force=$inforce; seen=$(grep -cF -- "$LEAF_VAL" "$T/shadow")"
+done
+rm -f "$T/shadow"
+cp "$T/common.env.orig" "$T/home/scripts/docker/common.env"
+
 # host.toml: start is up alone; LDAP_PROVISIONER_PASSWORD is in no start_env.
 python3 - "$REPO/d05/host.toml" <<'PY' && ok "host.toml: identity-platform starts with up alone; LDAP_PROVISIONER_PASSWORD in no start_env" || bad "host.toml leaf"
 import sys, tomllib

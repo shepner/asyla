@@ -143,6 +143,29 @@ GO_ENV="val=x var=y LDAP_PROVISIONER_PASSWORD=$V1" go "$S" d05 identity-platform
 traced "val=x and var=y exported in the incoming environment"
 ! grep -qE '^(val|var)=' "$T/envdump" && ok "val and var unset before any child ran" || bad "val/var in a child env" "$(grep -E '^(val|var)=' "$T/envdump" | cut -c1-5)"
 
+# --- a function named like a command the value passes through, exported into the incoming
+# environment (export -f; bash imports it at start): printf and [ (the value as an argument), ssh
+# (the value on its stdin). The script uses bash's builtin printf, [[ ]] and `builtin exec ssh`,
+# so none of them runs with the value. [ also runs elsewhere in the script, and printf in the ssh
+# stub (a bash child): their record shows the exported function was in force.
+for shadow in printf '[' ssh; do
+  case "$shadow" in
+    printf) printf() { builtin printf 'printf %s\n' "$*" >> "$STUB_SHADOW"; builtin printf "$@"; } ;;
+    '[') [() { builtin printf '[ %s\n' "$*" >> "$STUB_SHADOW"; builtin [ "$@"; } ;;
+    ssh) ssh() { { builtin printf 'ssh stdin '; cat; } >> "$STUB_SHADOW"; } ;;
+  esac
+  : > "$T/shadow"
+  export -f "$shadow"
+  GO_ENV="STUB_SHADOW=$T/shadow LDAP_PROVISIONER_PASSWORD=$V1" go "$S" d05 identity-platform leaf-issue LDAP_PROVISIONER_PASSWORD; rc=$?
+  unset -f "$shadow"
+  inforce=true
+  case "$shadow" in printf) grep -q '^printf ' "$T/shadow" || inforce=false ;; '[') grep -q '^\[ ' "$T/shadow" || inforce=false ;; esac
+  [ "$rc" -eq 0 ] && [ "$(cat "$T/stdin")" = "$V1" ] && ! grep -qF -- "$V1" "$T/shadow" && $inforce && nowhere \
+    && ok "an exported $shadow function: it never sees the value; the ssh program's stdin carries it" \
+    || bad "exported $shadow function" "rc=$rc; in-force=$inforce; seen=$(grep -cF -- "$V1" "$T/shadow")"
+done
+rm -f "$T/shadow"
+
 # --- refusals: exit 2, no ssh, no value in the output ---
 refused() {   # refused RC LABEL PATTERN: the last go refused (2) with PATTERN in its output
   local rc="$1" label="$2" pat="$3"

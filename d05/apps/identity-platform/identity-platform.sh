@@ -464,10 +464,13 @@ record_leaf() {   # record_leaf ACTION EXIT [refused]: prints the exit to return
 # CA at ca/root_ca.crt (step's --root, and the leaf's ca.crt), openldap-tls (the one openldap dir
 # M1 makes; never openldap-data or openldap-config), then openldap-leaf.sh issue with the value on
 # its stdin alone. The value is one line on this script's own stdin (scripts/app_switch.sh writes it
-# over ssh stdin), read with `IFS= read -r` into a local variable that is never exported (xtrace and
-# allexport off first), then this shell's stdin is pointed at /dev/null so that no later child holds
-# the pipe. bash's builtin printf writes it into a pipe to openldap-leaf.sh issue (theOrg's
-# interface since fcbed3fe), and the variable is unset after that run. Never an argv, an
+# over ssh stdin), read with `IFS= builtin read -r` into a local variable that is never exported
+# (xtrace and allexport off first), then this shell's stdin is pointed at /dev/null so that no later
+# child holds the pipe. bash's builtin printf writes it into a pipe to openldap-leaf.sh issue (theOrg's
+# interface since fcbed3fe), run with `builtin exec` in a subshell, and the variable is unset after that run.
+# Every command the value passes through is a builtin, a keyword ([[ ]]) or a program by path, never
+# a function: a printf, read, [ or openldap-leaf.sh function (common.env is sourced above) is
+# never called with it. Never an argv, an
 # environment, a file or a log. Refused (exit 3, before any docker call and without a status
 # write) when LDAP_PROVISIONER_PASSWORD was set in this script's environment, when stdin is a
 # terminal, and when the line read is empty; refused on a replica (exit 1; step-ca and its
@@ -489,9 +492,9 @@ do_leaf_issue() {
   # too (bash's local keeps the export flag): out of the environment first, and never exported.
   unset -v pw
   local +x pw=""
-  IFS= read -r pw || true
+  IFS= builtin read -r pw || true
   exec </dev/null
-  if [ -z "$pw" ]; then
+  if [[ -z $pw ]]; then
     echo "[ERROR] leaf-issue: refused: no provisioner password read on stdin (OpenBao secret/v2/certificate-management/step-ca/provisioners/ldap, field password); not issuing" >&2
     return 3
   fi
@@ -503,7 +506,9 @@ do_leaf_issue() {
   local rc=0 refused=""
   { ensure_networks && place_ca && mkdir -p "$LEAF_DIR"; } || rc=$?
   if [ "$rc" -eq 0 ]; then
-    printf '%s\n' "$pw" | IDENTITY_PLATFORM_ROOT="$IDENTITY_PLATFORM_ROOT" "$LEAF_SCRIPT" issue || rc=$?
+    # `builtin exec` in its own subshell: a program, never a function, and its exit status kept
+    # (bash 3.2 exits the shell under set -e when a program run by `builtin command` fails).
+    builtin printf '%s\n' "$pw" | (IDENTITY_PLATFORM_ROOT="$IDENTITY_PLATFORM_ROOT" builtin exec "$LEAF_SCRIPT" issue) || rc=$?
     [ "$rc" -ne 3 ] || refused=refused
   fi
   unset -v pw
