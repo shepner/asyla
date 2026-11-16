@@ -10,10 +10,14 @@
 # command line or in a switch_env list), a shell variable or the script's own name (GUEST_USER, REPO,
 # SSH_KEY) as VAR, build_host.py's ssh override set,
 # an app with no switch_env, an unknown app or host, a replica.
+# Plain ARGs (switch_args): the checked ARGs on the remote command, shell-quoted, with or without a
+# VAR (d05's fetch-bundle form); refused before ssh: a wrong count, an ARG not matching its pattern
+# (a shell-meta character, a trailing newline), ARGs to a switch with none, an upper-case word to a
+# switch that takes no VAR, a switch_args switch not in switch_env, an unanchored or broken pattern.
 # Every value is a plain stand-in word made at run time. Nothing reaches a host.
 # Run: bash scripts/tests/test_app_switch_sh.sh
 set -uo pipefail
-unset LDAP_PROVISIONER_PASSWORD AAA BBB CCC BUILD_HOST_SSH_KEY BUILD_HOST_SSH_KNOWN_HOSTS BUILD_HOST_SSH_BY_ADDRESS
+unset LDAP_PROVISIONER_PASSWORD THEORG_REGISTRY_PULL_TOKEN AAA BBB CCC ABC BUILD_HOST_SSH_KEY BUILD_HOST_SSH_KNOWN_HOSTS BUILD_HOST_SSH_BY_ADDRESS
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 T="$(mktemp -d)"
@@ -49,9 +53,22 @@ cp "$REPO/scripts/app_switch.sh" "$F/scripts/"
 cat > "$F/h01/host.toml" <<'EOF'
 [[app]]
 name = "two"
-switch_env = { "pair" = ["AAA", "BBB"], "one" = ["AAA"], "none" = [] }
+switch_env = { "pair" = ["AAA", "BBB"], "one" = ["AAA"], "none" = [], "fetch" = ["AAA"], "two-args" = [], "quoted" = [] }
+switch_args = { "fetch" = ['^m5-[0-9a-f]{12}$'], "two-args" = ['^[a-z]+$', '^[0-9]+$'], "quoted" = ['^[a-z ;]+$'] }
 [[app]]
 name = "plain"
+[[app]]
+name = "stray"
+switch_env = { "x" = [] }
+switch_args = { "y" = ['^a$'] }
+[[app]]
+name = "unanchored"
+switch_env = { "x" = [] }
+switch_args = { "x" = ['a'] }
+[[app]]
+name = "broken"
+switch_env = { "x" = [] }
+switch_args = { "x" = ['^(a$'] }
 EOF
 printf '[replica]\nof = "h01"\n[[app]]\nname = "two"\nswitch_env = { "none" = [] }\n' > "$F/h02/host.toml"
 
@@ -118,6 +135,28 @@ GO_ENV="AAA=$V1" go "$F/scripts/app_switch.sh" h01 two one AAA; rc=$?
 [ "$rc" -eq 0 ] && [ "$(args | tail -n 1)" = "~/scripts/h01/apps/two/two.sh one" ] && [ "$(cat "$T/stdin")" = "$V1" ] && nowhere \
   && ok "one VAR (AAA) on h01: the script and switch alone, stdin its value, none leaked" || bad "one VAR" "rc=$rc; $(args | tail -n 1)"
 
+# --- plain ARGs (switch_args): on the remote command after the switch, shell-quoted ---
+GO_ENV="AAA=$V1" go "$F/scripts/app_switch.sh" h01 two fetch AAA m5-0123456789ab; rc=$?
+[ "$rc" -eq 0 ] && [ "$(grep -c '^SSH$' "$T/log")" -eq 1 ] && [ "$(args | tail -n 1)" = "~/scripts/h01/apps/two/two.sh fetch m5-0123456789ab" ] \
+  && [ "$(cat "$T/stdin")" = "$V1" ] && nowhere && ! grep -q '^AAA=' "$T/envdump" \
+  && ok "a VAR and an ARG: the ARG on the remote command, the value on stdin alone" || bad "VAR + ARG" "rc=$rc; $(args | tail -n 1)"
+go "$F/scripts/app_switch.sh" h01 two two-args abc 42; rc=$?
+[ "$rc" -eq 0 ] && [ "$(args | tail -n 1)" = "~/scripts/h01/apps/two/two.sh two-args abc 42" ] && [ ! -s "$T/stdin" ] \
+  && ok "two lower-case ARGs to a switch with no VAR: both on the remote command, stdin empty" || bad "two ARGs" "rc=$rc; $(args | tail -n 1)"
+go "$F/scripts/app_switch.sh" h01 two quoted 'a b;c'; rc=$?
+[ "$rc" -eq 0 ] && [ "$(args | tail -n 1)" = '~/scripts/h01/apps/two/two.sh quoted a\ b\;c' ] \
+  && ok "an ARG its pattern lets hold a space and ; goes shell-quoted (printf %q), one word" || bad "quoted ARG" "rc=$rc; $(args | tail -n 1)"
+GO_ENV="THEORG_REGISTRY_PULL_TOKEN=$V1" go "$S" d05 identity-platform fetch-bundle THEORG_REGISTRY_PULL_TOKEN m5-0123456789ab; rc=$?
+[ "$rc" -eq 0 ] && [ "$(args | tail -n 1)" = "$IP fetch-bundle m5-0123456789ab" ] && [ "$(cat "$T/stdin")" = "$V1" ] && nowhere \
+  && ! grep -q '^THEORG_REGISTRY_PULL_TOKEN=' "$T/envdump" \
+  && ok "d05 fetch-bundle: the version on the remote command, the value on stdin alone" || bad "d05 fetch-bundle" "rc=$rc; $(args | tail -n 1)"
+GO_ENV="SHELLOPTS=xtrace AAA=$V1" go "$F/scripts/app_switch.sh" h01 two fetch AAA m5-0123456789ab; rc=$?
+grep -q '^+' <<< "$OUT" && [ "$rc" -eq 0 ] && [ "$(cat "$T/stdin")" = "$V1" ] && nowhere \
+  && ok "a VAR and an ARG under SHELLOPTS=xtrace: the value in no trace" || bad "VAR + ARG under xtrace" "rc=$rc"
+GO_ENV="AAA=$V1" go -x "$F/scripts/app_switch.sh" h01 two fetch AAA m5-0123456789ab; rc=$?
+grep -q '^+' <<< "$OUT" && [ "$rc" -eq 0 ] && [ "$(cat "$T/stdin")" = "$V1" ] && nowhere \
+  && ok "a VAR and an ARG under bash -x: the value in no trace" || bad "VAR + ARG under bash -x" "rc=$rc"
+
 # --- the remote exit is kept ---
 GO_ENV="STUB_SSH_RC=7" go "$S" d05 identity-platform leaf-renew; rc=$?
 [ "$rc" -eq 7 ] && ok "the remote command's exit is app_switch's (7, no VAR)" || bad "exit kept" "rc=$rc"
@@ -177,7 +216,7 @@ go "$S" d05 identity-platform verify; refused $? "a switch not in switch_env, no
 GO_ENV="LDAP_PROVISIONER_PASSWORD=$V1" go "$S" d05 identity-platform leaf-renew LDAP_PROVISIONER_PASSWORD; refused $? "a VAR not in switch_env for the switch (leaf-renew)" "not listed"
 GO_ENV="AAA=$V1" go "$S" d05 identity-platform leaf-issue AAA; refused $? "a VAR not in switch_env (AAA for leaf-issue)" "takes LDAP_PROVISIONER_PASSWORD; AAA is not listed"
 go "$S" d05 identity-platform leaf-issue; refused $? "a listed VAR missing (leaf-issue with none)" "needs exactly: LDAP_PROVISIONER_PASSWORD"
-GO_ENV="AAA=$V1 BBB=$V2" go "$F/scripts/app_switch.sh" h01 two pair AAA BBB; refused $? "more than one VAR on the command line" "at most one VAR"
+GO_ENV="AAA=$V1 BBB=$V2" go "$F/scripts/app_switch.sh" h01 two one AAA BBB; refused $? "more than one VAR on the command line" "at most one VAR"
 GO_ENV="LDAP_PROVISIONER_PASSWORD=$V1 AAA=$V2" go "$S" d05 identity-platform leaf-issue LDAP_PROVISIONER_PASSWORD AAA; refused $? "more than one VAR for leaf-issue" "at most one VAR"
 GO_ENV="AAA=$V1" go "$F/scripts/app_switch.sh" h01 two pair AAA; refused $? "a switch_env list naming two VARs" "at most one variable name"
 go "$S" d05 identity-platform leaf-issue LDAP_PROVISIONER_PASSWORD; refused $? "a VAR unset" "unset or empty"
@@ -198,14 +237,37 @@ go "$F/scripts/app_switch.sh" h02 two none; refused $? "a replica's spec" "repli
 go "$S" d05 identity-platform; refused $? "too few arguments" "usage"
 go "$S" 'd05;x' identity-platform leaf-renew; refused $? "a host name with other characters" "HOST must match"
 
-# --- d05's allowlist: the value goes to leaf-issue alone ---
-"$REAL_PY" - "$REPO/d05/host.toml" <<'PY' && ok "d05 switch_env: LDAP_PROVISIONER_PASSWORD for leaf-issue alone; no start switch listed" || bad "d05 switch_env"
+# --- ARG refusals: before ssh ---
+H="$F/scripts/app_switch.sh"
+GO_ENV="AAA=$V1" go "$H" h01 two fetch AAA; refused $? "too few ARGs (none for fetch's one)" "takes exactly 1 ARG"
+GO_ENV="AAA=$V1" go "$H" h01 two fetch AAA m5-0123456789ab m5-0123456789ab; refused $? "too many ARGs (two for fetch's one)" "takes exactly 1 ARG"
+go "$H" h01 two two-args abc; refused $? "too few ARGs, no VAR (one for two)" "takes exactly 2 ARG"
+GO_ENV="AAA=$V1" go "$H" h01 two fetch AAA m5-0123456789AB; refused $? "an ARG not matching its pattern (upper-case hex)" "ARG 1 does not match"
+go "$H" h01 two two-args abc x42; refused $? "the second ARG not matching its pattern" "ARG 2 does not match"
+GO_ENV="AAA=$V1" go "$H" h01 two fetch AAA 'm5-0123456789ab;id'; refused $? "a shell-meta ARG (;)" "ARG 1 does not match"
+GO_ENV="AAA=$V1" go "$H" h01 two fetch AAA '$(id)'; refused $? "a shell-meta ARG (\$(...))" "ARG 1 does not match"
+GO_ENV="AAA=$V1" go "$H" h01 two fetch AAA "m5-0123456789ab
+"; refused $? "an ARG with a trailing newline (fullmatch, not \$ before a newline)" "ARG 1 does not match"
+go "$H" h01 two none abc; refused $? "an ARG to a switch with none" "takes no ARG"
+go "$S" d05 identity-platform leaf-renew abc; refused $? "an ARG to a d05 switch with none (leaf-renew)" "takes no ARG"
+GO_ENV="LDAP_PROVISIONER_PASSWORD=$V1" go "$S" d05 identity-platform leaf-issue LDAP_PROVISIONER_PASSWORD abc; refused $? "an ARG to leaf-issue (VAR, no ARGs)" "takes no ARG"
+GO_ENV="ABC=$V1" go "$H" h01 two two-args ABC abc 42; refused $? "an upper-case word to a switch with ARGs and no VAR: a VAR, not an ARG" "takes no VAR"
+go "$H" h01 two fetch m5-0123456789ab; refused $? "an ARG without the switch's VAR" "needs exactly: AAA"
+GO_ENV="AAA=$V1 BBB=$V2" go "$H" h01 two fetch AAA m5-0123456789ab BBB; refused $? "a second VAR after an ARG (its value in no child environment)" "at most one VAR"
+go "$H" h01 stray x; refused $? "a switch_args switch not in switch_env" "all in switch_env"
+go "$H" h01 unanchored x a; refused $? "an unanchored switch_args pattern" "anchored patterns"
+go "$H" h01 broken x a; refused $? "a switch_args pattern that does not compile" "does not compile"
+
+# --- d05's allowlist: each value goes to its one switch alone ---
+"$REAL_PY" - "$REPO/d05/host.toml" <<'PY' && ok "d05 switch_env: LDAP_PROVISIONER_PASSWORD for leaf-issue, the pull token for fetch-bundle, no other VAR; no start switch listed; switch_args for fetch-bundle alone" || bad "d05 switch_env"
 import sys, tomllib
 a = [x for x in tomllib.load(open(sys.argv[1], "rb"))["app"] if x["name"] == "identity-platform"][0]
 se = a["switch_env"]
-assert se["leaf-issue"] == ["LDAP_PROVISIONER_PASSWORD"], se
-assert all(v == [] for k, v in se.items() if k != "leaf-issue"), se
+want = {"leaf-issue": ["LDAP_PROVISIONER_PASSWORD"], "fetch-bundle": ["THEORG_REGISTRY_PULL_TOKEN"]}
+assert all(se[k] == v for k, v in want.items()), se
+assert all(v == [] for k, v in se.items() if k not in want), se
 assert not {"up", "pull", "images", "verify", "down"} & set(se), se
+assert a["switch_args"] == {"fetch-bundle": ["^m5-[0-9a-f]{12}$"]}, a["switch_args"]
 PY
 
 [ "$fail" -eq 0 ] && echo "all passed" || echo "FAILURES"

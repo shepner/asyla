@@ -66,4 +66,12 @@ verify = ["verify"]
 restore = false
 pull_token_env = "THEORG_REGISTRY_PULL_TOKEN"
 start_env = ["IDP_KEYCLOAK_DB_PASSWORD"]
-switch_env = { "leaf-issue" = ["LDAP_PROVISIONER_PASSWORD"], "leaf-renew" = [], "leaf-schedule-install" = [], "leaf-schedule-status" = [], "leaf-schedule-remove" = [] }
+# switch_args (scripts/app_switch.sh): SWITCH -> one anchored pattern per plain ARG; a switch not in
+# it takes no ARG. The M5 cutover bundle (theOrg deploy/d05/CUTOVER-BUNDLE.md, asyla #654):
+# fetch-bundle takes the theorg-registry pull token on ssh stdin and the package version as its one
+# ARG. identity-platform.sh does not implement it yet (it refuses it as an unknown switch): theOrg's
+# contract is under review. unpack-bundle (the age identity on stdin, the expected sha256s as ARGs:
+# the count is to be revised, theOrg adds --expect-manifests-sha256), reset-cutover and
+# cutover-clean are added with that implementation.
+switch_env = { "leaf-issue" = ["LDAP_PROVISIONER_PASSWORD"], "leaf-renew" = [], "leaf-schedule-install" = [], "leaf-schedule-status" = [], "leaf-schedule-remove" = [], "fetch-bundle" = ["THEORG_REGISTRY_PULL_TOKEN"] }
+switch_args = { "fetch-bundle" = ['^m5-[0-9a-f]{12}$'] }
