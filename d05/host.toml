@@ -75,5 +75,5 @@ start_env = ["IDP_KEYCLOAK_DB_PASSWORD"]
 # restore-keycloak takes keycloak-db's password on ssh stdin (the name up reads; keycloak-backup gets
 # it on its stdin), restore-openldap no value. The build's restore stays false: identity-platform.sh
 # restore refuses (exit 1) and points at these two.
-switch_env = { "leaf-issue" = ["LDAP_PROVISIONER_PASSWORD"], "leaf-renew" = [], "leaf-schedule-install" = [], "leaf-schedule-status" = [], "leaf-schedule-remove" = [], "fetch-bundle" = ["THEORG_REGISTRY_PULL_TOKEN"], "unpack-bundle" = ["IDP_CUTOVER_BUNDLE_IDENTITY"], "reset-cutover" = [], "cutover-clean" = [], "restore-keycloak" = ["IDP_KEYCLOAK_DB_PASSWORD"], "restore-openldap" = [] }
+switch_env = { "leaf-issue" = ["LDAP_PROVISIONER_PASSWORD"], "leaf-renew" = [], "leaf-schedule-install" = [], "leaf-schedule-status" = [], "leaf-schedule-remove" = [], "fetch-bundle" = ["THEORG_REGISTRY_PULL_TOKEN"], "unpack-bundle" = ["IDP_CUTOVER_BUNDLE_IDENTITY"], "reset-cutover" = [], "cutover-clean" = [], "restore-keycloak" = ["IDP_KEYCLOAK_DB_PASSWORD"], "restore-openldap" = [], "start-openldap" = ["IDP_LDAP_ADMIN_PASSWORD"], "start-keycloak" = ["IDP_KEYCLOAK_DB_PASSWORD"] }
 switch_args = { "fetch-bundle" = ['^m5-[0-9a-f]{12}$'], "unpack-bundle" = ['^[0-9a-f]{64}$', '^[0-9a-f]{64}$', '^[0-9a-f]{64}$'] }

@@ -12,9 +12,9 @@ are tagged with that sha; the two upstream digests did not change.
 This folder is **M1** (agreed with theOrg): `up` creates the two networks, pulls the six images,
 places theOrg's root CA, reports on the openldap leaf, and starts **keycloak-db alone**. openldap
 and keycloak first start at the M5 cutover (DEPLOY.md steps 5-6), after a restore into empty
-targets; `start-openldap`, `start-keycloak` and `configure` refuse until that is written (behind
-the cutover marker gate below), and `restore` refuses and points at `restore-openldap` and
-`restore-keycloak`. The cutover bundle's switches and the two restores are its first part
+targets; `configure` refuses until that is written (behind the cutover marker gate below), and
+`restore` refuses and points at `restore-openldap` and `restore-keycloak`. The cutover bundle's
+switches, the two restores and `start-openldap` / `start-keycloak` are its first part
 ("Cutover bundle (M5 G2)"). The ops
 one-shots (backups, keycloak-configure) are never started by `up`.
 
@@ -178,27 +178,44 @@ runs the cutover image's `unpack` into the two dirs the restores read (`backup/`
     Writes `restored-keycloak`. **It needs the theOrg pin repinned to theOrg's merged main** (the
     `fcbed3fe` images' keycloak-backup does not take its password on stdin); asyla merges this to
     master only after that repin.
+  - `start-openldap` (cutover step 5): reads `IDP_LDAP_ADMIN_PASSWORD`'s value as one line on stdin
+    and runs `docker compose --profile restored up -d --no-deps --wait --wait-timeout 300 openldap`
+    (DEPLOY.md's form; the timeout is asyla's, `IDENTITY_PLATFORM_START_WAIT_S`) with the value only
+    in that process's environment, as `LDAP_ADMIN_PASSWORD` and `LDAP_CONFIG_PASSWORD`. Then it
+    checks an admin bind with it (the admin password is then the copy's) in theOrg's stdin form
+    (`rotate_ldap_admin_lab.py` at bd0c6bff): `docker exec -i ID ldapwhoami -x -H
+    ldaps://localhost:636 -D cn=admin,dc=theorg,dc=local -y /dev/stdin`, the value on its stdin
+    with no newline. A failed bind (49: the copy's password is not OpenBao's) leaves openldap
+    running, writes no marker and exits 1. Writes `started-openldap` (`date`, `admin-bind ok`).
+  - `start-keycloak` (cutover step 6): the same `up` for keycloak, with `IDP_KEYCLOAK_DB_PASSWORD`'s
+    value as `KC_DB_PASSWORD`; keycloak-db must be running and healthy. Writes `started-keycloak`.
+  - Both starts take no ARG and refuse (exit 3, no docker call, nothing changed) with the value's
+    name in the environment, on a replica, without their markers (below), once their own
+    `started-*` marker or `cutover-done` exists, or with a terminal or an empty read on stdin; a
+    service not healthy in time is exit 1 with no marker.
   - Both restores need a valid `unpacked` marker (its `manifests-sha256` 64 hex) and take no ARG;
     each is refused (exit 3, no docker run, nothing changed) on a replica and once its own
     `restored-*` marker or `cutover-done` exists. On 0 each writes its marker (`date`, the unpacked
     `manifests-sha256`); otherwise the restore's own exit passes through with no marker (3: it
     refused a target that is not empty; 2: a mount or usage problem; 1: it failed).
   - `reset-cutover`, `unpack-bundle` and both restores refuse (exit 3, nothing touched) when `backup/`,
-    `openldap-backup/` or `cutover-state/` is a symlink. The six switches run one at a time: each
+    `openldap-backup/` or `cutover-state/` is a symlink (both starts: `cutover-state/`). The eight switches run one at a time: each
     holds util-linux `flock -n` on `cutover-state/.lock` for its whole run, and refuses (exit 3,
     "another cutover switch is running") when it is busy.
 - The marker gate: one marker per step in `/mnt/docker/IdentityPlatform/cutover-state/`, each
   written atomically and then synced (`sync -f`): `fetched`, `unpack-started`, `unpacked`,
   `restored-openldap` / `restored-keycloak` from the restores, and `cutover-done` from the later
   go-live (not written yet; `cutover-done` stops `reset-cutover`, `cutover-clean` and the restores;
-  a `restored-*` marker stops `reset-cutover`). `start-openldap` needs `unpacked` and `restored-openldap`, `start-keycloak`
-  needs `unpacked` and `restored-keycloak`, `configure` needs both `restored-*`; `unpacked` counts
-  only with a non-empty version equal to `fetched`'s, a `restored-*` marker only when not empty.
-  Each names the missing or invalid marker and exits 3, and with its markers present still refuses
-  (not yet written, exit 3). `restore` refuses (exit 1, never build_host.py's skip status 3) and
+  a `restored-*` marker stops `reset-cutover`), `started-openldap` / `started-keycloak` from the
+  starts. `start-openldap` needs `unpacked` and `restored-openldap`, `start-keycloak`
+  needs `unpacked`, `restored-keycloak` and `started-openldap`, `configure` needs both `restored-*`;
+  `unpacked` counts only with a non-empty version equal to `fetched`'s, `started-openldap` only with
+  its `admin-bind ok` line, a `restored-*` marker only when not empty. Each names the missing or
+  invalid marker and exits 3; `configure` with its markers present still refuses (not yet written,
+  exit 3). `restore` refuses (exit 1, never build_host.py's skip status 3) and
   points at `restore-openldap` and `restore-keycloak`.
-- Exit codes of the six cutover switches: 0 done; 2 a usage error (a wrong ARG, an ARG to
-  `reset-cutover`, `cutover-clean` or a restore); 3 refused, nothing changed (a replica, the value's name set
+- Exit codes of the eight cutover switches: 0 done; 2 a usage error (a wrong ARG, an ARG to
+  `reset-cutover`, `cutover-clean`, a restore or a start); 3 refused, nothing changed (a replica, the value's name set
   in the environment, a terminal or an empty read on stdin, a marker or state check, combined with
   another switch); 1 a failure (a pull or download, a check after unpack, a target left not empty).
   unpack-bundle keeps unpack's own exit: 2 and 3 changed nothing; 1, 4 or any other failure may have

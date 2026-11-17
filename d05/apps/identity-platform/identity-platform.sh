@@ -10,9 +10,9 @@
 # here: their first start is the M5 cutover (DEPLOY.md steps 5-6), after a restore, and theOrg's
 # restores refuse a target that is not empty (keycloak_backup.sh counts tables; openldap_backup.sh
 # checks the volumes). A first openldap start runs osixia's bootstrap, so M1 never creates
-# openldap-data or openldap-config. start-openldap, start-keycloak and configure refuse until M5 is
-# written (the cutover bundle and the two restores below are its first parts); restore refuses and
-# points at restore-openldap and restore-keycloak.
+# openldap-data or openldap-config. configure refuses until M5 is written (the cutover bundle, the
+# two restores and the two starts below are its first parts); restore refuses and points at
+# restore-openldap and restore-keycloak.
 # No secret is in any file here or on the host. The workstation resolves the values from OpenBao
 # at deploy (build_host.py start_env, pull_token_env) and hands them to this process's environment;
 # this script maps them onto the names compose.yml passes by name. Only the long-running services
@@ -78,16 +78,27 @@
 #               not empty) passes through, with no marker.
 #   A marker per step in cutover-state/: fetched; unpack-started (written right before unpack's
 #   docker run: the targets then hold unpack's files); unpacked; restored-openldap and
-#   restored-keycloak (date, the unpacked manifests-sha256) from the two restores; cutover-done from
+#   restored-keycloak (date, the unpacked manifests-sha256) from the two restores; started-openldap
+#   (date, admin-bind ok) and started-keycloak (date) from the two starts; cutover-done from
 #   the go-live (not written yet). Each is written atomically, then synced (sync -f). start-openldap,
 #   start-keycloak and configure are gated on them (cutover_gate, exit 3 naming the missing or
-#   invalid marker: an unpacked whose version is not fetched's, an empty restored-*), and still
-#   refuse (exit 3) in this round. restore refuses (exit 1: never build_host.py's skip status 3)
+#   invalid marker: an unpacked whose version is not fetched's, an empty restored-*, a
+#   started-openldap without admin-bind ok); configure still refuses (exit 3) in this round.
+#   start-openldap  reads IDP_LDAP_ADMIN_PASSWORD's value as one line on stdin; it reaches the
+#               compose process alone, as LDAP_ADMIN_PASSWORD and LDAP_CONFIG_PASSWORD, for
+#               `--profile restored up -d --no-deps --wait --wait-timeout START_WAIT_S openldap`; then
+#               an admin bind (ldapwhoami -y /dev/stdin through docker exec -i, the value on its
+#               stdin). A failed bind: openldap left running, no marker, exit 1.
+#   start-keycloak  the same for keycloak with IDP_KEYCLOAK_DB_PASSWORD's value as KC_DB_PASSWORD;
+#               keycloak-db must be healthy, and started-openldap valid. Both refuse (exit 3, no
+#               docker call) with the value's name in the environment, on a replica, past their own
+#               started-* marker or cutover-done, a terminal or an empty read.
+#   restore refuses (exit 1: never build_host.py's skip status 3)
 #   and points at restore-openldap and restore-keycloak. reset-cutover and unpack-bundle refuse
 #   (exit 3) when a target or cutover-state/ is a symlink.
 #   THEORG_REGISTRY_PULL_TOKEN and IDP_CUTOVER_BUNDLE_IDENTITY are noted and unset at start, as
 #   LDAP_PROVISIONER_PASSWORD is; fetch-bundle and unpack-bundle then refuse (exit 3);
-#   restore-keycloak refuses (exit 3) with IDP_KEYCLOAK_DB_PASSWORD in its environment. The six
+#   restore-keycloak refuses (exit 3) with IDP_KEYCLOAK_DB_PASSWORD in its environment. The eight
 #   cutover switches each run alone, and one at a time: each holds flock(1) (util-linux) -n on
 #   cutover-state/.lock for its whole run; a busy lock is refused (exit 3).
 # Data under /mnt/docker/IdentityPlatform. No backup here yet: the data is the Mini's until M5.
@@ -181,6 +192,10 @@ EDGE_WANT="bridge true $EDGE_SUBNET $EDGE_GATEWAY $EDGE_IP_RANGE"
 SERVING_HOST="d05"
 
 DB_WAIT_S="${IDENTITY_PLATFORM_DB_WAIT_S:-120}"
+# start-openldap and start-keycloak: --wait-timeout for the restored service (asyla's addition, as up's).
+START_WAIT_S="${IDENTITY_PLATFORM_START_WAIT_S:-300}"
+# The admin DN (DEPLOY.md at bd0c6bff, "Verify" 1) start-openldap binds as.
+LDAP_ADMIN_DN="cn=admin,dc=theorg,dc=local"
 
 # --profile restored and ops name every service, for the image list and the pulls only; a start
 # never takes either profile, and COMPOSE_PROFILES is never set here (M1).
@@ -1160,14 +1175,119 @@ do_restore_openldap() {
   restore_done "$sw" restored-openldap "$RESTORE_MANIFESTS" "$rc"
 }
 
+# start-openldap and start-keycloak (DEPLOY.md "Production on d05", cutover steps 5-6, at theOrg
+# bd0c6bff): `--profile restored up -d --no-deps --wait SERVICE` over the restored data, with
+# --wait-timeout START_WAIT_S (IDENTITY_PLATFORM_START_WAIT_S, default 300; asyla's, as up's). The
+# value (start-openldap: IDP_LDAP_ADMIN_PASSWORD; start-keycloak: IDP_KEYCLOAK_DB_PASSWORD) is one
+# line on this script's stdin (scripts/app_switch.sh writes it), read as leaf-issue reads its value,
+# and reaches the docker compose process alone, in its environment under the names compose.yml
+# passes by name (LDAP_ADMIN_PASSWORD and LDAP_CONFIG_PASSWORD; KC_DB_PASSWORD): never an argv, a
+# file or a log. start-openldap then checks an admin bind with it (step 5: the admin password is
+# then the copy's) in theOrg's stdin form (scripts/rotate_ldap_admin_lab.py at bd0c6bff):
+# ldapwhoami -y /dev/stdin in the container through docker exec -i, the value on its stdin with no
+# newline, as that lab sends it. A failed bind leaves openldap running, writes no marker and exits
+# 1. On success each writes its started-* marker (date; start-openldap also "admin-bind ok").
+# Refused (exit 3, no docker call, nothing changed) with the value's name in the environment
+# (checked before any child runs), on a replica, cutover-state/ a symlink, the lock busy, a missing
+# or invalid marker (cutover_gate; start-keycloak needs started-openldap too), its own started-*
+# marker or cutover-done present, keycloak-db not running and healthy (start-keycloak), a terminal
+# on stdin or an empty read. Exit 2 for an ARG; 1 when the service does not become healthy.
+do_start() {   # do_start SWITCH VALUE_NAME SERVICE MARKER [ARG...]
+  local sw="$1" name="$2" svc="$3" marker="$4" h id rc=0
+  shift 4
+  if [ -n "${!name+x}" ]; then
+    echo "[ERROR] $sw: refused: $name is set in the environment; unset it and write the value as one line to $sw's stdin (scripts/app_switch.sh does); nothing changed" >&2
+    return 3
+  fi
+  if [ $# -ne 0 ]; then
+    echo "[ERROR] $sw: usage: $sw (no ARG)" >&2
+    return 2
+  fi
+  if is_replica; then
+    echo "[ERROR] $sw: refused: not on a replica ($(hostname -s </dev/null)); the cutover is d05's; nothing changed" >&2
+    return 3
+  fi
+  cutover_lock "$sw" || return
+  cutover_gate "$sw" || return
+  if [ -e "$STATE_DIR/$marker" ]; then
+    echo "[ERROR] $sw: refused: $STATE_DIR/$marker exists (already started); nothing changed" >&2
+    return 3
+  fi
+  if [ -e "$STATE_DIR/$CUTOVER_DONE" ]; then
+    echo "[ERROR] $sw: refused: $STATE_DIR/$CUTOVER_DONE exists (the cutover is done); nothing changed" >&2
+    return 3
+  fi
+  if [ "$svc" = keycloak ]; then
+    h="$(db_health </dev/null)"
+    if [ "$h" != healthy ]; then
+      echo "[ERROR] $sw: refused: keycloak-db is $h, not running and healthy (run up first); nothing changed" >&2
+      return 3
+    fi
+  fi
+  if [ -t 0 ]; then
+    echo "[ERROR] $sw: refused: stdin is a terminal; $sw reads $name's value as one line on stdin (scripts/app_switch.sh writes it); nothing changed" >&2
+    return 3
+  fi
+  { set +x; } 2>/dev/null
+  set +a
+  unset -v pw
+  local +x pw=""
+  IFS= builtin read -r pw || true
+  exec </dev/null
+  if [[ -z $pw ]]; then
+    echo "[ERROR] $sw: refused: no value read on stdin; nothing changed" >&2
+    return 3
+  fi
+  echo "[INFO] $sw: starting $svc (--profile restored, --no-deps; healthy within ${START_WAIT_S}s)"
+  # run_compose's argv, with `builtin exec docker` in its own subshell: the docker program, never a
+  # function; the value only in that subshell's environment.
+  if [ "$svc" = openldap ]; then
+    ( LDAP_ADMIN_PASSWORD="$pw" LDAP_CONFIG_PASSWORD="$pw"
+      builtin export LDAP_ADMIN_PASSWORD LDAP_CONFIG_PASSWORD
+      builtin exec docker compose -f "$COMPOSE_FILE" --project-directory "$SCRIPT_DIR" --profile restored \
+        up -d --no-deps --wait --wait-timeout "$START_WAIT_S" openldap ) || rc=$?
+  else
+    ( KC_DB_PASSWORD="$pw"
+      builtin export KC_DB_PASSWORD
+      builtin exec docker compose -f "$COMPOSE_FILE" --project-directory "$SCRIPT_DIR" --profile restored \
+        up -d --no-deps --wait --wait-timeout "$START_WAIT_S" keycloak ) || rc=$?
+  fi
+  if [ "$rc" -ne 0 ]; then
+    unset -v pw
+    echo "[ERROR] $sw: $svc did not start and become healthy within ${START_WAIT_S}s (docker compose exited $rc); no $marker marker" >&2
+    return 1
+  fi
+  if [ "$svc" = keycloak ]; then
+    unset -v pw
+    write_state "$marker" "date $(date -u +%Y-%m-%dT%H:%M:%SZ </dev/null)"
+    return
+  fi
+  id="$(run_compose --profile restored ps -q openldap </dev/null)" || id=""
+  if [ -z "$id" ]; then
+    unset -v pw
+    echo "[ERROR] $sw: openldap's container not found after the start; admin bind not checked; no $marker marker" >&2
+    return 1
+  fi
+  builtin printf '%s' "$pw" \
+    | (builtin exec docker exec -i "$id" ldapwhoami -x -H ldaps://localhost:636 -D "$LDAP_ADMIN_DN" -y /dev/stdin) || rc=$?
+  unset -v pw
+  if [ "$rc" -ne 0 ]; then
+    echo "[ERROR] $sw: the admin bind as $LDAP_ADMIN_DN failed (ldapwhoami exited $rc; 49: the restored copy's admin password is not OpenBao's IDP_LDAP_ADMIN_PASSWORD); openldap left running; no $marker marker" >&2
+    return 1
+  fi
+  write_state "$marker" "date $(date -u +%Y-%m-%dT%H:%M:%SZ </dev/null)" "admin-bind ok"
+}
+do_start_openldap() { do_start start-openldap IDP_LDAP_ADMIN_PASSWORD openldap started-openldap "$@"; }
+do_start_keycloak() { do_start start-keycloak IDP_KEYCLOAK_DB_PASSWORD keycloak started-keycloak "$@"; }
+
 # cutover_gate SWITCH: the markers a cutover switch needs; prints the missing or invalid ones and
-# returns 3. unpacked counts only with a non-empty version equal to fetched's; a restored-* marker
-# only when it is a non-empty file.
+# returns 3. unpacked counts only with a non-empty version equal to fetched's; started-openldap only
+# with its "admin-bind ok" line; a restored-* marker only when it is a non-empty file.
 cutover_gate() {
   local m v fv need=() missing=()
   case "$1" in
     start-openldap) need=(unpacked restored-openldap) ;;
-    start-keycloak) need=(unpacked restored-keycloak) ;;
+    start-keycloak) need=(unpacked restored-keycloak started-openldap) ;;
     configure) need=(restored-openldap restored-keycloak) ;;
     restore-keycloak|restore-openldap) need=(unpacked) ;;
     *) echo "[ERROR] cutover_gate: no gate for $1" >&2; return 3 ;;
@@ -1180,6 +1300,8 @@ cutover_gate() {
     elif [ "$m" = unpacked ]; then
       v="$(state_value unpacked version)" fv="$(state_value fetched version)"
       [ -n "$v" ] && [ "$v" = "$fv" ] || missing+=("unpacked (version '$v' is not fetched's '$fv')")
+    elif [ "$m" = started-openldap ] && ! grep -qx 'admin-bind ok' "$STATE_DIR/$m"; then
+      missing+=("started-openldap (no admin-bind ok)")
     fi
   done
   if [ ${#missing[@]} -gt 0 ]; then
@@ -1229,7 +1351,7 @@ run_cmd() {
     leaf-schedule-remove)
       do_leaf_schedule_remove
       ;;
-    start-openldap|start-keycloak|configure)
+    configure)
       cutover_gate "$cmd" || exit $?
       refuse_cutover "$cmd"
       ;;
@@ -1281,8 +1403,14 @@ usage() {
   echo "                    unpack wrote; refused past a restore or cutover-done. Runs alone. Not on a replica" >&2
   echo "  cutover-clean   - M5: remove cutover/bundle.tar.age and temp downloads (fetched kept);" >&2
   echo "                    refused once cutover-done. Runs alone. Not on a replica" >&2
-  echo "  start-openldap, start-keycloak, configure" >&2
-  echo "                  - Gated on the cutover markers (exit 3 naming the missing or invalid one); then refused:" >&2
+  echo "  start-openldap  - M5: start openldap (--profile restored up -d --no-deps --wait) over the restored" >&2
+  echo "                    volumes, then check an admin bind; reads IDP_LDAP_ADMIN_PASSWORD's value as one" >&2
+  echo "                    line on stdin (scripts/app_switch.sh); needs unpacked and restored-openldap;" >&2
+  echo "                    writes started-openldap. Runs alone. Not on a replica" >&2
+  echo "  start-keycloak  - M5: start keycloak the same way; reads IDP_KEYCLOAK_DB_PASSWORD's value as one" >&2
+  echo "                    line on stdin; keycloak-db must be healthy; needs unpacked, restored-keycloak" >&2
+  echo "                    and started-openldap; writes started-keycloak. Runs alone. Not on a replica" >&2
+  echo "  configure       - Gated on the cutover markers (exit 3 naming the missing or invalid one); then refused:" >&2
   echo "                    the M5 cutover, not yet written (exit 3)" >&2
   echo "  restore-openldap - M5: openldap-backup restore of openldap-backup/ into the empty openldap-data and" >&2
   echo "                    openldap-config (OPENLDAP_BACKUP_CONFIG_MOUNT=rw for this run); no secret; needs a" >&2
@@ -1331,6 +1459,14 @@ case "$1" in
     do_restore_openldap "${@:2}" || exit $?
     exit 0
     ;;
+  start-openldap)
+    do_start_openldap "${@:2}" || exit $?
+    exit 0
+    ;;
+  start-keycloak)
+    do_start_keycloak "${@:2}" || exit $?
+    exit 0
+    ;;
 esac
 
 # leaf-issue runs alone: its stdin carries the provisioner password, and no other switch's
@@ -1338,7 +1474,7 @@ esac
 if [ $# -gt 1 ]; then
   for cmd in "$@"; do
     case "$cmd" in
-      leaf-issue|fetch-bundle|unpack-bundle|reset-cutover|cutover-clean|restore-keycloak|restore-openldap)
+      leaf-issue|fetch-bundle|unpack-bundle|reset-cutover|cutover-clean|restore-keycloak|restore-openldap|start-openldap|start-keycloak)
         echo "[ERROR] $cmd: refused: run it alone (it reads a value on stdin or takes ARGs), not with: $*" >&2
         exit 3
         ;;

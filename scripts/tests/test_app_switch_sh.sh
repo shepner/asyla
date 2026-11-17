@@ -171,6 +171,16 @@ GO_ENV="IDP_KEYCLOAK_DB_PASSWORD=$V1" go "$S" d05 identity-platform restore-keyc
   && ! grep -q '^IDP_KEYCLOAK_DB_PASSWORD=' "$T/envdump" \
   && ok "d05 restore-keycloak: the switch alone on the remote command, keycloak-db's value on stdin alone" \
   || bad "d05 restore-keycloak" "rc=$rc; $(args | tail -n 1)"
+for pair in start-openldap:IDP_LDAP_ADMIN_PASSWORD start-keycloak:IDP_KEYCLOAK_DB_PASSWORD; do
+  sw="${pair%%:*}" var="${pair#*:}"
+  GO_ENV="$var=$V1" go "$S" d05 identity-platform "$sw" "$var"; rc=$?
+  [ "$rc" -eq 0 ] && [ "$(grep -c '^SSH$' "$T/log")" -eq 1 ] && [ "$(args | tail -n 1)" = "$IP $sw" ] \
+    && [ "$(cat "$T/stdin")" = "$V1" ] && [ "$(wc -l < "$T/stdin" | tr -d ' ')" -eq 1 ] && nowhere \
+    && ! grep -q "^$var=" "$T/envdump" \
+    && ok "d05 $sw: the switch alone on the remote command, $var's value on stdin alone" \
+    || bad "d05 $sw" "rc=$rc; $(args | tail -n 1)"
+  go "$S" d05 identity-platform "$sw"; refused $? "a listed VAR missing ($sw with none)" "needs exactly: $var"
+done
 GO_ENV="SHELLOPTS=xtrace AAA=$V1" go "$F/scripts/app_switch.sh" h01 two fetch AAA m5-0123456789ab; rc=$?
 grep -q '^+' <<< "$OUT" && [ "$rc" -eq 0 ] && [ "$(cat "$T/stdin")" = "$V1" ] && nowhere \
   && ok "a VAR and an ARG under SHELLOPTS=xtrace: the value in no trace" || bad "VAR + ARG under xtrace" "rc=$rc"
@@ -355,17 +365,18 @@ go "$H" h01 unanchored x a; refused $? "an unanchored switch_args pattern" "anch
 go "$H" h01 broken x a; refused $? "a switch_args pattern that does not compile" "does not compile"
 
 # --- d05's allowlist: each value goes to its one switch alone ---
-"$REAL_PY" - "$REPO/d05/host.toml" <<'PY' && ok "d05 switch_env: LDAP_PROVISIONER_PASSWORD for leaf-issue, the pull token for fetch-bundle, the age identity for unpack-bundle, keycloak-db's for restore-keycloak, no other VAR (reset-cutover, cutover-clean and restore-openldap none); no start or restore switch listed; build restore false; switch_args for fetch-bundle and unpack-bundle alone" || bad "d05 switch_env"
+"$REAL_PY" - "$REPO/d05/host.toml" <<'PY' && ok "d05 switch_env: LDAP_PROVISIONER_PASSWORD for leaf-issue, the pull token for fetch-bundle, the age identity for unpack-bundle, keycloak-db's for restore-keycloak and start-keycloak, the LDAP admin's for start-openldap, no other VAR (reset-cutover, cutover-clean and restore-openldap none); no up or restore switch listed; build restore false; switch_args for fetch-bundle and unpack-bundle alone" || bad "d05 switch_env"
 import sys, tomllib
 a = [x for x in tomllib.load(open(sys.argv[1], "rb"))["app"] if x["name"] == "identity-platform"][0]
 se = a["switch_env"]
 want = {"leaf-issue": ["LDAP_PROVISIONER_PASSWORD"], "fetch-bundle": ["THEORG_REGISTRY_PULL_TOKEN"],
-        "unpack-bundle": ["IDP_CUTOVER_BUNDLE_IDENTITY"], "restore-keycloak": ["IDP_KEYCLOAK_DB_PASSWORD"]}
+        "unpack-bundle": ["IDP_CUTOVER_BUNDLE_IDENTITY"], "restore-keycloak": ["IDP_KEYCLOAK_DB_PASSWORD"],
+        "start-openldap": ["IDP_LDAP_ADMIN_PASSWORD"], "start-keycloak": ["IDP_KEYCLOAK_DB_PASSWORD"]}
 assert all(se[k] == v for k, v in want.items()), se
 assert all(v == [] for k, v in se.items() if k not in want), se
 assert set(se) == {"leaf-issue", "leaf-renew", "leaf-schedule-install", "leaf-schedule-status", "leaf-schedule-remove",
                    "fetch-bundle", "unpack-bundle", "reset-cutover", "cutover-clean",
-                   "restore-keycloak", "restore-openldap"}, sorted(se)
+                   "restore-keycloak", "restore-openldap", "start-openldap", "start-keycloak"}, sorted(se)
 assert not {"up", "pull", "images", "verify", "down", "restore"} & set(se), se
 assert a["restore"] is False, a["restore"]
 assert a["switch_args"] == {"fetch-bundle": ["^m5-[0-9a-f]{12}$"],
