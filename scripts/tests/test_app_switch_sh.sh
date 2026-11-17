@@ -259,15 +259,17 @@ go "$H" h01 unanchored x a; refused $? "an unanchored switch_args pattern" "anch
 go "$H" h01 broken x a; refused $? "a switch_args pattern that does not compile" "does not compile"
 
 # --- d05's allowlist: each value goes to its one switch alone ---
-"$REAL_PY" - "$REPO/d05/host.toml" <<'PY' && ok "d05 switch_env: LDAP_PROVISIONER_PASSWORD for leaf-issue, the pull token for fetch-bundle, no other VAR; no start switch listed; switch_args for fetch-bundle alone" || bad "d05 switch_env"
+"$REAL_PY" - "$REPO/d05/host.toml" <<'PY' && ok "d05 switch_env: LDAP_PROVISIONER_PASSWORD for leaf-issue, the pull token for fetch-bundle, the age identity for unpack-bundle, no other VAR; no start switch listed; switch_args for fetch-bundle and unpack-bundle alone" || bad "d05 switch_env"
 import sys, tomllib
 a = [x for x in tomllib.load(open(sys.argv[1], "rb"))["app"] if x["name"] == "identity-platform"][0]
 se = a["switch_env"]
-want = {"leaf-issue": ["LDAP_PROVISIONER_PASSWORD"], "fetch-bundle": ["THEORG_REGISTRY_PULL_TOKEN"]}
+want = {"leaf-issue": ["LDAP_PROVISIONER_PASSWORD"], "fetch-bundle": ["THEORG_REGISTRY_PULL_TOKEN"],
+        "unpack-bundle": ["IDP_CUTOVER_BUNDLE_IDENTITY"]}
 assert all(se[k] == v for k, v in want.items()), se
 assert all(v == [] for k, v in se.items() if k not in want), se
 assert not {"up", "pull", "images", "verify", "down"} & set(se), se
-assert a["switch_args"] == {"fetch-bundle": ["^m5-[0-9a-f]{12}$"]}, a["switch_args"]
+assert a["switch_args"] == {"fetch-bundle": ["^m5-[0-9a-f]{12}$"],
+                            "unpack-bundle": ["^[0-9a-f]{64}$"] * 3}, a["switch_args"]
 PY
 
 [ "$fail" -eq 0 ] && echo "all passed" || echo "FAILURES"

@@ -21,13 +21,22 @@
 # either pull-token name in its environment, a terminal, an empty read or a value outside
 # [A-Za-z0-9_.-], over an existing bundle or unpacked marker, or beside another switch; exit 2 for
 # a bad VERSION; also under xtrace (SHELLOPTS and bash -x). curl is a stub.
+# unpack-bundle reads the age identity as one line on stdin: it reaches the image's unpack on docker
+# run -i's stdin alone, in the contract's exact docker run; refused (exit 3, no docker run, nothing
+# written) with IDP_CUTOVER_BUNDLE_IDENTITY in its environment, a terminal, an empty read, no fetched
+# marker or bundle, a bundle sha256 not the fetched one, a fetched version not m5-<12 hex of the
+# manifests ARG>, an unpacked marker, a non-empty target (lost+found alone is empty), a missing image,
+# or beside another switch; exit 2 for ARGs not three 64-hex; unpack's exits 1-4 kept; after exit 0
+# the four lines must match or no marker is written; also under xtrace. Both cutover switches refuse
+# on a replica before reading stdin.
 # Nothing here reaches a registry, the vault or a host; every value is a plain stand-in word made
 # at run time. Run: bash scripts/tests/test_identity_platform_sh.sh
 set -uo pipefail
 unset IDP_KEYCLOAK_DB_PASSWORD IDP_LDAP_ADMIN_PASSWORD IDP_DEPLOY_DEX_CLIENT_SECRET \
   IDENTITY_PLATFORM_REGISTRY_PULL_TOKEN IDENTITY_PLATFORM_TAG_OVERRIDE STUB_MISSING STUB_DB_RUNNING \
   STUB_HOST STUB_PW_FILE LDAP_PROVISIONER_PASSWORD STUB_LEAF_RC STUB_LEAF_PW_FILE STUB_RUN_PW_FILE \
-  IDENTITY_PLATFORM_SYSTEMD_DIR
+  IDENTITY_PLATFORM_SYSTEMD_DIR IDP_CUTOVER_BUNDLE_IDENTITY THEORG_REGISTRY_PULL_TOKEN STUB_CUT_MISSING \
+  STUB_ID_FILE STUB_UNPACK_RC STUB_UNPACK_OUT
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SRC="$REPO/d05/apps/identity-platform"
@@ -903,6 +912,171 @@ for mode in SHELLOPTS bash-x; do
     && ok "fetch-bundle under xtrace ($mode): traced up to the read, the value in no trace, argv or file; bundle fetched" \
     || bad "fetch-bundle xtrace $mode" "rc=$rc; leaked=$(grep -cF -- "$LEAF_VAL" <<< "$OUT"); $(grep -c '^+' <<< "$OUT") trace lines; $(cat "$T/log")"
 done
+# On a replica: refused before stdin is read, nothing called or written.
+reset_host
+STUB_HOST=test01 fetch_run fetch-bundle "$CUT_VER"; rc=$?
+fetch_refused 3 "on a replica" 'fetch-bundle: refused: not on a replica (test01).*stdin not read'
+
+# --- unpack-bundle: the M5 cutover bundle's unpack ---
+# The age identity is $LEAF_VAL (a stand-in, not an AGE-SECRET-KEY line), one line on stdin. It
+# reaches the image's unpack on docker run -i's stdin alone (the stub keeps it in STUB_ID_FILE, a temp
+# file read only by the checks). Never an argv, an environment, a log, the output or a file under the
+# host's dirs. The fetched bundle is the stand-in body under version CUT_VER, so MANIFESTS_SHA256
+# starts with CUT_VER's 12 hex.
+ID_NAME="IDP_CUTOVER_BUNDLE_IDENTITY"
+UNP_M="0123456789ab$(printf '0%.0s' {1..52})"
+UNP_K="$(printf 'b%.0s' {1..64})"
+UNP_O="$(printf 'c%.0s' {1..64})"
+UNP_RUN="docker run --rm -i --network none -v $ROOT/cutover/bundle.tar.age:/in/bundle.tar.age:ro -v $ROOT/backup:/dst/keycloak -v $ROOT/openldap-backup:/dst/openldap $CUT_IMAGE unpack --expect-manifests-sha256 $UNP_M --expect-keycloak-summary $UNP_K --expect-openldap-summary $UNP_O"
+UNP_LINES="$(printf 'version %s\nmanifests-sha256 %s\nkeycloak-summary-sha256 %s\nopenldap-summary-sha256 %s' "$CUT_VER" "$UNP_M" "$UNP_K" "$UNP_O")"
+unpack_setup() {   # a fresh host holding what fetch-bundle leaves: the bundle and its fetched marker
+  reset_host
+  rm -f "$T/idfile"
+  mkdir -p "$ROOT/cutover" "$ROOT/cutover-state"
+  cp "$T/body" "$ROOT/cutover/bundle.tar.age"
+  printf 'version %s\nsha256 %s\n' "$CUT_VER" "$BODY_SUM" > "$ROOT/cutover-state/fetched"
+}
+# unpack_run SWITCH...: leaf_run with unpack's stdin kept in $T/idfile (UNP_EXTRA: more NAME=value words).
+unpack_run() {
+  rm -f "$T/idfile"
+  LEAF_EXTRA="${UNP_EXTRA:-} STUB_ID_FILE=$T/idfile" leaf_run "$@"
+}
+snap() { find "$ROOT" | LC_ALL=C sort; cat "$ROOT/cutover-state/"* 2>/dev/null; }
+unpacked_ok() {   # the unpacked marker holds the four lines, no temp marker; one docker run, the contract's argv; unpack got the value on stdin
+  [ "$(cat "$ROOT/cutover-state/unpacked" 2>/dev/null)" = "$UNP_LINES" ] && [ -z "$(ls -A "$ROOT/cutover-state" | grep '^\.')" ] \
+    && [ "$(grep -c '^docker run' "$T/log")" -eq 1 ] && grep -qxF "$UNP_RUN" "$T/log" && grep -qx 'UNPACKENV ' "$T/log" \
+    && grep -qx "docker image inspect $CUT_IMAGE" "$T/log" \
+    && [ "$(cat "$T/idfile" 2>/dev/null)" = "$LEAF_VAL" ]
+}
+unp_refused() {   # unp_refused CODE WHAT PATTERN: that exit, PATTERN in the output, no docker run, nothing written
+  [ "$rc" -eq "$1" ] && echo "$OUT" | grep -q -- "$3" && ! grep -q '^docker run' "$T/log" && [ ! -e "$T/idfile" ] \
+    && [ "$(snap)" = "$before" ] && no_value \
+    && ok "unpack-bundle $2: refused ($1), no docker run, nothing written" \
+    || bad "unpack-bundle $2" "rc=$rc; $OUT; $(cat "$T/log")"
+}
+
+# The happy path: the contract's docker run, the four lines checked, the unpacked marker.
+unpack_setup
+unpack_run unpack-bundle "$UNP_M" "$UNP_K" "$UNP_O"; rc=$?
+[ "$rc" -eq 0 ] && unpacked_ok && no_value && [ -f "$ROOT/backup/STATUS" ] && [ -f "$ROOT/openldap-backup/STATUS" ] \
+  && cmp -s "$T/body" "$ROOT/cutover/bundle.tar.age" \
+  && ok "unpack-bundle: the contract's docker run, the value on unpack's stdin alone, four lines checked, unpacked marker" \
+  || bad "unpack-bundle happy" "rc=$rc; $OUT; $(cat "$T/log")"
+# Targets holding lost+found alone count as empty.
+unpack_setup
+mkdir -p "$ROOT/backup/lost+found" "$ROOT/openldap-backup/lost+found"
+unpack_run unpack-bundle "$UNP_M" "$UNP_K" "$UNP_O"; rc=$?
+[ "$rc" -eq 0 ] && unpacked_ok && no_value \
+  && ok "unpack-bundle: targets holding lost+found alone count as empty" || bad "unpack-bundle lost+found" "rc=$rc; $OUT"
+
+# The refusals: each exits 3 (2 for bad ARGs) with no docker run and nothing written.
+unpack_setup; before="$(snap)"
+UNP_EXTRA="$ID_NAME=$LEAF_VAL" unpack_run unpack-bundle "$UNP_M" "$UNP_K" "$UNP_O"; rc=$?
+unp_refused 3 "with $ID_NAME in its environment" "$ID_NAME is set in the environment"
+unpack_setup; before="$(snap)"
+UNP_EXTRA="$ID_NAME=" unpack_run unpack-bundle "$UNP_M" "$UNP_K" "$UNP_O"; rc=$?
+unp_refused 3 "with $ID_NAME set but empty" "$ID_NAME is set in the environment"
+unpack_setup; before="$(snap)"
+tty_run unpack-bundle "$UNP_M" "$UNP_K" "$UNP_O"; rc=$?
+unp_refused 3 "with a terminal on stdin" 'stdin is a terminal'
+unpack_setup; before="$(snap)"
+LEAF_STDIN= unpack_run unpack-bundle "$UNP_M" "$UNP_K" "$UNP_O"; rc=$?
+unp_refused 3 "with an empty stdin" 'no identity read on stdin; nothing changed'
+unpack_setup; before="$(snap)"
+LEAF_STDIN=$'\n' unpack_run unpack-bundle "$UNP_M" "$UNP_K" "$UNP_O"; rc=$?
+unp_refused 3 "with an empty line on stdin" 'no identity read on stdin; nothing changed'
+unpack_setup; before="$(snap)"
+STUB_HOST=test01 unpack_run unpack-bundle "$UNP_M" "$UNP_K" "$UNP_O"; rc=$?
+[ ! -s "$T/log" ] || rc=99
+unp_refused 3 "on a replica (no docker call at all)" 'unpack-bundle: refused: not on a replica (test01).*stdin not read'
+unpack_setup; rm -f "$ROOT/cutover-state/fetched"; before="$(snap)"
+unpack_run unpack-bundle "$UNP_M" "$UNP_K" "$UNP_O"; rc=$?
+unp_refused 3 "with no fetched marker" 'no fetched bundle'
+unpack_setup; rm -f "$ROOT/cutover/bundle.tar.age"; before="$(snap)"
+unpack_run unpack-bundle "$UNP_M" "$UNP_K" "$UNP_O"; rc=$?
+unp_refused 3 "with no bundle" 'no fetched bundle'
+unpack_setup; echo "another body" > "$ROOT/cutover/bundle.tar.age"; before="$(snap)"
+unpack_run unpack-bundle "$UNP_M" "$UNP_K" "$UNP_O"; rc=$?
+unp_refused 3 "with a bundle whose sha256 is not the fetched one" 'is not the one fetch-bundle recorded'
+unpack_setup; before="$(snap)"
+UNP_M2="fedcba987654${UNP_M:12}"
+unpack_run unpack-bundle "$UNP_M2" "$UNP_K" "$UNP_O"; rc=$?
+unp_refused 3 "with a MANIFESTS_SHA256 that is not the fetched version's (a wrong bundle)" "the fetched version ($CUT_VER) is not m5-fedcba987654"
+unpack_setup; printf '%s\n' "$UNP_LINES" > "$ROOT/cutover-state/unpacked"; before="$(snap)"
+unpack_run unpack-bundle "$UNP_M" "$UNP_K" "$UNP_O"; rc=$?
+unp_refused 3 "with an unpacked marker" 'unpacked exists'
+for tgt in backup openldap-backup; do
+  unpack_setup; mkdir -p "$ROOT/$tgt"; echo partial > "$ROOT/$tgt/summary.txt"; before="$(snap)"
+  unpack_run unpack-bundle "$UNP_M" "$UNP_K" "$UNP_O"; rc=$?
+  unp_refused 3 "with $tgt not empty" 'is not empty (or cannot be listed); run reset-cutover'
+done
+unpack_setup; before="$(snap)"
+UNP_EXTRA="STUB_CUT_MISSING=1" unpack_run unpack-bundle "$UNP_M" "$UNP_K" "$UNP_O"; rc=$?
+unp_refused 3 "with the image missing" 'is not here; run fetch-bundle'
+UNP_UP="$(printf '%s' "$UNP_M" | tr a-f A-F)"
+for args in "" "$UNP_M" "$UNP_M $UNP_K" "${UNP_M:1} $UNP_K $UNP_O" "$UNP_UP $UNP_K $UNP_O" "$UNP_M ${UNP_K}0 $UNP_O" \
+    "$UNP_M $UNP_K $UNP_O $UNP_O" "$UNP_M $UNP_K $UNP_O up" "$UNP_M $UNP_K g${UNP_O:1}"; do
+  unpack_setup; before="$(snap)"
+  # shellcheck disable=SC2086
+  unpack_run unpack-bundle $args; rc=$?
+  unp_refused 2 "with ARGs [${args:0:20}...] ($(wc -w <<< "$args" | tr -d ' ') words)" 'unpack-bundle: usage: unpack-bundle MANIFESTS_SHA256 KC_SUM OL_SUM'
+done
+for order in "up unpack-bundle" "leaf-renew unpack-bundle" "status unpack-bundle $UNP_M $UNP_K $UNP_O"; do
+  unpack_setup; before="$(snap)"
+  # shellcheck disable=SC2086
+  unpack_run $order; rc=$?
+  unp_refused 3 "combined (${order:0:28})" 'unpack-bundle: refused: run it alone'
+done
+
+# unpack's own exit is kept: 1 and 4 leave files (reset-cutover before a retry), 2 and 3 changed nothing.
+for code in 1 4; do
+  unpack_setup
+  UNP_EXTRA="STUB_UNPACK_RC=$code" unpack_run unpack-bundle "$UNP_M" "$UNP_K" "$UNP_O"; rc=$?
+  [ "$rc" -eq "$code" ] && echo "$OUT" | grep -q "unpack failed (exit $code).*run reset-cutover before a retry" \
+    && [ ! -e "$ROOT/cutover-state/unpacked" ] && grep -qxF "$UNP_RUN" "$T/log" && [ "$(cat "$T/idfile")" = "$LEAF_VAL" ] && no_value \
+    && ok "unpack-bundle: unpack's exit $code kept, no unpacked marker, run reset-cutover before a retry" \
+    || bad "unpack-bundle exit $code" "rc=$rc; $OUT"
+done
+for code in 2 3; do
+  unpack_setup
+  UNP_EXTRA="STUB_UNPACK_RC=$code" unpack_run unpack-bundle "$UNP_M" "$UNP_K" "$UNP_O"; rc=$?
+  [ "$rc" -eq "$code" ] && echo "$OUT" | grep -q "unpack refused (exit $code); nothing changed" \
+    && [ ! -e "$ROOT/cutover-state/unpacked" ] && [ -z "$(ls -A "$ROOT/backup" "$ROOT/openldap-backup" | grep -v ':$' | grep .)" ] \
+    && grep -qxF "$UNP_RUN" "$T/log" && no_value \
+    && ok "unpack-bundle: unpack's exit $code kept, no unpacked marker, nothing changed" \
+    || bad "unpack-bundle exit $code" "rc=$rc; $OUT"
+done
+# Exit 0 with lines that are not the fetched version and the three ARGs, in order: no marker, exit 1.
+for case_ in wrong-version wrong-summary order three-lines extra-line; do
+  case "$case_" in
+    wrong-version) lines="${UNP_LINES/version $CUT_VER/version m5-fedcba987654}" ;;
+    wrong-summary) lines="${UNP_LINES/openldap-summary-sha256 $UNP_O/openldap-summary-sha256 $UNP_K}" ;;
+    order) lines="$(printf '%s\n' "$UNP_LINES" | awk 'NR == 1 {a = $0; next} NR == 2 {print; print a; next} {print}')" ;;
+    three-lines) lines="$(printf '%s\n' "$UNP_LINES" | head -n 3)" ;;
+    extra-line) lines="$UNP_LINES"$'\nextra 1' ;;
+  esac
+  unpack_setup
+  STUB_UNPACK_OUT="$lines" UNP_EXTRA="STUB_UNPACK_RC=0" unpack_run unpack-bundle "$UNP_M" "$UNP_K" "$UNP_O"; rc=$?
+  [ "$rc" -ne 0 ] && echo "$OUT" | grep -q 'are not the fetched version and the three ARGs.*run reset-cutover' \
+    && [ ! -e "$ROOT/cutover-state/unpacked" ] && [ -z "$(ls -A "$ROOT/cutover-state" | grep '^\.')" ] && no_value \
+    && ok "unpack-bundle: exit 0 with its lines $case_: no unpacked marker, nonzero, run reset-cutover" \
+    || bad "unpack-bundle lines $case_" "rc=$rc; $OUT"
+done
+unset STUB_UNPACK_OUT
+
+# Under xtrace (SHELLOPTS=xtrace inherited, or bash -x): traced up to the read, the value in no
+# output, argv or file; unpack still gets it.
+for mode in SHELLOPTS bash-x; do
+  unpack_setup
+  if [ "$mode" = SHELLOPTS ]; then
+    UNP_EXTRA="SHELLOPTS=xtrace" unpack_run unpack-bundle "$UNP_M" "$UNP_K" "$UNP_O"; rc=$?
+  else
+    LEAF_BASH_X=1 unpack_run unpack-bundle "$UNP_M" "$UNP_K" "$UNP_O"; rc=$?
+  fi
+  [ "$rc" -eq 0 ] && grep -q '^+.*do_unpack_bundle' <<< "$OUT" && unpacked_ok && no_value \
+    && ok "unpack-bundle under xtrace ($mode): traced up to the read, the value in no trace, argv or file; unpacked" \
+    || bad "unpack-bundle xtrace $mode" "rc=$rc; leaked=$(grep -cF -- "$LEAF_VAL" <<< "$OUT"); $(grep -c '^+' <<< "$OUT") trace lines; $(cat "$T/log")"
+done
 
 # --- LDAP_PROVISIONER_PASSWORD reaches openldap-leaf.sh issue and no other child ---
 # PATH wrappers for every outside command the script may run dump their environment to
@@ -987,6 +1161,20 @@ for missing in "" 1; do
     && ok "fetch-bundle (image $([ -n "$missing" ] && echo missing || echo present)) with tok=x exported: the value in curl's config alone$([ -n "$missing" ] && echo ' and the pull'"'"'s environment under the pull-token name')" \
     || bad "fetch-bundle env (missing=$missing)" "rc=$rc; dump=$(grep -cF -- "$LEAF_VAL" "$T/envdump"); curl=$(grep -cF -- "$LEAF_VAL" "$T/curlenv"); $(cat "$T/log")"
 done
+# unpack-bundle, with ident=x exported in its environment (the local is never exported): the value
+# in no child's environment, docker's included (unpack gets it on stdin alone).
+unpack_setup
+ENV_EXTRA="ident=x STUB_ID_FILE=$T/idfile" envrun unpack-bundle "$UNP_M" "$UNP_K" "$UNP_O"; rc=$?
+[ "$rc" -eq 0 ] && [ "$(grep -c '^PATH=' "$T/envdump")" -ge 5 ] && ! grep -qF -- "$LEAF_VAL" "$T/envdump" \
+  && ! grep -qF -- "$LEAF_VAL" "$T/probe" && ! grep -q "^$ID_NAME=" "$T/envdump" && unpacked_ok && no_value \
+  && ok "unpack-bundle with ident=x exported: the value on unpack's stdin alone, in no child's environment ($(grep -c '^PATH=' "$T/envdump") dumps)" \
+  || bad "unpack-bundle env" "rc=$rc; dump=$(grep -cF -- "$LEAF_VAL" "$T/envdump"); $OUT; $(cat "$T/log")"
+unpack_setup
+# The name as a prefix (exported to envrun's children): ENV_EXTRA would itself be in every child's env.
+IDP_CUTOVER_BUNDLE_IDENTITY="$LEAF_VAL" envrun unpack-bundle "$UNP_M" "$UNP_K" "$UNP_O"; rc=$?
+[ "$rc" -eq 3 ] && ! grep -qF -- "$LEAF_VAL" "$T/envdump" && ! grep -qF -- "$LEAF_VAL" "$T/probe" && ! grep -q '^docker run' "$T/log" \
+  && ok "unpack-bundle with $ID_NAME in its environment: refused (3), no child has it, no docker run" \
+  || bad "unpack-bundle env refused" "rc=$rc; dump=$(grep -cF -- "$LEAF_VAL" "$T/envdump"); $(grep -F -- "$LEAF_VAL" "$T/envdump" | cut -d= -f1)"
 
 # identity-platform.sh never traces and never exports the name (comments aside).
 code="$(grep -vE '^[[:space:]]*#' "$SRC/identity-platform.sh")"

@@ -689,7 +689,8 @@ file_sha256() { sha256_hex < "$1"; }
 # reads its value: a local never exported, xtrace and allexport off, stdin then /dev/null. It reaches
 # two programs alone: curl, on its config stdin (`-K -`; -q first so no .curlrc is read), and the
 # image's docker pull, in that subshell's environment, through the credential helper (as pull).
-# Never an argv, a file or a log. Refused (exit 3, nothing called) when THEORG_REGISTRY_PULL_TOKEN
+# Never an argv, a file or a log. Refused (exit 3, nothing called) on a replica (before stdin is
+# read), when THEORG_REGISTRY_PULL_TOKEN
 # or IDENTITY_PLATFORM_REGISTRY_PULL_TOKEN is in the environment, stdin is a terminal or the read is
 # empty, and over an existing bundle or unpacked marker (cutover-clean or reset-cutover first); exit
 # 2 for a VERSION that is not m5-<12 hex>. The download goes to a temp name in cutover/, then mv;
@@ -703,6 +704,10 @@ do_fetch_bundle() {
   if [ $# -ne 1 ] || [[ ! $ver =~ $CUTOVER_VERSION_RE ]]; then
     echo "[ERROR] fetch-bundle: usage: fetch-bundle VERSION (one ARG matching $CUTOVER_VERSION_RE: pack's version line)" >&2
     return 2
+  fi
+  if is_replica; then
+    echo "[ERROR] fetch-bundle: refused: not on a replica ($(hostname -s </dev/null)); the cutover is d05's; stdin not read" >&2
+    return 3
   fi
   if [ -e "$BUNDLE" ]; then
     echo "[ERROR] fetch-bundle: refused: $BUNDLE exists; run cutover-clean first (reset-cutover too after an unpack)" >&2
@@ -757,6 +762,112 @@ do_fetch_bundle() {
   sum="$(file_sha256 "$BUNDLE")" && size="$(wc -c < "$BUNDLE" | tr -d ' ')" || return 1
   echo "[INFO] $BUNDLE: $ver, $size bytes, sha256 $sum"
   write_state fetched "version $ver" "sha256 $sum"
+}
+
+target_empty() {   # target_empty DIR: missing, or holding nothing but lost+found (unlistable: not empty)
+  local d="$1" names
+  [ -e "$d" ] || return 0
+  [ -d "$d" ] || return 1
+  names="$(ls -A "$d" </dev/null)" || return 1
+  [ -z "$names" ] || [ "$names" = "lost+found" ]
+}
+
+# unpack-bundle MANIFESTS_SHA256 KC_SUM OL_SUM: the image's unpack of cutover/bundle.tar.age into
+# backup/ and openldap-backup/ (the contract's command, exactly), checked against pack's three
+# sha256s the operator relays. The identity is one line on this script's stdin (scripts/app_switch.sh
+# writes it), read as leaf-issue reads its value; it reaches unpack's stdin alone (builtin printf
+# into `builtin exec docker run -i`), never an argv, an environment, a file or a log. Refused (exit 3,
+# nothing changed, no docker run) on a replica (before stdin is read), with IDP_CUTOVER_BUNDLE_IDENTITY
+# in the environment, a terminal on stdin or an empty read; with no fetched marker or no bundle, a
+# bundle whose sha256 is not the fetched one, a fetched version that is not m5-<MANIFESTS_SHA256's
+# first 12 hex> (a wrong bundle), an unpacked marker, a target holding more than lost+found (run
+# reset-cutover) or the image missing (run fetch-bundle). Exit 2 for ARGs that are not three 64-hex.
+# unpack's own exit is kept: 1 or 4 leave files without STATUS (reset-cutover before a retry), 2 or 3
+# changed nothing. After exit 0 its four stdout lines must be version, manifests-sha256,
+# keycloak-summary-sha256 and openldap-summary-sha256 equal to the fetched version and the three ARGs,
+# in that order; then the unpacked marker holds them. Anything else: no marker, exit 1.
+do_unpack_bundle() {
+  local m="${1:-}" k="${2:-}" o="${3:-}" ver sum out want rc=0
+  if $CUT_ID_IN_ENV; then
+    echo "[ERROR] unpack-bundle: refused: IDP_CUTOVER_BUNDLE_IDENTITY is set in the environment; write the identity as one line to unpack-bundle's stdin (scripts/app_switch.sh does); not unpacking" >&2
+    return 3
+  fi
+  if [ $# -ne 3 ] || [[ ! $m =~ $SHA256_RE ]] || [[ ! $k =~ $SHA256_RE ]] || [[ ! $o =~ $SHA256_RE ]]; then
+    echo "[ERROR] unpack-bundle: usage: unpack-bundle MANIFESTS_SHA256 KC_SUM OL_SUM (three ARGs matching $SHA256_RE: pack's manifests-sha256, keycloak-summary-sha256 and openldap-summary-sha256 lines)" >&2
+    return 2
+  fi
+  if is_replica; then
+    echo "[ERROR] unpack-bundle: refused: not on a replica ($(hostname -s </dev/null)); the cutover is d05's; stdin not read" >&2
+    return 3
+  fi
+  ver="$(state_value fetched version)"
+  if [ ! -f "$STATE_DIR/fetched" ] || [ ! -f "$BUNDLE" ]; then
+    echo "[ERROR] unpack-bundle: refused: no fetched bundle ($STATE_DIR/fetched and $BUNDLE); run fetch-bundle first; nothing changed" >&2
+    return 3
+  fi
+  sum="$(file_sha256 "$BUNDLE")" || return 3
+  if [ -z "$sum" ] || [ "$sum" != "$(state_value fetched sha256)" ]; then
+    echo "[ERROR] unpack-bundle: refused: $BUNDLE's sha256 ($sum) is not the one fetch-bundle recorded; run cutover-clean and fetch-bundle again; nothing changed" >&2
+    return 3
+  fi
+  if [ "$ver" != "m5-${m:0:12}" ]; then
+    echo "[ERROR] unpack-bundle: refused: the fetched version ($ver) is not m5-${m:0:12} (MANIFESTS_SHA256's first 12 hex): a wrong bundle or a wrong relay; nothing changed" >&2
+    return 3
+  fi
+  if [ -e "$STATE_DIR/unpacked" ]; then
+    echo "[ERROR] unpack-bundle: refused: $STATE_DIR/unpacked exists (already unpacked); nothing changed" >&2
+    return 3
+  fi
+  if ! target_empty "$KC_TARGET" || ! target_empty "$OL_TARGET"; then
+    echo "[ERROR] unpack-bundle: refused: $KC_TARGET or $OL_TARGET is not empty (or cannot be listed); run reset-cutover; nothing changed" >&2
+    return 3
+  fi
+  if ! docker image inspect "$CUTOVER_IMAGE" >/dev/null 2>&1 </dev/null; then
+    echo "[ERROR] unpack-bundle: refused: $CUTOVER_IMAGE is not here; run fetch-bundle (it pulls the image); nothing changed" >&2
+    return 3
+  fi
+  if [ -t 0 ]; then
+    echo "[ERROR] unpack-bundle: refused: stdin is a terminal; unpack-bundle reads the age identity as one line on stdin (scripts/app_switch.sh writes it); nothing changed" >&2
+    return 3
+  fi
+  { set +x; } 2>/dev/null
+  set +a
+  unset -v ident
+  local +x ident=""
+  IFS= builtin read -r ident || true
+  exec </dev/null
+  if [[ -z $ident ]]; then
+    echo "[ERROR] unpack-bundle: refused: no identity read on stdin; nothing changed" >&2
+    return 3
+  fi
+  mkdir -p "$KC_TARGET" "$OL_TARGET" || { unset -v ident; return 1; }
+  echo "[INFO] unpacking $BUNDLE ($ver) into $KC_TARGET and $OL_TARGET"
+  # `builtin exec` in its own subshell: the docker program, never a function.
+  out="$(builtin printf '%s\n' "$ident" \
+    | (builtin exec docker run --rm -i --network none \
+        -v "$BUNDLE:/in/bundle.tar.age:ro" \
+        -v "$KC_TARGET:/dst/keycloak" \
+        -v "$OL_TARGET:/dst/openldap" \
+        "$CUTOVER_IMAGE" \
+        unpack --expect-manifests-sha256 "$m" --expect-keycloak-summary "$k" --expect-openldap-summary "$o"))" || rc=$?
+  unset -v ident
+  case "$rc" in
+    0) ;;
+    2|3)
+      echo "[ERROR] unpack-bundle: unpack refused (exit $rc); nothing changed" >&2
+      return "$rc" ;;
+    *)
+      echo "[ERROR] unpack-bundle: unpack failed (exit $rc); the targets may hold files without STATUS: run reset-cutover before a retry" >&2
+      return "$rc" ;;
+  esac
+  want="$(printf 'version %s\nmanifests-sha256 %s\nkeycloak-summary-sha256 %s\nopenldap-summary-sha256 %s' "$ver" "$m" "$k" "$o")"
+  if [ "$out" != "$want" ]; then
+    echo "[ERROR] unpack-bundle: unpack exited 0 but its four lines are not the fetched version and the three ARGs, in order; no unpacked marker; run reset-cutover" >&2
+    printf '%s\n' "$out" | sed 's/^/[ERROR]   unpack said: /' >&2
+    return 1
+  fi
+  printf '%s\n' "$out" | sed 's/^/[INFO] unpack: /'
+  write_state unpacked "version $ver" "manifests-sha256 $m" "keycloak-summary-sha256 $k" "openldap-summary-sha256 $o"
 }
 
 refuse_cutover() {
@@ -836,7 +947,11 @@ usage() {
   echo "  leaf-schedule-remove  - Disable and remove the timer and its service" >&2
   echo "  fetch-bundle VERSION - M5: pull the cutover-bundle image if missing and download the package's" >&2
   echo "                    bundle.tar.age to cutover/; reads the theorg-registry pull token as one line on" >&2
-  echo "                    stdin (scripts/app_switch.sh). Runs alone" >&2
+  echo "                    stdin (scripts/app_switch.sh). Runs alone. Not on a replica" >&2
+  echo "  unpack-bundle MANIFESTS_SHA256 KC_SUM OL_SUM - M5: the image's unpack of the fetched bundle into" >&2
+  echo "                    backup/ and openldap-backup/, checked against pack's three sha256 lines; reads" >&2
+  echo "                    the age identity as one line on stdin (scripts/app_switch.sh). Runs alone. Not" >&2
+  echo "                    on a replica" >&2
   echo "  start-openldap, start-keycloak, restore" >&2
   echo "                  - Refused: the M5 cutover, not yet written" >&2
   echo "  logs            - Follow logs (optionally for one service)" >&2
@@ -858,6 +973,10 @@ case "$1" in
     do_fetch_bundle "${@:2}" || exit $?
     exit 0
     ;;
+  unpack-bundle)
+    do_unpack_bundle "${@:2}" || exit $?
+    exit 0
+    ;;
 esac
 
 # leaf-issue runs alone: its stdin carries the provisioner password, and no other switch's
@@ -865,7 +984,7 @@ esac
 if [ $# -gt 1 ]; then
   for cmd in "$@"; do
     case "$cmd" in
-      leaf-issue|fetch-bundle)
+      leaf-issue|fetch-bundle|unpack-bundle)
         echo "[ERROR] $cmd: refused: run it alone (it reads a value on stdin or takes ARGs), not with: $*" >&2
         exit 3
         ;;
