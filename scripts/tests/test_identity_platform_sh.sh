@@ -2,7 +2,7 @@
 # d05/apps/identity-platform/identity-platform.sh against stubs (docker, hostname): M1 only. up creates
 # the two networks once (edge with --internal) and refuses one whose IPAM differs at all; up starts keycloak-db
 # alone, never openldap, keycloak or an ops one-shot, and never creates openldap's data dirs;
-# configure and restore refuse; a root CA copy with another fingerprint is
+# restore refuses (configure: below); a root CA copy with another fingerprint is
 # refused; a missing openldap-tls leaf is reported, not fatal; the replica mode (a host not named
 # d05: a throwaway keycloak-db password) and images (build_host.py's replica guard); usage only for
 # an unknown switch. Plus compose.yml's rules (networks external, secrets by name only, the restored
@@ -49,6 +49,14 @@
 # refuses (exit 3, no up, nothing changed) with the value's name in its environment, on a replica,
 # a missing marker (start-keycloak: started-openldap too), past its own marker or cutover-done, a
 # symlinked cutover-state, combined, the lock held, a terminal or an empty read; also under xtrace.
+# configure reads two values (one line each on stdin) and writes both, as theOrg's
+# LDAP_ADMIN_PASSWORD= and VAULT_DEX_CLIENT_SECRET= lines, to the exact keycloak-configure apply's
+# stdin, then reconcile's, alone (in no environment, argv, output or file); writes configured on
+# both 0; a failed apply skips reconcile, either failing passes its exit with no marker; re-runs,
+# after cutover-done too; refuses (exit 3, no run, nothing changed) with either name in its
+# environment, on a replica, a missing marker (both restored-* and both started-*), keycloak not
+# healthy, a symlinked cutover-state, combined, the lock held, a terminal, or an empty or blank
+# line; exit 2 for an ARG; also under xtrace.
 # Nothing here reaches a registry, the vault or a host; every value is a plain stand-in word made
 # at run time. Run: bash scripts/tests/test_identity_platform_sh.sh
 set -uo pipefail
@@ -59,7 +67,8 @@ unset IDP_KEYCLOAK_DB_PASSWORD IDP_LDAP_ADMIN_PASSWORD IDP_DEPLOY_DEX_CLIENT_SEC
   IDENTITY_PLATFORM_SYSTEMD_DIR IDP_CUTOVER_BUNDLE_IDENTITY THEORG_REGISTRY_PULL_TOKEN STUB_CUT_MISSING \
   STUB_ID_FILE STUB_UNPACK_RC STUB_UNPACK_OUT STUB_OPS_CT STUB_RESTORED_CT STUB_PS_FAIL STUB_FIND_RC \
   STUB_RESTORE_RC STUB_RESTORE_PW_FILE STUB_DB_HEALTH OPENLDAP_BACKUP_CONFIG_MOUNT \
-  STUB_ENV_NAMES STUB_UP_ENV STUB_UP_RC STUB_BIND_FILE STUB_BIND_RC STUB_NO_OL IDENTITY_PLATFORM_START_WAIT_S
+  STUB_ENV_NAMES STUB_UP_ENV STUB_UP_RC STUB_BIND_FILE STUB_BIND_RC STUB_NO_OL IDENTITY_PLATFORM_START_WAIT_S \
+  STUB_KC_RUNNING STUB_KC_HEALTH STUB_CONF_IN STUB_APPLY_RC STUB_RECONCILE_RC CONF_STDIN
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SRC="$REPO/d05/apps/identity-platform"
@@ -109,7 +118,8 @@ echo "docker $*" | sed -E "s#-f [^ ]*/compose.yml#-f compose.yml#; s# --project-
 # STUB_ENV_NAMES: after each call, the secret names set in its environment (never a value).
 if [ -n "${STUB_ENV_NAMES:-}" ]; then
   s=""
-  for v in LDAP_ADMIN_PASSWORD LDAP_CONFIG_PASSWORD KC_DB_PASSWORD POSTGRES_PASSWORD IDP_LDAP_ADMIN_PASSWORD IDP_KEYCLOAK_DB_PASSWORD; do
+  for v in LDAP_ADMIN_PASSWORD LDAP_CONFIG_PASSWORD KC_DB_PASSWORD POSTGRES_PASSWORD IDP_LDAP_ADMIN_PASSWORD IDP_KEYCLOAK_DB_PASSWORD \
+    VAULT_DEX_CLIENT_SECRET IDP_DEPLOY_DEX_CLIENT_SECRET; do
     [ -z "${!v+x}" ] || s="$s $v"
   done
   echo "ENVNAMES$s" >> "$STUB_LOG"
@@ -225,8 +235,19 @@ case "$*" in
   "exec -i "*ldapwhoami*)
     if [ -n "${STUB_BIND_FILE:-}" ]; then cat > "$STUB_BIND_FILE"; else cat > /dev/null; fi
     exit "${STUB_BIND_RC:-0}" ;;
+  # configure's keycloak-configure runs: stdin to $STUB_CONF_IN.CMD and the call's environment to
+  # $STUB_CONF_IN.CMD.env (temp files read only by the checks); exit STUB_APPLY_RC or STUB_RECONCILE_RC.
+  *"--profile ops run --rm -T keycloak-configure "*)
+    c="${!#}"
+    if [ -n "${STUB_CONF_IN:-}" ]; then cat > "$STUB_CONF_IN.$c"; env > "$STUB_CONF_IN.$c.env"; else cat > /dev/null; fi
+    case "$c" in
+      apply) exit "${STUB_APPLY_RC:-0}" ;;
+      reconcile) exit "${STUB_RECONCILE_RC:-0}" ;;
+    esac ;;
   *"ps -q openldap") [ -n "${STUB_NO_OL:-}" ] || echo olid ;;
+  *"ps -q keycloak") if [ -n "${STUB_KC_RUNNING:-}" ]; then echo kcid; fi ;;
   *"ps -q keycloak-db"*) if [ -n "${STUB_DB_RUNNING:-}" ]; then echo dbid; fi ;;
+  "inspect "*kcid) echo "${STUB_KC_HEALTH:-healthy}" ;;
   "inspect "*) echo "${STUB_DB_HEALTH:-healthy}" ;;
 esac
 exit 0
@@ -490,8 +511,8 @@ grep -qE '^[[:space:]]+([a-z_|-]+\|)?images(\|[a-z_|-]+)?\)' "$SRC/identity-plat
 
 # --- the M5 switches refuse (the gate's every case: below, after unpack-bundle) ---
 for sw in start-openldap start-keycloak configure; do
-  # The starts refuse their value's name in the environment first (below): run them without it.
-  if [ "$sw" = configure ]; then STUB_SET="$DB_NAME IDP_LDAP_ADMIN_PASSWORD" run "$sw"; else run "$sw"; fi; rc=$?
+  # Each refuses its values' names in the environment first (below): run them without.
+  run "$sw"; rc=$?
   [ "$rc" -eq 3 ] && echo "$OUT" | grep -q "$sw: refused: cutover marker missing" && [ ! -s "$T/log" ] \
     && ok "$sw with no cutover marker: refused by the gate (3), no docker call" || bad "$sw refusal" "rc=$rc; $OUT; $(cat "$T/log")"
 done
@@ -1261,7 +1282,7 @@ done
 reset_setup; before="$(snap)"
 exec 7> "$ROOT/cutover-state/.lock"
 if "$T/bin/flock" -n 7; then
-  for sw in reset-cutover cutover-clean "fetch-bundle $CUT_VER" "unpack-bundle $UNP_M $UNP_K $UNP_O" restore-keycloak restore-openldap start-openldap start-keycloak; do
+  for sw in reset-cutover cutover-clean "fetch-bundle $CUT_VER" "unpack-bundle $UNP_M $UNP_K $UNP_O" restore-keycloak restore-openldap start-openldap start-keycloak configure; do
     # shellcheck disable=SC2086
     run $sw; rc=$?
     [ "$rc" -eq 3 ] && echo "$OUT" | grep -q "${sw%% *}: refused: another cutover switch is running" && [ ! -s "$T/log" ] \
@@ -1331,7 +1352,7 @@ run cutover-clean; rc=$?
 [ "$rc" -eq 3 ] && echo "$OUT" | grep -q 'cutover-clean: refused: .*/cutover-done exists' && [ ! -s "$T/log" ] && [ "$(snap)" = "$before" ] \
   && ok "cutover-clean with cutover-done: refused (3), nothing changed" || bad "cutover-clean cutover-done" "rc=$rc; $OUT"
 
-# cutover_gate: each switch's markers; a missing one is named (3); all present, still not yet written (3).
+# cutover_gate: each switch's markers; a missing one is named (3); all present, the switch's next check refuses (3).
 gate_case() {   # gate_case SWITCH "MARKERS" MISSING|pass (GATE_UNPACKED: unpacked's content; GATE_EMPTY: a marker written empty)
   local m pat
   reset_host; mkdir -p "$ROOT/cutover-state"
@@ -1343,14 +1364,14 @@ gate_case() {   # gate_case SWITCH "MARKERS" MISSING|pass (GATE_UNPACKED: unpack
     else echo "restored from the stand-in bundle" > "$ROOT/cutover-state/$m"; fi
   done
   run "$1"; rc=$?
-  # A start past its gate goes on to its own checks (keycloak-db's health, stdin: empty here, or
-  # a terminal), each a refusal (3) with no up.
+  # A switch past its gate goes on to its own checks (keycloak-db's or keycloak's health, stdin:
+  # empty here, or a terminal), each a refusal (3) with no up or run; configure's is keycloak's.
   if [ "$3" != pass ]; then pat="$1: refused: cutover marker missing or invalid: $3 ("
-  elif [ "$1" = configure ]; then pat="$1: M5 cutover, not yet written"
+  elif [ "$1" = configure ]; then pat="$1: refused: keycloak is not running"
   else pat="$1: refused: "; fi
   [ "$rc" -eq 3 ] && echo "$OUT" | grep -qF -- "$pat" && { [ "$3" != pass ] || ! echo "$OUT" | grep -q 'marker missing'; } \
-    && { [ ! -s "$T/log" ] || { [ "$3" = pass ] && ! grep -qE ' up |exec -i' "$T/log"; }; } \
-    && ok "cutover_gate $1 with [${2}]: $([ "$3" = pass ] && echo 'passes, then refused later (3), no up' || echo "names $3 (3), no docker call")" \
+    && { [ ! -s "$T/log" ] || { [ "$3" = pass ] && ! grep -qE ' up | run |exec -i' "$T/log"; }; } \
+    && ok "cutover_gate $1 with [${2}]: $([ "$3" = pass ] && echo 'passes, then refused later (3), no up or run' || echo "names $3 (3), no docker call")" \
     || bad "cutover_gate $1 [$2]" "rc=$rc; $OUT; $(cat "$T/log")"
 }
 gate_case start-openldap "" "unpacked restored-openldap"
@@ -1364,17 +1385,21 @@ gate_case start-keycloak "unpacked restored-keycloak" "started-openldap"
 gate_case start-keycloak "unpacked restored-keycloak started-openldap" pass
 GATE_BIND="admin-bind failed" gate_case start-keycloak "unpacked restored-keycloak started-openldap" "started-openldap (no admin-bind ok)"
 GATE_EMPTY=started-openldap gate_case start-keycloak "unpacked restored-keycloak started-openldap" "started-openldap (empty)"
-gate_case configure "" "restored-openldap restored-keycloak"
-gate_case configure "unpacked restored-openldap" "restored-keycloak"
-gate_case configure "unpacked restored-keycloak" "restored-openldap"
-gate_case configure "restored-openldap restored-keycloak" pass
+CONF_ALL="restored-openldap restored-keycloak started-openldap started-keycloak"
+gate_case configure "" "$CONF_ALL"
+for m in $CONF_ALL; do
+  gate_case configure "unpacked $(echo " $CONF_ALL " | sed "s/ $m / /; s/^ //; s/ $//")" "$m"
+done
+gate_case configure "$CONF_ALL" pass
+GATE_BIND="admin-bind failed" gate_case configure "$CONF_ALL" "started-openldap (no admin-bind ok)"
+GATE_EMPTY=started-keycloak gate_case configure "$CONF_ALL" "started-keycloak (empty)"
 # A marker that is there but not valid: an empty unpacked, an unpacked with no or another version
 # than fetched's, an empty restored-* marker.
 GATE_EMPTY=unpacked gate_case start-openldap "unpacked restored-openldap" "unpacked (empty)"
 GATE_UNPACKED="manifests-sha256 $UNP_M" gate_case start-keycloak "unpacked restored-keycloak started-openldap" "unpacked (version '' is not fetched's '$CUT_VER')"
 GATE_UNPACKED="version m5-fedcba987654" gate_case start-openldap "unpacked restored-openldap" "unpacked (version 'm5-fedcba987654' is not fetched's '$CUT_VER')"
 GATE_EMPTY=restored-openldap gate_case start-openldap "unpacked restored-openldap" "restored-openldap (empty)"
-GATE_EMPTY=restored-keycloak gate_case configure "restored-openldap restored-keycloak" "restored-keycloak (empty)"
+GATE_EMPTY=restored-keycloak gate_case configure "$CONF_ALL" "restored-keycloak (empty)"
 
 # Under xtrace (SHELLOPTS=xtrace inherited, or bash -x): traced up to the read, the value in no
 # output, argv or file; unpack still gets it.
@@ -1707,6 +1732,145 @@ for sw in start-openldap start-keycloak; do
   done
 done
 rm -f "$T/upenv" "$T/bindin"
+
+# --- configure (cutover step 6): keycloak-configure apply, then reconcile ---
+# Two stand-in values, one line each on stdin (CONF_STDIN, a plain global, replaces both lines when
+# set; a prefix assignment to a function would export it into the script's environment). Each run's
+# stdin goes to $T/confin.CMD and its environment to $T/confin.CMD.env (temp files read only by the
+# checks); the stub logs every call's secret names, never a value.
+CL="stand-in-ldap-$$" CD="stand-in-dex-$$"
+KC_PS="docker compose -f compose.yml --profile restored ps -q keycloak"
+KC_INSPECT="docker inspect -f {{if .State.Health}}{{.State.Health.Status}}{{else}}no healthcheck{{end}} kcid"
+CONF_RUN="docker compose -f compose.yml --profile ops run --rm -T keycloak-configure"
+printf 'LDAP_ADMIN_PASSWORD=%s\nVAULT_DEX_CLIENT_SECRET=%s\n' "$CL" "$CD" > "$T/confwant"
+conf_setup() {   # what the two starts leave
+  start_setup keycloak
+  printf 'date 2026-11-16T00:00:00Z\n' > "$ROOT/cutover-state/started-keycloak"
+}
+# conf_run SWITCH...: leaf_run with the two values on stdin; keycloak running and healthy unless
+# CONF_EXTRA (more NAME=value words) is set, which replaces STUB_KC_RUNNING=1.
+conf_run() {
+  local LEAF_STDIN
+  if [ -n "${CONF_STDIN+x}" ]; then LEAF_STDIN="$CONF_STDIN"; else LEAF_STDIN="$CL"$'\n'"$CD"$'\n'; fi
+  rm -f "$T/confin".*
+  LEAF_EXTRA="${CONF_EXTRA-STUB_KC_RUNNING=1} STUB_ENV_NAMES=1 STUB_CONF_IN=$T/confin" leaf_run "$@"
+}
+conf_no_value() {   # neither value in the output, any docker argv, a run's environment or a file under the host's dirs
+  local v f
+  for v in "$CL" "$CD"; do
+    ! grep -qF -- "$v" <<< "$OUT" && ! grep -qF -- "$v" "$T/log" && ! grep -rqF -- "$v" "$T/dl" "$T/systemd" "$T/home" || return 1
+    for f in "$T/confin".*.env; do [ ! -e "$f" ] || ! grep -qF -- "$v" "$f" || return 1; done
+  done
+}
+conf_calls_ok() {   # conf_calls_ok CMD...: kc_health's two calls, then exactly those runs; no secret name in any call's env
+  local want c
+  want="$(printf '%s\n%s' "$KC_PS" "$KC_INSPECT")"
+  for c in "$@"; do want="$want"$'\n'"$CONF_RUN $c"; done
+  [ "$(grep '^docker ' "$T/log")" = "$want" ] \
+    && [ "$(grep -c '^ENVNAMES' "$T/log")" -eq "$(( $# + 2 ))" ] && [ "$(grep '^ENVNAMES' "$T/log" | sort -u)" = "ENVNAMES" ] \
+    && for c in "$@"; do cmp -s "$T/confwant" "$T/confin.$c" || return 1; done
+}
+configured_ok() {   # configured: a UTC date, apply ok, reconcile ok; no temp marker
+  local f="$ROOT/cutover-state/configured"
+  [ -f "$f" ] && [ "$(wc -l < "$f" | tr -d ' ')" -eq 3 ] \
+    && grep -qE '^date [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' "$f" \
+    && [ "$(sed -n 2,3p "$f")" = "$(printf 'apply ok\nreconcile ok')" ] \
+    && [ -z "$(ls -A "$ROOT/cutover-state" | grep '^\.' | grep -vxF .lock)" ]
+}
+conf_refused() {   # conf_refused CODE WHAT PATTERN: that exit, PATTERN in the output, no run, nothing changed
+  [ "$rc" -eq "$1" ] && echo "$OUT" | grep -q -- "$3" && ! grep -q ' run ' "$T/log" \
+    && [ -z "$(ls "$T" | grep '^confin\.')" ] && [ "$(snap)" = "$before" ] && conf_no_value \
+    && ok "configure $2: refused ($1), no run, nothing changed" || bad "configure $2" "rc=$rc; $OUT; $(cat "$T/log")"
+}
+
+# The happy path, a re-run, and a re-run after cutover-done.
+conf_setup
+conf_run configure; rc=$?
+[ "$rc" -eq 0 ] && conf_calls_ok apply reconcile && configured_ok && conf_no_value \
+  && ok "configure: keycloak healthy, then the exact apply and reconcile runs, each with both values on its stdin alone in theOrg's NAME=value form; configured" \
+  || bad "configure happy" "rc=$rc; $OUT; $(cat "$T/log")"
+conf_run configure; rc=$?
+[ "$rc" -eq 0 ] && conf_calls_ok apply reconcile && configured_ok && conf_no_value \
+  && ok "configure a second time (idempotent): runs again (0)" || bad "configure re-run" "rc=$rc; $OUT; $(cat "$T/log")"
+echo done > "$ROOT/cutover-state/cutover-done"
+conf_run configure; rc=$?
+[ "$rc" -eq 0 ] && conf_calls_ok apply reconcile && configured_ok && conf_no_value \
+  && echo "$OUT" | grep -q 'configure: .*/cutover-done exists: a re-run after the cutover' \
+  && ok "configure after cutover-done: runs (0), noted" || bad "configure after cutover-done" "rc=$rc; $OUT; $(cat "$T/log")"
+
+# A failed apply skips reconcile; a failed reconcile; each passes its exit through, no marker.
+conf_setup
+CONF_EXTRA="STUB_KC_RUNNING=1 STUB_APPLY_RC=3" conf_run configure; rc=$?
+[ "$rc" -eq 3 ] && conf_calls_ok apply && [ ! -e "$T/confin.reconcile" ] && [ ! -e "$ROOT/cutover-state/configured" ] \
+  && echo "$OUT" | grep -q 'keycloak-configure apply exited 3 .*reconcile not run' && conf_no_value \
+  && ok "configure with apply exiting 3: no reconcile, no marker, exit 3" || bad "configure apply failure" "rc=$rc; $OUT; $(cat "$T/log")"
+conf_setup
+CONF_EXTRA="STUB_KC_RUNNING=1 STUB_RECONCILE_RC=1" conf_run configure; rc=$?
+[ "$rc" -eq 1 ] && conf_calls_ok apply reconcile && [ ! -e "$ROOT/cutover-state/configured" ] \
+  && echo "$OUT" | grep -q 'keycloak-configure reconcile exited 1' && conf_no_value \
+  && ok "configure with reconcile exiting 1: no marker, exit 1" || bad "configure reconcile failure" "rc=$rc; $OUT; $(cat "$T/log")"
+
+# The refusals: each exits 3 (2 for an ARG) with no run and nothing changed.
+for var in IDP_LDAP_ADMIN_PASSWORD IDP_DEPLOY_DEX_CLIENT_SECRET; do
+  for how in set empty; do
+    if [ "$how" = set ]; then e="$var=$CL"; else e="$var="; fi
+    conf_setup; before="$(snap)"
+    CONF_EXTRA="STUB_KC_RUNNING=1 $e" conf_run configure; rc=$?
+    [ ! -s "$T/log" ] || bad "configure with $var in its env called docker" "$(cat "$T/log")"
+    conf_refused 3 "with $var in its environment ($how)" "configure: refused: $var is set in the environment"
+  done
+done
+conf_setup; before="$(snap)"
+conf_run configure extra; rc=$?
+conf_refused 2 "with an ARG" "configure: usage: configure (no ARG)"
+conf_setup; before="$(snap)"
+STUB_HOST=test01 conf_run configure; rc=$?
+[ ! -s "$T/log" ] || bad "configure on a replica called docker" "$(cat "$T/log")"
+conf_refused 3 "on a replica" "configure: refused: not on a replica (test01)"
+conf_setup; mv "$ROOT/cutover-state" "$ROOT/cutover-state.real"; ln -s "$ROOT/cutover-state.real" "$ROOT/cutover-state"; before="$(snap)"
+conf_run configure; rc=$?
+conf_refused 3 "with cutover-state a symlink" "$ROOT/cutover-state is a symlink"
+conf_setup; rm -f "$ROOT/cutover-state/started-keycloak"; before="$(snap)"
+conf_run configure; rc=$?
+conf_refused 3 "with no started-keycloak marker (the gate)" "configure: refused: cutover marker missing or invalid: started-keycloak ("
+conf_setup; before="$(snap)"
+CONF_EXTRA="" conf_run configure; rc=$?
+conf_refused 3 "with keycloak not running" "configure: refused: keycloak is not running, not running and healthy"
+conf_setup; before="$(snap)"
+CONF_EXTRA="STUB_KC_RUNNING=1 STUB_KC_HEALTH=starting" conf_run configure; rc=$?
+conf_refused 3 "with keycloak starting" "configure: refused: keycloak is starting"
+conf_setup; before="$(snap)"; rm -f "$T/confin".*
+STUB_KC_RUNNING=1 tty_run configure; rc=$?
+conf_refused 3 "with a terminal on stdin" "configure: refused: stdin is a terminal"
+for c in "empty stdin::1" "a blank line 1:"$'\n'"$CD"$'\n'":1" "no line 2:$CL"$'\n'":2" "a blank line 2:$CL"$'\n\n'":2"; do
+  conf_setup; before="$(snap)"
+  CONF_STDIN="${c#*:}"; CONF_STDIN="${CONF_STDIN%:*}"
+  conf_run configure; rc=$?
+  unset CONF_STDIN
+  if [ "${c##*:}" = 1 ]; then n=IDP_LDAP_ADMIN_PASSWORD; else n=IDP_DEPLOY_DEX_CLIENT_SECRET; fi
+  conf_refused 3 "with ${c%%:*}" "configure: refused: no $n value read on stdin (line ${c##*:})"
+done
+for order in "up configure" "verify configure"; do
+  conf_setup; before="$(snap)"
+  # shellcheck disable=SC2086
+  conf_run $order; rc=$?
+  conf_refused 3 "combined (${order%% *} first)" "configure: refused: run it alone"
+done
+
+# Under xtrace (SHELLOPTS=xtrace inherited, or bash -x): traced up to the reads, neither value in
+# any trace, argv or file; both runs still get them.
+for mode in SHELLOPTS bash-x; do
+  conf_setup
+  if [ "$mode" = SHELLOPTS ]; then
+    CONF_EXTRA="STUB_KC_RUNNING=1 SHELLOPTS=xtrace" conf_run configure; rc=$?
+  else
+    LEAF_BASH_X=1 conf_run configure; rc=$?
+  fi
+  [ "$rc" -eq 0 ] && grep -q '^+.*do_configure' <<< "$OUT" && conf_calls_ok apply reconcile && configured_ok && conf_no_value \
+    && ok "configure under xtrace ($mode): traced up to the reads, neither value in any trace, argv or file; configured" \
+    || bad "configure xtrace $mode" "rc=$rc; $(grep -c '^+' <<< "$OUT") trace lines; $(cat "$T/log")"
+done
+rm -f "$T/confin".* "$T/confwant"
 
 # --- LDAP_PROVISIONER_PASSWORD reaches openldap-leaf.sh issue and no other child ---
 # PATH wrappers for every outside command the script may run dump their environment to

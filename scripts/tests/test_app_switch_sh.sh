@@ -179,8 +179,8 @@ for pair in start-openldap:IDP_LDAP_ADMIN_PASSWORD start-keycloak:IDP_KEYCLOAK_D
     && ! grep -q "^$var=" "$T/envdump" \
     && ok "d05 $sw: the switch alone on the remote command, $var's value on stdin alone" \
     || bad "d05 $sw" "rc=$rc; $(args | tail -n 1)"
-  go "$S" d05 identity-platform "$sw"; refused $? "a listed VAR missing ($sw with none)" "needs exactly: $var"
 done
+# (their missing-VAR refusals are below, after refused is defined)
 GO_ENV="SHELLOPTS=xtrace AAA=$V1" go "$F/scripts/app_switch.sh" h01 two fetch AAA m5-0123456789ab; rc=$?
 grep -q '^+' <<< "$OUT" && [ "$rc" -eq 0 ] && [ "$(cat "$T/stdin")" = "$V1" ] && nowhere \
   && ok "a VAR and an ARG under SHELLOPTS=xtrace: the value in no trace" || bad "VAR + ARG under xtrace" "rc=$rc"
@@ -294,6 +294,24 @@ refused() {   # refused RC LABEL PATTERN: the last go refused (2) with PATTERN i
   [ "$rc" -eq 2 ] && no_ssh && grep -qE -- "$pat" <<< "$OUT" && nowhere \
     && ok "refused: $label" || bad "refusal $label" "rc=$rc; $OUT"
 }
+for pair in start-openldap:IDP_LDAP_ADMIN_PASSWORD start-keycloak:IDP_KEYCLOAK_DB_PASSWORD; do
+  sw="${pair%%:*}" var="${pair#*:}"
+  go "$S" d05 identity-platform "$sw"; refused $? "a listed VAR missing ($sw with none)" "needs exactly: $var"
+done
+# d05 configure: two VARs in switch_env's order; one ssh, the switch alone on the remote command,
+# ssh's stdin the LDAP admin's value then the Dex client's, one line each, neither in any child.
+CONF_VARS="IDP_LDAP_ADMIN_PASSWORD IDP_DEPLOY_DEX_CLIENT_SECRET"
+GO_ENV="IDP_LDAP_ADMIN_PASSWORD=$V1 IDP_DEPLOY_DEX_CLIENT_SECRET=$V2" go "$S" d05 identity-platform configure $CONF_VARS; rc=$?
+[ "$rc" -eq 0 ] && [ "$(grep -c '^SSH$' "$T/log")" -eq 1 ] && [ "$(args | tail -n 1)" = "$IP configure" ] \
+  && [ "$(cat "$T/stdin")" = "$V1
+$V2" ] && [ "$(wc -l < "$T/stdin" | tr -d ' ')" -eq 2 ] && nowhere \
+  && ! grep -qE '^(IDP_LDAP_ADMIN_PASSWORD|IDP_DEPLOY_DEX_CLIENT_SECRET)=' "$T/envdump" \
+  && ok "d05 configure: the switch alone on the remote command, the LDAP admin's then the Dex client's value on stdin, one line each" \
+  || bad "d05 configure" "rc=$rc; $(args | tail -n 1); stdin lines=$(wc -l < "$T/stdin" | tr -d ' ')"
+GO_ENV="IDP_LDAP_ADMIN_PASSWORD=$V1" go "$S" d05 identity-platform configure IDP_LDAP_ADMIN_PASSWORD; refused $? "configure with one of its two VARs" "configure takes $CONF_VARS; IDP_LDAP_ADMIN_PASSWORD is not listed"
+go "$S" d05 identity-platform configure; refused $? "configure with neither VAR" "needs exactly: $CONF_VARS"
+GO_ENV="IDP_LDAP_ADMIN_PASSWORD=$V1 IDP_DEPLOY_DEX_CLIENT_SECRET=$V2" go "$S" d05 identity-platform configure IDP_DEPLOY_DEX_CLIENT_SECRET IDP_LDAP_ADMIN_PASSWORD
+refused $? "configure with its two VARs in the other order" "configure takes $CONF_VARS; IDP_DEPLOY_DEX_CLIENT_SECRET IDP_LDAP_ADMIN_PASSWORD is not listed"
 GO_ENV="LDAP_PROVISIONER_PASSWORD=$V1" go "$S" d05 identity-platform up LDAP_PROVISIONER_PASSWORD; refused $? "a switch not in switch_env (up)" "does not allow 'up'"
 go "$S" d05 identity-platform verify; refused $? "a switch not in switch_env, no VAR (verify)" "does not allow 'verify'"
 GO_ENV="LDAP_PROVISIONER_PASSWORD=$V1" go "$S" d05 identity-platform leaf-renew LDAP_PROVISIONER_PASSWORD; refused $? "a VAR not in switch_env for the switch (leaf-renew)" "not listed"
@@ -365,18 +383,19 @@ go "$H" h01 unanchored x a; refused $? "an unanchored switch_args pattern" "anch
 go "$H" h01 broken x a; refused $? "a switch_args pattern that does not compile" "does not compile"
 
 # --- d05's allowlist: each value goes to its one switch alone ---
-"$REAL_PY" - "$REPO/d05/host.toml" <<'PY' && ok "d05 switch_env: LDAP_PROVISIONER_PASSWORD for leaf-issue, the pull token for fetch-bundle, the age identity for unpack-bundle, keycloak-db's for restore-keycloak and start-keycloak, the LDAP admin's for start-openldap, no other VAR (reset-cutover, cutover-clean and restore-openldap none); no up or restore switch listed; build restore false; switch_args for fetch-bundle and unpack-bundle alone" || bad "d05 switch_env"
+"$REAL_PY" - "$REPO/d05/host.toml" <<'PY' && ok "d05 switch_env: LDAP_PROVISIONER_PASSWORD for leaf-issue, the pull token for fetch-bundle, the age identity for unpack-bundle, keycloak-db's for restore-keycloak and start-keycloak, the LDAP admin's for start-openldap, the LDAP admin's then the deploy Dex client's for configure, no other VAR (reset-cutover, cutover-clean and restore-openldap none); no up or restore switch listed; build restore false; switch_args for fetch-bundle and unpack-bundle alone" || bad "d05 switch_env"
 import sys, tomllib
 a = [x for x in tomllib.load(open(sys.argv[1], "rb"))["app"] if x["name"] == "identity-platform"][0]
 se = a["switch_env"]
 want = {"leaf-issue": ["LDAP_PROVISIONER_PASSWORD"], "fetch-bundle": ["THEORG_REGISTRY_PULL_TOKEN"],
         "unpack-bundle": ["IDP_CUTOVER_BUNDLE_IDENTITY"], "restore-keycloak": ["IDP_KEYCLOAK_DB_PASSWORD"],
-        "start-openldap": ["IDP_LDAP_ADMIN_PASSWORD"], "start-keycloak": ["IDP_KEYCLOAK_DB_PASSWORD"]}
+        "start-openldap": ["IDP_LDAP_ADMIN_PASSWORD"], "start-keycloak": ["IDP_KEYCLOAK_DB_PASSWORD"],
+        "configure": ["IDP_LDAP_ADMIN_PASSWORD", "IDP_DEPLOY_DEX_CLIENT_SECRET"]}
 assert all(se[k] == v for k, v in want.items()), se
 assert all(v == [] for k, v in se.items() if k not in want), se
 assert set(se) == {"leaf-issue", "leaf-renew", "leaf-schedule-install", "leaf-schedule-status", "leaf-schedule-remove",
                    "fetch-bundle", "unpack-bundle", "reset-cutover", "cutover-clean",
-                   "restore-keycloak", "restore-openldap", "start-openldap", "start-keycloak"}, sorted(se)
+                   "restore-keycloak", "restore-openldap", "start-openldap", "start-keycloak", "configure"}, sorted(se)
 assert not {"up", "pull", "images", "verify", "down", "restore"} & set(se), se
 assert a["restore"] is False, a["restore"]
 assert a["switch_args"] == {"fetch-bundle": ["^m5-[0-9a-f]{12}$"],

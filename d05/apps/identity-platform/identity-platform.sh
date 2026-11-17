@@ -10,9 +10,9 @@
 # here: their first start is the M5 cutover (DEPLOY.md steps 5-6), after a restore, and theOrg's
 # restores refuse a target that is not empty (keycloak_backup.sh counts tables; openldap_backup.sh
 # checks the volumes). A first openldap start runs osixia's bootstrap, so M1 never creates
-# openldap-data or openldap-config. configure refuses until M5 is written (the cutover bundle, the
-# two restores and the two starts below are its first parts); restore refuses and points at
-# restore-openldap and restore-keycloak.
+# openldap-data or openldap-config. configure runs only at the M5 cutover, behind the cutover gate
+# (the cutover bundle, the two restores, the two starts and configure below are M5's switches);
+# restore refuses and points at restore-openldap and restore-keycloak.
 # No secret is in any file here or on the host. The workstation resolves the values from OpenBao
 # at deploy (build_host.py start_env, pull_token_env) and hands them to this process's environment;
 # this script maps them onto the names compose.yml passes by name. Only the long-running services
@@ -79,11 +79,20 @@
 #   A marker per step in cutover-state/: fetched; unpack-started (written right before unpack's
 #   docker run: the targets then hold unpack's files); unpacked; restored-openldap and
 #   restored-keycloak (date, the unpacked manifests-sha256) from the two restores; started-openldap
-#   (date, admin-bind ok) and started-keycloak (date) from the two starts; cutover-done from
+#   (date, admin-bind ok) and started-keycloak (date) from the two starts; configured (date, apply
+#   ok, reconcile ok) from configure; cutover-done from
 #   the go-live (not written yet). Each is written atomically, then synced (sync -f). start-openldap,
 #   start-keycloak and configure are gated on them (cutover_gate, exit 3 naming the missing or
-#   invalid marker: an unpacked whose version is not fetched's, an empty restored-*, a
-#   started-openldap without admin-bind ok); configure still refuses (exit 3) in this round.
+#   invalid marker: an unpacked whose version is not fetched's, an empty restored-* or started-*,
+#   a started-openldap without admin-bind ok).
+#   configure  reads IDP_LDAP_ADMIN_PASSWORD's then IDP_DEPLOY_DEX_CLIENT_SECRET's value, one line
+#               each on stdin, and writes both, as theOrg's LDAP_ADMIN_PASSWORD= and
+#               VAULT_DEX_CLIENT_SECRET= lines, to keycloak-configure apply's stdin, then reconcile's
+#               (DEPLOY.md cutover step 6 at bd0c6bff); needs both restored-* and both started-*
+#               markers and keycloak healthy; re-runnable, after cutover-done too (DEPLOY.md: the
+#               configuration steps are idempotent). It needs the repin (fcbed3fe's keycloak-configure
+#               does not read stdin). Refused (exit 3, no docker run) with either name in the
+#               environment, on a replica, a terminal or an empty read.
 #   start-openldap  reads IDP_LDAP_ADMIN_PASSWORD's value as one line on stdin; it reaches the
 #               compose process alone, as LDAP_ADMIN_PASSWORD and LDAP_CONFIG_PASSWORD, for
 #               `--profile restored up -d --no-deps --wait --wait-timeout START_WAIT_S openldap`; then
@@ -98,7 +107,7 @@
 #   (exit 3) when a target or cutover-state/ is a symlink.
 #   THEORG_REGISTRY_PULL_TOKEN and IDP_CUTOVER_BUNDLE_IDENTITY are noted and unset at start, as
 #   LDAP_PROVISIONER_PASSWORD is; fetch-bundle and unpack-bundle then refuse (exit 3);
-#   restore-keycloak refuses (exit 3) with IDP_KEYCLOAK_DB_PASSWORD in its environment. The eight
+#   restore-keycloak refuses (exit 3) with IDP_KEYCLOAK_DB_PASSWORD in its environment. The nine
 #   cutover switches each run alone, and one at a time: each holds flock(1) (util-linux) -n on
 #   cutover-state/.lock for its whole run; a busy lock is refused (exit 3).
 # Data under /mnt/docker/IdentityPlatform. No backup here yet: the data is the Mini's until M5.
@@ -710,7 +719,8 @@ do_leaf_schedule_remove() {
 # the file's file system, the rename included), else `sync FILE`; a failed sync is a warning only.
 # Each is `key value` lines: fetched (version, sha256), unpack-started (version, manifests-sha256),
 # unpacked (unpack's four lines); restored-openldap and restored-keycloak (date, manifests-sha256)
-# from the restores; cutover-done from the go-live (not written yet).
+# from the restores; started-openldap and started-keycloak from the starts; configured from
+# configure; cutover-done from the go-live (not written yet).
 CUTOVER_DONE=cutover-done
 write_state() {   # write_state NAME LINE...
   local name="$1" tmp
@@ -1280,15 +1290,107 @@ do_start() {   # do_start SWITCH VALUE_NAME SERVICE MARKER [ARG...]
 do_start_openldap() { do_start start-openldap IDP_LDAP_ADMIN_PASSWORD openldap started-openldap "$@"; }
 do_start_keycloak() { do_start start-keycloak IDP_KEYCLOAK_DB_PASSWORD keycloak started-keycloak "$@"; }
 
+# keycloak's health, as db_health's (keycloak is in profile restored, so ps names it).
+kc_health() {
+  local id
+  id="$(run_compose --profile restored ps -q keycloak 2>/dev/null)" || id=""
+  [ -n "$id" ] || { echo "not running"; return 0; }
+  docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}no healthcheck{{end}}' "$id" 2>/dev/null || echo "unknown"
+}
+
+# configure (DEPLOY.md "Production on d05", cutover step 6, at theOrg bd0c6bff): keycloak-configure
+# apply, then reconcile; no ensure or bootstrap (the restored copy carries the realm and its client).
+# Two values, one line each on this script's stdin in this order (scripts/app_switch.sh writes them,
+# switch_env's order): IDP_LDAP_ADMIN_PASSWORD's, then IDP_DEPLOY_DEX_CLIENT_SECRET's, each read as
+# leaf-issue reads its value. Each run gets both on its stdin alone, in theOrg's form (DEPLOY.md
+# "Secrets on stdin only"; scripts/keycloak_realm.py read_network_secrets: one line per name, the
+# name, an equals sign and the value, for LDAP_ADMIN_PASSWORD and VAULT_DEX_CLIENT_SECRET; no env
+# flag), written by builtin printf: never an
+# argv, an environment, a file or a log. compose.yml passes no secret by name to interpolate, so the
+# compose process needs neither. Refused (exit 3, no docker run, nothing changed) with either name
+# in the environment (checked before any child runs), on a replica, cutover-state/ a symlink, the
+# lock busy, a missing or invalid marker (cutover_gate: both restored-* and both started-*),
+# keycloak not running and healthy, a terminal on stdin or an empty read of either line. Exit 2 for
+# an ARG. Not refused past its own configured marker or cutover-done: DEPLOY.md ("Updating", step 4)
+# says the configuration steps are idempotent and are re-run after an update, and after a directory
+# restore ("re-run the configuration reconcile steps"). An apply that fails skips reconcile; either
+# failing returns its exit (3: keycloak-configure refused its stdin or settings) with no marker.
+# On both 0 writes configured (date, apply ok, reconcile ok). It needs the repin: fcbed3fe's
+# keycloak-configure image does not read its secrets on stdin.
+do_configure() {
+  local sw=configure n h cmd rc=0
+  for n in IDP_LDAP_ADMIN_PASSWORD IDP_DEPLOY_DEX_CLIENT_SECRET; do
+    if [ -n "${!n+x}" ]; then
+      echo "[ERROR] $sw: refused: $n is set in the environment; unset it and write the two values as one line each to $sw's stdin (scripts/app_switch.sh does); nothing changed" >&2
+      return 3
+    fi
+  done
+  if [ $# -ne 0 ]; then
+    echo "[ERROR] $sw: usage: $sw (no ARG)" >&2
+    return 2
+  fi
+  if is_replica; then
+    echo "[ERROR] $sw: refused: not on a replica ($(hostname -s </dev/null)); the cutover is d05's; nothing changed" >&2
+    return 3
+  fi
+  cutover_lock "$sw" || return
+  cutover_gate "$sw" || return
+  if [ -e "$STATE_DIR/$CUTOVER_DONE" ]; then
+    echo "[INFO] $sw: $STATE_DIR/$CUTOVER_DONE exists: a re-run after the cutover (apply and reconcile are idempotent)"
+  fi
+  h="$(kc_health </dev/null)"
+  if [ "$h" != healthy ]; then
+    echo "[ERROR] $sw: refused: keycloak is $h, not running and healthy (start-keycloak first); nothing changed" >&2
+    return 3
+  fi
+  if [ -t 0 ]; then
+    echo "[ERROR] $sw: refused: stdin is a terminal; $sw reads IDP_LDAP_ADMIN_PASSWORD's and IDP_DEPLOY_DEX_CLIENT_SECRET's values as one line each on stdin (scripts/app_switch.sh writes them); nothing changed" >&2
+    return 3
+  fi
+  { set +x; } 2>/dev/null
+  set +a
+  unset -v ldap dex
+  local +x ldap="" dex=""
+  IFS= builtin read -r ldap || true
+  IFS= builtin read -r dex || true
+  exec </dev/null
+  if [[ -z $ldap ]]; then
+    unset -v ldap dex
+    echo "[ERROR] $sw: refused: no IDP_LDAP_ADMIN_PASSWORD value read on stdin (line 1); nothing changed" >&2
+    return 3
+  fi
+  if [[ -z $dex ]]; then
+    unset -v ldap dex
+    echo "[ERROR] $sw: refused: no IDP_DEPLOY_DEX_CLIENT_SECRET value read on stdin (line 2); nothing changed" >&2
+    return 3
+  fi
+  for cmd in apply reconcile; do
+    echo "[INFO] $sw: keycloak-configure $cmd"
+    # run_compose's argv, with `builtin exec docker` in its own subshell: the docker program, never a
+    # function (a common.env function named docker would otherwise get the values on its stdin).
+    builtin printf 'LDAP_ADMIN_PASSWORD=%s\nVAULT_DEX_CLIENT_SECRET=%s\n' "$ldap" "$dex" \
+      | (builtin exec docker compose -f "$COMPOSE_FILE" --project-directory "$SCRIPT_DIR" \
+          --profile ops run --rm -T keycloak-configure "$cmd") || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      unset -v ldap dex
+      echo "[ERROR] $sw: keycloak-configure $cmd exited $rc (3: it refused its stdin or a setting; 1: it failed)$([ "$cmd" = apply ] && echo '; reconcile not run'); no configured marker" >&2
+      return "$rc"
+    fi
+  done
+  unset -v ldap dex
+  write_state configured "date $(date -u +%Y-%m-%dT%H:%M:%SZ </dev/null)" "apply ok" "reconcile ok"
+}
+
 # cutover_gate SWITCH: the markers a cutover switch needs; prints the missing or invalid ones and
 # returns 3. unpacked counts only with a non-empty version equal to fetched's; started-openldap only
-# with its "admin-bind ok" line; a restored-* marker only when it is a non-empty file.
+# with its "admin-bind ok" line; a restored-* or started-keycloak marker only when it is a non-empty
+# file. configure needs both restored-* and both started-*.
 cutover_gate() {
   local m v fv need=() missing=()
   case "$1" in
     start-openldap) need=(unpacked restored-openldap) ;;
     start-keycloak) need=(unpacked restored-keycloak started-openldap) ;;
-    configure) need=(restored-openldap restored-keycloak) ;;
+    configure) need=(restored-openldap restored-keycloak started-openldap started-keycloak) ;;
     restore-keycloak|restore-openldap) need=(unpacked) ;;
     *) echo "[ERROR] cutover_gate: no gate for $1" >&2; return 3 ;;
   esac
@@ -1308,11 +1410,6 @@ cutover_gate() {
     echo "[ERROR] $1: refused: cutover marker missing or invalid: ${missing[*]} (in $STATE_DIR); nothing done" >&2
     return 3
   fi
-}
-
-refuse_cutover() {
-  echo "[ERROR] $1: M5 cutover, not yet written (theOrg identity-platform DEPLOY.md steps 5-6, after a restore); refused" >&2
-  exit 3
 }
 
 run_cmd() {
@@ -1350,10 +1447,6 @@ run_cmd() {
       ;;
     leaf-schedule-remove)
       do_leaf_schedule_remove
-      ;;
-    configure)
-      cutover_gate "$cmd" || exit $?
-      refuse_cutover "$cmd"
       ;;
     restore)
       # Not 3: build_host.py reads exit 3 from a restore as "skipped, data present".
@@ -1410,8 +1503,10 @@ usage() {
   echo "  start-keycloak  - M5: start keycloak the same way; reads IDP_KEYCLOAK_DB_PASSWORD's value as one" >&2
   echo "                    line on stdin; keycloak-db must be healthy; needs unpacked, restored-keycloak" >&2
   echo "                    and started-openldap; writes started-keycloak. Runs alone. Not on a replica" >&2
-  echo "  configure       - Gated on the cutover markers (exit 3 naming the missing or invalid one); then refused:" >&2
-  echo "                    the M5 cutover, not yet written (exit 3)" >&2
+  echo "  configure       - M5: keycloak-configure apply, then reconcile; reads IDP_LDAP_ADMIN_PASSWORD's then" >&2
+  echo "                    IDP_DEPLOY_DEX_CLIENT_SECRET's value as one line each on stdin (scripts/app_switch.sh)" >&2
+  echo "                    and writes both to each run's stdin; keycloak must be healthy; needs both restored-*" >&2
+  echo "                    and both started-*; writes configured; re-runnable. Runs alone. Not on a replica" >&2
   echo "  restore-openldap - M5: openldap-backup restore of openldap-backup/ into the empty openldap-data and" >&2
   echo "                    openldap-config (OPENLDAP_BACKUP_CONFIG_MOUNT=rw for this run); no secret; needs a" >&2
   echo "                    valid unpacked marker; writes restored-openldap. Runs alone. Not on a replica" >&2
@@ -1467,6 +1562,10 @@ case "$1" in
     do_start_keycloak "${@:2}" || exit $?
     exit 0
     ;;
+  configure)
+    do_configure "${@:2}" || exit $?
+    exit 0
+    ;;
 esac
 
 # leaf-issue runs alone: its stdin carries the provisioner password, and no other switch's
@@ -1474,7 +1573,7 @@ esac
 if [ $# -gt 1 ]; then
   for cmd in "$@"; do
     case "$cmd" in
-      leaf-issue|fetch-bundle|unpack-bundle|reset-cutover|cutover-clean|restore-keycloak|restore-openldap|start-openldap|start-keycloak)
+      leaf-issue|fetch-bundle|unpack-bundle|reset-cutover|cutover-clean|restore-keycloak|restore-openldap|start-openldap|start-keycloak|configure)
         echo "[ERROR] $cmd: refused: run it alone (it reads a value on stdin or takes ARGs), not with: $*" >&2
         exit 3
         ;;

@@ -74,6 +74,8 @@ start_env = ["IDP_KEYCLOAK_DB_PASSWORD"]
 # and cutover-clean take no value and no ARG. The restores (cutover step 5) take no ARG:
 # restore-keycloak takes keycloak-db's password on ssh stdin (the name up reads; keycloak-backup gets
 # it on its stdin), restore-openldap no value. The build's restore stays false: identity-platform.sh
-# restore refuses (exit 1) and points at these two.
-switch_env = { "leaf-issue" = ["LDAP_PROVISIONER_PASSWORD"], "leaf-renew" = [], "leaf-schedule-install" = [], "leaf-schedule-status" = [], "leaf-schedule-remove" = [], "fetch-bundle" = ["THEORG_REGISTRY_PULL_TOKEN"], "unpack-bundle" = ["IDP_CUTOVER_BUNDLE_IDENTITY"], "reset-cutover" = [], "cutover-clean" = [], "restore-keycloak" = ["IDP_KEYCLOAK_DB_PASSWORD"], "restore-openldap" = [], "start-openldap" = ["IDP_LDAP_ADMIN_PASSWORD"], "start-keycloak" = ["IDP_KEYCLOAK_DB_PASSWORD"] }
+# restore refuses (exit 1) and points at these two. configure (cutover step 6) takes two values, no
+# ARG: the LDAP admin's password, then the deploy Dex client's secret, one line each on ssh stdin;
+# keycloak-configure gets both on its stdin.
+switch_env = { "leaf-issue" = ["LDAP_PROVISIONER_PASSWORD"], "leaf-renew" = [], "leaf-schedule-install" = [], "leaf-schedule-status" = [], "leaf-schedule-remove" = [], "fetch-bundle" = ["THEORG_REGISTRY_PULL_TOKEN"], "unpack-bundle" = ["IDP_CUTOVER_BUNDLE_IDENTITY"], "reset-cutover" = [], "cutover-clean" = [], "restore-keycloak" = ["IDP_KEYCLOAK_DB_PASSWORD"], "restore-openldap" = [], "start-openldap" = ["IDP_LDAP_ADMIN_PASSWORD"], "start-keycloak" = ["IDP_KEYCLOAK_DB_PASSWORD"], "configure" = ["IDP_LDAP_ADMIN_PASSWORD", "IDP_DEPLOY_DEX_CLIENT_SECRET"] }
 switch_args = { "fetch-bundle" = ['^m5-[0-9a-f]{12}$'], "unpack-bundle" = ['^[0-9a-f]{64}$', '^[0-9a-f]{64}$', '^[0-9a-f]{64}$'] }
