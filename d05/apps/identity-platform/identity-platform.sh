@@ -56,8 +56,8 @@
 #               wrote: refused (exit 3, nothing changed) with neither unpack-started nor unpacked
 #               (targets already empty: a no-op, exit 0), on a replica, once cutover-done, a restore
 #               marker, or a restored or ops container exists, or when compose cannot tell.
-#   cutover-clean  removes the ciphertext, fetch-bundle's temp downloads and the fetched marker;
-#               idempotent. Refused on a replica and once cutover-done exists.
+#   cutover-clean  removes the ciphertext and fetch-bundle's temp downloads; keeps the fetched marker
+#               (the gate compares unpacked with it); idempotent. Refused on a replica and once cutover-done exists.
 #   A marker per step in cutover-state/: fetched; unpack-started (written right before unpack's
 #   docker run: the targets then hold unpack's files); unpacked; restored-openldap and
 #   restored-keycloak from the restores; cutover-done from the go-live or restore switch (neither
@@ -1015,8 +1015,9 @@ do_reset_cutover() {
   echo "[INFO] reset-cutover: $KC_TARGET and $OL_TARGET empty (lost+found kept), no unpacked or unpack-started marker; the bundle and the fetched marker kept"
 }
 
-# cutover-clean: the ciphertext, fetch-bundle's temp downloads (cutover/.bundle.*) and the fetched
-# marker (and a temp one) removed; idempotent. A bundle can always be fetched again, so no marker
+# cutover-clean: the ciphertext, fetch-bundle's temp downloads (cutover/.bundle.*) and a temp
+# fetched marker removed; the fetched marker is kept, because cutover_gate checks unpacked
+# against it (a new fetch-bundle rewrites it); idempotent. A bundle can always be fetched again, so no marker
 # gates it. Refused (exit 3) on a replica, with the cutover lock busy, and once cutover-done exists.
 do_cutover_clean() {
   if [ $# -ne 0 ]; then
@@ -1032,8 +1033,8 @@ do_cutover_clean() {
     echo "[ERROR] cutover-clean: refused: $STATE_DIR/$CUTOVER_DONE exists (the cutover is done); nothing changed" >&2
     return 3
   fi
-  rm -f "$BUNDLE" "$CUT_DIR"/.bundle.* "$STATE_DIR/fetched" "$STATE_DIR"/.fetched.* || return 1
-  echo "[INFO] cutover-clean: no $BUNDLE, no temp download, no fetched marker"
+  rm -f "$BUNDLE" "$CUT_DIR"/.bundle.* "$STATE_DIR"/.fetched.* || return 1
+  echo "[INFO] cutover-clean: no $BUNDLE, no temp download; the fetched marker is kept"
 }
 
 # cutover_gate SWITCH: the markers a cutover switch needs; prints the missing or invalid ones and
@@ -1154,7 +1155,7 @@ usage() {
   echo "  reset-cutover   - M5: remove the unpacked marker, empty backup/ and openldap-backup/ (lost+found" >&2
   echo "                    kept), then the unpack-started marker, after a failed unpack; only what an" >&2
   echo "                    unpack wrote; refused past a restore or cutover-done. Runs alone. Not on a replica" >&2
-  echo "  cutover-clean   - M5: remove cutover/bundle.tar.age, temp downloads and the fetched marker;" >&2
+  echo "  cutover-clean   - M5: remove cutover/bundle.tar.age and temp downloads (fetched kept);" >&2
   echo "                    refused once cutover-done. Runs alone. Not on a replica" >&2
   echo "  start-openldap, start-keycloak, configure" >&2
   echo "                  - Gated on the cutover markers (exit 3 naming the missing or invalid one); then refused:" >&2

@@ -1231,15 +1231,15 @@ STUB_FIND_RC=1 run reset-cutover; rc=$?
   && [ -f "$ROOT/cutover-state/unpack-started" ] \
   && ok "reset-cutover: a target not empty afterwards fails it (1), unpack-started kept" || bad "reset-cutover check after" "rc=$rc; $OUT"
 
-# cutover-clean: the bundle, temp downloads and the fetched marker go; twice is the same; nothing else touched.
+# cutover-clean: the bundle and temp downloads go, the fetched marker stays (its temp file goes); twice is the same; nothing else touched.
 reset_setup
 echo part > "$ROOT/cutover/.bundle.Ab12Cd"; echo part > "$ROOT/cutover-state/.fetched.Ab12Cd"
 for pass in 1 2; do
   run cutover-clean; rc=$?
   [ "$rc" -eq 0 ] && [ -z "$(ls -A "$ROOT/cutover")" ] \
-    && [ "$(ls -A "$ROOT/cutover-state" | grep -vxF .lock | LC_ALL=C sort | tr '\n' ' ')" = "unpack-started unpacked " ] \
+    && [ "$(ls -A "$ROOT/cutover-state" | grep -vxF .lock | LC_ALL=C sort | tr '\n' ' ')" = "fetched unpack-started unpacked " ] \
     && [ "$(cat "$ROOT/cutover-state/unpacked")" = "$UNP_LINES" ] && [ -f "$ROOT/backup/sub/file" ] && [ ! -s "$T/log" ] \
-    && ok "cutover-clean (run $pass): no bundle, temp file or fetched marker; unpack-started, unpacked and the targets kept; no docker call" \
+    && ok "cutover-clean (run $pass): no bundle or temp file; fetched, unpack-started, unpacked and the targets kept; no docker call" \
     || bad "cutover-clean run $pass" "rc=$rc; $OUT; $(ls -A "$ROOT/cutover" "$ROOT/cutover-state")"
 done
 reset_host

@@ -157,7 +157,8 @@ runs the cutover image's `unpack` into the two dirs the restores read (`backup/`
     targets are already empty; otherwise it removes `unpacked` (keeping `unpack-started`) and fails:
     run `cutover-clean` and `fetch-bundle` (which pulls the image), then `reset-cutover` again.
   - `cutover-clean`: removes `cutover/bundle.tar.age`, fetch-bundle's temp downloads
-    (`cutover/.bundle.*`) and the `fetched` marker; idempotent, gated only on `cutover-done`
+    (`cutover/.bundle.*`), and keeps the `fetched` marker, which the gate checks `unpacked`
+    against (a new `fetch-bundle` rewrites it); idempotent, gated only on `cutover-done`
     (refused once it exists; a bundle can be fetched again).
   - Both `reset-cutover` and `unpack-bundle` refuse (exit 3, nothing touched) when `backup/`,
     `openldap-backup/` or `cutover-state/` is a symlink. The four switches run one at a time: each
