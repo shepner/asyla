@@ -19,7 +19,7 @@
 # keycloak-summary-sha256 is exit 1 with no backup run; then count-check/ emptied (find, only when it
 # holds files), keycloak-db's value on `run -v count-check:/backup ... backup`'s stdin alone (also
 # under xtrace), d05's summary read read-only, and count-check/ pruned to summary.txt (no dump left;
-# a failed prune: exit 1); equal (changesets and order ignored): counted (date, manifests-sha256,
+# a failed prune: exit 1); equal (order ignored; changesets compared): counted (date, manifests-sha256,
 # counts equal); not equal: exit 1, both line sets, no counted; the backup failing: its exit, no
 # d05 read, pruned. Every value is a plain stand-in word made at run time.
 # Run: bash scripts/tests/test_identity_platform_backup_sh.sh
@@ -389,10 +389,10 @@ KCDB="$(sed -n 's/^KC_DB_IMAGE="\(.*\)"$/\1/p' "$SRC/identity-platform.sh")"
 [ -n "$KCDB" ] || bad "KC_DB_IMAGE not found in the script"
 CC_M="$(printf 'a%.0s' {1..64})"
 CC_MARKERS="unpacked restored-openldap restored-keycloak started-openldap started-keycloak configured"
-# The Mini's summary (theOrg's SUMMARY_SQL lines) and d05's: the same counts in another order, a
-# different changesets.
+# The Mini's summary (theOrg's SUMMARY_SQL lines) and d05's: the same counts, changesets included,
+# in another order.
 MINI_SUM=$'realm master\nrealm theorg\nusers master 1\nusers theorg 12\nclients master 7\nclients theorg 9\ncredentials theorg otp 3\ncredentials theorg webauthn 2\nchangesets 120'
-NEW_SUM=$'realm theorg\nrealm master\nclients theorg 9\nclients master 7\nusers theorg 12\nusers master 1\ncredentials theorg webauthn 2\ncredentials theorg otp 3\nchangesets 131'
+NEW_SUM=$'realm theorg\nrealm master\nclients theorg 9\nclients master 7\nusers theorg 12\nusers master 1\ncredentials theorg webauthn 2\ncredentials theorg otp 3\nchangesets 120'
 cc_pin() {   # unpacked, its keycloak-summary-sha256 that of backup/summary.txt as it is now (unpack-bundle's check)
   local k
   k="$( (sha256sum 2>/dev/null || shasum -a 256) < "$ROOT/backup/summary.txt" | awk '{print $1}')"
@@ -437,12 +437,12 @@ counted_ok() {   # counted: a UTC date, unpacked's manifests-sha256, counts equa
 
 run -- 2>/dev/null; echo "$OUT" | grep -q '^  count-check ' && ok "usage lists count-check" || bad "usage has no count-check line"
 
-# The happy path: count-check/ missing (made, no find), exact calls; changesets and order ignored.
+# The happy path: count-check/ missing (made, no find), exact calls; equal changesets, order ignored.
 cc_setup
 run -- count-check; rc=$?
 [ "$rc" -eq 0 ] && [ "$(docker_lines)" = "$CC_EXPECT" ] && counted_ok && [ -d "$CC" ] \
   && echo "$OUT" | grep -q 'count-check: the realm names and each realm.s users, clients and credentials by type are equal (2 realm(s)); next: cutover-done' \
-  && ok "count-check: exit 0, exactly the six docker calls (the Mini's read first, the -v count-check:/backup override, the prune last); counted written; changesets and line order ignored" \
+  && ok "count-check: exit 0, exactly the six docker calls (the Mini's read first, the -v count-check:/backup override, the prune last); counted written; equal changesets pass, line order ignored" \
   || bad "count-check happy path" "rc=$rc; $OUT; $(docker_lines)"
 cc_only_summary && ok "count-check: count-check/ keeps only summary.txt (no Keycloak dump, manifest, STATUS or .work left)" \
   || bad "count-check left more than summary.txt" "$(ls -A "$CC")"
@@ -498,7 +498,7 @@ printf 'date 2026-11-16T00:00:00Z\nmanifests-sha256 %s\ncounts equal\n' "$CC_M" 
 run -- count-check; rc=$?
 mism="$(printf '%s\n' "$OUT" | sed -n '/only in the Mini/,$p')"
 [ "$rc" -eq 1 ] && [ ! -e "$ROOT/cutover-state/counted" ] && [ "$(docker_lines)" = "$CC_EXPECT" ] \
-  && echo "$OUT" | grep -qF "count-check: the counts differ (realm, users, clients, credentials lines; changesets ignored); no counted marker" \
+  && echo "$OUT" | grep -qF "count-check: the counts differ (realm, users, clients, credentials, changesets lines); no counted marker" \
   && [ "$mism" = "  only in the Mini's $ROOT/backup/summary.txt:
     users theorg 12
   only in d05's $CC/summary.txt:
@@ -510,7 +510,20 @@ cc_setup; printf '%s\nrealm extra\n' "$NEW_SUM" > "$T/newsummary"
 run -- count-check; rc=$?
 [ "$rc" -eq 1 ] && [ ! -e "$ROOT/cutover-state/counted" ] && printf '%s\n' "$OUT" | grep -qx '    realm extra' \
   && ok "count-check: a realm only in d05's: exit 1, named, no counted" || bad "count-check extra realm" "rc=$rc; $OUT"
-# changesets alone differing is equal (the happy path has 120 vs 131); a summary without realm lines is not.
+# changesets alone differing is a mismatch (keycloak_backup.sh:175-182 and :553 at theOrg bd0c6bff:
+# Liquibase's changelog count, which restore requires equal): exit 1, the two changesets lines, no counted.
+cc_setup; printf '%s\n' "${NEW_SUM/changesets 120/changesets 131}" > "$T/newsummary"
+run -- count-check; rc=$?
+mism="$(printf '%s\n' "$OUT" | sed -n '/only in the Mini/,$p')"
+[ "$rc" -eq 1 ] && [ ! -e "$ROOT/cutover-state/counted" ] && [ "$(docker_lines)" = "$CC_EXPECT" ] \
+  && echo "$OUT" | grep -qF "count-check: the counts differ (realm, users, clients, credentials, changesets lines); no counted marker" \
+  && [ "$mism" = "  only in the Mini's $ROOT/backup/summary.txt:
+    changesets 120
+  only in d05's $CC/summary.txt:
+    changesets 131" ] && cc_only_summary \
+  && ok "count-check: changesets alone differing (120 vs 131): exit 1, both changesets lines printed, no counted" \
+  || bad "count-check changesets differ" "rc=$rc; $OUT"
+# A summary without realm lines is not equal counts.
 cc_setup; STUB_NO_SUMMARY=1 run -- count-check; rc=$?
 [ "$rc" -eq 1 ] && [ ! -e "$ROOT/cutover-state/counted" ] \
   && echo "$OUT" | grep -qF "count-check: could not read a realm line from d05's $CC/summary.txt; no counted marker" \

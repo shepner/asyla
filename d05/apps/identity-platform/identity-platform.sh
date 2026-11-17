@@ -121,7 +121,7 @@
 #   count-check  no value, no ARG (DEPLOY.md cutover step 7, Counts): keycloak-backup backup into
 #               the emptied count-check/ (`run -v count-check:/backup`; keycloak-db's password from
 #               the running container, as backup, on its stdin alone), then its summary.txt's realm,
-#               users, clients and credentials lines (changesets ignored) compared with the Mini's
+#               users, clients, credentials and changesets lines compared with the Mini's
 #               backup/summary.txt (read first; its sha256 must be unpacked's
 #               keycloak-summary-sha256, else exit 1 and no backup run). count-check/ then keeps
 #               only summary.txt. Equal: writes counted (date, manifests-sha256, counts equal);
@@ -1585,9 +1585,11 @@ do_cutover_done() {
 # count-check: DEPLOY.md cutover step 7, Counts (theOrg bd0c6bff): keycloak-backup backup on d05 into
 # its empty count-check/, then its summary.txt compared with the Mini's (backup/summary.txt, from the
 # bundle): the realm names, and per realm the users, the clients and the credentials by type must be
-# equal. Only the `realm`, `users`, `clients` and `credentials` lines count, compared LC_ALL=C sorted;
-# `changesets` (Liquibase's count, which differs across Keycloak versions; step 7 does not name it)
-# and any other line are ignored. No value, no ARG (exit 2); no stdin is read. keycloak-db's
+# equal. Only the `realm`, `users`, `clients`, `credentials` and `changesets` lines count, compared
+# LC_ALL=C sorted; any other line is ignored. `changesets` is count(*) of Keycloak's Liquibase
+# changelog (theOrg bd0c6bff scripts/keycloak_backup.sh:175-182), which restore already requires equal
+# (:553, the whole summary): a difference means d05 ran a different Keycloak against the copy, which
+# step 7 must stop on. No value, no ARG (exit 2); no stdin is read. keycloak-db's
 # password is the running container's own (kc_db_password, as backup), on keycloak-backup backup's
 # stdin alone; `run -v count-check:/backup` replaces the service's backup/ mount for that run (Compose
 # v5.7.0, checked on ws01), so backup/ is never written. Before anything else is run, the Mini's
@@ -1693,7 +1695,7 @@ do_count_check() {
   fi
   if [ "$mini" != "$new" ]; then
     {
-      echo "[ERROR] $sw: the counts differ (realm, users, clients, credentials lines; changesets ignored); no counted marker"
+      echo "[ERROR] $sw: the counts differ (realm, users, clients, credentials, changesets lines); no counted marker"
       echo "  only in the Mini's $KC_TARGET/summary.txt:"
       LC_ALL=C comm -23 <(printf '%s\n' "$mini") <(printf '%s\n' "$new") | sed 's/^/    /'
       echo "  only in d05's $COUNT_DIR/summary.txt:"
@@ -1713,9 +1715,9 @@ read_summary() {
   builtin printf x
 }
 
-# count_lines TEXT: a summary's realm, users, clients and credentials lines, LC_ALL=C sorted.
+# count_lines TEXT: a summary's realm, users, clients, credentials and changesets lines, LC_ALL=C sorted.
 count_lines() {
-  builtin printf '%s\n' "$1" | { grep -E '^(realm|users|clients|credentials) ' || true; } | LC_ALL=C sort
+  builtin printf '%s\n' "$1" | { grep -E '^(realm|users|clients|credentials|changesets) ' || true; } | LC_ALL=C sort
 }
 
 # count_dir_prune SWITCH: count-check/ emptied of all but summary.txt (and lost+found) through
@@ -2036,8 +2038,8 @@ usage() {
   echo "                    and both started-*; writes configured; re-runnable. Runs alone. Not on a replica" >&2
   echo "  count-check     - M5 step 7: keycloak-backup backup into the empty count-check/ (keycloak-db's" >&2
   echo "                    password from the running container, on its stdin), then its summary.txt's" >&2
-  echo "                    realm, users, clients and credentials lines compared with backup/summary.txt's" >&2
-  echo "                    (changesets ignored); equal: writes counted, exit 0; not equal: exit 1, both" >&2
+  echo "                    realm, users, clients, credentials and changesets lines compared with" >&2
+  echo "                    backup/summary.txt's; equal: writes counted, exit 0; not equal: exit 1, both" >&2
   echo "                    differing line sets printed. backup/summary.txt's sha256 must be unpacked's" >&2
   echo "                    keycloak-summary-sha256 (else exit 1, no backup); count-check/ keeps only" >&2
   echo "                    summary.txt after. No value, no ARG; needs unpacked, both restored-*," >&2

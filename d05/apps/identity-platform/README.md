@@ -226,8 +226,10 @@ runs the cutover image's `unpack` into the two dirs the restores read (`backup/`
     backup`: the `-v` replaces the service's `backup/` mount for that run, so the Mini's copy is
     untouched; keycloak-db's password taken from the running container, as `backup`, on its stdin
     alone), then its `summary.txt` compared with the Mini's `backup/summary.txt`: the `realm`,
-    `users`, `clients` and `credentials` lines, sorted (`changesets`, Liquibase's count, is
-    ignored). Both are read, and `count-check/` emptied, as root through keycloak-db's image
+    `users`, `clients`, `credentials` and `changesets` lines, sorted. `changesets` is count(*) of
+    Keycloak's Liquibase changelog (theOrg bd0c6bff `scripts/keycloak_backup.sh:175-182`), which
+    restore already requires equal (`:553`): a difference means d05 ran a different Keycloak
+    against the copy, and step 7 stops (exit 1, no marker). Both are read, and `count-check/` emptied, as root through keycloak-db's image
     (`--pull never --network none`, read-only for the reads). After the backup, whatever the
     comparison, the same `find` removes everything in `count-check/` but `summary.txt`, so no
     Keycloak dump stays on disk; anything else left is exit 1, no marker. Equal: writes `counted` (`date`,
