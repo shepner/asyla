@@ -12,7 +12,9 @@ are tagged with that sha; the two upstream digests did not change.
 This folder is **M1** (agreed with theOrg): `up` creates the two networks, pulls the six images,
 places theOrg's root CA, reports on the openldap leaf, and starts **keycloak-db alone**. openldap
 and keycloak first start at the M5 cutover (DEPLOY.md steps 5-6), after a restore into empty
-targets; `start-openldap`, `start-keycloak` and `restore` refuse until that is written. The ops
+targets; `start-openldap`, `start-keycloak`, `configure` and `restore` refuse until that is written
+(the first three behind the cutover marker gate below). The cutover bundle's switches are its
+first part ("Cutover bundle (M5 G2)"). The ops
 one-shots (backups, keycloak-configure) are never started by `up`.
 
 - `compose.yml`: the example with both networks external, every secret passed by name only,
@@ -100,3 +102,67 @@ one-shots (backups, keycloak-configure) are never started by `up`.
   image for build_host.py's egress probe; `up` on a host not named d05 makes the networks, places
   the CA and starts keycloak-db alone with a throwaway password made at run time (a replica gets no
   `start_env`; d05's value is never used there). openldap and keycloak never start on a replica.
+
+## Cutover bundle (M5 G2)
+
+The Mini's data comes to d05 as theOrg's cutover bundle (theOrg identity-platform
+`deploy/d05/CUTOVER-BUNDLE.md`, asyla #654): the Mini's `pack` writes an age-encrypted
+`bundle.tar.age` to the theorg generic package `identity-platform-cutover`, and d05 downloads it and
+runs the cutover image's `unpack` into the two dirs the restores read (`backup/` and
+`openldap-backup/` under `/mnt/docker/IdentityPlatform`).
+
+- Pin: `CUTOVER_BUNDLE_COMMIT` in `identity-platform.sh` (one line) is theOrg identity-platform
+  `7ac1bfb` (`7ac1bfb4ba3402f16d029765cdc92c51a5fab769`), PR #87: approved, CI green, **not merged**.
+  Repin it to the merged main commit when #87 merges. The image is
+  `gitea.asyla.org/theorg/identity-platform-cutover-bundle:<that commit>`.
+- The relay: the operator copies pack's output on the Mini into the commands below: its `version`
+  line (`m5-<12 hex>`, fetch-bundle's ARG) and its three sha256 lines, `manifests-sha256`,
+  `keycloak-summary-sha256` and `openldap-summary-sha256` (unpack-bundle's three ARGs, in that
+  order). unpack-bundle refuses a fetched version that is not `m5-` and the manifests sum's first
+  12 hex, and after unpack checks its four lines against the fetched version and the three ARGs.
+- The operator commands, each run alone from the workstation (`scripts/app_switch.sh` allows them
+  through `switch_env` and `switch_args` in `d05/host.toml`; a value goes on ssh stdin, never an
+  argv or an environment on d05):
+
+  ```
+  cd ~/local/asyla && python3 core/tools/credentials.py exec THEORG_REGISTRY_PULL_TOKEN -- projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform fetch-bundle THEORG_REGISTRY_PULL_TOKEN VERSION
+  cd ~/local/asyla && python3 core/tools/credentials.py exec IDP_CUTOVER_BUNDLE_IDENTITY -- projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform unpack-bundle IDP_CUTOVER_BUNDLE_IDENTITY MANIFESTS_SHA256 KC_SUM OL_SUM
+  cd ~/local/asyla && projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform reset-cutover
+  cd ~/local/asyla && projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform cutover-clean
+  ```
+
+  - `fetch-bundle VERSION`: pulls the cutover image if missing (the theorg-registry token through
+    the credential helper, as `pull`) and downloads `bundle.tar.age` to `cutover/` (the token on
+    curl's config stdin alone); prints its size and sha256; writes the `fetched` marker. Refused
+    over an existing bundle (`cutover-clean` first) or an `unpacked` marker (`reset-cutover`
+    first).
+  - `unpack-bundle MANIFESTS_SHA256 KC_SUM OL_SUM`: reads the age identity on stdin and writes it
+    to the image's `unpack` on stdin alone; the contract's `docker run --rm -i --network none`.
+    The `IDP_CUTOVER_BUNDLE_IDENTITY` credentials slot waits on secrets-vault#65: until it exists
+    this command cannot run. Refused with no `fetched` marker or bundle, a bundle whose sha256 is
+    not the fetched one, an `unpacked` marker, or a target holding more than `lost+found`
+    (`reset-cutover` first).
+  - `reset-cutover`: after a failed unpack (or to unpack again), removes the `unpacked` marker and
+    empties both targets but for `lost+found`, with the pinned image's `find` (`--pull never`,
+    `--network none`: unpack's files are root-owned); keeps the bundle and the `fetched` marker.
+    Refused once a `restored-*` marker exists, when `docker compose --profile restored ps -a -q
+    openldap keycloak` lists a container, or when that call fails: past a restore the targets are
+    never emptied here. With the image missing it succeeds when both targets are already empty;
+    otherwise it removes the marker and fails: run `cutover-clean` and `fetch-bundle` (which pulls
+    the image), then `reset-cutover` again.
+  - `cutover-clean`: removes `cutover/bundle.tar.age`, fetch-bundle's temp downloads
+    (`cutover/.bundle.*`) and the `fetched` marker; idempotent, never gated (a bundle can be
+    fetched again).
+- The marker gate: one marker per finished step in `/mnt/docker/IdentityPlatform/cutover-state/`,
+  each written atomically: `fetched`, `unpacked`, and `restored-openldap` / `restored-keycloak`
+  from the restores (not written yet). `start-openldap` needs `unpacked` and `restored-openldap`,
+  `start-keycloak` needs `unpacked` and `restored-keycloak`, `configure` needs both `restored-*`;
+  each names the missing marker and exits 3, and with its markers present still refuses (not yet
+  written, exit 3). `restore` refuses (exit 1, never build_host.py's skip status 3) until theOrg's
+  B2a (`keycloak_backup.sh` taking `PGPASSWORD` on stdin) and identity-platform #86.
+- Exit codes of the four cutover switches: 0 done; 2 a usage error (a wrong ARG, an ARG to
+  `reset-cutover` or `cutover-clean`); 3 refused, nothing changed (a replica, the value's name set
+  in the environment, a terminal or an empty read on stdin, a marker or state check, combined with
+  another switch); 1 a failure (a pull or download, a check after unpack, a target left not empty).
+  unpack-bundle keeps unpack's own exit: 2 and 3 changed nothing; 1, 4 or any other failure may have
+  left files: run `reset-cutover` before a retry. None runs on a replica.

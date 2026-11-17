@@ -71,6 +71,6 @@ start_env = ["IDP_KEYCLOAK_DB_PASSWORD"]
 # fetch-bundle takes the theorg-registry pull token on ssh stdin and the package version as its one
 # ARG. unpack-bundle takes the age identity on ssh stdin and pack's three sha256 lines as ARGs
 # (manifests-sha256, keycloak-summary-sha256, openldap-summary-sha256, in that order). reset-cutover
-# and cutover-clean are added with their implementation.
-switch_env = { "leaf-issue" = ["LDAP_PROVISIONER_PASSWORD"], "leaf-renew" = [], "leaf-schedule-install" = [], "leaf-schedule-status" = [], "leaf-schedule-remove" = [], "fetch-bundle" = ["THEORG_REGISTRY_PULL_TOKEN"], "unpack-bundle" = ["IDP_CUTOVER_BUNDLE_IDENTITY"] }
+# and cutover-clean take no value and no ARG.
+switch_env = { "leaf-issue" = ["LDAP_PROVISIONER_PASSWORD"], "leaf-renew" = [], "leaf-schedule-install" = [], "leaf-schedule-status" = [], "leaf-schedule-remove" = [], "fetch-bundle" = ["THEORG_REGISTRY_PULL_TOKEN"], "unpack-bundle" = ["IDP_CUTOVER_BUNDLE_IDENTITY"], "reset-cutover" = [], "cutover-clean" = [] }
 switch_args = { "fetch-bundle" = ['^m5-[0-9a-f]{12}$'], "unpack-bundle" = ['^[0-9a-f]{64}$', '^[0-9a-f]{64}$', '^[0-9a-f]{64}$'] }

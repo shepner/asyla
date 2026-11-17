@@ -10,8 +10,8 @@
 # here: their first start is the M5 cutover (DEPLOY.md steps 5-6), after a restore, and theOrg's
 # restores refuse a target that is not empty (keycloak_backup.sh counts tables; openldap_backup.sh
 # checks the volumes). A first openldap start runs osixia's bootstrap, so M1 never creates
-# openldap-data or openldap-config. start-openldap, start-keycloak and restore refuse until M5 is
-# written.
+# openldap-data or openldap-config. start-openldap, start-keycloak, configure and restore refuse
+# until M5 is written (the cutover bundle below is its first part).
 # No secret is in any file here or on the host. The workstation resolves the values from OpenBao
 # at deploy (build_host.py start_env, pull_token_env) and hands them to this process's environment;
 # this script maps them onto the names compose.yml passes by name:
@@ -50,13 +50,20 @@
 #   unpack-bundle MANIFESTS_SHA256 KC_SUM OL_SUM  reads the age identity as one line on stdin and
 #               writes it to the image's unpack on stdin alone; the two targets are backup/ and
 #               openldap-backup/ (the dirs the restores read).
-#   reset-cutover  empties both targets (lost+found kept) after a failed unpack; refused once a
-#               restore marker or a restored container exists. cutover-clean removes the ciphertext.
+#   reset-cutover  removes the unpacked marker and empties both targets (lost+found kept) with the
+#               pinned image's find (the files are root-owned), keeping the ciphertext and the
+#               fetched marker; refused (exit 3) on a replica, once a restore marker or a restored
+#               container exists, or when compose cannot tell.
+#   cutover-clean  removes the ciphertext, fetch-bundle's temp downloads and the fetched marker;
+#               idempotent. Refused on a replica.
 #   A marker per finished step in cutover-state/ (fetched, unpacked; restored-openldap and
 #   restored-keycloak from the restores, not written yet): start-openldap, start-keycloak and
-#   configure are gated on them (cutover_gate), and still refuse in this round.
+#   configure are gated on them (cutover_gate, exit 3 naming the missing marker), and still refuse
+#   (exit 3) in this round. restore refuses (exit 1: never build_host.py's skip status 3) until
+#   theOrg's B2a and identity-platform #86.
 #   THEORG_REGISTRY_PULL_TOKEN and IDP_CUTOVER_BUNDLE_IDENTITY are noted and unset at start, as
-#   LDAP_PROVISIONER_PASSWORD is; fetch-bundle and unpack-bundle then refuse (exit 3). Each runs alone.
+#   LDAP_PROVISIONER_PASSWORD is; fetch-bundle and unpack-bundle then refuse (exit 3). The four
+#   cutover switches each run alone.
 # Data under /mnt/docker/IdentityPlatform. No backup here yet: the data is the Mini's until M5.
 
 set -euo pipefail
@@ -870,9 +877,100 @@ do_unpack_bundle() {
   write_state unpacked "version $ver" "manifests-sha256 $m" "keycloak-summary-sha256 $k" "openldap-summary-sha256 $o"
 }
 
+# reset-cutover: undo an unpack (a failed one included: no unpacked marker, files present) so that
+# unpack-bundle can run again. Refused (exit 3, nothing changed) on a replica, when a restored-*
+# marker exists, when `compose --profile restored ps -a -q openldap keycloak` lists a container or
+# fails: past a restore the targets are the restores' input, never emptied here. Then the unpacked
+# marker goes first (a crash mid-delete leaves no marker over a partial target), and each existing
+# target is emptied but for lost+found by the pinned image's find (unpack's files are root-owned;
+# --pull never, --network none). The ciphertext and the fetched marker are kept. With the image
+# missing: targets already empty succeed; a target holding files cannot be emptied here, so the
+# marker goes and it fails (exit 1): cutover-clean and fetch-bundle (it pulls the image), then again.
+# Exit 1 too when a target is not empty afterwards.
+do_reset_cutover() {
+  local f ids d rc=0
+  if [ $# -ne 0 ]; then
+    echo "[ERROR] reset-cutover: usage: reset-cutover (no ARG)" >&2
+    return 2
+  fi
+  if is_replica; then
+    echo "[ERROR] reset-cutover: refused: not on a replica ($(hostname -s </dev/null)); the cutover is d05's; nothing changed" >&2
+    return 3
+  fi
+  for f in "$STATE_DIR"/restored-*; do
+    if [ -e "$f" ]; then
+      echo "[ERROR] reset-cutover: refused: $f exists (a restore ran: the targets are its input); nothing changed" >&2
+      return 3
+    fi
+  done
+  if ! ids="$(run_compose --profile restored ps -a -q openldap keycloak </dev/null)"; then
+    echo "[ERROR] reset-cutover: refused: docker compose ps for openldap and keycloak failed (cannot tell whether a restored container exists); nothing changed" >&2
+    return 3
+  fi
+  if [ -n "$ids" ]; then
+    echo "[ERROR] reset-cutover: refused: an openldap or keycloak container exists (the cutover is past its restore); nothing changed" >&2
+    return 3
+  fi
+  if ! docker image inspect "$CUTOVER_IMAGE" >/dev/null 2>&1 </dev/null; then
+    if target_empty "$KC_TARGET" && target_empty "$OL_TARGET"; then
+      rm -f "$STATE_DIR/unpacked" || return 1
+      echo "[INFO] reset-cutover: $CUTOVER_IMAGE is not here, and both targets are empty already; no unpacked marker"
+      return 0
+    fi
+    rm -f "$STATE_DIR/unpacked" || return 1
+    echo "[ERROR] reset-cutover: $CUTOVER_IMAGE is not here, so the root-owned files in the targets cannot be removed; the unpacked marker is gone; run cutover-clean and fetch-bundle VERSION (it pulls the image), then reset-cutover again" >&2
+    return 1
+  fi
+  rm -f "$STATE_DIR/unpacked" || return 1
+  for d in "$KC_TARGET" "$OL_TARGET"; do
+    [ -d "$d" ] || continue
+    docker run --rm --network none --pull never --entrypoint find -v "$d:/t" "$CUTOVER_IMAGE" \
+      /t -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf {} + </dev/null || rc=$?
+  done
+  if ! target_empty "$KC_TARGET" || ! target_empty "$OL_TARGET"; then
+    echo "[ERROR] reset-cutover: a target still holds files (find exit $rc): $KC_TARGET, $OL_TARGET" >&2
+    return 1
+  fi
+  echo "[INFO] reset-cutover: $KC_TARGET and $OL_TARGET empty (lost+found kept), no unpacked marker; the bundle and the fetched marker kept"
+}
+
+# cutover-clean: the ciphertext, fetch-bundle's temp downloads (cutover/.bundle.*) and the fetched
+# marker (and a temp one) removed; idempotent. A bundle can always be fetched again, so no marker
+# gates it. Refused (exit 3) on a replica.
+do_cutover_clean() {
+  if [ $# -ne 0 ]; then
+    echo "[ERROR] cutover-clean: usage: cutover-clean (no ARG)" >&2
+    return 2
+  fi
+  if is_replica; then
+    echo "[ERROR] cutover-clean: refused: not on a replica ($(hostname -s </dev/null)); the cutover is d05's; nothing changed" >&2
+    return 3
+  fi
+  rm -f "$BUNDLE" "$CUT_DIR"/.bundle.* "$STATE_DIR/fetched" "$STATE_DIR"/.fetched.* || return 1
+  echo "[INFO] cutover-clean: no $BUNDLE, no temp download, no fetched marker"
+}
+
+# cutover_gate SWITCH: the markers a cutover switch needs; prints the missing ones and returns 3.
+cutover_gate() {
+  local m need=() missing=()
+  case "$1" in
+    start-openldap) need=(unpacked restored-openldap) ;;
+    start-keycloak) need=(unpacked restored-keycloak) ;;
+    configure) need=(restored-openldap restored-keycloak) ;;
+    *) echo "[ERROR] cutover_gate: no gate for $1" >&2; return 3 ;;
+  esac
+  for m in "${need[@]}"; do
+    [ -f "$STATE_DIR/$m" ] || missing+=("$m")
+  done
+  if [ ${#missing[@]} -gt 0 ]; then
+    echo "[ERROR] $1: refused: cutover marker missing: ${missing[*]} (in $STATE_DIR); nothing done" >&2
+    return 3
+  fi
+}
+
 refuse_cutover() {
   echo "[ERROR] $1: M5 cutover, not yet written (theOrg identity-platform DEPLOY.md steps 5-6, after a restore); refused" >&2
-  exit 1
+  exit 3
 }
 
 run_cmd() {
@@ -911,8 +1009,14 @@ run_cmd() {
     leaf-schedule-remove)
       do_leaf_schedule_remove
       ;;
-    start-openldap|start-keycloak|restore)
+    start-openldap|start-keycloak|configure)
+      cutover_gate "$cmd" || exit $?
       refuse_cutover "$cmd"
+      ;;
+    restore)
+      # Not 3: build_host.py reads exit 3 from a restore as "skipped, data present".
+      echo "[ERROR] restore: refused: waiting on theOrg's B2a (keycloak_backup.sh PGPASSWORD on stdin) and identity-platform #86" >&2
+      exit 1
       ;;
     *)
       echo "[ERROR] unknown switch: $cmd" >&2
@@ -952,8 +1056,14 @@ usage() {
   echo "                    backup/ and openldap-backup/, checked against pack's three sha256 lines; reads" >&2
   echo "                    the age identity as one line on stdin (scripts/app_switch.sh). Runs alone. Not" >&2
   echo "                    on a replica" >&2
-  echo "  start-openldap, start-keycloak, restore" >&2
-  echo "                  - Refused: the M5 cutover, not yet written" >&2
+  echo "  reset-cutover   - M5: remove the unpacked marker and empty backup/ and openldap-backup/ (lost+found" >&2
+  echo "                    kept) after a failed unpack; refused past a restore. Runs alone. Not on a replica" >&2
+  echo "  cutover-clean   - M5: remove cutover/bundle.tar.age, temp downloads and the fetched marker." >&2
+  echo "                    Runs alone. Not on a replica" >&2
+  echo "  start-openldap, start-keycloak, configure" >&2
+  echo "                  - Gated on the cutover markers (exit 3 naming the missing one); then refused:" >&2
+  echo "                    the M5 cutover, not yet written (exit 3)" >&2
+  echo "  restore         - Refused (exit 1): waiting on theOrg's B2a and identity-platform #86" >&2
   echo "  logs            - Follow logs (optionally for one service)" >&2
 }
 
@@ -977,6 +1087,14 @@ case "$1" in
     do_unpack_bundle "${@:2}" || exit $?
     exit 0
     ;;
+  reset-cutover)
+    do_reset_cutover "${@:2}" || exit $?
+    exit 0
+    ;;
+  cutover-clean)
+    do_cutover_clean "${@:2}" || exit $?
+    exit 0
+    ;;
 esac
 
 # leaf-issue runs alone: its stdin carries the provisioner password, and no other switch's
@@ -984,7 +1102,7 @@ esac
 if [ $# -gt 1 ]; then
   for cmd in "$@"; do
     case "$cmd" in
-      leaf-issue|fetch-bundle|unpack-bundle)
+      leaf-issue|fetch-bundle|unpack-bundle|reset-cutover|cutover-clean)
         echo "[ERROR] $cmd: refused: run it alone (it reads a value on stdin or takes ARGs), not with: $*" >&2
         exit 3
         ;;
