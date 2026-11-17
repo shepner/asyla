@@ -11,7 +11,7 @@
 # restores refuse a target that is not empty (keycloak_backup.sh counts tables; openldap_backup.sh
 # checks the volumes). A first openldap start runs osixia's bootstrap, so M1 never creates
 # openldap-data or openldap-config. configure runs only at the M5 cutover, behind the cutover gate
-# (the cutover bundle, the two restores, the two starts, configure and cutover-done below are M5's
+# (the cutover bundle, the two restores, the two starts, configure, count-check and cutover-done below are M5's
 # switches); restore refuses and points at restore-openldap and restore-keycloak. Once cutover-done
 # exists (on d05, never on a replica), up starts keycloak-db, openldap and keycloak together
 # (`--profile restored up -d --wait`) and needs IDP_LDAP_ADMIN_PASSWORD as well as
@@ -118,12 +118,21 @@
 #   THEORG_REGISTRY_PULL_TOKEN and IDP_CUTOVER_BUNDLE_IDENTITY are noted and unset at start, as
 #   LDAP_PROVISIONER_PASSWORD is; fetch-bundle and unpack-bundle then refuse (exit 3);
 #   restore-keycloak refuses (exit 3) with IDP_KEYCLOAK_DB_PASSWORD in its environment.
+#   count-check  no value, no ARG (DEPLOY.md cutover step 7, Counts): keycloak-backup backup into
+#               the emptied count-check/ (`run -v count-check:/backup`; keycloak-db's password from
+#               the running container, as backup, on its stdin alone), then its summary.txt's realm,
+#               users, clients and credentials lines (changesets ignored) compared with the Mini's
+#               backup/summary.txt. Equal: writes counted (date, manifests-sha256, counts equal);
+#               not equal: exit 1, both differing line sets printed. Refused (exit 3) on a replica,
+#               a symlink, the lock busy, past cutover-done, unless unpacked, both restored-*, both
+#               started-* and configured are valid.
 #   cutover-done  no value, no ARG: the operator runs it after the cutover's verification. Refused
 #               (exit 3, nothing written) on a replica, with the lock busy, unless every marker is
-#               there and valid (cutover_gate: unpacked, both restored-*, both started-* and
-#               configured with apply ok and reconcile ok; both restored-* naming unpacked's
-#               manifests-sha256), and unless openldap and keycloak are running and healthy. Writes
-#               cutover-done (date, manifests-sha256); past it, prints that and exits 0. The ten
+#               there and valid (cutover_gate: unpacked, both restored-*, both started-*,
+#               configured with apply ok and reconcile ok, and counted with counts equal; both
+#               restored-* and counted naming unpacked's manifests-sha256), and unless openldap and
+#               keycloak are running and healthy. Writes cutover-done (date, manifests-sha256); past
+#               it, prints that and exits 0. The eleven
 #   cutover switches each run alone, and one at a time: each holds flock(1) (util-linux) -n on
 #   cutover-state/.lock for its whole run; a busy lock is refused (exit 3).
 # Data under /mnt/docker/IdentityPlatform. backup (host-maintenance's nightly task, once cutover-done
@@ -214,6 +223,8 @@ STATE_DIR="$APP_ROOT/cutover-state"
 # so the restores read what unpack wrote.
 KC_TARGET="$APP_ROOT/backup"
 OL_TARGET="$APP_ROOT/openldap-backup"
+# count-check's own keycloak-backup copy (DEPLOY.md cutover step 7), mounted over /backup for that run.
+COUNT_DIR="$APP_ROOT/count-check"
 
 # backup's nightly mirror (the operator's "Yes, mirror nightly", 2026-11-16): the NAS share
 # (build/setup/nfs.sh mounts /mnt/nas/data1/docker on d05), one dir per copy; the stage is this
@@ -1518,8 +1529,8 @@ do_configure() {
 # cutover-done: the go-live record, run by the operator after the cutover's verification (DEPLOY.md
 # step 8). No value, no ARG (exit 2). Refused (exit 3, nothing written) on a replica, cutover-state/
 # a symlink, the lock busy, a missing or invalid marker (cutover_gate: unpacked, both restored-*,
-# both started-* and configured), an unpacked manifests-sha256 that is not 64 hex or a restored-*
-# naming another, and openldap or keycloak not running and healthy. Past an existing cutover-done:
+# both started-*, configured and counted), an unpacked manifests-sha256 that is not 64 hex or a
+# restored-* or counted naming another, and openldap or keycloak not running and healthy. Past an existing cutover-done:
 # says so, exit 0, nothing written. Writes cutover-done (date, manifests-sha256): up then starts
 # all three services and needs both values; the restores, starts, reset-cutover and cutover-clean
 # refuse.
@@ -1544,7 +1555,7 @@ do_cutover_done() {
     echo "[ERROR] $sw: refused: cutover marker missing or invalid: unpacked (manifests-sha256 '$m' is not 64 hex) (in $STATE_DIR); nothing done" >&2
     return 3
   fi
-  for f in restored-openldap restored-keycloak; do
+  for f in restored-openldap restored-keycloak counted; do
     if [ "$(state_value "$f" manifests-sha256)" != "$m" ]; then
       echo "[ERROR] $sw: refused: cutover marker missing or invalid: $f (its manifests-sha256 is not unpacked's) (in $STATE_DIR); nothing done" >&2
       return 3
@@ -1559,6 +1570,106 @@ do_cutover_done() {
   done
   write_state "$CUTOVER_DONE" "date $(date -u +%Y-%m-%dT%H:%M:%SZ </dev/null)" "manifests-sha256 $m" || return 1
   echo "[INFO] $sw: recorded; up now starts keycloak-db, openldap and keycloak and needs IDP_KEYCLOAK_DB_PASSWORD and IDP_LDAP_ADMIN_PASSWORD"
+}
+
+# count-check: DEPLOY.md cutover step 7, Counts (theOrg bd0c6bff): keycloak-backup backup on d05 into
+# its empty count-check/, then its summary.txt compared with the Mini's (backup/summary.txt, from the
+# bundle): the realm names, and per realm the users, the clients and the credentials by type must be
+# equal. Only the `realm`, `users`, `clients` and `credentials` lines count, compared LC_ALL=C sorted;
+# `changesets` (Liquibase's count, which differs across Keycloak versions; step 7 does not name it)
+# and any other line are ignored. No value, no ARG (exit 2); no stdin is read. keycloak-db's
+# password is the running container's own (kc_db_password, as backup), on keycloak-backup backup's
+# stdin alone; `run -v count-check:/backup` replaces the service's backup/ mount for that run (Compose
+# v5.7.0, checked on ws01), so backup/ is never written. count-check/ is emptied first (its files are
+# root-owned: find in keycloak-db's image, --pull never, --network none, as reset-cutover) and both
+# summaries are read through that image, read-only. Refused (exit 3, nothing changed) on a replica,
+# count-check/, a target or cutover-state/ a symlink, the lock busy, past cutover-done, and on a
+# missing or invalid marker (cutover_gate: unpacked, both restored-*, both started-* and configured).
+# Equal: writes counted (date, the unpacked manifests-sha256, counts equal), which cutover-done
+# needs; exit 0. Not equal: exit 1, both differing line sets printed (counts, not secrets), no marker.
+# The backup failing: its exit, no marker. count-check/ not emptied, keycloak-db's password not
+# taken, or a summary unreadable or without a realm line: exit 1, no marker. Re-runnable until
+# cutover-done; past the refusals a run first removes an existing counted.
+do_count_check() {
+  local sw=count-check m rc=0 mini new
+  { set +x; } 2>/dev/null
+  set +a
+  unset -v pw
+  local +x pw=""
+  if [ $# -ne 0 ]; then
+    echo "[ERROR] $sw: usage: $sw (no ARG)" >&2
+    return 2
+  fi
+  if is_replica; then
+    echo "[ERROR] $sw: refused: not on a replica ($(hostname -s </dev/null)); the cutover is d05's; nothing changed" >&2
+    return 3
+  fi
+  refuse_symlinks "$sw" "$COUNT_DIR" "$KC_TARGET" "$OL_TARGET" "$STATE_DIR" || return
+  cutover_lock "$sw" || return
+  if [ -e "$STATE_DIR/$CUTOVER_DONE" ]; then
+    echo "[ERROR] $sw: refused: $STATE_DIR/$CUTOVER_DONE exists (the cutover is done; backup/ may hold a nightly copy, not the Mini's); nothing changed" >&2
+    return 3
+  fi
+  cutover_gate "$sw" || return
+  m="$(state_value unpacked manifests-sha256)"
+  if [[ ! $m =~ $SHA256_RE ]]; then
+    echo "[ERROR] $sw: refused: cutover marker missing or invalid: unpacked (manifests-sha256 '$m' is not 64 hex) (in $STATE_DIR); nothing done" >&2
+    return 3
+  fi
+
+  rm -f "$STATE_DIR/counted" || return 1
+  mkdir -p "$COUNT_DIR" || return 1
+  if ! target_empty "$COUNT_DIR"; then
+    docker run --rm --network none --pull never --user 0:0 --entrypoint find -v "$COUNT_DIR:/t" "$KC_DB_IMAGE" \
+      /t -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf {} + </dev/null || rc=$?
+    if ! target_empty "$COUNT_DIR"; then
+      echo "[ERROR] $sw: $COUNT_DIR still holds files (find exit $rc); no backup run, no counted marker" >&2
+      return 1
+    fi
+  fi
+
+  echo "[INFO] $sw: keycloak-backup backup into $COUNT_DIR (keycloak-db's password on its stdin)"
+  kc_db_password "$sw" || { echo "[ERROR] $sw: no backup run, no counted marker" >&2; return 1; }
+  rc=0
+  # run_compose's argv, with `builtin exec docker` in its own subshell, as do_backup.
+  builtin printf '%s\n' "$pw" \
+    | (builtin exec docker compose -f "$COMPOSE_FILE" --project-directory "$SCRIPT_DIR" \
+        --profile ops run --rm -T -v "$COUNT_DIR:/backup" -e KEYCLOAK_BACKUP_PASSWORD_STDIN=1 keycloak-backup backup) || rc=$?
+  pw=""
+  unset -v pw
+  if [ "$rc" -ne 0 ]; then
+    echo "[ERROR] $sw: keycloak-backup backup exited $rc; no counted marker" >&2
+    return "$rc"
+  fi
+
+  if ! mini="$(count_lines "$KC_TARGET")" || ! grep -q '^realm ' <<<"$mini"; then
+    echo "[ERROR] $sw: could not read a realm line from the Mini's $KC_TARGET/summary.txt; no counted marker" >&2
+    return 1
+  fi
+  if ! new="$(count_lines "$COUNT_DIR")" || ! grep -q '^realm ' <<<"$new"; then
+    echo "[ERROR] $sw: could not read a realm line from d05's $COUNT_DIR/summary.txt; no counted marker" >&2
+    return 1
+  fi
+  if [ "$mini" != "$new" ]; then
+    {
+      echo "[ERROR] $sw: the counts differ (realm, users, clients, credentials lines; changesets ignored); no counted marker"
+      echo "  only in the Mini's $KC_TARGET/summary.txt:"
+      LC_ALL=C comm -23 <(printf '%s\n' "$mini") <(printf '%s\n' "$new") | sed 's/^/    /'
+      echo "  only in d05's $COUNT_DIR/summary.txt:"
+      LC_ALL=C comm -13 <(printf '%s\n' "$mini") <(printf '%s\n' "$new") | sed 's/^/    /'
+    } >&2
+    return 1
+  fi
+  write_state counted "date $(date -u +%Y-%m-%dT%H:%M:%SZ </dev/null)" "manifests-sha256 $m" "counts equal" || return 1
+  echo "[INFO] $sw: the realm names and each realm's users, clients and credentials by type are equal ($(grep -c '^realm ' <<<"$new") realm(s)); next: cutover-done"
+}
+
+# count_lines DIR: DIR/summary.txt read as root through keycloak-db's image (read-only, no pull, no
+# network), its realm, users, clients and credentials lines LC_ALL=C sorted; returns 1 when unread.
+count_lines() {
+  local out
+  out="$(docker run --rm --pull never --network none --user 0:0 --entrypoint cat -v "$1:/s:ro" "$KC_DB_IMAGE" /s/summary.txt </dev/null)" || return 1
+  printf '%s\n' "$out" | { grep -E '^(realm|users|clients|credentials) ' || true; } | LC_ALL=C sort
 }
 
 # backup (asyla #654 unit D; the operator's "Yes, mirror nightly", 2026-11-16). host-maintenance's
@@ -1602,7 +1713,7 @@ do_backup() {
   run_compose --profile ops run --rm -T openldap-backup verify </dev/null || { backup_failed 1 "openldap-backup verify" $?; return 1; }
 
   echo "[INFO] $sw: step 2: keycloak-backup backup (keycloak-db's password on its stdin), then verify"
-  kc_db_password || { backup_failed 2 "keycloak-db's password" 1; return 1; }
+  kc_db_password "$sw" || { backup_failed 2 "keycloak-db's password" 1; return 1; }
   # run_compose's argv, with `builtin exec docker` in its own subshell: the docker program, never a
   # function (a common.env function named docker would otherwise get the value on its stdin).
   builtin printf '%s\n' "$pw" \
@@ -1633,21 +1744,22 @@ backup_failed() {   # backup_failed STEP NAME EXIT
 # docker inspect's template matches that one Config.Env entry by name and emits nothing else (the
 # environment is never listed); the value lands in this process only: never printed, an argv, an
 # environment or a file. The docker group can read it there already (dockerd's config.v2.json).
-# Returns 1 when keycloak-db is not running or has no such entry.
-kc_db_password() {
-  local id
+# Returns 1 when keycloak-db is not running or has no such entry. SWITCH (backup or count-check,
+# whose local pw it sets) names the caller in its messages.
+kc_db_password() {   # kc_db_password SWITCH
+  local sw="$1" id
   id="$(run_compose ps -q --status running keycloak-db 2>/dev/null </dev/null)" || id=""
   id="${id%%$'\n'*}"
   if [ -z "$id" ]; then
-    echo "[ERROR] backup: keycloak-db is not running, so its password cannot be taken from it" >&2
+    echo "[ERROR] $sw: keycloak-db is not running, so its password cannot be taken from it" >&2
     return 1
   fi
   pw="$(docker inspect -f '{{range .Config.Env}}{{if eq (index (split . "=") 0) "POSTGRES_PASSWORD"}}{{.}}{{end}}{{end}}' "$id" 2>/dev/null </dev/null)" || pw=""
   case "$pw" in
     POSTGRES_PASSWORD=?*) pw="${pw#POSTGRES_PASSWORD=}" ;;
-    *) pw=""; echo "[ERROR] backup: the running keycloak-db has no POSTGRES_PASSWORD to take" >&2; return 1 ;;
+    *) pw=""; echo "[ERROR] $sw: the running keycloak-db has no POSTGRES_PASSWORD to take" >&2; return 1 ;;
   esac
-  echo "[INFO] backup: keycloak-db's password taken from the running keycloak-db (not printed)"
+  echo "[INFO] $sw: keycloak-db's password taken from the running keycloak-db (not printed)"
 }
 
 # manifest_names FILE: the file names a theOrg manifest.sha256 lists, one per line; returns 1 (and
@@ -1718,15 +1830,17 @@ mirror_copy() {
 # cutover_gate SWITCH: the markers a cutover switch needs; prints the missing or invalid ones and
 # returns 3. unpacked counts only with a non-empty version equal to fetched's; started-openldap only
 # with its "admin-bind ok" line; configured only with its "apply ok" and "reconcile ok" lines; a
-# restored-* or started-keycloak marker only when it is a non-empty file. configure needs both
-# restored-* and both started-*; cutover-done needs those, unpacked and configured.
+# restored-* or started-keycloak marker only when it is a non-empty file; counted only with its
+# "counts equal" line. configure needs both restored-* and both started-*; count-check needs those,
+# unpacked and configured; cutover-done needs those and counted.
 cutover_gate() {
   local m v fv need=() missing=()
   case "$1" in
     start-openldap) need=(unpacked restored-openldap) ;;
     start-keycloak) need=(unpacked restored-keycloak started-openldap) ;;
     configure) need=(restored-openldap restored-keycloak started-openldap started-keycloak) ;;
-    cutover-done) need=(unpacked restored-openldap restored-keycloak started-openldap started-keycloak configured) ;;
+    count-check) need=(unpacked restored-openldap restored-keycloak started-openldap started-keycloak configured) ;;
+    cutover-done) need=(unpacked restored-openldap restored-keycloak started-openldap started-keycloak configured counted) ;;
     restore-keycloak|restore-openldap) need=(unpacked) ;;
     *) echo "[ERROR] cutover_gate: no gate for $1" >&2; return 3 ;;
   esac
@@ -1742,6 +1856,8 @@ cutover_gate() {
       missing+=("started-openldap (no admin-bind ok)")
     elif [ "$m" = configured ] && ! { grep -qx 'apply ok' "$STATE_DIR/$m" && grep -qx 'reconcile ok' "$STATE_DIR/$m"; }; then
       missing+=("configured (no apply ok and reconcile ok)")
+    elif [ "$m" = counted ] && ! grep -qx 'counts equal' "$STATE_DIR/$m"; then
+      missing+=("counted (no counts equal)")
     fi
   done
   if [ ${#missing[@]} -gt 0 ]; then
@@ -1854,8 +1970,14 @@ usage() {
   echo "                    IDP_DEPLOY_DEX_CLIENT_SECRET's value as one line each on stdin (scripts/app_switch.sh)" >&2
   echo "                    and writes both to each run's stdin; keycloak must be healthy; needs both restored-*" >&2
   echo "                    and both started-*; writes configured; re-runnable. Runs alone. Not on a replica" >&2
+  echo "  count-check     - M5 step 7: keycloak-backup backup into the empty count-check/ (keycloak-db's" >&2
+  echo "                    password from the running container, on its stdin), then its summary.txt's" >&2
+  echo "                    realm, users, clients and credentials lines compared with backup/summary.txt's" >&2
+  echo "                    (changesets ignored); equal: writes counted, exit 0; not equal: exit 1, both" >&2
+  echo "                    differing line sets printed. No value, no ARG; needs unpacked, both restored-*," >&2
+  echo "                    both started-* and configured. Runs alone. Not on a replica" >&2
   echo "  cutover-done    - M5: record the go-live after the cutover's verification; no value, no ARG; needs" >&2
-  echo "                    every marker (unpacked, both restored-*, both started-*, configured) and" >&2
+  echo "                    every marker (unpacked, both restored-*, both started-*, configured, counted) and" >&2
   echo "                    openldap and keycloak healthy; writes cutover-done (date, manifests-sha256);" >&2
   echo "                    exits 0 if it exists. Runs alone. Not on a replica" >&2
   echo "  restore-openldap - M5: openldap-backup restore of openldap-backup/ into the empty openldap-data and" >&2
@@ -1922,6 +2044,10 @@ case "$1" in
     do_configure "${@:2}" || exit $?
     exit 0
     ;;
+  count-check)
+    do_count_check "${@:2}" || exit $?
+    exit 0
+    ;;
   cutover-done)
     do_cutover_done "${@:2}" || exit $?
     exit 0
@@ -1933,7 +2059,7 @@ esac
 if [ $# -gt 1 ]; then
   for cmd in "$@"; do
     case "$cmd" in
-      leaf-issue|fetch-bundle|unpack-bundle|reset-cutover|cutover-clean|restore-keycloak|restore-openldap|start-openldap|start-keycloak|configure|cutover-done|backup)
+      leaf-issue|fetch-bundle|unpack-bundle|reset-cutover|cutover-clean|restore-keycloak|restore-openldap|start-openldap|start-keycloak|configure|count-check|cutover-done|backup)
         echo "[ERROR] $cmd: refused: run it alone (it reads a value on stdin, takes ARGs or holds the cutover lock), not with: $*" >&2
         exit 3
         ;;

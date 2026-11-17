@@ -58,7 +58,8 @@
 # healthy, a symlinked cutover-state, combined, the lock held, a terminal, or an empty or blank
 # line; exit 2 for an ARG; also under xtrace.
 # cutover-done (the go-live record) runs only past every marker (unpacked, both restored-* naming
-# unpacked's manifests-sha256, both started-*, configured with apply ok and reconcile ok) and with
+# unpacked's manifests-sha256, both started-*, configured with apply ok and reconcile ok, counted
+# with counts equal and unpacked's manifests-sha256; count-check's own cases: the backup test) and with
 # openldap and keycloak healthy (the exact ps and inspect calls, nothing else); writes cutover-done
 # (date, manifests-sha256); a re-run says it exists (0, no call); refuses (exit 3, no up or run,
 # nothing written) on a replica, a symlinked cutover-state, an invalid marker, either service not
@@ -1306,7 +1307,7 @@ done
 reset_setup; before="$(snap)"
 exec 7> "$ROOT/cutover-state/.lock"
 if "$T/bin/flock" -n 7; then
-  for sw in reset-cutover cutover-clean "fetch-bundle $CUT_VER" "unpack-bundle $UNP_M $UNP_K $UNP_O" restore-keycloak restore-openldap start-openldap start-keycloak configure cutover-done; do
+  for sw in reset-cutover cutover-clean "fetch-bundle $CUT_VER" "unpack-bundle $UNP_M $UNP_K $UNP_O" restore-keycloak restore-openldap start-openldap start-keycloak configure count-check cutover-done; do
     # shellcheck disable=SC2086
     run $sw; rc=$?
     [ "$rc" -eq 3 ] && echo "$OUT" | grep -q "${sw%% *}: refused: another cutover switch is running" && [ ! -s "$T/log" ] \
@@ -1386,6 +1387,7 @@ gate_case() {   # gate_case SWITCH "MARKERS" MISSING|pass (GATE_UNPACKED: unpack
     elif [ "$m" = unpacked ]; then printf '%s\n' "${GATE_UNPACKED-$UNP_LINES}" > "$ROOT/cutover-state/$m"
     elif [ "$m" = started-openldap ]; then printf 'date 2026-11-16T00:00:00Z\n%s\n' "${GATE_BIND-admin-bind ok}" > "$ROOT/cutover-state/$m"
     elif [ "$m" = configured ]; then printf 'date 2026-11-16T00:00:00Z\n%s\n' "${GATE_CONF-$'apply ok\nreconcile ok'}" > "$ROOT/cutover-state/$m"
+    elif [ "$m" = counted ]; then printf 'date 2026-11-16T00:00:00Z\nmanifests-sha256 %s\n%s\n' "$UNP_M" "${GATE_COUNTED-counts equal}" > "$ROOT/cutover-state/$m"
     elif [[ $m == restored-* ]]; then printf 'date 2026-11-16T00:00:00Z\nmanifests-sha256 %s\n' "$UNP_M" > "$ROOT/cutover-state/$m"
     else echo "started from the stand-in bundle" > "$ROOT/cutover-state/$m"; fi
   done
@@ -1427,12 +1429,15 @@ GATE_UNPACKED="manifests-sha256 $UNP_M" gate_case start-keycloak "unpacked resto
 GATE_UNPACKED="version m5-fedcba987654" gate_case start-openldap "unpacked restored-openldap" "unpacked (version 'm5-fedcba987654' is not fetched's '$CUT_VER')"
 GATE_EMPTY=restored-openldap gate_case start-openldap "unpacked restored-openldap" "restored-openldap (empty)"
 GATE_EMPTY=restored-keycloak gate_case configure "$CONF_ALL" "restored-keycloak (empty)"
-# cutover-done: unpacked, both restored-*, both started-* and configured (with apply ok and reconcile ok).
-DONE_ALL="unpacked $CONF_ALL configured"
+# cutover-done: unpacked, both restored-*, both started-*, configured (with apply ok and reconcile
+# ok) and counted (with counts equal). count-check's gate (the same less counted) is in the backup test.
+DONE_ALL="unpacked $CONF_ALL configured counted"
 for m in $DONE_ALL; do
   gate_case cutover-done "$(echo " $DONE_ALL " | sed "s/ $m / /; s/^ //; s/ $//")" "$m"
 done
 GATE_CONF="apply ok" gate_case cutover-done "$DONE_ALL" "configured (no apply ok and reconcile ok)"
+GATE_COUNTED="counts differ" gate_case cutover-done "$DONE_ALL" "counted (no counts equal)"
+GATE_EMPTY=counted gate_case cutover-done "$DONE_ALL" "counted (empty)"
 gate_case cutover-done "$DONE_ALL" pass
 
 # Under xtrace (SHELLOPTS=xtrace inherited, or bash -x): traced up to the read, the value in no
@@ -2034,9 +2039,10 @@ STUB_DB_RUNNING=1 run verify; rc=$?
 
 # --- cutover-done (the go-live record): every marker, openldap and keycloak healthy ---
 OL_INSPECT="docker inspect -f {{if .State.Health}}{{.State.Health.Status}}{{else}}no healthcheck{{end}} olid"
-cd_setup() {   # what configure leaves
+cd_setup() {   # what configure, then count-check, leave
   conf_setup
   printf 'date 2026-11-16T00:00:00Z\napply ok\nreconcile ok\n' > "$ROOT/cutover-state/configured"
+  printf 'date 2026-11-16T00:00:00Z\nmanifests-sha256 %s\ncounts equal\n' "$UNP_M" > "$ROOT/cutover-state/counted"
 }
 done_ok() {   # cutover-done: a UTC date and unpacked's manifests-sha256; no temp marker
   local f="$ROOT/cutover-state/cutover-done"
@@ -2075,6 +2081,12 @@ cd_refused 3 "with unpacked's manifests-sha256 not 64 hex" "unpacked (manifests-
 cd_setup; printf 'date 2026-11-16T00:00:00Z\nmanifests-sha256 %s\n' "$UNP_K" > "$ROOT/cutover-state/restored-keycloak"; before="$(snap)"
 STUB_KC_RUNNING=1 run cutover-done; rc=$?
 cd_refused 3 "with restored-keycloak naming another manifests-sha256" "restored-keycloak (its manifests-sha256 is not unpacked's)"
+cd_setup; rm -f "$ROOT/cutover-state/counted"; before="$(snap)"
+STUB_KC_RUNNING=1 run cutover-done; rc=$?
+cd_refused 3 "without counted (count-check not run or not equal)" "cutover-done: refused: cutover marker missing or invalid: counted ("
+cd_setup; printf 'date 2026-11-16T00:00:00Z\nmanifests-sha256 %s\ncounts equal\n' "$UNP_K" > "$ROOT/cutover-state/counted"; before="$(snap)"
+STUB_KC_RUNNING=1 run cutover-done; rc=$?
+cd_refused 3 "with counted naming another manifests-sha256" "counted (its manifests-sha256 is not unpacked's)"
 cd_setup; printf 'date 2026-11-16T00:00:00Z\nadmin-bind failed\n' > "$ROOT/cutover-state/started-openldap"; before="$(snap)"
 STUB_KC_RUNNING=1 run cutover-done; rc=$?
 cd_refused 3 "with started-openldap without admin-bind ok" "started-openldap (no admin-bind ok)"
