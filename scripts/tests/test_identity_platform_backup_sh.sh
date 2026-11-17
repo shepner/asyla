@@ -8,14 +8,15 @@
 # to keycloak-backup backup's stdin alone (never an argv, an environment, a file or the output, also
 # under SHELLOPTS=xtrace and bash -x), keycloak-backup verify with no stdin, then each copy staged
 # by mirror-stage.sh (run here by the docker stub with the real script) under flock -s and mirrored
-# to the NAS dir: the mirror's STATUS removed first, the named files, manifest.sha256, then STATUS
-# last; .work, .prev, .lock and unnamed files never copied. Each step's failure exits 1 naming the
+# to the NAS dir: the mirror's STATUS removed first, the named files, manifest.sha256, the NAS copy
+# checked against it, then STATUS last; .work, .prev, .lock and unnamed files never copied; the copy
+# mounted read-only; a symlinked stage dir refused. Each step's failure exits 1 naming the
 # step, with no call of a later step. Every value is a plain stand-in word made at run time.
 # Run: bash scripts/tests/test_identity_platform_backup_sh.sh
 set -uo pipefail
 unset IDP_KEYCLOAK_DB_PASSWORD IDP_LDAP_ADMIN_PASSWORD POSTGRES_PASSWORD PGPASSWORD KC_DB_PASSWORD \
   STUB_OL_BACKUP_RC STUB_OL_VERIFY_RC STUB_KC_BACKUP_RC STUB_KC_VERIFY_RC STUB_NO_DB STUB_NO_PW \
-  STUB_STAGE_RC STUB_NOT_MOUNTED STUB_CP_FAIL
+  STUB_STAGE_RC STUB_NOT_MOUNTED STUB_CP_FAIL STUB_CP_CORRUPT STUB_FLOCK_W
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SRC="$REPO/d05/apps/identity-platform"
@@ -57,7 +58,7 @@ case "$*" in
     s="" st="" scr=""
     for a in "$@"; do
       case "$a" in
-        *:/backup) s="${a%:/backup}" ;; *:/stage) st="${a%:/stage}" ;; *:/mirror-stage.sh:ro) scr="${a%:/mirror-stage.sh:ro}" ;;
+        *:/backup:ro) s="${a%:/backup:ro}" ;; *:/stage) st="${a%:/stage}" ;; *:/mirror-stage.sh:ro) scr="${a%:/mirror-stage.sh:ro}" ;;
       esac
     done
     n=$#
@@ -71,7 +72,8 @@ cat > "$T/bin/hostname" <<'EOF'
 [ "$1" = -s ] && echo "$STUB_HOST"
 EOF
 # flock: `-n FD` is a real non-blocking flock(2) on the inherited fd (python3's fcntl; util-linux
-# flock is not on macOS); any other form (mirror-stage.sh's -s -w) is logged and taken.
+# flock is not on macOS); `-s -w N FD` (mirror-stage.sh's) is logged, then a real shared flock(2)
+# polled non-blocking until N seconds (N overridden by STUB_FLOCK_W); any other form is logged and taken.
 cat > "$T/bin/flock" <<'EOF'
 #!/bin/bash
 { set +x; } 2>/dev/null
@@ -83,6 +85,18 @@ except BlockingIOError:
     sys.exit(1)' "$2"
 fi
 echo "flock $*" >> "$STUB_LOG"
+if [ "${1:-}" = -s ] && [ "${2:-}" = -w ] && [[ ${3:-} =~ ^[0-9]+$ ]] && [[ ${4:-} =~ ^[0-9]+$ ]]; then
+  exec python3 -I -c 'import fcntl, sys, time
+end = time.monotonic() + float(sys.argv[2])
+while True:
+    try:
+        fcntl.flock(int(sys.argv[1]), fcntl.LOCK_SH | fcntl.LOCK_NB)
+        sys.exit(0)
+    except BlockingIOError:
+        if time.monotonic() >= end:
+            sys.exit(1)
+        time.sleep(0.1)' "$4" "${STUB_FLOCK_W:-$3}"
+fi
 exit 0
 EOF
 cat > "$T/bin/mountpoint" <<'EOF'
@@ -92,7 +106,8 @@ echo "mountpoint $*" | sed "s#$STUB_T#T#g" >> "$STUB_LOG"
 [ -z "${STUB_NOT_MOUNTED:-}" ]
 EOF
 # cp: logs its call; for a copy into the mirror, logs STATUS-PRESENT when the mirror still has a
-# STATUS while another file is copied in, and fails a copy of STUB_CP_FAIL's name; then copies.
+# STATUS while another file is copied in, fails a copy of STUB_CP_FAIL's name, and appends a byte
+# to the NAS copy of STUB_CP_CORRUPT's name (a copy that did not land intact); then copies.
 cat > "$T/bin/cp" <<'EOF'
 #!/bin/bash
 { set +x; } 2>/dev/null
@@ -102,7 +117,8 @@ case "$dst" in
   "$STUB_T/nas/"*)
     b="${dst##*/}"
     [ "$b" = STATUS ] || [ ! -e "${dst%/*}/STATUS" ] || echo "STATUS-PRESENT $b" >> "$STUB_LOG"
-    [ "$b" != "${STUB_CP_FAIL:-}" ] || exit 1 ;;
+    [ "$b" != "${STUB_CP_FAIL:-}" ] || exit 1
+    if [ "$b" = "${STUB_CP_CORRUPT:-}" ]; then /bin/cp "$@" && printf x >> "$dst"; exit; fi ;;
 esac
 exec /bin/cp "$@"
 EOF
@@ -170,8 +186,8 @@ $C ps -q --status running keycloak-db
 docker inspect -f {{range .Config.Env}}{{if eq (index (split . \"=\") 0) \"POSTGRES_PASSWORD\"}}{{.}}{{end}}{{end}} dbid
 $C --profile ops run --rm -T -e KEYCLOAK_BACKUP_PASSWORD_STDIN=1 keycloak-backup backup
 $C --profile ops run --rm -T keycloak-backup verify
-docker run --rm --network none --pull never --user 0:0 --entrypoint sh -v T/dl/IdentityPlatform/openldap-backup:/backup -v T/dl/IdentityPlatform/mirror-stage/openldap:/stage -v T/app/mirror-stage.sh:/mirror-stage.sh:ro $IMG-openldap-backup:$TAG /mirror-stage.sh /backup /stage $U
-docker run --rm --network none --pull never --user 0:0 --entrypoint sh -v T/dl/IdentityPlatform/backup:/backup -v T/dl/IdentityPlatform/mirror-stage/keycloak:/stage -v T/app/mirror-stage.sh:/mirror-stage.sh:ro $IMG-keycloak-backup:$TAG /mirror-stage.sh /backup /stage $U"
+docker run --rm --network none --pull never --user 0:0 --entrypoint sh -v T/dl/IdentityPlatform/openldap-backup:/backup:ro -v T/dl/IdentityPlatform/mirror-stage/openldap:/stage -v T/app/mirror-stage.sh:/mirror-stage.sh:ro $IMG-openldap-backup:$TAG /mirror-stage.sh /backup /stage $U
+docker run --rm --network none --pull never --user 0:0 --entrypoint sh -v T/dl/IdentityPlatform/backup:/backup:ro -v T/dl/IdentityPlatform/mirror-stage/keycloak:/stage -v T/app/mirror-stage.sh:/mirror-stage.sh:ro $IMG-keycloak-backup:$TAG /mirror-stage.sh /backup /stage $U"
 
 check_mirror() {   # check_mirror NAME FILE...: mirror and stage hold exactly the copy; cp order
   local name="$1" f want got order
@@ -241,6 +257,11 @@ refused "before cutover-done" "backup: refused: no $ROOT/cutover-state/cutover-d
 setup
 mv "$ROOT/backup" "$ROOT/backup.real" && ln -s backup.real "$ROOT/backup"
 refused "backup/ a symlink" "backup: refused: $ROOT/backup is a symlink" -- backup
+for n in openldap keycloak; do
+  setup
+  mkdir -p "$ROOT/mirror-stage/elsewhere" && ln -s elsewhere "$ROOT/mirror-stage/$n"
+  refused "mirror-stage/$n a symlink" "backup: refused: $ROOT/mirror-stage/$n is a symlink" -- backup
+done
 setup
 refused "combined (backup verify)" "backup: refused: run it alone" -- backup verify
 refused "combined (verify backup)" "backup: refused: run it alone" -- verify backup
@@ -304,6 +325,26 @@ setup
 run STUB_CP_FAIL=keycloak.dump -- backup; rc=$?
 [ "$rc" -eq 1 ] && echo "$OUT" | grep -qF "step 3 failed: mirror of keycloak" && [ -e "$MIR/openldap/STATUS" ] \
   && [ ! -e "$MIR/keycloak/STATUS" ] && ok "keycloak's mirror failing: exit 1, its mirror without STATUS" || bad "keycloak partial" "rc=$rc; $OUT"
+# A NAS copy that did not land intact (a byte more than the stage's): checked against the manifest, no STATUS.
+setup
+run STUB_CP_CORRUPT=data.ldif -- backup; rc=$?
+[ "$rc" -eq 1 ] && echo "$OUT" | grep -qF "do not match its manifest.sha256; no STATUS written there" \
+  && echo "$OUT" | grep -qF "step 3 failed: mirror of openldap" && [ ! -e "$MIR/openldap/STATUS" ] && [ ! -e "$MIR/keycloak" ] \
+  && ok "a NAS copy not matching its manifest: exit 1, no STATUS there; keycloak not started" || bad "corrupt NAS copy" "rc=$rc; $OUT"
+
+# A backup still holding its copy's lock (LOCK_EX on .lock): the stage's flock -s waits, then fails.
+setup
+exec 8< "$ROOT/openldap-backup/.lock"
+if "$T/bin/flock" -n 8; then
+  run STUB_FLOCK_W=1 -- backup; rc=$?
+  [ "$rc" -eq 1 ] && echo "$OUT" | grep -qF "could not take $ROOT/openldap-backup/.lock shared" \
+    && echo "$OUT" | grep -qF "step 3 failed: mirror of openldap" && grep -qx 'flock -s -w 1800 9' "$T/log" \
+    && [ ! -e "$ROOT/mirror-stage/openldap/STATUS" ] && [ "$(cat "$MIR/openldap/STATUS")" = "OK old" ] && [ ! -e "$MIR/keycloak" ] \
+    && ok "the copy's lock held: the stage waits, fails, stages and mirrors nothing" || bad "copy lock held" "rc=$rc; $OUT"
+else
+  bad "could not take openldap-backup/.lock for the copy-lock-held case"
+fi
+exec 8<&-
 
 # A re-run over a complete mirror: exit 0, the same contents.
 setup

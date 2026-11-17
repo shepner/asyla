@@ -1528,7 +1528,7 @@ do_backup() {
     echo "[ERROR] $sw: refused: no $STATE_DIR/$CUTOVER_DONE yet; the data is the Mini's until the M5 cutover is done; nothing done" >&2
     return 3
   fi
-  refuse_symlinks "$sw" "$KC_TARGET" "$OL_TARGET" "$MIRROR_STAGE" || return
+  refuse_symlinks "$sw" "$KC_TARGET" "$OL_TARGET" "$MIRROR_STAGE" "$MIRROR_STAGE/openldap" "$MIRROR_STAGE/keycloak" || return
   cutover_lock "$sw" || return
 
   echo "[INFO] $sw: step 1: openldap-backup backup, then verify"
@@ -1621,7 +1621,7 @@ mirror_copy() {
   st="$MIRROR_STAGE/$name" dest="$MIRROR_DIR/$name"
   (umask 077 && mkdir -p "$st") || return 1
   docker run --rm --network none --pull never --user 0:0 --entrypoint sh \
-    -v "$src:/backup" -v "$st:/stage" -v "$MIRROR_STAGE_SCRIPT:/mirror-stage.sh:ro" \
+    -v "$src:/backup:ro" -v "$st:/stage" -v "$MIRROR_STAGE_SCRIPT:/mirror-stage.sh:ro" \
     "$REGISTRY/theorg/identity-platform-$svc:$IDENTITY_PLATFORM_TAG" \
     /mirror-stage.sh /backup /stage "$(id -u)" "$(id -g)" </dev/null || return 1
   case "$(head -n 1 "$st/STATUS" 2>/dev/null)" in
@@ -1639,6 +1639,12 @@ mirror_copy() {
     cp -p "$st/$n" "$dest/$n" || return 1
   done
   cp -p "$st/manifest.sha256" "$dest/manifest.sha256" || return 1
+  # The NAS copy itself checked against its manifest before STATUS: a copy that did not land
+  # intact never gets a STATUS.
+  if ! (cd "$dest" && sha256sum --quiet -c manifest.sha256) </dev/null; then
+    echo "[ERROR] backup: the files in $dest do not match its manifest.sha256; no STATUS written there" >&2
+    return 1
+  fi
   cp -p "$st/STATUS" "$dest/STATUS" || return 1
   echo "[INFO] backup: $name mirrored to $dest (STATUS last)"
 }
