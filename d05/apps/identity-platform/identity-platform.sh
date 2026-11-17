@@ -122,7 +122,9 @@
 #               cutover-done (date, manifests-sha256); past it, prints that and exits 0. The ten
 #   cutover switches each run alone, and one at a time: each holds flock(1) (util-linux) -n on
 #   cutover-state/.lock for its whole run; a busy lock is refused (exit 3).
-# Data under /mnt/docker/IdentityPlatform. No backup here yet: the data is the Mini's until M5.
+# Data under /mnt/docker/IdentityPlatform. backup (host-maintenance's nightly task, once cutover-done
+# exists; refused, exit 3, before it and on a replica): openldap-backup and keycloak-backup backup and
+# verify, then both copies mirrored to /mnt/nas/data1/docker/IdentityPlatform/mirror (do_backup).
 
 set -euo pipefail
 
@@ -187,6 +189,14 @@ STATE_DIR="$APP_ROOT/cutover-state"
 # so the restores read what unpack wrote.
 KC_TARGET="$APP_ROOT/backup"
 OL_TARGET="$APP_ROOT/openldap-backup"
+
+# backup's nightly mirror (the operator's "Yes, mirror nightly", 2026-11-16): the NAS share
+# (build/setup/nfs.sh mounts /mnt/nas/data1/docker on d05), one dir per copy; the stage is this
+# user's readable copy of each, made by mirror-stage.sh in the copy's own image.
+DOCKER_D1="${DOCKER_D1:-/mnt/nas/data1/docker}"
+MIRROR_DIR="$DOCKER_D1/IdentityPlatform/mirror"
+MIRROR_STAGE="$APP_ROOT/mirror-stage"
+MIRROR_STAGE_SCRIPT="$SCRIPT_DIR/mirror-stage.sh"
 
 # The renewer's systemd units: the service is a template (@USER@, @SCRIPT@), filled in and
 # installed only by leaf-schedule-install.
@@ -1485,6 +1495,154 @@ do_cutover_done() {
   echo "[INFO] $sw: recorded; up now starts keycloak-db, openldap and keycloak and needs IDP_KEYCLOAK_DB_PASSWORD and IDP_LDAP_ADMIN_PASSWORD"
 }
 
+# backup (asyla #654 unit D; the operator's "Yes, mirror nightly", 2026-11-16). host-maintenance's
+# nightly backup task runs `identity-platform.sh backup` (it looks for run_cmd's `backup)` line)
+# with stdin /dev/null and MAINT_FOREGROUND=1, blocks until it exits and reads only the exit: 0
+# counts as a fresh backup. So 0 only when all three steps passed, in this order (theOrg DEPLOY.md
+# at bd0c6bff, "Production on d05": Backup; "Keycloak: backup, restore and verify"; "Directory:
+# backup, restore and verify"):
+#   1. openldap-backup backup, then verify (no secret);
+#   2. keycloak-backup backup with keycloak-db's password on its stdin alone
+#      (-T -e KEYCLOAK_BACKUP_PASSWORD_STDIN=1), then verify (theOrg: verify needs no password);
+#   3. each copy mirrored to the NAS (mirror_copy).
+# A failed step exits 1 naming it; the steps after it are skipped. The password is the running
+# keycloak-db's own POSTGRES_PASSWORD (kc_db_password), as communications.sh's pg_password takes
+# comms-postgres's: the nightly run gets no value. Refused (exit 3, nothing run or written: never
+# 0, so a run before the data is d05's cannot count as a fresh backup) on a replica, before
+# cutover-done exists, when backup/, openldap-backup/, mirror-stage/ or cutover-state/ is a symlink,
+# and when the cutover lock is busy. The lock is cutover_lock (exclusive, -n), as the cutover
+# switches take it: no configure, restore or other backup runs meanwhile, and a second backup is
+# refused here (3) rather than by theOrg's own /backup/.lock (1). Runs alone. No stdin is read. It
+# needs the repin to theOrg's merged main: fcbed3fe's keycloak-backup does not read stdin.
+do_backup() {
+  local sw=backup rc=0 id n
+  { set +x; } 2>/dev/null
+  set +a
+  unset -v pw
+  local +x pw=""
+  if is_replica; then
+    echo "[ERROR] $sw: refused: not on a replica ($(hostname -s </dev/null)); a replica's copy is not d05's and its NAS shares are read-only; nothing done" >&2
+    return 3
+  fi
+  if ! cutover_is_done; then
+    echo "[ERROR] $sw: refused: no $STATE_DIR/$CUTOVER_DONE yet; the data is the Mini's until the M5 cutover is done; nothing done" >&2
+    return 3
+  fi
+  refuse_symlinks "$sw" "$KC_TARGET" "$OL_TARGET" "$MIRROR_STAGE" || return
+  cutover_lock "$sw" || return
+
+  echo "[INFO] $sw: step 1: openldap-backup backup, then verify"
+  run_compose --profile ops run --rm -T openldap-backup backup </dev/null || { backup_failed 1 "openldap-backup backup" $?; return 1; }
+  run_compose --profile ops run --rm -T openldap-backup verify </dev/null || { backup_failed 1 "openldap-backup verify" $?; return 1; }
+
+  echo "[INFO] $sw: step 2: keycloak-backup backup (keycloak-db's password on its stdin), then verify"
+  kc_db_password || { backup_failed 2 "keycloak-db's password" 1; return 1; }
+  # run_compose's argv, with `builtin exec docker` in its own subshell: the docker program, never a
+  # function (a common.env function named docker would otherwise get the value on its stdin).
+  builtin printf '%s\n' "$pw" \
+    | (builtin exec docker compose -f "$COMPOSE_FILE" --project-directory "$SCRIPT_DIR" \
+        --profile ops run --rm -T -e KEYCLOAK_BACKUP_PASSWORD_STDIN=1 keycloak-backup backup) || rc=$?
+  pw=""
+  unset -v pw
+  [ "$rc" -eq 0 ] || { backup_failed 2 "keycloak-backup backup" "$rc"; return 1; }
+  run_compose --profile ops run --rm -T keycloak-backup verify </dev/null || { backup_failed 2 "keycloak-backup verify" $?; return 1; }
+
+  echo "[INFO] $sw: step 3: mirror both copies to $MIRROR_DIR"
+  if ! mountpoint -q "$DOCKER_D1" </dev/null; then
+    echo "[ERROR] $sw: $DOCKER_D1 is not a mount point (the NAS share is not mounted); not mirroring" >&2
+    backup_failed 3 "mirror" 1
+    return 1
+  fi
+  for n in openldap keycloak; do
+    mirror_copy "$n" || { backup_failed 3 "mirror of $n" 1; return 1; }
+  done
+  echo "[INFO] $sw: done: both copies backed up, verified and mirrored to $MIRROR_DIR"
+}
+
+backup_failed() {   # backup_failed STEP NAME EXIT
+  echo "[ERROR] backup: step $1 failed: $2 (exit $3); the steps after it were skipped; not a fresh backup" >&2
+}
+
+# kc_db_password: sets do_backup's local pw to the running keycloak-db container's POSTGRES_PASSWORD.
+# docker inspect's template matches that one Config.Env entry by name and emits nothing else (the
+# environment is never listed); the value lands in this process only: never printed, an argv, an
+# environment or a file. The docker group can read it there already (dockerd's config.v2.json).
+# Returns 1 when keycloak-db is not running or has no such entry.
+kc_db_password() {
+  local id
+  id="$(run_compose ps -q --status running keycloak-db 2>/dev/null </dev/null)" || id=""
+  id="${id%%$'\n'*}"
+  if [ -z "$id" ]; then
+    echo "[ERROR] backup: keycloak-db is not running, so its password cannot be taken from it" >&2
+    return 1
+  fi
+  pw="$(docker inspect -f '{{range .Config.Env}}{{if eq (index (split . "=") 0) "POSTGRES_PASSWORD"}}{{.}}{{end}}{{end}}' "$id" 2>/dev/null </dev/null)" || pw=""
+  case "$pw" in
+    POSTGRES_PASSWORD=?*) pw="${pw#POSTGRES_PASSWORD=}" ;;
+    *) pw=""; echo "[ERROR] backup: the running keycloak-db has no POSTGRES_PASSWORD to take" >&2; return 1 ;;
+  esac
+  echo "[INFO] backup: keycloak-db's password taken from the running keycloak-db (not printed)"
+}
+
+# manifest_names FILE: the file names a theOrg manifest.sha256 lists, one per line; returns 1 (and
+# says why) unless every line is "<64 hex>  <plain file name>" naming neither STATUS nor itself.
+manifest_names() {
+  local f="$1" line out=() re='^[0-9a-f]{64} [ *]([A-Za-z0-9][A-Za-z0-9._-]*)$'
+  if [ ! -s "$f" ]; then
+    echo "[ERROR] backup: $f is missing or empty" >&2
+    return 1
+  fi
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [[ $line =~ $re ]] && [ "${BASH_REMATCH[1]}" != STATUS ] && [ "${BASH_REMATCH[1]}" != manifest.sha256 ]; then
+      out+=("${BASH_REMATCH[1]}")
+    else
+      echo "[ERROR] backup: $f has a line that is not '<sha256>  <file name>'" >&2
+      return 1
+    fi
+  done < "$f"
+  printf '%s\n' "${out[@]}"
+}
+
+# mirror_copy NAME (openldap | keycloak): one copy to MIRROR_DIR/NAME, per theOrg's mirroring rule
+# (DEPLOY.md at bd0c6bff, "Mirroring /backup"). The copy's files are root-owned and owner-only, so
+# first mirror-stage.sh runs as root in the copy's own image (--network none, --pull never: steps 1
+# and 2 just ran it) with the copy and mirror-stage/NAME mounted: under flock -s on the copy's
+# .lock it stages the files manifest.sha256 names, the manifest, then STATUS last, checks them with
+# sha256sum -c and chowns the stage to this user. Then, as this user: the stage's STATUS must be
+# OK; the mirror's STATUS is removed first, then the named files and manifest.sha256 are copied,
+# then STATUS last, so a mirror cut off part-way has no STATUS and never passes for a copy. .work,
+# .prev, .lock and anything the manifest does not name never reach the stage or the mirror.
+mirror_copy() {
+  local name="$1" src svc st dest n names
+  case "$name" in
+    openldap) src="$OL_TARGET" svc=openldap-backup ;;
+    keycloak) src="$KC_TARGET" svc=keycloak-backup ;;
+  esac
+  st="$MIRROR_STAGE/$name" dest="$MIRROR_DIR/$name"
+  (umask 077 && mkdir -p "$st") || return 1
+  docker run --rm --network none --pull never --user 0:0 --entrypoint sh \
+    -v "$src:/backup" -v "$st:/stage" -v "$MIRROR_STAGE_SCRIPT:/mirror-stage.sh:ro" \
+    "$REGISTRY/theorg/identity-platform-$svc:$IDENTITY_PLATFORM_TAG" \
+    /mirror-stage.sh /backup /stage "$(id -u)" "$(id -g)" </dev/null || return 1
+  case "$(head -n 1 "$st/STATUS" 2>/dev/null)" in
+    OK*) ;;
+    *) echo "[ERROR] backup: $st/STATUS is missing or not OK after staging; not mirroring $name" >&2; return 1 ;;
+  esac
+  names="$(manifest_names "$st/manifest.sha256")" || return 1
+  (umask 077 && mkdir -p "$dest") || return 1
+  rm -f "$dest/STATUS" || return 1
+  if [ -e "$dest/STATUS" ]; then
+    echo "[ERROR] backup: could not remove $dest/STATUS; not mirroring $name" >&2
+    return 1
+  fi
+  for n in $names; do
+    cp -p "$st/$n" "$dest/$n" || return 1
+  done
+  cp -p "$st/manifest.sha256" "$dest/manifest.sha256" || return 1
+  cp -p "$st/STATUS" "$dest/STATUS" || return 1
+  echo "[INFO] backup: $name mirrored to $dest (STATUS last)"
+}
+
 # cutover_gate SWITCH: the markers a cutover switch needs; prints the missing or invalid ones and
 # returns 3. unpacked counts only with a non-empty version equal to fetched's; started-openldap only
 # with its "admin-bind ok" line; configured only with its "apply ok" and "reconcile ok" lines; a
@@ -1556,6 +1714,10 @@ run_cmd() {
       ;;
     leaf-schedule-remove)
       do_leaf_schedule_remove
+      ;;
+    backup)
+      # host-maintenance's nightly backup task (do_backup). 3 = refused, never a fresh backup.
+      do_backup || exit $?
       ;;
     restore)
       # Not 3: build_host.py reads exit 3 from a restore as "skipped, data present".
@@ -1630,6 +1792,11 @@ usage() {
   echo "                    must be running and healthy; reads keycloak-db's password as one line on stdin" >&2
   echo "                    (scripts/app_switch.sh), never IDP_KEYCLOAK_DB_PASSWORD in the environment;" >&2
   echo "                    writes restored-keycloak. Runs alone. Not on a replica" >&2
+  echo "  backup          - Nightly (host-maintenance), once cutover-done exists: openldap-backup backup and" >&2
+  echo "                    verify, keycloak-backup backup (keycloak-db's password from the running container," >&2
+  echo "                    on its stdin) and verify, then both copies mirrored to $MIRROR_DIR" >&2
+  echo "                    (STATUS last); 0 only when all passed. Refused (exit 3) before cutover-done, on a" >&2
+  echo "                    replica or with the cutover lock busy. Runs alone. Needs the theOrg repin" >&2
   echo "  restore         - Refused (exit 1): the M5 restores are restore-openldap and restore-keycloak" >&2
   echo "  logs            - Follow logs (optionally for one service)" >&2
 }
@@ -1693,8 +1860,8 @@ esac
 if [ $# -gt 1 ]; then
   for cmd in "$@"; do
     case "$cmd" in
-      leaf-issue|fetch-bundle|unpack-bundle|reset-cutover|cutover-clean|restore-keycloak|restore-openldap|start-openldap|start-keycloak|configure|cutover-done)
-        echo "[ERROR] $cmd: refused: run it alone (it reads a value on stdin or takes ARGs), not with: $*" >&2
+      leaf-issue|fetch-bundle|unpack-bundle|reset-cutover|cutover-clean|restore-keycloak|restore-openldap|start-openldap|start-keycloak|configure|cutover-done|backup)
+        echo "[ERROR] $cmd: refused: run it alone (it reads a value on stdin, takes ARGs or holds the cutover lock), not with: $*" >&2
         exit 3
         ;;
     esac

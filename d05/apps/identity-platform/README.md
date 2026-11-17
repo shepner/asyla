@@ -103,8 +103,8 @@ one-shots (backups, keycloak-configure) are never started by `up`.
   stay at `fcbed3fe` until that reaches theOrg's main (pending repin; `compose.yml` header). Images are pulled with the theorg-registry token the
   workstation hands over at use (`pull_token_env`, as `IDENTITY_PLATFORM_REGISTRY_PULL_TOKEN`)
   through `docker-credential-identity-platform-env`, under a throwaway `DOCKER_CONFIG`.
-- Data: `/mnt/docker/IdentityPlatform/{ca,keycloak-db}` in M1. No backup yet: the system of record
-  stays on the Mini until M5.
+- Data: `/mnt/docker/IdentityPlatform/{ca,keycloak-db}` in M1. The system of record stays on the
+  Mini until the M5 cutover; `backup` refuses before `cutover-done` (see "Backup (M5 unit D)").
 - Replica (test01 as `[replica] of = "d05"`): `images` pulls what is missing and lists keycloak-db's
   image for build_host.py's egress probe; `up` on a host not named d05 makes the networks, places
   the CA and starts keycloak-db alone with a throwaway password made at run time (a replica gets no
@@ -253,3 +253,43 @@ runs the cutover image's `unpack` into the two dirs the restores read (`backup/`
   unpack-bundle keeps unpack's own exit: 2 and 3 changed nothing; 1, 4 or any other failure may have
   left files: run `reset-cutover` before a retry. The restores keep the restore's own exit, as
   above. None runs on a replica.
+
+## Backup (M5 unit D)
+
+`identity-platform.sh backup` is host-maintenance's nightly backup task (asyla #654; the operator's
+"Yes, mirror nightly", 2026-11-16). host-maintenance runs it with stdin `/dev/null` and
+`MAINT_FOREGROUND=1`, blocks until it exits and reads only the exit status: 0 counts as a fresh
+backup. So it exits 0 only when every step passed, in this order (theOrg `DEPLOY.md` at `bd0c6bff`):
+
+1. `openldap-backup backup`, then `openldap-backup verify` (no secret).
+2. `keycloak-backup backup` with keycloak-db's password as one line on its stdin alone
+   (`-T -e KEYCLOAK_BACKUP_PASSWORD_STDIN=1`), then `keycloak-backup verify` with no stdin (theOrg:
+   verify needs no password). The password is the running keycloak-db's own `POSTGRES_PASSWORD`,
+   read with a `docker inspect` template that emits that one entry (as `communications.sh` does for
+   its database); it is never printed, an argv, an environment or a file.
+3. Each copy (`openldap-backup/`, `backup/`) mirrored to
+   `/mnt/nas/data1/docker/IdentityPlatform/mirror/{openldap,keycloak}` once
+   `/mnt/nas/data1/docker` is a mount point.
+
+A failed step exits 1 naming it; the later steps are skipped.
+
+- Refused (exit 3, nothing run or written, so never counted as a fresh backup): on a replica, before
+  `cutover-state/cutover-done` exists (the data is the Mini's until then), when `backup/`,
+  `openldap-backup/`, `mirror-stage/` or `cutover-state/` is a symlink, when combined with another
+  switch, and when the cutover lock is busy.
+- The lock: `backup` takes the cutover switches' exclusive `flock -n` on `cutover-state/.lock`. No
+  `configure`, restore or second `backup` runs meanwhile, and a second `backup` is refused here
+  (3) rather than by theOrg's own `/backup/.lock` (1).
+- The stage: the copies' files are root-owned and owner-only, so `mirror-stage.sh` runs as root in
+  the copy's own image (`docker run --rm --network none --pull never --user 0:0`; steps 1 and 2 just
+  used it) with the copy and `mirror-stage/NAME` mounted. Under `flock -s` on the copy's `.lock`
+  (theOrg's mirroring rule: it waits for a running backup) it empties the stage, copies the files
+  `manifest.sha256` names and the manifest, checks them with `sha256sum -c`, copies `STATUS` last
+  and chowns the stage to this user. That the images carry `flock`, `sha256sum` and `find` is an
+  inference (they are Debian-based, and theOrg's own backup scripts use `flock`), not checked on d05.
+- The mirror, as this user: the stage's `STATUS` must be `OK`; the mirror's `STATUS` is removed
+  first, then the named files and `manifest.sha256` are copied, then `STATUS` last, so a mirror cut
+  off part-way has no `STATUS`. `.work`, `.prev`, `.lock` and unnamed files never reach the stage or
+  the mirror. Files an older manifest named and the current one does not stay in the mirror.
+- Needs the repin to theOrg's merged main: `fcbed3fe`'s `keycloak-backup` does not read stdin.
+- Tests: `scripts/tests/test_identity_platform_backup_sh.sh` (stubs; the real `mirror-stage.sh`).
