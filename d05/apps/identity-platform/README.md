@@ -12,9 +12,10 @@ are tagged with that sha; the two upstream digests did not change.
 This folder is **M1** (agreed with theOrg): `up` creates the two networks, pulls the six images,
 places theOrg's root CA, reports on the openldap leaf, and starts **keycloak-db alone**. openldap
 and keycloak first start at the M5 cutover (DEPLOY.md steps 5-6), after a restore into empty
-targets; `start-openldap`, `start-keycloak`, `configure` and `restore` refuse until that is written
-(the first three behind the cutover marker gate below). The cutover bundle's switches are its
-first part ("Cutover bundle (M5 G2)"). The ops
+targets; `start-openldap`, `start-keycloak` and `configure` refuse until that is written (behind
+the cutover marker gate below), and `restore` refuses and points at `restore-openldap` and
+`restore-keycloak`. The cutover bundle's switches and the two restores are its first part
+("Cutover bundle (M5 G2)"). The ops
 one-shots (backups, keycloak-configure) are never started by `up`.
 
 - `compose.yml`: the example with both networks external, every secret passed by name only,
@@ -132,6 +133,8 @@ runs the cutover image's `unpack` into the two dirs the restores read (`backup/`
   cd ~/local/asyla && python3 core/tools/credentials.py exec IDP_CUTOVER_BUNDLE_IDENTITY -- projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform unpack-bundle IDP_CUTOVER_BUNDLE_IDENTITY MANIFESTS_SHA256 KC_SUM OL_SUM
   cd ~/local/asyla && projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform reset-cutover
   cd ~/local/asyla && projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform cutover-clean
+  cd ~/local/asyla && projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform restore-openldap
+  cd ~/local/asyla && python3 core/tools/credentials.py exec IDP_KEYCLOAK_DB_PASSWORD -- projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform restore-keycloak IDP_KEYCLOAK_DB_PASSWORD
   ```
 
   - `fetch-bundle VERSION`: pulls the cutover image if missing (the theorg-registry token through
@@ -163,23 +166,41 @@ runs the cutover image's `unpack` into the two dirs the restores read (`backup/`
     (`cutover/.bundle.*`), and keeps the `fetched` marker, which the gate checks `unpacked`
     against (a new `fetch-bundle` rewrites it); idempotent, gated only on `cutover-done`
     (refused once it exists; a bundle can be fetched again).
-  - Both `reset-cutover` and `unpack-bundle` refuse (exit 3, nothing touched) when `backup/`,
-    `openldap-backup/` or `cutover-state/` is a symlink. The four switches run one at a time: each
+  - `restore-openldap` (cutover step 5): `docker compose --profile ops run --rm -T openldap-backup
+    restore` with `OPENLDAP_BACKUP_CONFIG_MOUNT=rw` in compose's environment for that run (compose.yml
+    mounts openldap-config read-only otherwise, and the restore refuses a read-only target); no
+    secret (theOrg's `openldap_backup.sh` reads none). Writes `restored-openldap`.
+  - `restore-keycloak` (cutover step 5): reads keycloak-db's password (`IDP_KEYCLOAK_DB_PASSWORD`,
+    the name `up` reads) as one line on stdin and writes it to `docker compose --profile ops run
+    --rm -T -e KEYCLOAK_BACKUP_PASSWORD_STDIN=1 keycloak-backup restore` on stdin alone (never
+    `PGPASSWORD`, an argv, a file or a log). keycloak-db must be running and healthy. Refused (exit
+    3) with `IDP_KEYCLOAK_DB_PASSWORD` in its environment, a terminal or an empty read on stdin.
+    Writes `restored-keycloak`. **It needs the theOrg pin repinned to theOrg's merged main** (the
+    `fcbed3fe` images' keycloak-backup does not take its password on stdin); asyla merges this to
+    master only after that repin.
+  - Both restores need a valid `unpacked` marker (its `manifests-sha256` 64 hex) and take no ARG;
+    each is refused (exit 3, no docker run, nothing changed) on a replica and once its own
+    `restored-*` marker or `cutover-done` exists. On 0 each writes its marker (`date`, the unpacked
+    `manifests-sha256`); otherwise the restore's own exit passes through with no marker (3: it
+    refused a target that is not empty; 2: a mount or usage problem; 1: it failed).
+  - `reset-cutover`, `unpack-bundle` and both restores refuse (exit 3, nothing touched) when `backup/`,
+    `openldap-backup/` or `cutover-state/` is a symlink. The six switches run one at a time: each
     holds util-linux `flock -n` on `cutover-state/.lock` for its whole run, and refuses (exit 3,
     "another cutover switch is running") when it is busy.
 - The marker gate: one marker per step in `/mnt/docker/IdentityPlatform/cutover-state/`, each
   written atomically and then synced (`sync -f`): `fetched`, `unpack-started`, `unpacked`,
   `restored-openldap` / `restored-keycloak` from the restores, and `cutover-done` from the later
-  go-live or restore switch (those three not written yet; `cutover-done` stops `reset-cutover` and
-  `cutover-clean`). `start-openldap` needs `unpacked` and `restored-openldap`, `start-keycloak`
+  go-live (not written yet; `cutover-done` stops `reset-cutover`, `cutover-clean` and the restores;
+  a `restored-*` marker stops `reset-cutover`). `start-openldap` needs `unpacked` and `restored-openldap`, `start-keycloak`
   needs `unpacked` and `restored-keycloak`, `configure` needs both `restored-*`; `unpacked` counts
   only with a non-empty version equal to `fetched`'s, a `restored-*` marker only when not empty.
   Each names the missing or invalid marker and exits 3, and with its markers present still refuses
-  (not yet written, exit 3). `restore` refuses (exit 1, never build_host.py's skip status 3) until theOrg's
-  B2a (`keycloak_backup.sh` taking `PGPASSWORD` on stdin) and identity-platform #86.
-- Exit codes of the four cutover switches: 0 done; 2 a usage error (a wrong ARG, an ARG to
-  `reset-cutover` or `cutover-clean`); 3 refused, nothing changed (a replica, the value's name set
+  (not yet written, exit 3). `restore` refuses (exit 1, never build_host.py's skip status 3) and
+  points at `restore-openldap` and `restore-keycloak`.
+- Exit codes of the six cutover switches: 0 done; 2 a usage error (a wrong ARG, an ARG to
+  `reset-cutover`, `cutover-clean` or a restore); 3 refused, nothing changed (a replica, the value's name set
   in the environment, a terminal or an empty read on stdin, a marker or state check, combined with
   another switch); 1 a failure (a pull or download, a check after unpack, a target left not empty).
   unpack-bundle keeps unpack's own exit: 2 and 3 changed nothing; 1, 4 or any other failure may have
-  left files: run `reset-cutover` before a retry. None runs on a replica.
+  left files: run `reset-cutover` before a retry. The restores keep the restore's own exit, as
+  above. None runs on a replica.

@@ -35,6 +35,13 @@
 # cutover-state; cutover-clean refuses past cutover-done; the gate refuses an empty or
 # version-mismatched unpacked and an empty restored-*; a held cutover-state/.lock refuses every
 # cutover switch (the flock stub is a real flock(2) through python3).
+# restore-openldap and restore-keycloak run the exact compose ops one-shots (openldap's with
+# OPENLDAP_BACKUP_CONFIG_MOUNT=rw, keycloak's with keycloak-db's value on its stdin alone), write
+# their restored-* marker on 0 and pass the restore's own exit through without one; each refuses
+# (exit 3, no docker run, nothing changed) on a replica, without a valid unpacked marker, past its
+# own marker or cutover-done, over a symlink, combined, with the lock held; restore-keycloak also
+# with the value's name in its environment, keycloak-db not healthy, a terminal or an empty read;
+# also under xtrace. reset-cutover refuses after each marker they write.
 # Nothing here reaches a registry, the vault or a host; every value is a plain stand-in word made
 # at run time. Run: bash scripts/tests/test_identity_platform_sh.sh
 set -uo pipefail
@@ -43,7 +50,8 @@ unset IDP_KEYCLOAK_DB_PASSWORD IDP_LDAP_ADMIN_PASSWORD IDP_DEPLOY_DEX_CLIENT_SEC
   IDENTITY_PLATFORM_REGISTRY_PULL_TOKEN IDENTITY_PLATFORM_TAG_OVERRIDE STUB_MISSING STUB_DB_RUNNING \
   STUB_HOST STUB_PW_FILE LDAP_PROVISIONER_PASSWORD STUB_LEAF_RC STUB_LEAF_PW_FILE STUB_RUN_PW_FILE \
   IDENTITY_PLATFORM_SYSTEMD_DIR IDP_CUTOVER_BUNDLE_IDENTITY THEORG_REGISTRY_PULL_TOKEN STUB_CUT_MISSING \
-  STUB_ID_FILE STUB_UNPACK_RC STUB_UNPACK_OUT STUB_OPS_CT STUB_RESTORED_CT STUB_PS_FAIL STUB_FIND_RC
+  STUB_ID_FILE STUB_UNPACK_RC STUB_UNPACK_OUT STUB_OPS_CT STUB_RESTORED_CT STUB_PS_FAIL STUB_FIND_RC \
+  STUB_RESTORE_RC STUB_RESTORE_PW_FILE STUB_DB_HEALTH OPENLDAP_BACKUP_CONFIG_MOUNT
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SRC="$REPO/d05/apps/identity-platform"
@@ -163,6 +171,21 @@ case "$*" in
     [ -z "${STUB_FIND_RC:-}" ] || exit "$STUB_FIND_RC"
     d=""; for a in "$@"; do case "$a" in *:/t) d="${a%:/t}" ;; esac; done
     find "$d" -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf -- {} + ;;
+  # The restores (restore-keycloak, restore-openldap): log which secret names are set (never a
+  # value) and OPENLDAP_BACKUP_CONFIG_MOUNT; keycloak-backup's stdin goes to STUB_RESTORE_PW_FILE (a
+  # temp file read only by the checks), openldap-backup's stdin byte count is logged; exit STUB_RESTORE_RC.
+  *"--profile ops run --rm -T -e KEYCLOAK_BACKUP_PASSWORD_STDIN=1 keycloak-backup restore"|*"--profile ops run --rm -T openldap-backup restore")
+    s=""
+    for v in IDP_KEYCLOAK_DB_PASSWORD PGPASSWORD POSTGRES_PASSWORD KC_DB_PASSWORD LDAP_ADMIN_PASSWORD LDAP_PROVISIONER_PASSWORD; do
+      [ -z "${!v+x}" ] || s="$s $v"
+    done
+    echo "RESTENV$s" >> "$STUB_LOG"
+    echo "MOUNT ${OPENLDAP_BACKUP_CONFIG_MOUNT-unset}" >> "$STUB_LOG"
+    case "$*" in
+      *keycloak-backup*) if [ -n "${STUB_RESTORE_PW_FILE:-}" ]; then cat > "$STUB_RESTORE_PW_FILE"; else cat > /dev/null; fi ;;
+      *) echo "STDIN $(wc -c | tr -d ' ')" >> "$STUB_LOG" ;;
+    esac
+    exit "${STUB_RESTORE_RC:-0}" ;;
   *"ps -a -q openldap keycloak"*)
     [ -z "${STUB_PS_FAIL:-}" ] || exit 1
     [ -z "${STUB_RESTORED_CT:-}" ] || echo ctid
@@ -448,8 +471,8 @@ for sw in start-openldap start-keycloak configure; do
     && ok "$sw with no cutover marker: refused by the gate (3), no docker call" || bad "$sw refusal" "rc=$rc; $OUT; $(cat "$T/log")"
 done
 STUB_SET="$DB_NAME IDP_LDAP_ADMIN_PASSWORD" run restore; rc=$?
-[ "$rc" -eq 1 ] && echo "$OUT" | grep -qF "restore: refused: waiting on theOrg's B2a (keycloak_backup.sh PGPASSWORD on stdin) and identity-platform #86" \
-  && [ ! -s "$T/log" ] && ok "restore: refused (1), waiting on B2a and #86, no docker call" || bad "restore refusal" "rc=$rc; $OUT; $(cat "$T/log")"
+[ "$rc" -eq 1 ] && echo "$OUT" | grep -qF "restore: refused: the M5 restores are restore-openldap then restore-keycloak" \
+  && [ ! -s "$T/log" ] && ok "restore: refused (1), pointing at restore-openldap and restore-keycloak, no docker call" || bad "restore refusal" "rc=$rc; $OUT; $(cat "$T/log")"
 # build_host.py reads exit 3 from a restore as "skipped, data present": the refusal must not be 3.
 run restore; rc=$?
 [ "$rc" -ne 3 ] && ok "restore's refusal is not build_host.py's skip status (3)" || bad "restore exit 3"
@@ -1213,7 +1236,7 @@ done
 reset_setup; before="$(snap)"
 exec 7> "$ROOT/cutover-state/.lock"
 if "$T/bin/flock" -n 7; then
-  for sw in reset-cutover cutover-clean "fetch-bundle $CUT_VER" "unpack-bundle $UNP_M $UNP_K $UNP_O"; do
+  for sw in reset-cutover cutover-clean "fetch-bundle $CUT_VER" "unpack-bundle $UNP_M $UNP_K $UNP_O" restore-keycloak restore-openldap; do
     # shellcheck disable=SC2086
     run $sw; rc=$?
     [ "$rc" -eq 3 ] && echo "$OUT" | grep -q "${sw%% *}: refused: another cutover switch is running" && [ ! -s "$T/log" ] \
@@ -1331,6 +1354,161 @@ for mode in SHELLOPTS bash-x; do
   [ "$rc" -eq 0 ] && grep -q '^+.*do_unpack_bundle' <<< "$OUT" && unpacked_ok && no_value \
     && ok "unpack-bundle under xtrace ($mode): traced up to the read, the value in no trace, argv or file; unpacked" \
     || bad "unpack-bundle xtrace $mode" "rc=$rc; leaked=$(grep -cF -- "$LEAF_VAL" <<< "$OUT"); $(grep -c '^+' <<< "$OUT") trace lines; $(cat "$T/log")"
+done
+
+# --- restore-openldap and restore-keycloak: the M5 restores (cutover step 5) ---
+# keycloak-db's password is $LEAF_VAL, one line on stdin. It reaches keycloak-backup restore on its
+# stdin alone (the stub keeps it in $T/pwfile, a temp file read only by the checks), never an
+# environment, an argv, a log, the output or a file under the host's dirs. The setup is what
+# unpack-bundle leaves (reset_setup: the unpacked marker, files in both targets).
+KC_RESTORE="docker compose -f compose.yml --profile ops run --rm -T -e KEYCLOAK_BACKUP_PASSWORD_STDIN=1 keycloak-backup restore"
+OL_RESTORE="docker compose -f compose.yml --profile ops run --rm -T openldap-backup restore"
+# rest_run SWITCH...: leaf_run with keycloak-backup's stdin kept in $T/pwfile; keycloak-db running and
+# healthy unless REST_EXTRA (more NAME=value words) is set, which replaces STUB_DB_RUNNING=1.
+rest_run() {
+  rm -f "$T/pwfile"
+  LEAF_EXTRA="${REST_EXTRA-STUB_DB_RUNNING=1} STUB_RESTORE_PW_FILE=$T/pwfile" leaf_run "$@"
+}
+restored_ok() {   # restored_ok MARKER: two lines (a UTC date, the unpacked manifests-sha256), no temp marker
+  local f="$ROOT/cutover-state/$1"
+  [ -f "$f" ] && [ "$(wc -l < "$f" | tr -d ' ')" -eq 2 ] \
+    && grep -qE '^date [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' "$f" \
+    && [ "$(sed -n 2p "$f")" = "manifests-sha256 $UNP_M" ] \
+    && [ -z "$(ls -A "$ROOT/cutover-state" | grep '^\.' | grep -vxF .lock)" ]
+}
+kc_ok() {   # one restore run, the contract's argv; no secret name in its env; the value on its stdin alone
+  [ "$(grep -c ' run ' "$T/log")" -eq 1 ] && grep -qxF "$KC_RESTORE" "$T/log" && grep -qx 'RESTENV' "$T/log" \
+    && grep -qx 'MOUNT unset' "$T/log" && [ "$(cat "$T/pwfile" 2>/dev/null)" = "$LEAF_VAL" ] \
+    && [ "$(wc -l < "$T/pwfile" | tr -d ' ')" -eq 1 ]
+}
+ol_ok() {   # one restore run, the exact argv; OPENLDAP_BACKUP_CONFIG_MOUNT=rw; no secret name; empty stdin
+  [ "$(grep -c ' run ' "$T/log")" -eq 1 ] && grep -qxF "$OL_RESTORE" "$T/log" && grep -qx 'RESTENV' "$T/log" \
+    && grep -qx 'MOUNT rw' "$T/log" && grep -qx 'STDIN 0' "$T/log"
+}
+rest_refused() {   # rest_refused CODE SWITCH WHAT PATTERN: that exit, PATTERN in the output, no docker run, nothing changed
+  [ "$rc" -eq "$1" ] && echo "$OUT" | grep -q -- "$4" && ! grep -q ' run ' "$T/log" && ! grep -q '^RESTENV' "$T/log" \
+    && [ ! -e "$T/pwfile" ] && [ "$(snap)" = "$before" ] && no_value \
+    && ok "$2 $3: refused ($1), no docker run, nothing changed" || bad "$2 $3" "rc=$rc; $OUT; $(cat "$T/log")"
+}
+
+# The happy paths. restore-openldap with keycloak-db not running (it need not run).
+reset_setup
+REST_EXTRA="" rest_run restore-openldap; rc=$?
+[ "$rc" -eq 0 ] && ol_ok && restored_ok restored-openldap && [ ! -e "$ROOT/cutover-state/restored-keycloak" ] \
+  && ! grep -q 'ps -q keycloak-db' "$T/log" && no_value \
+  && ok "restore-openldap: the exact compose run, OPENLDAP_BACKUP_CONFIG_MOUNT=rw, no secret, empty stdin; restored-openldap (date, manifests-sha256)" \
+  || bad "restore-openldap happy" "rc=$rc; $OUT; $(cat "$T/log")"
+before="$(snap)"
+run reset-cutover; rc=$?
+reset_refused "after restore-openldap wrote restored-openldap" "refused: .*/restored-openldap exists"
+before="$(snap)"
+rest_run restore-openldap; rc=$?
+rest_refused 3 restore-openldap "a second time (its own marker)" 'restored-openldap exists (already restored'
+reset_setup
+rest_run restore-keycloak; rc=$?
+[ "$rc" -eq 0 ] && kc_ok && restored_ok restored-keycloak && [ ! -e "$ROOT/cutover-state/restored-openldap" ] && no_value \
+  && ok "restore-keycloak: the contract's compose run, the value on keycloak-backup's stdin alone, no secret name in its env; restored-keycloak (date, manifests-sha256)" \
+  || bad "restore-keycloak happy" "rc=$rc; $OUT; $(cat "$T/log")"
+before="$(snap)"
+run reset-cutover; rc=$?
+reset_refused "after restore-keycloak wrote restored-keycloak" "refused: .*/restored-keycloak exists"
+before="$(snap)"
+rest_run restore-keycloak; rc=$?
+rest_refused 3 restore-keycloak "a second time (its own marker)" 'restored-keycloak exists (already restored'
+# Each restores alone: the other's marker is no bar.
+reset_setup; echo done > "$ROOT/cutover-state/restored-openldap"
+rest_run restore-keycloak; rc=$?
+[ "$rc" -eq 0 ] && kc_ok && restored_ok restored-keycloak \
+  && ok "restore-keycloak after restore-openldap: runs (0)" || bad "restore-keycloak after openldap" "rc=$rc; $OUT"
+
+# The restore's own exit passes through (3: a target not empty; 2: mount or usage; 1: failed), no marker.
+for sw in restore-openldap restore-keycloak; do
+  for code in 1 2 3; do
+    reset_setup
+    REST_EXTRA="STUB_DB_RUNNING=1 STUB_RESTORE_RC=$code" rest_run "$sw"; rc=$?
+    [ "$rc" -eq "$code" ] && grep -q '^RESTENV' "$T/log" && [ ! -e "$ROOT/cutover-state/restored-${sw#restore-}" ] \
+      && echo "$OUT" | grep -q "$sw: the restore exited $code" && no_value \
+      && { [ "$sw" = restore-openldap ] || [ "$(cat "$T/pwfile" 2>/dev/null)" = "$LEAF_VAL" ]; } \
+      && ok "$sw: the restore's exit $code passed through, no marker" || bad "$sw exit $code" "rc=$rc; $OUT; $(cat "$T/log")"
+  done
+done
+
+# The refusals both share: each exits 3 (2 for an ARG) with no docker run and nothing changed.
+for sw in restore-openldap restore-keycloak; do
+  own="restored-${sw#restore-}"
+  reset_setup; before="$(snap)"
+  STUB_HOST=test01 rest_run "$sw"; rc=$?
+  [ ! -s "$T/log" ] || bad "$sw on a replica called docker" "$(cat "$T/log")"
+  rest_refused 3 "$sw" "on a replica" "$sw: refused: not on a replica (test01)"
+  reset_setup; rm -f "$ROOT/cutover-state/unpacked"; before="$(snap)"
+  rest_run "$sw"; rc=$?
+  rest_refused 3 "$sw" "with no unpacked marker (the gate)" "$sw: refused: cutover marker missing or invalid: unpacked ("
+  reset_setup; : > "$ROOT/cutover-state/unpacked"; before="$(snap)"
+  rest_run "$sw"; rc=$?
+  rest_refused 3 "$sw" "with an empty unpacked marker (the gate)" "$sw: refused: cutover marker missing or invalid: unpacked (empty)"
+  reset_setup; printf '%s\n' "${UNP_LINES/version $CUT_VER/version m5-fedcba987654}" > "$ROOT/cutover-state/unpacked"; before="$(snap)"
+  rest_run "$sw"; rc=$?
+  rest_refused 3 "$sw" "with an unpacked version not fetched's (the gate)" "unpacked (version 'm5-fedcba987654' is not fetched's"
+  reset_setup; printf '%s\n' "${UNP_LINES/manifests-sha256 $UNP_M/manifests-sha256 short}" > "$ROOT/cutover-state/unpacked"; before="$(snap)"
+  rest_run "$sw"; rc=$?
+  rest_refused 3 "$sw" "with an unpacked manifests-sha256 not 64 hex" "unpacked (manifests-sha256 'short' is not 64 hex)"
+  reset_setup; echo done > "$ROOT/cutover-state/$own"; before="$(snap)"
+  rest_run "$sw"; rc=$?
+  rest_refused 3 "$sw" "with $own present" "$own exists (already restored"
+  reset_setup; echo done > "$ROOT/cutover-state/cutover-done"; before="$(snap)"
+  rest_run "$sw"; rc=$?
+  rest_refused 3 "$sw" "with cutover-done present" "cutover-done exists (the cutover is done)"
+  for tgt in backup openldap-backup cutover-state; do
+    reset_setup; mv "$ROOT/$tgt" "$ROOT/$tgt.real"; ln -s "$ROOT/$tgt.real" "$ROOT/$tgt"; before="$(snap)"
+    rest_run "$sw"; rc=$?
+    rest_refused 3 "$sw" "with $tgt a symlink" "$ROOT/$tgt is a symlink"
+  done
+  reset_setup; before="$(snap)"
+  rest_run "$sw" extra; rc=$?
+  rest_refused 2 "$sw" "with an ARG" "usage: $sw (no ARG)"
+  for order in "up $sw" "verify $sw"; do
+    reset_setup; before="$(snap)"
+    # shellcheck disable=SC2086
+    rest_run $order; rc=$?
+    rest_refused 3 "$sw" "combined (${order%% *} first)" "$sw: refused: run it alone"
+  done
+done
+
+# restore-keycloak's own refusals: the value's name in its environment (set, or set empty: checked
+# before any child runs), keycloak-db not running or not healthy, a terminal, an empty read.
+for how in set empty; do
+  if [ "$how" = set ]; then e="IDP_KEYCLOAK_DB_PASSWORD=$LEAF_VAL"; else e="IDP_KEYCLOAK_DB_PASSWORD="; fi
+  reset_setup; before="$(snap)"
+  REST_EXTRA="STUB_DB_RUNNING=1 $e" rest_run restore-keycloak; rc=$?
+  [ ! -s "$T/log" ] || bad "restore-keycloak with the name in its env called docker" "$(cat "$T/log")"
+  rest_refused 3 restore-keycloak "with IDP_KEYCLOAK_DB_PASSWORD in its environment ($how)" \
+    'restore-keycloak: refused: IDP_KEYCLOAK_DB_PASSWORD is set in the environment'
+done
+reset_setup; before="$(snap)"
+REST_EXTRA="" rest_run restore-keycloak; rc=$?
+rest_refused 3 restore-keycloak "with keycloak-db not running" 'restore-keycloak: refused: keycloak-db is not running, not running and healthy'
+reset_setup; before="$(snap)"
+REST_EXTRA="STUB_DB_RUNNING=1 STUB_DB_HEALTH=starting" rest_run restore-keycloak; rc=$?
+rest_refused 3 restore-keycloak "with keycloak-db starting" 'restore-keycloak: refused: keycloak-db is starting'
+reset_setup; before="$(snap)"
+LEAF_STDIN= rest_run restore-keycloak; rc=$?
+rest_refused 3 restore-keycloak "with an empty read" 'restore-keycloak: refused: no database password read on stdin'
+reset_setup; before="$(snap)"; rm -f "$T/pwfile"
+STUB_DB_RUNNING=1 tty_run restore-keycloak; rc=$?
+rest_refused 3 restore-keycloak "with a terminal on stdin" 'restore-keycloak: refused: stdin is a terminal'
+
+# Under xtrace (SHELLOPTS=xtrace inherited, or bash -x): traced up to the read, the value in no
+# trace, argv or file; keycloak-backup still gets it.
+for mode in SHELLOPTS bash-x; do
+  reset_setup
+  if [ "$mode" = SHELLOPTS ]; then
+    REST_EXTRA="STUB_DB_RUNNING=1 SHELLOPTS=xtrace" rest_run restore-keycloak; rc=$?
+  else
+    LEAF_BASH_X=1 rest_run restore-keycloak; rc=$?
+  fi
+  [ "$rc" -eq 0 ] && grep -q '^+.*do_restore_keycloak' <<< "$OUT" && kc_ok && restored_ok restored-keycloak && no_value \
+    && ok "restore-keycloak under xtrace ($mode): traced up to the read, the value in no trace, argv or file; restored" \
+    || bad "restore-keycloak xtrace $mode" "rc=$rc; leaked=$(grep -cF -- "$LEAF_VAL" <<< "$OUT"); $(grep -c '^+' <<< "$OUT") trace lines; $(cat "$T/log")"
 done
 
 # --- LDAP_PROVISIONER_PASSWORD reaches openldap-leaf.sh issue and no other child ---

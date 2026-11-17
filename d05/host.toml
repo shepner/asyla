@@ -71,6 +71,9 @@ start_env = ["IDP_KEYCLOAK_DB_PASSWORD"]
 # fetch-bundle takes the theorg-registry pull token on ssh stdin and the package version as its one
 # ARG. unpack-bundle takes the age identity on ssh stdin and pack's three sha256 lines as ARGs
 # (manifests-sha256, keycloak-summary-sha256, openldap-summary-sha256, in that order). reset-cutover
-# and cutover-clean take no value and no ARG.
-switch_env = { "leaf-issue" = ["LDAP_PROVISIONER_PASSWORD"], "leaf-renew" = [], "leaf-schedule-install" = [], "leaf-schedule-status" = [], "leaf-schedule-remove" = [], "fetch-bundle" = ["THEORG_REGISTRY_PULL_TOKEN"], "unpack-bundle" = ["IDP_CUTOVER_BUNDLE_IDENTITY"], "reset-cutover" = [], "cutover-clean" = [] }
+# and cutover-clean take no value and no ARG. The restores (cutover step 5) take no ARG:
+# restore-keycloak takes keycloak-db's password on ssh stdin (the name up reads; keycloak-backup gets
+# it on its stdin), restore-openldap no value. The build's restore stays false: identity-platform.sh
+# restore refuses (exit 1) and points at these two.
+switch_env = { "leaf-issue" = ["LDAP_PROVISIONER_PASSWORD"], "leaf-renew" = [], "leaf-schedule-install" = [], "leaf-schedule-status" = [], "leaf-schedule-remove" = [], "fetch-bundle" = ["THEORG_REGISTRY_PULL_TOKEN"], "unpack-bundle" = ["IDP_CUTOVER_BUNDLE_IDENTITY"], "reset-cutover" = [], "cutover-clean" = [], "restore-keycloak" = ["IDP_KEYCLOAK_DB_PASSWORD"], "restore-openldap" = [] }
 switch_args = { "fetch-bundle" = ['^m5-[0-9a-f]{12}$'], "unpack-bundle" = ['^[0-9a-f]{64}$', '^[0-9a-f]{64}$', '^[0-9a-f]{64}$'] }
