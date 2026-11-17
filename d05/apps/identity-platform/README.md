@@ -204,8 +204,9 @@ runs the cutover image's `unpack` into the two dirs the restores read (`backup/`
     with `reconcile` (never an argv, an environment, a file or a log; compose.yml passes neither by
     name, so the compose process needs neither). keycloak must be running and healthy. An apply
     that fails skips reconcile; either failing passes its exit through (3: it refused its stdin or
-    a setting) with no marker. On both 0 it writes `configured` (`date`, `apply ok`,
-    `reconcile ok`). It is re-runnable, after `configured` and `cutover-done` too (DEPLOY.md
+    a setting) with no marker. Past the refusals, before apply, it removes `counted` and
+    `configured`, so a re-run leaves neither stale (`count-check` is run again after it). On both 0
+    it writes `configured` (`date`, `apply ok`, `reconcile ok`). It is re-runnable, after `configured` and `cutover-done` too (DEPLOY.md
     "Updating": the configuration steps are idempotent). Refused (exit 3, no docker run, nothing
     changed) with either name in the environment, on a replica, a terminal or an empty read of
     either line; exit 2 for an ARG. **It needs the theOrg pin repinned to theOrg's merged main**
@@ -215,7 +216,11 @@ runs the cutover image's `unpack` into the two dirs the restores read (`backup/`
     ```
     cd ~/local/asyla && python3 core/tools/credentials.py exec IDP_LDAP_ADMIN_PASSWORD IDP_DEPLOY_DEX_CLIENT_SECRET -- projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform configure IDP_LDAP_ADMIN_PASSWORD IDP_DEPLOY_DEX_CLIENT_SECRET
     ```
-  - `count-check` (cutover step 7, Counts; DEPLOY.md at `bd0c6bff`): no value, no ARG.
+  - `count-check` (cutover step 7, Counts; DEPLOY.md at `bd0c6bff`): no value, no ARG. First the
+    Mini's `backup/summary.txt` is read once (as root through keycloak-db's image, read-only) and
+    its sha256 must equal `unpacked`'s `keycloak-summary-sha256` (theOrg `bd0c6bff`
+    `scripts/cutover_bundle.sh`: the sha256 of `keycloak/summary.txt`), so the counts compared are
+    the Mini's copy's; not equal: exit 1, no backup run, no marker. Then
     keycloak-backup backup on d05 into the emptied `count-check/` (`docker compose --profile ops
     run --rm -T -v .../count-check:/backup -e KEYCLOAK_BACKUP_PASSWORD_STDIN=1 keycloak-backup
     backup`: the `-v` replaces the service's `backup/` mount for that run, so the Mini's copy is
@@ -223,12 +228,16 @@ runs the cutover image's `unpack` into the two dirs the restores read (`backup/`
     alone), then its `summary.txt` compared with the Mini's `backup/summary.txt`: the `realm`,
     `users`, `clients` and `credentials` lines, sorted (`changesets`, Liquibase's count, is
     ignored). Both are read, and `count-check/` emptied, as root through keycloak-db's image
-    (`--pull never --network none`, read-only for the reads). Equal: writes `counted` (`date`,
+    (`--pull never --network none`, read-only for the reads). After the backup, whatever the
+    comparison, the same `find` removes everything in `count-check/` but `summary.txt`, so no
+    Keycloak dump stays on disk; anything else left is exit 1, no marker. Equal: writes `counted` (`date`,
     `manifests-sha256`, `counts equal`), exit 0. Not equal: exit 1, both differing line sets
     printed (counts, not secrets), no marker. The backup failing: its exit, no marker. Refused
     (exit 3, nothing changed) on a replica, when `count-check/`, a target or `cutover-state/` is a
     symlink, with the lock busy, once `cutover-done` exists, and unless `unpacked`, both
     `restored-*`, both `started-*` and `configured` are valid. Re-runnable until `cutover-done`.
+    **It needs the theOrg pin repinned to theOrg's merged main** (`fcbed3fe`'s keycloak-backup has
+    no `KEYCLOAK_BACKUP_PASSWORD_STDIN`); asyla merges this to master only after that repin.
 
     ```
     cd ~/local/asyla/projects/asyla-hosts && scripts/app_switch.sh d05 identity-platform count-check

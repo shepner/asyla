@@ -52,7 +52,8 @@
 # configure reads two values (one line each on stdin) and writes both, as theOrg's
 # LDAP_ADMIN_PASSWORD= and VAULT_DEX_CLIENT_SECRET= lines, to the exact keycloak-configure apply's
 # stdin, then reconcile's, alone (in no environment, argv, output or file); writes configured on
-# both 0; a failed apply skips reconcile, either failing passes its exit with no marker; re-runs,
+# both 0; a failed apply skips reconcile, either failing passes its exit with no marker; a re-run
+# removes an earlier configured and counted before apply (a refusal keeps them); re-runs,
 # after cutover-done too; refuses (exit 3, no run, nothing changed) with either name in its
 # environment, on a replica, a missing marker (both restored-* and both started-*), keycloak not
 # healthy, a symlinked cutover-state, combined, the lock held, a terminal, or an empty or blank
@@ -1874,6 +1875,28 @@ CONF_EXTRA="STUB_KC_RUNNING=1 STUB_APPLY_RC=3" conf_run configure; rc=$?
 [ "$rc" -eq 3 ] && conf_calls_ok apply && [ ! -e "$T/confin.reconcile" ] && [ ! -e "$ROOT/cutover-state/configured" ] \
   && echo "$OUT" | grep -q 'keycloak-configure apply exited 3 .*reconcile not run' && conf_no_value \
   && ok "configure with apply exiting 3: no reconcile, no marker, exit 3" || bad "configure apply failure" "rc=$rc; $OUT; $(cat "$T/log")"
+# A re-run leaves no stale marker: counted and configured removed before apply; a failed apply
+# leaves neither, a passing run only the new configured.
+stale_markers() {   # an earlier run's configured and count-check's counted
+  printf 'date 2026-11-15T00:00:00Z\napply ok\nreconcile ok\n' > "$ROOT/cutover-state/configured"
+  printf 'date 2026-11-15T00:00:00Z\nmanifests-sha256 %s\ncounts equal\n' "$UNP_M" > "$ROOT/cutover-state/counted"
+}
+conf_setup; stale_markers
+CONF_EXTRA="STUB_KC_RUNNING=1 STUB_APPLY_RC=1" conf_run configure; rc=$?
+[ "$rc" -eq 1 ] && conf_calls_ok apply && [ ! -e "$ROOT/cutover-state/configured" ] && [ ! -e "$ROOT/cutover-state/counted" ] && conf_no_value \
+  && ok "configure re-run with apply failing: the earlier configured and counted removed, no marker, exit 1" \
+  || bad "configure stale markers on failure" "rc=$rc; $OUT; $(ls -A "$ROOT/cutover-state")"
+conf_setup; stale_markers
+conf_run configure; rc=$?
+[ "$rc" -eq 0 ] && conf_calls_ok apply reconcile && configured_ok && ! grep -q 2026-11-15 "$ROOT/cutover-state/configured" \
+  && [ ! -e "$ROOT/cutover-state/counted" ] && conf_no_value \
+  && ok "configure re-run: counted removed (count-check runs again), configured rewritten" \
+  || bad "configure stale markers on success" "rc=$rc; $OUT; $(ls -A "$ROOT/cutover-state")"
+conf_setup; stale_markers; before="$(snap)"
+CONF_EXTRA="" conf_run configure; rc=$?
+[ "$rc" -eq 3 ] && echo "$OUT" | grep -qF "configure: refused: keycloak is not running" && [ -e "$ROOT/cutover-state/configured" ] && [ -e "$ROOT/cutover-state/counted" ] && [ "$(snap)" = "$before" ] \
+  && ok "configure refused (keycloak not healthy): configured and counted kept, nothing changed" \
+  || bad "configure refusal kept markers" "rc=$rc; $OUT; $(ls -A "$ROOT/cutover-state")"
 conf_setup
 CONF_EXTRA="STUB_KC_RUNNING=1 STUB_RECONCILE_RC=1" conf_run configure; rc=$?
 [ "$rc" -eq 1 ] && conf_calls_ok apply reconcile && [ ! -e "$ROOT/cutover-state/configured" ] \

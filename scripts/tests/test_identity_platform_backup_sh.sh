@@ -14,11 +14,14 @@
 # step, with no call of a later step.
 # count-check (cutover step 7): refused (exit 3, no docker call, nothing changed) on a replica, a
 # symlinked count-check/ or target, the lock held, past cutover-done, each gate marker missing, an
-# unpacked manifests-sha256 not 64 hex, combined; exit 2 for an ARG. Otherwise count-check/ emptied
-# (find, only when it holds files), keycloak-db's value on `run -v count-check:/backup ... backup`'s
-# stdin alone (also under xtrace), both summaries read read-only; equal (changesets and order
-# ignored): counted (date, manifests-sha256, counts equal); not equal: exit 1, both line sets, no
-# counted; the backup failing: its exit, no read. Every value is a plain stand-in word made at run time.
+# unpacked manifests-sha256 or keycloak-summary-sha256 not 64 hex, combined; exit 2 for an ARG.
+# Otherwise the Mini's backup/summary.txt read first, read-only: its sha256 not unpacked's
+# keycloak-summary-sha256 is exit 1 with no backup run; then count-check/ emptied (find, only when it
+# holds files), keycloak-db's value on `run -v count-check:/backup ... backup`'s stdin alone (also
+# under xtrace), d05's summary read read-only, and count-check/ pruned to summary.txt (no dump left;
+# a failed prune: exit 1); equal (changesets and order ignored): counted (date, manifests-sha256,
+# counts equal); not equal: exit 1, both line sets, no counted; the backup failing: its exit, no
+# d05 read, pruned. Every value is a plain stand-in word made at run time.
 # Run: bash scripts/tests/test_identity_platform_backup_sh.sh
 set -uo pipefail
 unset IDP_KEYCLOAK_DB_PASSWORD IDP_LDAP_ADMIN_PASSWORD POSTGRES_PASSWORD PGPASSWORD KC_DB_PASSWORD \
@@ -59,18 +62,22 @@ case "$*" in
     cat > "$STUB_T/kcstdin"; exit "${STUB_KC_BACKUP_RC:-0}" ;;
   *"--profile ops run --rm -T keycloak-backup verify")
     echo "VERIFYSTDIN $(wc -c | tr -d ' ')" >> "$STUB_LOG"; exit "${STUB_KC_VERIFY_RC:-0}" ;;
-  # count-check's backup into the -v dir: its stdin kept; writes $STUB_T/newsummary there as summary.txt.
+  # count-check's backup into the -v dir: its stdin kept; writes a stand-in dump, a manifest, a
+  # STATUS and a .work dir (also before a failure), then $STUB_T/newsummary there as summary.txt.
   *"--profile ops run --rm -T -v "*":/backup -e KEYCLOAK_BACKUP_PASSWORD_STDIN=1 keycloak-backup backup")
     cat > "$STUB_T/kcstdin"
-    [ -z "${STUB_KC_BACKUP_RC:-}" ] || exit "$STUB_KC_BACKUP_RC"
     for a in "$@"; do case "$a" in *:/backup) d="${a%:/backup}" ;; esac; done
+    mkdir -p "$d/.work"; echo stand-in-dump > "$d/keycloak.dump"
+    [ -z "${STUB_KC_BACKUP_RC:-}" ] || exit "$STUB_KC_BACKUP_RC"
+    echo stand-in-manifest > "$d/manifest.sha256"; echo OK > "$d/STATUS"
     [ -n "${STUB_NO_SUMMARY:-}" ] || cat "$STUB_T/newsummary" > "$d/summary.txt"
     exit 0 ;;
-  # count-check's emptying of count-check/ (find in keycloak-db's image), run here on the host dir.
+  # count-check's find in keycloak-db's image (the emptying and the prune), run here on the host
+  # dir with its own expression (after `-v DIR:/t IMAGE /t`).
   "run --rm --network none --pull never --user 0:0 --entrypoint find "*)
     [ -z "${STUB_FIND_RC:-}" ] || exit "$STUB_FIND_RC"
     for a in "$@"; do case "$a" in *:/t) d="${a%:/t}" ;; esac; done
-    find "$d" -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf {} +
+    find "$d" "${@:15}"
     exit 0 ;;
   # count-check's read of a summary.txt (cat in keycloak-db's image, read-only), here on the host dir.
   "run --rm --pull never --network none --user 0:0 --entrypoint cat "*)
@@ -386,25 +393,40 @@ CC_MARKERS="unpacked restored-openldap restored-keycloak started-openldap starte
 # different changesets.
 MINI_SUM=$'realm master\nrealm theorg\nusers master 1\nusers theorg 12\nclients master 7\nclients theorg 9\ncredentials theorg otp 3\ncredentials theorg webauthn 2\nchangesets 120'
 NEW_SUM=$'realm theorg\nrealm master\nclients theorg 9\nclients master 7\nusers theorg 12\nusers master 1\ncredentials theorg webauthn 2\ncredentials theorg otp 3\nchangesets 131'
+cc_pin() {   # unpacked, its keycloak-summary-sha256 that of backup/summary.txt as it is now (unpack-bundle's check)
+  local k
+  k="$( (sha256sum 2>/dev/null || shasum -a 256) < "$ROOT/backup/summary.txt" | awk '{print $1}')"
+  printf 'version m5-%s\nmanifests-sha256 %s\nkeycloak-summary-sha256 %s\nopenldap-summary-sha256 %s\n' \
+    "${CC_M:0:12}" "$CC_M" "$k" "$CC_M" > "$ROOT/cutover-state/unpacked"
+}
 cc_setup() {   # what configure leaves on d05 before cutover-done; backup/ holds the Mini's copy
   rm -rf "$T/dl"/* "$T/nas"/*
   mkdir -p "$ROOT/cutover-state" "$ROOT/openldap-backup" "$ROOT/backup"
   printf '%s\n' "$MINI_SUM" > "$ROOT/backup/summary.txt"
   printf '%s\n' "$NEW_SUM" > "$T/newsummary"
   printf 'version m5-%s\nsha256 %s\n' "${CC_M:0:12}" "$CC_M" > "$ROOT/cutover-state/fetched"
-  printf 'version m5-%s\nmanifests-sha256 %s\n' "${CC_M:0:12}" "$CC_M" > "$ROOT/cutover-state/unpacked"
+  cc_pin
   printf 'date 2026-11-16T00:00:00Z\nmanifests-sha256 %s\n' "$CC_M" > "$ROOT/cutover-state/restored-openldap"
   printf 'date 2026-11-16T00:00:00Z\nmanifests-sha256 %s\n' "$CC_M" > "$ROOT/cutover-state/restored-keycloak"
   printf 'date 2026-11-16T00:00:00Z\nadmin-bind ok\n' > "$ROOT/cutover-state/started-openldap"
   printf 'date 2026-11-16T00:00:00Z\n' > "$ROOT/cutover-state/started-keycloak"
   printf 'date 2026-11-16T00:00:00Z\napply ok\nreconcile ok\n' > "$ROOT/cutover-state/configured"
 }
-CC_EXPECT="$C ps -q --status running keycloak-db
-docker inspect -f {{range .Config.Env}}{{if eq (index (split . \"=\") 0) \"POSTGRES_PASSWORD\"}}{{.}}{{end}}{{end}} dbid
-$C --profile ops run --rm -T -v T/dl/IdentityPlatform/count-check:/backup -e KEYCLOAK_BACKUP_PASSWORD_STDIN=1 keycloak-backup backup
-docker run --rm --pull never --network none --user 0:0 --entrypoint cat -v T/dl/IdentityPlatform/backup:/s:ro $KCDB /s/summary.txt
-docker run --rm --pull never --network none --user 0:0 --entrypoint cat -v T/dl/IdentityPlatform/count-check:/s:ro $KCDB /s/summary.txt"
+CC_MINI="docker run --rm --pull never --network none --user 0:0 --entrypoint cat -v T/dl/IdentityPlatform/backup:/s:ro $KCDB /s/summary.txt"
 CC_FIND="docker run --rm --network none --pull never --user 0:0 --entrypoint find -v T/dl/IdentityPlatform/count-check:/t $KCDB /t -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf {} +"
+CC_PRUNE="docker run --rm --network none --pull never --user 0:0 --entrypoint find -v T/dl/IdentityPlatform/count-check:/t $KCDB /t -mindepth 1 -maxdepth 1 ! -name lost+found ! -name summary.txt -exec rm -rf {} +"
+# After the Mini's read (and the emptying, when count-check/ holds files): the backup, d05's read, the prune.
+CC_BACKUP="$C ps -q --status running keycloak-db
+docker inspect -f {{range .Config.Env}}{{if eq (index (split . \"=\") 0) \"POSTGRES_PASSWORD\"}}{{.}}{{end}}{{end}} dbid
+$C --profile ops run --rm -T -v T/dl/IdentityPlatform/count-check:/backup -e KEYCLOAK_BACKUP_PASSWORD_STDIN=1 keycloak-backup backup"
+CC_REST="$CC_BACKUP
+docker run --rm --pull never --network none --user 0:0 --entrypoint cat -v T/dl/IdentityPlatform/count-check:/s:ro $KCDB /s/summary.txt
+$CC_PRUNE"
+CC_EXPECT="$CC_MINI
+$CC_REST"
+cc_only_summary() {   # cc_only_summary [lost+found]: count-check/ holds summary.txt (and lost+found when named), nothing else
+  [ "$(ls -A "$CC" | LC_ALL=C sort | tr '\n' ' ')" = "${1:+$1 }summary.txt " ]
+}
 counted_ok() {   # counted: a UTC date, unpacked's manifests-sha256, counts equal; no temp marker
   local f="$ROOT/cutover-state/counted"
   [ -f "$f" ] && [ "$(wc -l < "$f" | tr -d ' ')" -eq 3 ] \
@@ -420,8 +442,10 @@ cc_setup
 run -- count-check; rc=$?
 [ "$rc" -eq 0 ] && [ "$(docker_lines)" = "$CC_EXPECT" ] && counted_ok && [ -d "$CC" ] \
   && echo "$OUT" | grep -q 'count-check: the realm names and each realm.s users, clients and credentials by type are equal (2 realm(s)); next: cutover-done' \
-  && ok "count-check: exit 0, exactly the five docker calls (the -v count-check:/backup override); counted written; changesets and line order ignored" \
+  && ok "count-check: exit 0, exactly the six docker calls (the Mini's read first, the -v count-check:/backup override, the prune last); counted written; changesets and line order ignored" \
   || bad "count-check happy path" "rc=$rc; $OUT; $(docker_lines)"
+cc_only_summary && ok "count-check: count-check/ keeps only summary.txt (no Keycloak dump, manifest, STATUS or .work left)" \
+  || bad "count-check left more than summary.txt" "$(ls -A "$CC")"
 [ "$(cat "$T/kcstdin" 2>/dev/null)" = "$WORD" ] && [ "$(wc -l < "$T/kcstdin" | tr -d ' ')" = 1 ] \
   && ok "count-check: keycloak-backup backup's stdin is keycloak-db's value, one line" || bad "count-check stdin"
 no_word && ok "count-check: the value is in no output, argv, environment or file" || bad "count-check: the value leaked"
@@ -430,16 +454,42 @@ no_word && ok "count-check: the value is in no output, argv, environment or file
 # A stale count-check/ (an earlier run's copy) is emptied first through find; lost+found kept.
 cc_setup; mkdir -p "$CC/lost+found" "$CC/.work"; echo old > "$CC/summary.txt"; echo old > "$CC/keycloak.dump"
 run -- count-check; rc=$?
-[ "$rc" -eq 0 ] && [ "$(docker_lines)" = "$(printf '%s\n%s' "$CC_FIND" "$CC_EXPECT")" ] && counted_ok \
-  && [ "$(ls -A "$CC" | LC_ALL=C sort | tr '\n' ' ')" = "lost+found summary.txt " ] \
-  && ok "count-check over a stale count-check/: find empties it first (lost+found kept), then the same calls" \
+[ "$rc" -eq 0 ] && [ "$(docker_lines)" = "$(printf '%s\n%s\n%s' "$CC_MINI" "$CC_FIND" "$CC_REST")" ] && counted_ok \
+  && cc_only_summary lost+found \
+  && ok "count-check over a stale count-check/: after the Mini's read, find empties it (lost+found kept), then the same calls" \
   || bad "count-check stale dir" "rc=$rc; $OUT; $(docker_lines)"
 # find failing to empty it: exit 1, no backup, no counted.
 cc_setup; mkdir -p "$CC"; echo old > "$CC/summary.txt"
 run STUB_FIND_RC=1 -- count-check; rc=$?
-[ "$rc" -eq 1 ] && [ "$(docker_lines)" = "$CC_FIND" ] && [ ! -e "$ROOT/cutover-state/counted" ] \
+[ "$rc" -eq 1 ] && [ "$(docker_lines)" = "$(printf '%s\n%s' "$CC_MINI" "$CC_FIND")" ] && [ ! -e "$ROOT/cutover-state/counted" ] \
   && echo "$OUT" | grep -qF "count-check: $CC still holds files (find exit 1); no backup run" \
   && ok "count-check: count-check/ not emptied: exit 1, no backup, no counted" || bad "count-check find fails" "rc=$rc; $OUT; $(docker_lines)"
+# The prune failing after the backup (count-check/ was missing, so no emptying): exit 1, no counted, named.
+cc_setup
+run STUB_FIND_RC=1 -- count-check; rc=$?
+[ "$rc" -eq 1 ] && [ "$(docker_lines)" = "$CC_EXPECT" ] && [ ! -e "$ROOT/cutover-state/counted" ] \
+  && echo "$OUT" | grep -qF "count-check: $CC still holds more than summary.txt (find exit 1): " \
+  && echo "$OUT" | grep -qF "keycloak.dump" \
+  && ok "count-check: the prune failing (the dump left): exit 1, the leftovers named, no counted" || bad "count-check prune fails" "rc=$rc; $OUT; $(docker_lines)"
+
+# The Mini's backup/summary.txt changed after unpack (its sha256 not unpacked's
+# keycloak-summary-sha256): exit 1, only the Mini's read run (no emptying, no backup), no counted.
+cc_setup; printf 'date 2026-11-16T00:00:00Z\nmanifests-sha256 %s\ncounts equal\n' "$CC_M" > "$ROOT/cutover-state/counted"
+mkdir -p "$CC"; echo old > "$CC/summary.txt"
+printf '%s\n' "${MINI_SUM/users theorg 12/users theorg 11}" > "$ROOT/backup/summary.txt"
+run -- count-check; rc=$?
+[ "$rc" -eq 1 ] && [ "$(docker_lines)" = "$CC_MINI" ] && [ ! -e "$ROOT/cutover-state/counted" ] && [ ! -e "$T/kcstdin" ] \
+  && echo "$OUT" | grep -qF "count-check: refused: $ROOT/backup/summary.txt is not the Mini's copy (its sha256 " \
+  && echo "$OUT" | grep -qF "is not unpacked's keycloak-summary-sha256 " && echo "$OUT" | grep -qF "no backup run, no counted marker" \
+  && [ "$(cat "$CC/summary.txt")" = old ] \
+  && ok "count-check with a changed backup/summary.txt: exit 1, only the Mini's read, no backup run, no counted (the earlier one removed)" \
+  || bad "count-check changed Mini summary" "rc=$rc; $OUT; $(docker_lines)"
+# One trailing newline more is another file: refused as well.
+cc_setup; printf '\n' >> "$ROOT/backup/summary.txt"
+run -- count-check; rc=$?
+[ "$rc" -eq 1 ] && [ "$(docker_lines)" = "$CC_MINI" ] && [ ! -e "$ROOT/cutover-state/counted" ] \
+  && echo "$OUT" | grep -qF "is not the Mini's copy" \
+  && ok "count-check with backup/summary.txt one newline longer: exit 1, no backup run" || bad "count-check trailing newline" "rc=$rc; $OUT"
 
 # A mismatch: exit 1, both differing line sets printed, no counted (an earlier counted removed).
 cc_setup
@@ -452,8 +502,8 @@ mism="$(printf '%s\n' "$OUT" | sed -n '/only in the Mini/,$p')"
   && [ "$mism" = "  only in the Mini's $ROOT/backup/summary.txt:
     users theorg 12
   only in d05's $CC/summary.txt:
-    users theorg 11" ] && no_word \
-  && ok "count-check mismatch: exit 1, exactly the differing lines of each, no counted (the earlier one removed)" \
+    users theorg 11" ] && no_word && cc_only_summary \
+  && ok "count-check mismatch: exit 1, exactly the differing lines of each, no counted (the earlier one removed); count-check/ pruned to summary.txt" \
   || bad "count-check mismatch" "rc=$rc; $OUT"
 # A realm only on one side.
 cc_setup; printf '%s\nrealm extra\n' "$NEW_SUM" > "$T/newsummary"
@@ -465,19 +515,21 @@ cc_setup; STUB_NO_SUMMARY=1 run -- count-check; rc=$?
 [ "$rc" -eq 1 ] && [ ! -e "$ROOT/cutover-state/counted" ] \
   && echo "$OUT" | grep -qF "count-check: could not read a realm line from d05's $CC/summary.txt; no counted marker" \
   && ok "count-check: no summary.txt from the backup: exit 1, no counted" || bad "count-check no summary" "rc=$rc; $OUT"
-cc_setup; printf 'changesets 120\n' > "$ROOT/backup/summary.txt"; printf 'changesets 120\n' > "$T/newsummary"
+cc_setup; printf 'changesets 120\n' > "$ROOT/backup/summary.txt"; printf 'changesets 120\n' > "$T/newsummary"; cc_pin
 run -- count-check; rc=$?
-[ "$rc" -eq 1 ] && [ ! -e "$ROOT/cutover-state/counted" ] \
-  && echo "$OUT" | grep -qF "count-check: could not read a realm line from the Mini's $ROOT/backup/summary.txt" \
-  && ok "count-check: summaries with no realm line are not equal counts: exit 1, no counted" || bad "count-check no realm" "rc=$rc; $OUT"
+[ "$rc" -eq 1 ] && [ ! -e "$ROOT/cutover-state/counted" ] && [ "$(docker_lines)" = "$CC_MINI" ] \
+  && echo "$OUT" | grep -qF "count-check: could not read a realm line from the Mini's $ROOT/backup/summary.txt; no backup run" \
+  && ok "count-check: summaries with no realm line are not equal counts: exit 1, no backup run, no counted" || bad "count-check no realm" "rc=$rc; $OUT"
 
-# The backup failing: its exit, no summary read, no counted. keycloak-db's password not taken: 1, no backup.
+# The backup failing: its exit, no d05 read, no counted, the partial dump pruned. keycloak-db's
+# password not taken: 1, no backup.
 cc_setup; run STUB_KC_BACKUP_RC=4 -- count-check; rc=$?
-[ "$rc" -eq 4 ] && [ "$(docker_lines)" = "$(printf '%s\n' "$CC_EXPECT" | head -n 3)" ] && [ ! -e "$ROOT/cutover-state/counted" ] \
+[ "$rc" -eq 4 ] && [ "$(docker_lines)" = "$(printf '%s\n%s\n%s' "$CC_MINI" "$CC_BACKUP" "$CC_PRUNE")" ] && [ ! -e "$ROOT/cutover-state/counted" ] \
   && echo "$OUT" | grep -qF "count-check: keycloak-backup backup exited 4; no counted marker" && no_word \
-  && ok "count-check: the backup failing: its exit (4), no read, no counted" || bad "count-check backup fails" "rc=$rc; $OUT; $(docker_lines)"
+  && [ -z "$(ls -A "$CC")" ] \
+  && ok "count-check: the backup failing: its exit (4), no d05 read, no counted, its partial dump removed" || bad "count-check backup fails" "rc=$rc; $OUT; $(docker_lines)"
 cc_setup; run STUB_NO_DB=1 -- count-check; rc=$?
-[ "$rc" -eq 1 ] && [ "$(docker_lines)" = "$(printf '%s\n' "$CC_EXPECT" | head -n 1)" ] && [ ! -e "$ROOT/cutover-state/counted" ] \
+[ "$rc" -eq 1 ] && [ "$(docker_lines)" = "$(printf '%s\n' "$CC_EXPECT" | head -n 2)" ] && [ ! -e "$ROOT/cutover-state/counted" ] \
   && echo "$OUT" | grep -qF "count-check: keycloak-db is not running" \
   && ok "count-check: keycloak-db not running: exit 1, no backup, no counted" || bad "count-check no db" "rc=$rc; $OUT; $(docker_lines)"
 
@@ -505,6 +557,8 @@ cc_setup; printf 'date 2026-11-16T00:00:00Z\napply ok\n' > "$ROOT/cutover-state/
 refused "count-check with configured without reconcile ok" "configured (no apply ok and reconcile ok)" -- count-check
 cc_setup; printf 'version m5-%s\nmanifests-sha256 0123\n' "${CC_M:0:12}" > "$ROOT/cutover-state/unpacked"
 refused "count-check with unpacked's manifests-sha256 not 64 hex" "unpacked (manifests-sha256 '0123' is not 64 hex)" -- count-check
+cc_setup; printf 'version m5-%s\nmanifests-sha256 %s\n' "${CC_M:0:12}" "$CC_M" > "$ROOT/cutover-state/unpacked"
+refused "count-check with unpacked without keycloak-summary-sha256" "unpacked (keycloak-summary-sha256 '' is not 64 hex)" -- count-check
 cc_setup
 refused "count-check combined (verify count-check)" "count-check: refused: run it alone" -- verify count-check
 cc_setup

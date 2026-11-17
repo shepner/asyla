@@ -122,7 +122,9 @@
 #               the emptied count-check/ (`run -v count-check:/backup`; keycloak-db's password from
 #               the running container, as backup, on its stdin alone), then its summary.txt's realm,
 #               users, clients and credentials lines (changesets ignored) compared with the Mini's
-#               backup/summary.txt. Equal: writes counted (date, manifests-sha256, counts equal);
+#               backup/summary.txt (read first; its sha256 must be unpacked's
+#               keycloak-summary-sha256, else exit 1 and no backup run). count-check/ then keeps
+#               only summary.txt. Equal: writes counted (date, manifests-sha256, counts equal);
 #               not equal: exit 1, both differing line sets printed. Refused (exit 3) on a replica,
 #               a symlink, the lock busy, past cutover-done, unless unpacked, both restored-*, both
 #               started-* and configured are valid.
@@ -1458,7 +1460,8 @@ restored_health() {
 # says the configuration steps are idempotent and are re-run after an update, and after a directory
 # restore ("re-run the configuration reconcile steps"). An apply that fails skips reconcile; either
 # failing returns its exit (3: keycloak-configure refused its stdin or settings) with no marker.
-# On both 0 writes configured (date, apply ok, reconcile ok). It needs the repin: fcbed3fe's
+# Past the refusals, before apply, it removes counted and configured, so a re-run leaves neither
+# stale (count-check runs again after it). On both 0 writes configured (date, apply ok, reconcile ok). It needs the repin: fcbed3fe's
 # keycloak-configure image does not read its secrets on stdin.
 do_configure() {
   local sw=configure n h cmd rc=0
@@ -1508,6 +1511,13 @@ do_configure() {
     unset -v ldap dex
     echo "[ERROR] $sw: refused: no IDP_DEPLOY_DEX_CLIENT_SECRET value read on stdin (line 2); nothing changed" >&2
     return 3
+  fi
+  # A re-run leaves no stale marker: counted (a count of the old configuration) and configured go
+  # before apply; a failed run leaves neither.
+  if ! rm -f "$STATE_DIR/counted" "$STATE_DIR/configured"; then
+    unset -v ldap dex
+    echo "[ERROR] $sw: could not remove $STATE_DIR/counted and configured; no keycloak-configure run" >&2
+    return 1
   fi
   for cmd in apply reconcile; do
     echo "[INFO] $sw: keycloak-configure $cmd"
@@ -1580,18 +1590,26 @@ do_cutover_done() {
 # and any other line are ignored. No value, no ARG (exit 2); no stdin is read. keycloak-db's
 # password is the running container's own (kc_db_password, as backup), on keycloak-backup backup's
 # stdin alone; `run -v count-check:/backup` replaces the service's backup/ mount for that run (Compose
-# v5.7.0, checked on ws01), so backup/ is never written. count-check/ is emptied first (its files are
-# root-owned: find in keycloak-db's image, --pull never, --network none, as reset-cutover) and both
-# summaries are read through that image, read-only. Refused (exit 3, nothing changed) on a replica,
-# count-check/, a target or cutover-state/ a symlink, the lock busy, past cutover-done, and on a
-# missing or invalid marker (cutover_gate: unpacked, both restored-*, both started-* and configured).
-# Equal: writes counted (date, the unpacked manifests-sha256, counts equal), which cutover-done
-# needs; exit 0. Not equal: exit 1, both differing line sets printed (counts, not secrets), no marker.
-# The backup failing: its exit, no marker. count-check/ not emptied, keycloak-db's password not
-# taken, or a summary unreadable or without a realm line: exit 1, no marker. Re-runnable until
-# cutover-done; past the refusals a run first removes an existing counted.
+# v5.7.0, checked on ws01), so backup/ is never written. Before anything else is run, the Mini's
+# backup/summary.txt is read once through keycloak-db's image (read-only) and its sha256 must equal
+# unpacked's keycloak-summary-sha256 (theOrg bd0c6bff scripts/cutover_bundle.sh: the sha256 of
+# keycloak/summary.txt), so the counts compared are the Mini's copy's; not equal: exit 1, no backup
+# run, no marker. count-check/ is then emptied (its files are root-owned: find in keycloak-db's
+# image, --pull never, --network none, as reset-cutover), and d05's summary is read through that
+# image, read-only. After the backup (and whatever the comparison), the same find removes all of
+# count-check/ but summary.txt, so no Keycloak dump stays on disk; anything else left: exit 1, no
+# marker. Refused (exit 3, nothing changed) on a replica, count-check/, a target or cutover-state/
+# a symlink, the lock busy, past cutover-done, and on a missing or invalid marker (cutover_gate:
+# unpacked, both restored-*, both started-* and configured; unpacked's manifests-sha256 and
+# keycloak-summary-sha256 64 hex). Equal: writes counted (date, the unpacked manifests-sha256,
+# counts equal), which cutover-done needs; exit 0. Not equal: exit 1, both differing line sets
+# printed (counts, not secrets), no marker. The backup failing: its exit, no marker. count-check/
+# not emptied, keycloak-db's password not taken, or a summary unreadable or without a realm line:
+# exit 1, no marker. Re-runnable until cutover-done; past the refusals a run first removes an
+# existing counted. It needs the repin to theOrg's merged main: fcbed3fe's keycloak-backup has no
+# KEYCLOAK_BACKUP_PASSWORD_STDIN.
 do_count_check() {
-  local sw=count-check m rc=0 mini new
+  local sw=count-check m k raw sum rc=0 mini new
   { set +x; } 2>/dev/null
   set +a
   unset -v pw
@@ -1616,8 +1634,31 @@ do_count_check() {
     echo "[ERROR] $sw: refused: cutover marker missing or invalid: unpacked (manifests-sha256 '$m' is not 64 hex) (in $STATE_DIR); nothing done" >&2
     return 3
   fi
+  k="$(state_value unpacked keycloak-summary-sha256)"
+  if [[ ! $k =~ $SHA256_RE ]]; then
+    echo "[ERROR] $sw: refused: cutover marker missing or invalid: unpacked (keycloak-summary-sha256 '$k' is not 64 hex) (in $STATE_DIR); nothing done" >&2
+    return 3
+  fi
 
   rm -f "$STATE_DIR/counted" || return 1
+  # The Mini's summary first, read once: its bytes must be the unpacked copy's (cutover_bundle.sh's
+  # keycloak-summary-sha256 is the sha256 of keycloak/summary.txt), and its counts come from that read.
+  if ! raw="$(read_summary "$KC_TARGET")"; then
+    echo "[ERROR] $sw: could not read the Mini's $KC_TARGET/summary.txt; no backup run, no counted marker" >&2
+    return 1
+  fi
+  raw="${raw%x}"
+  sum="$(builtin printf '%s' "$raw" | sha256_hex)"
+  if [ "$sum" != "$k" ]; then
+    echo "[ERROR] $sw: refused: $KC_TARGET/summary.txt is not the Mini's copy (its sha256 $sum is not unpacked's keycloak-summary-sha256 $k); no backup run, no counted marker" >&2
+    return 1
+  fi
+  mini="$(count_lines "$raw")"
+  if ! grep -q '^realm ' <<<"$mini"; then
+    echo "[ERROR] $sw: could not read a realm line from the Mini's $KC_TARGET/summary.txt; no backup run, no counted marker" >&2
+    return 1
+  fi
+
   mkdir -p "$COUNT_DIR" || return 1
   if ! target_empty "$COUNT_DIR"; then
     docker run --rm --network none --pull never --user 0:0 --entrypoint find -v "$COUNT_DIR:/t" "$KC_DB_IMAGE" \
@@ -1639,14 +1680,14 @@ do_count_check() {
   unset -v pw
   if [ "$rc" -ne 0 ]; then
     echo "[ERROR] $sw: keycloak-backup backup exited $rc; no counted marker" >&2
+    count_dir_prune "$sw"
     return "$rc"
   fi
 
-  if ! mini="$(count_lines "$KC_TARGET")" || ! grep -q '^realm ' <<<"$mini"; then
-    echo "[ERROR] $sw: could not read a realm line from the Mini's $KC_TARGET/summary.txt; no counted marker" >&2
-    return 1
-  fi
-  if ! new="$(count_lines "$COUNT_DIR")" || ! grep -q '^realm ' <<<"$new"; then
+  if raw="$(read_summary "$COUNT_DIR")"; then new="$(count_lines "${raw%x}")"; else new=""; fi
+  # No Keycloak dump stays on disk: all but summary.txt removed, whatever the comparison.
+  count_dir_prune "$sw" || { echo "[ERROR] $sw: no counted marker" >&2; return 1; }
+  if ! grep -q '^realm ' <<<"$new"; then
     echo "[ERROR] $sw: could not read a realm line from d05's $COUNT_DIR/summary.txt; no counted marker" >&2
     return 1
   fi
@@ -1664,12 +1705,35 @@ do_count_check() {
   echo "[INFO] $sw: the realm names and each realm's users, clients and credentials by type are equal ($(grep -c '^realm ' <<<"$new") realm(s)); next: cutover-done"
 }
 
-# count_lines DIR: DIR/summary.txt read as root through keycloak-db's image (read-only, no pull, no
-# network), its realm, users, clients and credentials lines LC_ALL=C sorted; returns 1 when unread.
+# read_summary DIR: DIR/summary.txt read as root through keycloak-db's image (read-only, no pull, no
+# network), its bytes then one x (so a command substitution keeps its trailing newlines; the caller
+# strips the x); returns 1 when unread.
+read_summary() {
+  docker run --rm --pull never --network none --user 0:0 --entrypoint cat -v "$1:/s:ro" "$KC_DB_IMAGE" /s/summary.txt </dev/null || return 1
+  builtin printf x
+}
+
+# count_lines TEXT: a summary's realm, users, clients and credentials lines, LC_ALL=C sorted.
 count_lines() {
-  local out
-  out="$(docker run --rm --pull never --network none --user 0:0 --entrypoint cat -v "$1:/s:ro" "$KC_DB_IMAGE" /s/summary.txt </dev/null)" || return 1
-  printf '%s\n' "$out" | { grep -E '^(realm|users|clients|credentials) ' || true; } | LC_ALL=C sort
+  builtin printf '%s\n' "$1" | { grep -E '^(realm|users|clients|credentials) ' || true; } | LC_ALL=C sort
+}
+
+# count_dir_prune SWITCH: count-check/ emptied of all but summary.txt (and lost+found) through
+# keycloak-db's image, as its emptying: no Keycloak dump stays on disk. Returns 1, naming what is
+# left, when anything else remains.
+count_dir_prune() {
+  local rc=0 names left
+  docker run --rm --network none --pull never --user 0:0 --entrypoint find -v "$COUNT_DIR:/t" "$KC_DB_IMAGE" \
+    /t -mindepth 1 -maxdepth 1 ! -name lost+found ! -name summary.txt -exec rm -rf {} + </dev/null || rc=$?
+  if ! names="$(ls -A "$COUNT_DIR" </dev/null)"; then
+    echo "[ERROR] $1: could not list $COUNT_DIR after removing all but summary.txt (find exit $rc)" >&2
+    return 1
+  fi
+  left="$(grep -vxF -e lost+found -e summary.txt <<<"$names" || true)"
+  if [ -n "$left" ]; then
+    echo "[ERROR] $1: $COUNT_DIR still holds more than summary.txt (find exit $rc): $(tr '\n' ' ' <<<"$left")" >&2
+    return 1
+  fi
 }
 
 # backup (asyla #654 unit D; the operator's "Yes, mirror nightly", 2026-11-16). host-maintenance's
@@ -1974,8 +2038,11 @@ usage() {
   echo "                    password from the running container, on its stdin), then its summary.txt's" >&2
   echo "                    realm, users, clients and credentials lines compared with backup/summary.txt's" >&2
   echo "                    (changesets ignored); equal: writes counted, exit 0; not equal: exit 1, both" >&2
-  echo "                    differing line sets printed. No value, no ARG; needs unpacked, both restored-*," >&2
-  echo "                    both started-* and configured. Runs alone. Not on a replica" >&2
+  echo "                    differing line sets printed. backup/summary.txt's sha256 must be unpacked's" >&2
+  echo "                    keycloak-summary-sha256 (else exit 1, no backup); count-check/ keeps only" >&2
+  echo "                    summary.txt after. No value, no ARG; needs unpacked, both restored-*," >&2
+  echo "                    both started-* and configured. Runs alone. Not on a replica. Needs the repin to" >&2
+  echo "                    theOrg's merged main (fcbed3fe's keycloak-backup has no KEYCLOAK_BACKUP_PASSWORD_STDIN)" >&2
   echo "  cutover-done    - M5: record the go-live after the cutover's verification; no value, no ARG; needs" >&2
   echo "                    every marker (unpacked, both restored-*, both started-*, configured, counted) and" >&2
   echo "                    openldap and keycloak healthy; writes cutover-done (date, manifests-sha256);" >&2
