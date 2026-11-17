@@ -39,6 +39,7 @@
 # at run time. Run: bash scripts/tests/test_identity_platform_sh.sh
 set -uo pipefail
 unset IDP_KEYCLOAK_DB_PASSWORD IDP_LDAP_ADMIN_PASSWORD IDP_DEPLOY_DEX_CLIENT_SECRET \
+  KC_DB_PASSWORD POSTGRES_PASSWORD PGPASSWORD LDAP_ADMIN_PASSWORD LDAP_CONFIG_PASSWORD VAULT_DEX_CLIENT_SECRET \
   IDENTITY_PLATFORM_REGISTRY_PULL_TOKEN IDENTITY_PLATFORM_TAG_OVERRIDE STUB_MISSING STUB_DB_RUNNING \
   STUB_HOST STUB_PW_FILE LDAP_PROVISIONER_PASSWORD STUB_LEAF_RC STUB_LEAF_PW_FILE STUB_RUN_PW_FILE \
   IDENTITY_PLATFORM_SYSTEMD_DIR IDP_CUTOVER_BUNDLE_IDENTITY THEORG_REGISTRY_PULL_TOKEN STUB_CUT_MISSING \
@@ -174,7 +175,7 @@ case "$*" in
     printf 'gitea.asyla.org' | docker-credential-identity-platform-env get | grep -q '"Username":"theorg-registry"' \
       && echo "HELPER_OK" >> "$STUB_LOG" ;;
   *" up "*)
-    for v in POSTGRES_PASSWORD KC_DB_PASSWORD LDAP_ADMIN_PASSWORD VAULT_DEX_CLIENT_SECRET; do
+    for v in POSTGRES_PASSWORD KC_DB_PASSWORD LDAP_ADMIN_PASSWORD LDAP_CONFIG_PASSWORD PGPASSWORD VAULT_DEX_CLIENT_SECRET; do
       [ -n "${!v:-}" ] && echo "SET $v" >> "$STUB_LOG"
     done
     [ -z "${STUB_PW_FILE:-}" ] || printf '%s' "${POSTGRES_PASSWORD:-}" > "$STUB_PW_FILE" ;;
@@ -257,9 +258,29 @@ for n in identity-platform-net identity-platform-edge; do
 done
 ! grep -qE '\$\{[A-Z_]*(PASSWORD|SECRET|TOKEN)[A-Z_]*' "$C" \
   && ok "compose.yml: no secret is interpolated (an M1 compose call needs none)" || bad "compose.yml interpolates a secret" "$(grep -nE '\$\{[A-Z_]*(PASSWORD|SECRET|TOKEN)' "$C")"
-for n in LDAP_ADMIN_PASSWORD LDAP_CONFIG_PASSWORD POSTGRES_PASSWORD KC_DB_PASSWORD PGPASSWORD VAULT_DEX_CLIENT_SECRET; do
+for n in LDAP_ADMIN_PASSWORD LDAP_CONFIG_PASSWORD POSTGRES_PASSWORD KC_DB_PASSWORD; do
   grep -qE "^      - $n\$" "$C" && ok "compose.yml: $n by name only" || bad "compose.yml: $n not by name"
 done
+# theOrg bd0c6bff: keycloak-backup's password and keycloak-configure's secrets go on stdin.
+for n in PGPASSWORD VAULT_DEX_CLIENT_SECRET; do
+  ! grep -q "$n" "$C" && ok "compose.yml: $n is not listed (stdin, bd0c6bff)" || bad "compose.yml lists $n" "$(grep -n "$n" "$C")"
+done
+# The operator's rule (2026-11-16): no one-shot (profile ops) names a secret variable, in a list
+# entry, a map key or an interpolation.
+ops_svcs="$(awk '/^  [a-z][a-z0-9-]*:$/ {s=$1; sub(/:$/, "", s)} /^    profiles: \[ops\]$/ {print s}' "$C" | sort | tr '\n' ' ')"
+[ "$ops_svcs" = "keycloak-backup keycloak-configure openldap-backup " ] \
+  && ok "compose.yml: the ops one-shots are keycloak-backup, keycloak-configure and openldap-backup" || bad "ops services" "[$ops_svcs]"
+for s in $ops_svcs; do
+  body="$(awk -v s="$s" '$0 ~ "^  "s":$" {f=1; next} f && /^  [^ ]/ {f=0} f' "$C")"
+  # A secret's name ends in PASSWORD, SECRET or TOKEN (VAULT_DEX_TOKEN_URL is a URL, not one).
+  [ -n "$body" ] && ! grep -qE '(PASSWORD|SECRET|TOKEN)([=:}[:space:]]|$)' <<< "$body" \
+    && ok "compose.yml: ops one-shot $s names no secret variable" || bad "compose.yml: $s names a secret" "$(grep -nE '(PASSWORD|SECRET|TOKEN)([=:}[:space:]]|$)' <<< "$body")"
+done
+OL_HC="$(awk '/^  openldap:$/ {f=1; next} f && /^  [^ ]/ {f=0} f && /^      test:/' "$C")"
+grep -qF 'ldapsearch -x -H ldaps://localhost:636 -b \"\" -s base -LLL namingContexts' <<< "$OL_HC" \
+  && ! grep -q '\$' <<< "$OL_HC" && ! grep -qE -- '(-w|-y|-D) ' <<< "$OL_HC" \
+  && ok "compose.yml: openldap's healthcheck is the anonymous rootDSE read, no \$-expanded password (bd0c6bff)" \
+  || bad "compose.yml: openldap healthcheck" "$OL_HC"
 ! grep -q 'KC_BOOTSTRAP_ADMIN' "$C" && ok "compose.yml: no KC_BOOTSTRAP_ADMIN_*" || bad "KC_BOOTSTRAP_ADMIN present"
 for s in keycloak openldap; do
   awk -v s="$s" '$0 ~ "^  "s":$" {f=1; next} f && /^  [^ ]/ {f=0} f && /profiles: \[restored\]/ {p=1} END {exit !p}' "$C" \
@@ -354,11 +375,13 @@ starts="$(grep -E '^docker compose .* (up|run|start|create)( |$)' "$T/log" | sed
 ! grep -E '^docker compose .* (up|run|start)( |$)' "$T/log" | grep -qE 'openldap|keycloak( |$)|keycloak-(backup|configure)|--profile' \
   && ok "up never starts openldap, keycloak or an ops one-shot" || bad "up started more" "$(cat "$T/log")"
 grep -q '^SET POSTGRES_PASSWORD' "$T/log" && grep -q '^SET KC_DB_PASSWORD' "$T/log" \
-  && ! grep -qE '^SET (LDAP_ADMIN_PASSWORD|VAULT_DEX_CLIENT_SECRET)' "$T/log" \
-  && ok "up maps IDP_KEYCLOAK_DB_PASSWORD onto the compose names; unset optional names stay unset" || bad "secret mapping" "$(grep '^SET' "$T/log")"
+  && ! grep -qE '^SET (LDAP_ADMIN_PASSWORD|LDAP_CONFIG_PASSWORD|PGPASSWORD|VAULT_DEX_CLIENT_SECRET)' "$T/log" \
+  && ok "up maps IDP_KEYCLOAK_DB_PASSWORD onto KC_DB_PASSWORD and POSTGRES_PASSWORD only; unset optional names stay unset" || bad "secret mapping" "$(grep '^SET' "$T/log")"
 STUB_SET="$DB_NAME IDP_LDAP_ADMIN_PASSWORD IDP_DEPLOY_DEX_CLIENT_SECRET" run up; rc=$?
-[ "$rc" -eq 0 ] && grep -q '^SET LDAP_ADMIN_PASSWORD' "$T/log" && grep -q '^SET VAULT_DEX_CLIENT_SECRET' "$T/log" \
-  && ok "up maps the optional LDAP and Dex values when they are sent" || bad "optional mapping" "rc=$rc; $(grep '^SET' "$T/log")"
+[ "$rc" -eq 0 ] && grep -q '^SET LDAP_ADMIN_PASSWORD' "$T/log" && grep -q '^SET LDAP_CONFIG_PASSWORD' "$T/log" \
+  && ! grep -qE '^SET (PGPASSWORD|VAULT_DEX_CLIENT_SECRET)' "$T/log" \
+  && ok "up maps the optional LDAP value when sent; never exports PGPASSWORD or VAULT_DEX_CLIENT_SECRET (stdin, bd0c6bff)" \
+  || bad "optional mapping" "rc=$rc; $(grep '^SET' "$T/log")"
 [ ! -e "$ROOT/openldap-data" ] && [ ! -e "$ROOT/openldap-config" ] && [ -d "$ROOT/keycloak-db" ] \
   && ok "up creates keycloak-db's dir, never openldap-data or openldap-config" || bad "up dirs" "$(ls "$ROOT")"
 cmp -s "$SRC/theorg-v2-root.crt" "$ROOT/ca/root_ca.crt" && echo "$OUT" | grep -q 'theOrg-v2 Root CA, SHA-256 CD:39' \

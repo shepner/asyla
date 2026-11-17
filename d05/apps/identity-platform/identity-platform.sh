@@ -14,10 +14,15 @@
 # until M5 is written (the cutover bundle below is its first part).
 # No secret is in any file here or on the host. The workstation resolves the values from OpenBao
 # at deploy (build_host.py start_env, pull_token_env) and hands them to this process's environment;
-# this script maps them onto the names compose.yml passes by name:
-#   IDP_KEYCLOAK_DB_PASSWORD       -> KC_DB_PASSWORD, POSTGRES_PASSWORD, PGPASSWORD (up needs it)
-#   IDP_LDAP_ADMIN_PASSWORD        -> LDAP_ADMIN_PASSWORD, LDAP_CONFIG_PASSWORD (M5; not sent in M1)
-#   IDP_DEPLOY_DEX_CLIENT_SECRET   -> VAULT_DEX_CLIENT_SECRET, keycloak-configure (M5; not sent in M1)
+# this script maps them onto the names compose.yml passes by name. Only the long-running services
+# (keycloak, keycloak-db, openldap) name a secret; every one-shot (configure, the backup and
+# restore runs, break-glass) takes its value on stdin (theOrg bd0c6bff, the operator's rule of
+# 2026-11-16), so map_secrets exports nothing a one-shot would read:
+#   IDP_KEYCLOAK_DB_PASSWORD       -> KC_DB_PASSWORD (keycloak), POSTGRES_PASSWORD (keycloak-db);
+#                                     up needs it. keycloak-backup takes it on stdin (M5), never PGPASSWORD.
+#   IDP_LDAP_ADMIN_PASSWORD        -> LDAP_ADMIN_PASSWORD, LDAP_CONFIG_PASSWORD (openldap; M5; not sent in M1)
+#   IDP_DEPLOY_DEX_CLIENT_SECRET   -> never exported: keycloak-configure takes it on stdin (#86; M5;
+#                                     not sent in M1)
 # docker compose hands a name only to the services that list it, and M1 starts keycloak-db alone,
 # so in M1 only POSTGRES_PASSWORD reaches a container.
 # On any host but d05 (test01 as a replica of d05) up runs in replica mode: build_host.py sends a
@@ -199,21 +204,18 @@ replica_db_secret() {
   echo "[INFO] Replica of $SERVING_HOST ($(hostname -s)): keycloak-db with a throwaway password; openldap and keycloak never start"
 }
 
+# Exports only the names a long-running service lists (compose.yml). Never PGPASSWORD or
+# VAULT_DEX_CLIENT_SECRET: their one-shots take the value on stdin.
 map_secrets() {
   if [ -n "${IDP_KEYCLOAK_DB_PASSWORD:-}" ]; then
     KC_DB_PASSWORD="$IDP_KEYCLOAK_DB_PASSWORD"
     POSTGRES_PASSWORD="$IDP_KEYCLOAK_DB_PASSWORD"
-    PGPASSWORD="$IDP_KEYCLOAK_DB_PASSWORD"
-    export KC_DB_PASSWORD POSTGRES_PASSWORD PGPASSWORD
+    export KC_DB_PASSWORD POSTGRES_PASSWORD
   fi
   if [ -n "${IDP_LDAP_ADMIN_PASSWORD:-}" ]; then
     LDAP_ADMIN_PASSWORD="$IDP_LDAP_ADMIN_PASSWORD"
     LDAP_CONFIG_PASSWORD="$IDP_LDAP_ADMIN_PASSWORD"
     export LDAP_ADMIN_PASSWORD LDAP_CONFIG_PASSWORD
-  fi
-  if [ -n "${IDP_DEPLOY_DEX_CLIENT_SECRET:-}" ]; then
-    VAULT_DEX_CLIENT_SECRET="$IDP_DEPLOY_DEX_CLIENT_SECRET"
-    export VAULT_DEX_CLIENT_SECRET
   fi
 }
 

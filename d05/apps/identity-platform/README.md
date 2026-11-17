@@ -93,7 +93,10 @@ one-shots (backups, keycloak-configure) are never started by `up`.
 - No secret is in any file, here or on the host. The workstation resolves them from OpenBao at
   deploy (`d05/host.toml`: `start_env` `IDP_KEYCLOAK_DB_PASSWORD`; `IDP_LDAP_ADMIN_PASSWORD` and
   `IDP_DEPLOY_DEX_CLIENT_SECRET` are M5's, not sent in M1), and `identity-platform.sh` maps them
-  onto the compose names (its header). Images are pulled with the theorg-registry token the
+  onto the compose names (its header). Only the long-running services (keycloak, keycloak-db,
+  openldap) name a secret in `compose.yml`; every one-shot (configure, the backup and restore runs)
+  takes its value on stdin, as theOrg's `bd0c6bff` (PR #88, not merged). The image tag and digests
+  stay at `fcbed3fe` until that reaches theOrg's main (pending repin; `compose.yml` header). Images are pulled with the theorg-registry token the
   workstation hands over at use (`pull_token_env`, as `IDENTITY_PLATFORM_REGISTRY_PULL_TOKEN`)
   through `docker-credential-identity-platform-env`, under a throwaway `DOCKER_CONFIG`.
 - Data: `/mnt/docker/IdentityPlatform/{ca,keycloak-db}` in M1. No backup yet: the system of record
