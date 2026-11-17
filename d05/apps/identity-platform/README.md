@@ -137,28 +137,41 @@ runs the cutover image's `unpack` into the two dirs the restores read (`backup/`
     over an existing bundle (`cutover-clean` first) or an `unpacked` marker (`reset-cutover`
     first).
   - `unpack-bundle MANIFESTS_SHA256 KC_SUM OL_SUM`: reads the age identity on stdin and writes it
-    to the image's `unpack` on stdin alone; the contract's `docker run --rm -i --network none`.
-    The `IDP_CUTOVER_BUNDLE_IDENTITY` credentials slot waits on secrets-vault#65: until it exists
-    this command cannot run. Refused with no `fetched` marker or bundle, a bundle whose sha256 is
-    not the fetched one, an `unpacked` marker, or a target holding more than `lost+found`
-    (`reset-cutover` first).
-  - `reset-cutover`: after a failed unpack (or to unpack again), removes the `unpacked` marker and
-    empties both targets but for `lost+found`, with the pinned image's `find` (`--pull never`,
-    `--network none`: unpack's files are root-owned); keeps the bundle and the `fetched` marker.
-    Refused once a `restored-*` marker exists, when `docker compose --profile restored ps -a -q
-    openldap keycloak` lists a container, or when that call fails: past a restore the targets are
-    never emptied here. With the image missing it succeeds when both targets are already empty;
-    otherwise it removes the marker and fails: run `cutover-clean` and `fetch-bundle` (which pulls
-    the image), then `reset-cutover` again.
+    to the image's `unpack` on stdin alone; the contract's docker run plus `--pull never`:
+    `docker run --rm -i --pull never --network none`. Right before it, past every refusal and the
+    identity read, it writes the `unpack-started` marker (the fetched version and
+    `MANIFESTS_SHA256`). The `IDP_CUTOVER_BUNDLE_IDENTITY` credentials slot waits on
+    secrets-vault#65: until it exists this command cannot run. Refused with no `fetched` marker or
+    bundle, a bundle whose sha256 is not the fetched one, an `unpacked` marker, an `unpack-started`
+    marker without `unpacked` ("a previous unpack did not finish: run reset-cutover"), or a target
+    holding more than `lost+found` (`reset-cutover` first).
+  - `reset-cutover`: after a failed unpack (or to unpack again), removes the `unpacked` marker,
+    empties both targets but for `lost+found` with the pinned image's `find` (`--pull never`,
+    `--network none`: unpack's files are root-owned), and once both are verified empty removes the
+    `unpack-started` marker; keeps the bundle and the `fetched` marker. It deletes only what an
+    unpack wrote: with neither `unpack-started` nor `unpacked` it refuses (exit 3, nothing
+    changed), unless both targets are already empty (a no-op). Refused once `cutover-done` or a
+    `restored-*` marker exists, when `docker compose --profile restored --profile ops ps -a -q
+    openldap keycloak keycloak-backup openldap-backup` lists a container, or when that call fails:
+    past a restore the targets are never emptied here. With the image missing it succeeds when both
+    targets are already empty; otherwise it removes `unpacked` (keeping `unpack-started`) and fails:
+    run `cutover-clean` and `fetch-bundle` (which pulls the image), then `reset-cutover` again.
   - `cutover-clean`: removes `cutover/bundle.tar.age`, fetch-bundle's temp downloads
-    (`cutover/.bundle.*`) and the `fetched` marker; idempotent, never gated (a bundle can be
-    fetched again).
-- The marker gate: one marker per finished step in `/mnt/docker/IdentityPlatform/cutover-state/`,
-  each written atomically: `fetched`, `unpacked`, and `restored-openldap` / `restored-keycloak`
-  from the restores (not written yet). `start-openldap` needs `unpacked` and `restored-openldap`,
-  `start-keycloak` needs `unpacked` and `restored-keycloak`, `configure` needs both `restored-*`;
-  each names the missing marker and exits 3, and with its markers present still refuses (not yet
-  written, exit 3). `restore` refuses (exit 1, never build_host.py's skip status 3) until theOrg's
+    (`cutover/.bundle.*`) and the `fetched` marker; idempotent, gated only on `cutover-done`
+    (refused once it exists; a bundle can be fetched again).
+  - Both `reset-cutover` and `unpack-bundle` refuse (exit 3, nothing touched) when `backup/`,
+    `openldap-backup/` or `cutover-state/` is a symlink. The four switches run one at a time: each
+    holds util-linux `flock -n` on `cutover-state/.lock` for its whole run, and refuses (exit 3,
+    "another cutover switch is running") when it is busy.
+- The marker gate: one marker per step in `/mnt/docker/IdentityPlatform/cutover-state/`, each
+  written atomically and then synced (`sync -f`): `fetched`, `unpack-started`, `unpacked`,
+  `restored-openldap` / `restored-keycloak` from the restores, and `cutover-done` from the later
+  go-live or restore switch (those three not written yet; `cutover-done` stops `reset-cutover` and
+  `cutover-clean`). `start-openldap` needs `unpacked` and `restored-openldap`, `start-keycloak`
+  needs `unpacked` and `restored-keycloak`, `configure` needs both `restored-*`; `unpacked` counts
+  only with a non-empty version equal to `fetched`'s, a `restored-*` marker only when not empty.
+  Each names the missing or invalid marker and exits 3, and with its markers present still refuses
+  (not yet written, exit 3). `restore` refuses (exit 1, never build_host.py's skip status 3) until theOrg's
   B2a (`keycloak_backup.sh` taking `PGPASSWORD` on stdin) and identity-platform #86.
 - Exit codes of the four cutover switches: 0 done; 2 a usage error (a wrong ARG, an ARG to
   `reset-cutover` or `cutover-clean`); 3 refused, nothing changed (a replica, the value's name set

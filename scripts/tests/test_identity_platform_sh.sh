@@ -28,7 +28,13 @@
 # manifests ARG>, an unpacked marker, a non-empty target (lost+found alone is empty), a missing image,
 # or beside another switch; exit 2 for ARGs not three 64-hex; unpack's exits 1-4 kept; after exit 0
 # the four lines must match or no marker is written; also under xtrace. Both cutover switches refuse
-# on a replica before reading stdin.
+# on a replica before reading stdin. unpack-bundle writes unpack-started right before its docker
+# run (--pull never) and refuses a stale one; reset-cutover deletes only what an unpack wrote (no
+# unpack-started or unpacked: refused over files, a no-op over empty targets), refuses past
+# cutover-done, a restored-* marker, a restored or ops container, and a symlinked target or
+# cutover-state; cutover-clean refuses past cutover-done; the gate refuses an empty or
+# version-mismatched unpacked and an empty restored-*; a held cutover-state/.lock refuses every
+# cutover switch (the flock stub is a real flock(2) through python3).
 # Nothing here reaches a registry, the vault or a host; every value is a plain stand-in word made
 # at run time. Run: bash scripts/tests/test_identity_platform_sh.sh
 set -uo pipefail
@@ -36,7 +42,7 @@ unset IDP_KEYCLOAK_DB_PASSWORD IDP_LDAP_ADMIN_PASSWORD IDP_DEPLOY_DEX_CLIENT_SEC
   IDENTITY_PLATFORM_REGISTRY_PULL_TOKEN IDENTITY_PLATFORM_TAG_OVERRIDE STUB_MISSING STUB_DB_RUNNING \
   STUB_HOST STUB_PW_FILE LDAP_PROVISIONER_PASSWORD STUB_LEAF_RC STUB_LEAF_PW_FILE STUB_RUN_PW_FILE \
   IDENTITY_PLATFORM_SYSTEMD_DIR IDP_CUTOVER_BUNDLE_IDENTITY THEORG_REGISTRY_PULL_TOKEN STUB_CUT_MISSING \
-  STUB_ID_FILE STUB_UNPACK_RC STUB_UNPACK_OUT
+  STUB_ID_FILE STUB_UNPACK_RC STUB_UNPACK_OUT STUB_OPS_CT STUB_RESTORED_CT STUB_PS_FAIL STUB_FIND_RC
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SRC="$REPO/d05/apps/identity-platform"
@@ -158,7 +164,11 @@ case "$*" in
     find "$d" -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf -- {} + ;;
   *"ps -a -q openldap keycloak"*)
     [ -z "${STUB_PS_FAIL:-}" ] || exit 1
-    [ -z "${STUB_RESTORED_CT:-}" ] || echo ctid ;;
+    [ -z "${STUB_RESTORED_CT:-}" ] || echo ctid
+    # STUB_OPS_CT: an ops one-shot's container, listed only when the call names that profile and both.
+    case "$*" in
+      *"--profile ops ps -a -q openldap keycloak keycloak-backup openldap-backup") [ -z "${STUB_OPS_CT:-}" ] || echo opsid ;;
+    esac ;;
   *" pull"*)
     echo "PULLCFG $(cat "$DOCKER_CONFIG/config.json" 2>/dev/null)" >> "$STUB_LOG"
     printf 'gitea.asyla.org' | docker-credential-identity-platform-env get | grep -q '"Username":"theorg-registry"' \
@@ -190,7 +200,18 @@ echo "systemctl $*" >> "$STUB_LOG"
 case "$1" in is-enabled|is-active) exit 1 ;; esac
 exit 0
 EOF
-printf '#!/bin/bash\nexit 0\n' > "$T/bin/flock"
+# flock: `flock -n FD` (the form both scripts use) is a real non-blocking flock(2) on that inherited
+# fd, through python3's fcntl (util-linux flock is not on macOS): exit 1 while another open of the
+# file holds it, as flock(1) -n. Any other form takes the lock.
+cat > "$T/bin/flock" <<'EOF'
+#!/bin/bash
+[ "${1:-}" = -n ] && [[ ${2:-} =~ ^[0-9]+$ ]] || exit 0
+exec python3 -I -c 'import fcntl, sys
+try:
+    fcntl.flock(int(sys.argv[1]), fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    sys.exit(1)' "$2"
+EOF
 # curl (fetch-bundle's download): logs its argv and which pull-token names are in its environment
 # (never a value), dumps its environment to STUB_CURL_ENV, keeps its `-K -` config (its stdin) in
 # STUB_CURL_CFG (a temp file read only by the checks), writes a fixed stand-in body to its -o path
@@ -808,12 +829,12 @@ fetch_run() {
 cfg_ok() { [ "$(cat "$T/curlcfg" 2>/dev/null)" = "header = \"Authorization: $CUT_SCHEME $LEAF_VAL\"" ]; }
 no_cut_left() {   # no bundle, no temp download and no fetched marker (or temp marker)
   [ ! -e "$ROOT/cutover/bundle.tar.age" ] && [ -z "$(ls -A "$ROOT/cutover" 2>/dev/null)" ] \
-    && [ ! -e "$ROOT/cutover-state/fetched" ] && [ -z "$(ls -A "$ROOT/cutover-state" 2>/dev/null | grep '^\.')" ]
+    && [ ! -e "$ROOT/cutover-state/fetched" ] && [ -z "$(ls -A "$ROOT/cutover-state" 2>/dev/null | grep '^\.' | grep -vxF .lock)" ]
 }
 fetched_ok() {   # the bundle is the body, the marker names the version and its sha256, the output its size and sum
   cmp -s "$T/body" "$ROOT/cutover/bundle.tar.age" && [ "$(ls -A "$ROOT/cutover")" = "bundle.tar.age" ] \
     && [ "$(cat "$ROOT/cutover-state/fetched")" = "$(printf 'version %s\nsha256 %s' "$CUT_VER" "$BODY_SUM")" ] \
-    && [ -z "$(ls -A "$ROOT/cutover-state" | grep '^\.')" ] \
+    && [ -z "$(ls -A "$ROOT/cutover-state" | grep '^\.' | grep -vxF .lock)" ] \
     && echo "$OUT" | grep -qF "$CUT_VER, $BODY_SIZE bytes, sha256 $BODY_SUM"
 }
 curl_ok() {   # one curl call: -q first, the config on stdin, https only, the package URL last; no pull-token name in its env
@@ -931,7 +952,7 @@ ID_NAME="IDP_CUTOVER_BUNDLE_IDENTITY"
 UNP_M="0123456789ab$(printf '0%.0s' {1..52})"
 UNP_K="$(printf 'b%.0s' {1..64})"
 UNP_O="$(printf 'c%.0s' {1..64})"
-UNP_RUN="docker run --rm -i --network none -v $ROOT/cutover/bundle.tar.age:/in/bundle.tar.age:ro -v $ROOT/backup:/dst/keycloak -v $ROOT/openldap-backup:/dst/openldap $CUT_IMAGE unpack --expect-manifests-sha256 $UNP_M --expect-keycloak-summary $UNP_K --expect-openldap-summary $UNP_O"
+UNP_RUN="docker run --rm -i --pull never --network none -v $ROOT/cutover/bundle.tar.age:/in/bundle.tar.age:ro -v $ROOT/backup:/dst/keycloak -v $ROOT/openldap-backup:/dst/openldap $CUT_IMAGE unpack --expect-manifests-sha256 $UNP_M --expect-keycloak-summary $UNP_K --expect-openldap-summary $UNP_O"
 UNP_LINES="$(printf 'version %s\nmanifests-sha256 %s\nkeycloak-summary-sha256 %s\nopenldap-summary-sha256 %s' "$CUT_VER" "$UNP_M" "$UNP_K" "$UNP_O")"
 unpack_setup() {   # a fresh host holding what fetch-bundle leaves: the bundle and its fetched marker
   reset_host
@@ -945,9 +966,13 @@ unpack_run() {
   rm -f "$T/idfile"
   LEAF_EXTRA="${UNP_EXTRA:-} STUB_ID_FILE=$T/idfile" leaf_run "$@"
 }
-snap() { find "$ROOT" | LC_ALL=C sort; cat "$ROOT/cutover-state/"* 2>/dev/null; }
-unpacked_ok() {   # the unpacked marker holds the four lines, no temp marker; one docker run, the contract's argv; unpack got the value on stdin
-  [ "$(cat "$ROOT/cutover-state/unpacked" 2>/dev/null)" = "$UNP_LINES" ] && [ -z "$(ls -A "$ROOT/cutover-state" | grep '^\.')" ] \
+# The cutover lock file (cutover-state/.lock, made by every cutover switch past its replica check) is
+# no change.
+snap() { find "$ROOT" ! -path "$ROOT/cutover-state/.lock" | LC_ALL=C sort; cat "$ROOT/cutover-state/"* 2>/dev/null; }
+UNP_STARTED="$(printf 'version %s\nmanifests-sha256 %s' "$CUT_VER" "$UNP_M")"
+unpacked_ok() {   # the unpacked and unpack-started markers, no temp marker; one docker run, the contract's argv; unpack got the value on stdin
+  [ "$(cat "$ROOT/cutover-state/unpacked" 2>/dev/null)" = "$UNP_LINES" ] && [ -z "$(ls -A "$ROOT/cutover-state" | grep '^\.' | grep -vxF .lock)" ] \
+    && [ "$(cat "$ROOT/cutover-state/unpack-started" 2>/dev/null)" = "$UNP_STARTED" ] \
     && [ "$(grep -c '^docker run' "$T/log")" -eq 1 ] && grep -qxF "$UNP_RUN" "$T/log" && grep -qx 'UNPACKENV ' "$T/log" \
     && grep -qx "docker image inspect $CUT_IMAGE" "$T/log" \
     && [ "$(cat "$T/idfile" 2>/dev/null)" = "$LEAF_VAL" ]
@@ -1009,6 +1034,15 @@ unp_refused 3 "with a MANIFESTS_SHA256 that is not the fetched version's (a wron
 unpack_setup; printf '%s\n' "$UNP_LINES" > "$ROOT/cutover-state/unpacked"; before="$(snap)"
 unpack_run unpack-bundle "$UNP_M" "$UNP_K" "$UNP_O"; rc=$?
 unp_refused 3 "with an unpacked marker" 'unpacked exists'
+unpack_setup; printf '%s\n' "$UNP_STARTED" > "$ROOT/cutover-state/unpack-started"; before="$(snap)"
+unpack_run unpack-bundle "$UNP_M" "$UNP_K" "$UNP_O"; rc=$?
+unp_refused 3 "with a stale unpack-started marker (no unpacked)" 'a previous unpack did not finish: run reset-cutover'
+for tgt in backup openldap-backup cutover-state; do
+  unpack_setup; mkdir -p "$ROOT/$tgt"; mv "$ROOT/$tgt" "$ROOT/$tgt.real"; ln -s "$ROOT/$tgt.real" "$ROOT/$tgt"; before="$(snap)"
+  unpack_run unpack-bundle "$UNP_M" "$UNP_K" "$UNP_O"; rc=$?
+  [ ! -e "$ROOT/$tgt.real/.lock" ] || rc=99
+  unp_refused 3 "with $tgt a symlink" "refused: $ROOT/$tgt is a symlink"
+done
 for tgt in backup openldap-backup; do
   unpack_setup; mkdir -p "$ROOT/$tgt"; echo partial > "$ROOT/$tgt/summary.txt"; before="$(snap)"
   unpack_run unpack-bundle "$UNP_M" "$UNP_K" "$UNP_O"; rc=$?
@@ -1038,7 +1072,8 @@ for code in 1 4; do
   UNP_EXTRA="STUB_UNPACK_RC=$code" unpack_run unpack-bundle "$UNP_M" "$UNP_K" "$UNP_O"; rc=$?
   [ "$rc" -eq "$code" ] && echo "$OUT" | grep -q "unpack failed (exit $code).*run reset-cutover before a retry" \
     && [ ! -e "$ROOT/cutover-state/unpacked" ] && grep -qxF "$UNP_RUN" "$T/log" && [ "$(cat "$T/idfile")" = "$LEAF_VAL" ] && no_value \
-    && ok "unpack-bundle: unpack's exit $code kept, no unpacked marker, run reset-cutover before a retry" \
+    && [ "$(cat "$ROOT/cutover-state/unpack-started" 2>/dev/null)" = "$UNP_STARTED" ] \
+    && ok "unpack-bundle: unpack's exit $code kept, no unpacked marker, unpack-started kept, run reset-cutover before a retry" \
     || bad "unpack-bundle exit $code" "rc=$rc; $OUT"
 done
 for code in 2 3; do
@@ -1046,8 +1081,8 @@ for code in 2 3; do
   UNP_EXTRA="STUB_UNPACK_RC=$code" unpack_run unpack-bundle "$UNP_M" "$UNP_K" "$UNP_O"; rc=$?
   [ "$rc" -eq "$code" ] && echo "$OUT" | grep -q "unpack refused (exit $code); nothing changed" \
     && [ ! -e "$ROOT/cutover-state/unpacked" ] && [ -z "$(ls -A "$ROOT/backup" "$ROOT/openldap-backup" | grep -v ':$' | grep .)" ] \
-    && grep -qxF "$UNP_RUN" "$T/log" && no_value \
-    && ok "unpack-bundle: unpack's exit $code kept, no unpacked marker, nothing changed" \
+    && [ ! -e "$ROOT/cutover-state/unpack-started" ] && grep -qxF "$UNP_RUN" "$T/log" && no_value \
+    && ok "unpack-bundle: unpack's exit $code kept, no unpacked or unpack-started marker, nothing changed" \
     || bad "unpack-bundle exit $code" "rc=$rc; $OUT"
 done
 # Exit 0 with lines that are not the fetched version and the three ARGs, in order: no marker, exit 1.
@@ -1062,7 +1097,7 @@ for case_ in wrong-version wrong-summary order three-lines extra-line; do
   unpack_setup
   STUB_UNPACK_OUT="$lines" UNP_EXTRA="STUB_UNPACK_RC=0" unpack_run unpack-bundle "$UNP_M" "$UNP_K" "$UNP_O"; rc=$?
   [ "$rc" -ne 0 ] && echo "$OUT" | grep -q 'are not the fetched version and the three ARGs.*run reset-cutover' \
-    && [ ! -e "$ROOT/cutover-state/unpacked" ] && [ -z "$(ls -A "$ROOT/cutover-state" | grep '^\.')" ] && no_value \
+    && [ ! -e "$ROOT/cutover-state/unpacked" ] && [ -z "$(ls -A "$ROOT/cutover-state" | grep '^\.' | grep -vxF .lock)" ] && no_value \
     && ok "unpack-bundle: exit 0 with its lines $case_: no unpacked marker, nonzero, run reset-cutover" \
     || bad "unpack-bundle lines $case_" "rc=$rc; $OUT"
 done
@@ -1070,16 +1105,19 @@ unset STUB_UNPACK_OUT
 
 # --- reset-cutover, cutover-clean and the cutover gate ---
 # The docker stub runs reset-cutover's find here on the mounted dir; STUB_CUT_MISSING says the
-# cutover image is not here; STUB_RESTORED_CT lists a container, STUB_PS_FAIL fails compose ps.
+# cutover image is not here; STUB_RESTORED_CT lists a container, STUB_OPS_CT an ops one-shot's,
+# STUB_PS_FAIL fails compose ps.
 reset_find() { printf 'docker run --rm --network none --pull never --entrypoint find -v %s:/t %s /t -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf {} +' "$1" "$CUT_IMAGE"; }
-RESET_PS="docker compose -f compose.yml --profile restored ps -a -q openldap keycloak"
-reset_setup() {   # what an unpack leaves: the bundle, both markers, files (lost+found too) in both targets
+RESET_PS="docker compose -f compose.yml --profile restored --profile ops ps -a -q openldap keycloak keycloak-backup openldap-backup"
+reset_setup() {   # what an unpack leaves: the bundle, its three markers, files (lost+found too) in both targets
   unpack_setup
   mkdir -p "$ROOT/backup/lost+found" "$ROOT/openldap-backup/lost+found" "$ROOT/backup/sub"
   echo one > "$ROOT/backup/STATUS"; echo two > "$ROOT/backup/sub/file"
   echo three > "$ROOT/openldap-backup/STATUS"; echo four > "$ROOT/openldap-backup/.dotfile"
+  printf '%s\n' "$UNP_STARTED" > "$ROOT/cutover-state/unpack-started"
   printf '%s\n' "$UNP_LINES" > "$ROOT/cutover-state/unpacked"
 }
+no_unp_markers() { [ ! -e "$ROOT/cutover-state/unpacked" ] && [ ! -e "$ROOT/cutover-state/unpack-started" ]; }
 targets_reset() { [ "$(ls -A "$ROOT/backup")" = "lost+found" ] && [ "$(ls -A "$ROOT/openldap-backup")" = "lost+found" ]; }
 cut_kept() { cmp -s "$T/body" "$ROOT/cutover/bundle.tar.age" && [ "$(cat "$ROOT/cutover-state/fetched")" = "$(printf 'version %s\nsha256 %s' "$CUT_VER" "$BODY_SUM")" ]; }
 reset_refused() {   # reset_refused WHAT PATTERN: exit 3, PATTERN in the output, no docker run, nothing changed
@@ -1089,17 +1127,31 @@ reset_refused() {   # reset_refused WHAT PATTERN: exit 3, PATTERN in the output,
 
 reset_setup
 run reset-cutover; rc=$?
-[ "$rc" -eq 0 ] && targets_reset && [ ! -e "$ROOT/cutover-state/unpacked" ] && cut_kept \
+[ "$rc" -eq 0 ] && targets_reset && no_unp_markers && cut_kept \
   && grep -qxF "$RESET_PS" "$T/log" && [ "$(grep -c '^docker run' "$T/log")" -eq 2 ] \
   && grep -qxF "$(reset_find "$ROOT/backup")" "$T/log" && grep -qxF "$(reset_find "$ROOT/openldap-backup")" "$T/log" \
-  && ok "reset-cutover: both targets emptied by the pinned image's find (lost+found kept), no unpacked marker, bundle and fetched kept" \
+  && ok "reset-cutover: both targets emptied by the pinned image's find (lost+found kept), no unpacked or unpack-started marker, bundle and fetched kept" \
   || bad "reset-cutover happy" "rc=$rc; $OUT; $(cat "$T/log")"
-# A failed unpack (no unpacked marker), targets holding lost+found alone: still a clean reset.
+# A failed unpack (unpack-started, no unpacked marker), files in the targets: the reset empties them.
+reset_setup; rm -f "$ROOT/cutover-state/unpacked"
+run reset-cutover; rc=$?
+[ "$rc" -eq 0 ] && targets_reset && no_unp_markers && cut_kept && [ "$(grep -c '^docker run' "$T/log")" -eq 2 ] \
+  && ok "reset-cutover after a failed unpack (unpack-started alone): targets emptied, unpack-started gone" || bad "reset-cutover failed unpack" "rc=$rc; $OUT"
+# Targets holding lost+found alone, unpack-started: still a clean reset.
 reset_setup; rm -f "$ROOT/cutover-state/unpacked" "$ROOT/backup/STATUS" "$ROOT/openldap-backup/STATUS" "$ROOT/openldap-backup/.dotfile"
 rm -rf "$ROOT/backup/sub"
 run reset-cutover; rc=$?
-[ "$rc" -eq 0 ] && targets_reset && cut_kept && [ "$(grep -c '^docker run' "$T/log")" -eq 2 ] \
+[ "$rc" -eq 0 ] && targets_reset && cut_kept && no_unp_markers && [ "$(grep -c '^docker run' "$T/log")" -eq 2 ] \
   && ok "reset-cutover: targets holding lost+found alone, no unpacked marker: succeeds, lost+found kept" || bad "reset-cutover lost+found" "rc=$rc; $OUT"
+# No unpack marker at all: targets with files are not unpack's (refused, files kept); empty ones are a no-op.
+reset_setup; rm -f "$ROOT/cutover-state/unpacked" "$ROOT/cutover-state/unpack-started"; before="$(snap)"
+run reset-cutover; rc=$?
+reset_refused "with no unpack-started or unpacked marker and files in the targets" 'refused: no unpack-started or unpacked marker'
+reset_setup; rm -f "$ROOT/cutover-state/unpacked" "$ROOT/cutover-state/unpack-started"
+rm -rf "$ROOT/backup/sub" "$ROOT/backup/STATUS" "$ROOT/openldap-backup/STATUS" "$ROOT/openldap-backup/.dotfile"; before="$(snap)"
+run reset-cutover; rc=$?
+[ "$rc" -eq 0 ] && ! grep -q '^docker run' "$T/log" && [ "$(snap)" = "$before" ] && echo "$OUT" | grep -q 'nothing to do' \
+  && ok "reset-cutover with no unpack marker and empty targets: a no-op (0), no docker run, nothing changed" || bad "reset-cutover no marker empty" "rc=$rc; $OUT"
 # No target at all: nothing to empty, no docker run, no target made.
 unpack_setup
 run reset-cutover; rc=$?
@@ -1115,12 +1167,42 @@ for m in restored-openldap restored-keycloak; do
   run reset-cutover; rc=$?
   reset_refused "with $m" "refused: .*/$m exists"
 done
+reset_setup; echo done > "$ROOT/cutover-state/cutover-done"; before="$(snap)"
+run reset-cutover; rc=$?
+reset_refused "with cutover-done" 'refused: .*/cutover-done exists (the cutover is done)'
 reset_setup; before="$(snap)"
 STUB_RESTORED_CT=1 run reset-cutover; rc=$?
-reset_refused "with a restored container" 'an openldap or keycloak container exists'
+reset_refused "with a restored container" 'an openldap, keycloak or backup one-shot container exists'
+reset_setup; before="$(snap)"
+STUB_OPS_CT=1 run reset-cutover; rc=$?
+reset_refused "with an ops one-shot's container" 'an openldap, keycloak or backup one-shot container exists'
 reset_setup; before="$(snap)"
 STUB_PS_FAIL=1 run reset-cutover; rc=$?
-reset_refused "when compose ps fails" 'docker compose ps for openldap and keycloak failed'
+reset_refused "when compose ps fails" 'docker compose ps for openldap, keycloak and the backup one-shots failed'
+for tgt in backup openldap-backup cutover-state; do
+  reset_setup; mv "$ROOT/$tgt" "$ROOT/$tgt.real"; ln -s "$ROOT/$tgt.real" "$ROOT/$tgt"; before="$(snap)"
+  run reset-cutover; rc=$?
+  [ ! -e "$ROOT/$tgt.real/.lock" ] && [ ! -s "$T/log" ] || rc=99
+  reset_refused "with $tgt a symlink (no docker call at all)" "refused: $ROOT/$tgt is a symlink"
+done
+# One cutover switch at a time: with cutover-state/.lock held by another open (fd 7 here, locked by
+# the flock stub: a real flock(2)), each switch refuses (3) with no docker or curl call, nothing changed.
+reset_setup; before="$(snap)"
+exec 7> "$ROOT/cutover-state/.lock"
+if "$T/bin/flock" -n 7; then
+  for sw in reset-cutover cutover-clean "fetch-bundle $CUT_VER" "unpack-bundle $UNP_M $UNP_K $UNP_O"; do
+    # shellcheck disable=SC2086
+    run $sw; rc=$?
+    [ "$rc" -eq 3 ] && echo "$OUT" | grep -q "${sw%% *}: refused: another cutover switch is running" && [ ! -s "$T/log" ] \
+      && [ "$(snap)" = "$before" ] && ok "${sw%% *} with the cutover lock held: refused (3), no call, nothing changed" \
+      || bad "${sw%% *} lock held" "rc=$rc; $OUT; $(cat "$T/log")"
+  done
+else
+  bad "the test could not take the cutover lock"
+fi
+exec 7>&-
+run reset-cutover; rc=$?
+[ "$rc" -eq 0 ] && targets_reset && ok "reset-cutover once the lock is released: runs (0)" || bad "reset-cutover after the lock" "rc=$rc; $OUT"
 reset_setup; before="$(snap)"
 run verify reset-cutover; rc=$?
 reset_refused "combined with another switch" 'reset-cutover: refused: run it alone'
@@ -1132,30 +1214,32 @@ run reset-cutover extra; rc=$?
 reset_setup; rm -rf "$ROOT/backup"/* "$ROOT/backup/sub" "$ROOT/openldap-backup"/* "$ROOT/openldap-backup/.dotfile"
 mkdir -p "$ROOT/backup/lost+found"
 STUB_CUT_MISSING=1 run reset-cutover; rc=$?
-[ "$rc" -eq 0 ] && ! grep -q '^docker run' "$T/log" && [ ! -e "$ROOT/cutover-state/unpacked" ] && cut_kept \
+[ "$rc" -eq 0 ] && ! grep -q '^docker run' "$T/log" && no_unp_markers && cut_kept \
   && echo "$OUT" | grep -q 'both targets are empty already' \
-  && ok "reset-cutover, image missing, targets empty: succeeds, no docker run, no unpacked marker" || bad "reset-cutover image missing empty" "rc=$rc; $OUT; $(ls -A "$ROOT/backup" "$ROOT/openldap-backup")"
+  && ok "reset-cutover, image missing, targets empty: succeeds, no docker run, no unpacked or unpack-started marker" || bad "reset-cutover image missing empty" "rc=$rc; $OUT; $(ls -A "$ROOT/backup" "$ROOT/openldap-backup")"
 reset_setup
 STUB_CUT_MISSING=1 run reset-cutover; rc=$?
 [ "$rc" -eq 1 ] && echo "$OUT" | grep -q 'run cutover-clean and fetch-bundle VERSION (it pulls the image), then reset-cutover again' \
   && ! grep -q '^docker run' "$T/log" && [ ! -e "$ROOT/cutover-state/unpacked" ] && [ -f "$ROOT/backup/sub/file" ] \
-  && [ -f "$ROOT/openldap-backup/STATUS" ] && cut_kept \
-  && ok "reset-cutover, image missing, targets holding files: fails (1), run fetch-bundle, files kept, no unpacked marker" \
+  && [ -f "$ROOT/openldap-backup/STATUS" ] && cut_kept && [ -f "$ROOT/cutover-state/unpack-started" ] \
+  && ok "reset-cutover, image missing, targets holding files: fails (1), run fetch-bundle, files kept, no unpacked marker, unpack-started kept" \
   || bad "reset-cutover image missing files" "rc=$rc; $OUT"
 # A find that leaves files: the check afterwards fails it (1).
 reset_setup
 STUB_FIND_RC=1 run reset-cutover; rc=$?
 [ "$rc" -eq 1 ] && echo "$OUT" | grep -q 'a target still holds files (find exit 1)' && [ ! -e "$ROOT/cutover-state/unpacked" ] \
-  && ok "reset-cutover: a target not empty afterwards fails it (1)" || bad "reset-cutover check after" "rc=$rc; $OUT"
+  && [ -f "$ROOT/cutover-state/unpack-started" ] \
+  && ok "reset-cutover: a target not empty afterwards fails it (1), unpack-started kept" || bad "reset-cutover check after" "rc=$rc; $OUT"
 
 # cutover-clean: the bundle, temp downloads and the fetched marker go; twice is the same; nothing else touched.
 reset_setup
 echo part > "$ROOT/cutover/.bundle.Ab12Cd"; echo part > "$ROOT/cutover-state/.fetched.Ab12Cd"
 for pass in 1 2; do
   run cutover-clean; rc=$?
-  [ "$rc" -eq 0 ] && [ -z "$(ls -A "$ROOT/cutover")" ] && [ "$(ls -A "$ROOT/cutover-state")" = unpacked ] \
+  [ "$rc" -eq 0 ] && [ -z "$(ls -A "$ROOT/cutover")" ] \
+    && [ "$(ls -A "$ROOT/cutover-state" | grep -vxF .lock | LC_ALL=C sort | tr '\n' ' ')" = "unpack-started unpacked " ] \
     && [ "$(cat "$ROOT/cutover-state/unpacked")" = "$UNP_LINES" ] && [ -f "$ROOT/backup/sub/file" ] && [ ! -s "$T/log" ] \
-    && ok "cutover-clean (run $pass): no bundle, temp file or fetched marker; unpacked and the targets kept; no docker call" \
+    && ok "cutover-clean (run $pass): no bundle, temp file or fetched marker; unpack-started, unpacked and the targets kept; no docker call" \
     || bad "cutover-clean run $pass" "rc=$rc; $OUT; $(ls -A "$ROOT/cutover" "$ROOT/cutover-state")"
 done
 reset_host
@@ -1171,14 +1255,23 @@ run cutover-clean extra; rc=$?
 run verify cutover-clean; rc=$?
 [ "$rc" -eq 3 ] && echo "$OUT" | grep -q 'cutover-clean: refused: run it alone' && [ "$(snap)" = "$before" ] \
   && ok "cutover-clean combined with another switch: refused (3)" || bad "cutover-clean combined" "rc=$rc; $OUT"
+reset_setup; echo done > "$ROOT/cutover-state/cutover-done"; before="$(snap)"
+run cutover-clean; rc=$?
+[ "$rc" -eq 3 ] && echo "$OUT" | grep -q 'cutover-clean: refused: .*/cutover-done exists' && [ ! -s "$T/log" ] && [ "$(snap)" = "$before" ] \
+  && ok "cutover-clean with cutover-done: refused (3), nothing changed" || bad "cutover-clean cutover-done" "rc=$rc; $OUT"
 
 # cutover_gate: each switch's markers; a missing one is named (3); all present, still not yet written (3).
-gate_case() {   # gate_case SWITCH "MARKERS" MISSING|pass
+gate_case() {   # gate_case SWITCH "MARKERS" MISSING|pass (GATE_UNPACKED: unpacked's content; GATE_EMPTY: a marker written empty)
   local m pat
   reset_host; mkdir -p "$ROOT/cutover-state"
-  for m in $2; do echo done > "$ROOT/cutover-state/$m"; done
+  printf 'version %s\nsha256 %s\n' "$CUT_VER" "$BODY_SUM" > "$ROOT/cutover-state/fetched"
+  for m in $2; do
+    if [ "$m" = "${GATE_EMPTY:-}" ]; then : > "$ROOT/cutover-state/$m"
+    elif [ "$m" = unpacked ]; then printf '%s\n' "${GATE_UNPACKED-$UNP_LINES}" > "$ROOT/cutover-state/$m"
+    else echo "restored from the stand-in bundle" > "$ROOT/cutover-state/$m"; fi
+  done
   run "$1"; rc=$?
-  if [ "$3" = pass ]; then pat="$1: M5 cutover, not yet written"; else pat="$1: refused: cutover marker missing: $3 ("; fi
+  if [ "$3" = pass ]; then pat="$1: M5 cutover, not yet written"; else pat="$1: refused: cutover marker missing or invalid: $3 ("; fi
   [ "$rc" -eq 3 ] && echo "$OUT" | grep -qF -- "$pat" && { [ "$3" != pass ] || ! echo "$OUT" | grep -q 'marker missing'; } && [ ! -s "$T/log" ] \
     && ok "cutover_gate $1 with [${2}]: $([ "$3" = pass ] && echo 'passes, then not yet written (3)' || echo "names $3 (3)"), no docker call" \
     || bad "cutover_gate $1 [$2]" "rc=$rc; $OUT; $(cat "$T/log")"
@@ -1195,6 +1288,13 @@ gate_case configure "" "restored-openldap restored-keycloak"
 gate_case configure "unpacked restored-openldap" "restored-keycloak"
 gate_case configure "unpacked restored-keycloak" "restored-openldap"
 gate_case configure "restored-openldap restored-keycloak" pass
+# A marker that is there but not valid: an empty unpacked, an unpacked with no or another version
+# than fetched's, an empty restored-* marker.
+GATE_EMPTY=unpacked gate_case start-openldap "unpacked restored-openldap" "unpacked (empty)"
+GATE_UNPACKED="manifests-sha256 $UNP_M" gate_case start-keycloak "unpacked restored-keycloak" "unpacked (version '' is not fetched's '$CUT_VER')"
+GATE_UNPACKED="version m5-fedcba987654" gate_case start-openldap "unpacked restored-openldap" "unpacked (version 'm5-fedcba987654' is not fetched's '$CUT_VER')"
+GATE_EMPTY=restored-openldap gate_case start-openldap "unpacked restored-openldap" "restored-openldap (empty)"
+GATE_EMPTY=restored-keycloak gate_case configure "restored-openldap restored-keycloak" "restored-keycloak (empty)"
 
 # Under xtrace (SHELLOPTS=xtrace inherited, or bash -x): traced up to the read, the value in no
 # output, argv or file; unpack still gets it.
