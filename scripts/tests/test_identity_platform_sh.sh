@@ -64,7 +64,9 @@
 # nothing written) on a replica, a symlinked cutover-state, an invalid marker, either service not
 # healthy, combined, the lock held; exit 2 for an ARG. Past cutover-done on d05, up starts
 # keycloak-db, openldap and keycloak in one `--profile restored up -d --wait` with both values
-# under compose.yml's names, and refuses (exit 1, no docker call) without either; before it, up
+# under compose.yml's names (in no earlier child's environment), refuses (exit 1, no docker call)
+# without either, and (exit 1, no compose up; configure: exit 3, no run) when openldap-data,
+# openldap-config or keycloak-db is missing or empty; before it, up
 # ignores the LDAP value; on a replica up stays M1's whatever cutover-state holds. verify then
 # checks openldap and keycloak too (d05 only).
 # Nothing here reaches a registry, the vault or a host; every value is a plain stand-in word made
@@ -78,7 +80,8 @@ unset IDP_KEYCLOAK_DB_PASSWORD IDP_LDAP_ADMIN_PASSWORD IDP_DEPLOY_DEX_CLIENT_SEC
   STUB_ID_FILE STUB_UNPACK_RC STUB_UNPACK_OUT STUB_OPS_CT STUB_RESTORED_CT STUB_PS_FAIL STUB_FIND_RC \
   STUB_RESTORE_RC STUB_RESTORE_PW_FILE STUB_DB_HEALTH OPENLDAP_BACKUP_CONFIG_MOUNT \
   STUB_ENV_NAMES STUB_UP_ENV STUB_UP_RC STUB_BIND_FILE STUB_BIND_RC STUB_NO_OL IDENTITY_PLATFORM_START_WAIT_S \
-  STUB_KC_RUNNING STUB_KC_HEALTH STUB_CONF_IN STUB_APPLY_RC STUB_RECONCILE_RC CONF_STDIN STUB_OL_HEALTH
+  STUB_KC_RUNNING STUB_KC_HEALTH STUB_CONF_IN STUB_APPLY_RC STUB_RECONCILE_RC CONF_STDIN STUB_OL_HEALTH \
+  STUB_DATA_RC
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SRC="$REPO/d05/apps/identity-platform"
@@ -163,6 +166,12 @@ if [ "$1 $2" = "network create" ]; then
   echo "$drv $internal $subnet $gw $range" > "$STUB_NET/$1"; echo "netid-$1"; exit 0
 fi
 case "$*" in
+  # The post-cutover data check: lists the mounted host dir here as the image's sh would (lost+found
+  # aside); STUB_DATA_RC exits that instead (a docker failure).
+  "run "*":/d:ro "*)
+    [ -z "${STUB_DATA_RC:-}" ] || exit "$STUB_DATA_RC"
+    d=""; for a in "$@"; do case "$a" in *:/d:ro) d="${a%:/d:ro}" ;; esac; done
+    [ -n "$(ls -A "$d" 2>/dev/null | grep -vx lost+found)" ]; exit ;;
   # openldap-leaf.sh's one-offs (the real copy): no swap marker, no valid leaf, the issue succeeds.
   "run "*"test -e"*) exit 1 ;;
   "run "*"certificate verify"*) exit 1 ;;
@@ -390,6 +399,10 @@ DB_IMAGE="postgres:16.14-bookworm@sha256:64154d0babcb1741988719e703419af0382b199
   && ok "compose.yml: keycloak's image is fcbed3fe's digest" || bad "compose.yml: keycloak image" "$(grep -E '^    image:' <<< "$KC")"
 [ "$(grep -E '^    image:' <<< "$DB")" = "    image: $DB_IMAGE" ] \
   && ok "compose.yml: keycloak-db's image is fcbed3fe's digest" || bad "compose.yml: keycloak-db image" "$(grep -E '^    image:' <<< "$DB")"
+db_img_script="$(sed -nE 's/^KC_DB_IMAGE="(.*)"$/\1/p' "$SRC/identity-platform.sh")"
+[ "    image: $db_img_script" = "$(grep -E '^    image:' <<< "$DB")" ] \
+  && ok "identity-platform.sh's KC_DB_IMAGE (the data check's image) equals compose.yml's keycloak-db image" \
+  || bad "KC_DB_IMAGE differs from compose.yml's keycloak-db image" "[$db_img_script]"
 ! grep -q 'profiles:' <<< "$DB" && ok "compose.yml: keycloak-db has no profile (the one M1 service)" || bad "compose.yml: keycloak-db has a profile"
 # The real compose, when docker is here: no daemon is asked (config only), every value a stand-in.
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
@@ -1783,12 +1796,21 @@ conf_no_value() {   # neither value in the output, any docker argv, a run's envi
     for f in "$T/confin".*.env; do [ ! -e "$f" ] || ! grep -qF -- "$v" "$f" || return 1; done
   done
 }
-conf_calls_ok() {   # conf_calls_ok CMD...: kc_health's two calls, then exactly those runs; no secret name in any call's env
-  local want c
+# The post-cutover data check's docker run for one data dir (DIR under $ROOT), as the stub logs it.
+dchk() { printf 'docker run --rm --pull never --network none --user 0:0 --entrypoint sh -v %s:/d:ro %s -c %s' \
+  "$ROOT/$1" "$DB_IMAGE" 'test -n "$(ls -A /d | grep -vx lost+found)"'; }
+DCHK_ALL="$(printf '%s\n%s\n%s' "$(dchk openldap-data)" "$(dchk openldap-config)" "$(dchk keycloak-db)")"
+data_dirs() {   # data_dirs: the three post-cutover data dirs, each holding a file (lost+found too)
+  local d
+  for d in openldap-data openldap-config keycloak-db; do mkdir -p "$ROOT/$d/lost+found"; echo data > "$ROOT/$d/f"; done
+}
+conf_calls_ok() {   # conf_calls_ok CMD...: CONF_PRE's calls (none unset), kc_health's two calls, then exactly those runs; no secret name in any call's env
+  local want c npre=0
   want="$(printf '%s\n%s' "$KC_PS" "$KC_INSPECT")"
+  if [ -n "${CONF_PRE:-}" ]; then want="$CONF_PRE"$'\n'"$want"; npre="$(grep -c . <<< "$CONF_PRE")"; fi
   for c in "$@"; do want="$want"$'\n'"$CONF_RUN $c"; done
   [ "$(grep '^docker ' "$T/log")" = "$want" ] \
-    && [ "$(grep -c '^ENVNAMES' "$T/log")" -eq "$(( $# + 2 ))" ] && [ "$(grep '^ENVNAMES' "$T/log" | sort -u)" = "ENVNAMES" ] \
+    && [ "$(grep -c '^ENVNAMES' "$T/log")" -eq "$(( $# + 2 + npre ))" ] && [ "$(grep '^ENVNAMES' "$T/log" | sort -u)" = "ENVNAMES" ] \
     && for c in "$@"; do cmp -s "$T/confwant" "$T/confin.$c" || return 1; done
 }
 configured_ok() {   # configured: a UTC date, apply ok, reconcile ok; no temp marker
@@ -1814,10 +1836,32 @@ conf_run configure; rc=$?
 [ "$rc" -eq 0 ] && conf_calls_ok apply reconcile && configured_ok && conf_no_value \
   && ok "configure a second time (idempotent): runs again (0)" || bad "configure re-run" "rc=$rc; $OUT; $(cat "$T/log")"
 echo done > "$ROOT/cutover-state/cutover-done"
+data_dirs
 conf_run configure; rc=$?
-[ "$rc" -eq 0 ] && conf_calls_ok apply reconcile && configured_ok && conf_no_value \
+[ "$rc" -eq 0 ] && CONF_PRE="$DCHK_ALL" conf_calls_ok apply reconcile && configured_ok && conf_no_value \
   && echo "$OUT" | grep -q 'configure: .*/cutover-done exists: a re-run after the cutover' \
-  && ok "configure after cutover-done: runs (0), noted" || bad "configure after cutover-done" "rc=$rc; $OUT; $(cat "$T/log")"
+  && ok "configure after cutover-done: the three data checks, then runs (0), noted" || bad "configure after cutover-done" "rc=$rc; $OUT; $(cat "$T/log")"
+# Past cutover-done, a data dir missing or empty (or the check failing) refuses (3) before
+# kc_health: no compose call, no run, nothing changed.
+conf_data_refused() {   # conf_data_refused WHAT PATTERN CALLS: exit 3, PATTERN in the output, the log's docker lines exactly CALLS
+  [ "$rc" -eq 3 ] && echo "$OUT" | grep -qF -- "$2" && [ "$(grep '^docker ' "$T/log")" = "$3" ] \
+    && [ -z "$(ls "$T" | grep '^confin\.')" ] && [ "$(snap)" = "$before" ] && conf_no_value \
+    && ok "configure after cutover-done with $1: refused (3), no compose call or run, nothing changed" \
+    || bad "configure after cutover-done with $1" "rc=$rc; $OUT; $(cat "$T/log")"
+}
+for d in openldap-data openldap-config keycloak-db; do
+  conf_setup; echo done > "$ROOT/cutover-state/cutover-done"; data_dirs
+  rm -f "$ROOT/$d/f"; before="$(snap)"
+  conf_run configure; rc=$?
+  conf_data_refused "$d empty (lost+found aside)" "configure: refused: $ROOT/$d is empty" "$(grep -B9 -xF -- "$(dchk "$d")" <<< "$DCHK_ALL")"
+done
+conf_setup; echo done > "$ROOT/cutover-state/cutover-done"; data_dirs
+rm -rf "${ROOT:?}/openldap-config"; before="$(snap)"
+conf_run configure; rc=$?
+conf_data_refused "openldap-config missing" "configure: refused: $ROOT/openldap-config is missing" "$(dchk openldap-data)"
+conf_setup; echo done > "$ROOT/cutover-state/cutover-done"; data_dirs; before="$(snap)"
+CONF_EXTRA="STUB_KC_RUNNING=1 STUB_DATA_RC=125" conf_run configure; rc=$?
+conf_data_refused "the data check failing (docker 125)" "could not check that $ROOT/openldap-data holds data (docker run exited 125)" "$(dchk openldap-data)"
 
 # A failed apply skips reconcile; a failed reconcile; each passes its exit through, no marker.
 conf_setup
@@ -1898,10 +1942,11 @@ rm -f "$T/confin".* "$T/confwant"
 # alone); the up call's environment goes to $T/upenv (a temp file read only by the checks).
 UPD="stand-in-db-$$" UPL="stand-in-ldap-$$"
 DONE_UP="--profile restored up -d --wait --wait-timeout 300 keycloak-db openldap keycloak"
-done_host() {   # a fresh host whose cutover-state holds cutover-done
+done_host() {   # a fresh host whose cutover-state holds cutover-done, and the three data dirs holding data
   reset_host; rm -f "$T/upenv"
   mkdir -p "$ROOT/cutover-state"
   printf 'date 2026-11-16T00:00:00Z\nmanifests-sha256 %s\n' "$UNP_M" > "$ROOT/cutover-state/cutover-done"
+  data_dirs
 }
 up_starts() { grep -E '^docker compose .* (up|run|start|create)( |$)' "$T/log" | sed -E 's/^docker compose -f compose.yml //'; }
 up_refused() {   # up_refused WHAT PATTERN: exit 1, PATTERN in the output, no docker call, no value in the output
@@ -1919,6 +1964,30 @@ grep -qxF "KC_DB_PASSWORD=$UPD" "$T/upenv" && grep -qxF "POSTGRES_PASSWORD=$UPD"
   || bad "post-cutover up environment" "$(grep -oE '^[A-Z_]*(PASSWORD|SECRET)=' "$T/upenv" 2>/dev/null | tr '\n' ' ')"
 ! grep -qF stand-in "$T/log" && ! grep -qF stand-in <<< "$OUT" \
   && ok "up past cutover-done: neither value in any docker argv or the output" || bad "post-cutover up leaks a value"
+[ "$(grep -F ':/d:ro ' "$T/log")" = "$DCHK_ALL" ] \
+  && ok "up past cutover-done: the three data checks, read-only, no pull, no network, keycloak-db's image" \
+  || bad "post-cutover up data checks" "$(grep '^docker run' "$T/log")"
+# A data dir missing or empty (or the check failing): exit 1, no compose up, no value in the output;
+# a missing dir is never created (no docker -v, no ensure_dirs).
+up_data_refused() {   # up_data_refused WHAT PATTERN
+  [ "$rc" -eq 1 ] && echo "$OUT" | grep -qF -- "$2" && [ -z "$(up_starts)" ] && ! grep -qF stand-in <<< "$OUT" \
+    && ok "up past cutover-done with $1: refused (1), no compose up" || bad "post-cutover up with $1" "rc=$rc; $OUT; $(cat "$T/log")"
+}
+for d in openldap-data openldap-config keycloak-db; do
+  done_host; rm -f "$ROOT/$d/f"
+  IDP_KEYCLOAK_DB_PASSWORD="$UPD" IDP_LDAP_ADMIN_PASSWORD="$UPL" run up; rc=$?
+  up_data_refused "$d empty (lost+found aside)" "up: refused: $ROOT/$d is empty"
+done
+for d in openldap-data keycloak-db; do
+  done_host; rm -rf "${ROOT:?}/$d"
+  IDP_KEYCLOAK_DB_PASSWORD="$UPD" IDP_LDAP_ADMIN_PASSWORD="$UPL" run up; rc=$?
+  up_data_refused "$d missing" "up: refused: $ROOT/$d is missing"
+  [ ! -e "$ROOT/$d" ] && ! grep -qF "$ROOT/$d:/d:ro" "$T/log" \
+    && ok "up past cutover-done with $d missing: not created, never mounted" || bad "post-cutover up created $d" "$(ls "$ROOT")"
+done
+done_host
+IDP_KEYCLOAK_DB_PASSWORD="$UPD" IDP_LDAP_ADMIN_PASSWORD="$UPL" STUB_DATA_RC=125 run up; rc=$?
+up_data_refused "the data check failing (docker 125)" "could not check that $ROOT/openldap-data holds data (docker run exited 125)"
 done_host
 IDP_KEYCLOAK_DB_PASSWORD="$UPD" run up; rc=$?
 up_refused "without IDP_LDAP_ADMIN_PASSWORD" 'IDP_LDAP_ADMIN_PASSWORD is not in'
@@ -2047,6 +2116,10 @@ for s in docker hostname sudo systemctl flock; do
 [ -z "${STUB_ENVDUMP:-}" ] || env >> "$STUB_ENVDUMP"
 ' "$T/bin/$s" && rm -f "$T/bin/$s.orig"
 done
+# docker: a marker line in the dump before a compose up's own environment (the L1 check below).
+sed -i.orig '1a\
+case "$*" in *" up "*) [ -z "${STUB_ENVDUMP:-}" ] || echo "MARK compose up" >> "$STUB_ENVDUMP" ;; esac
+' "$T/bin/docker" && rm -f "$T/bin/docker.orig"
 sed -i.orig '1a\
 [ -z "${STUB_LEAF_ENV:-}" ] || env >> "$STUB_LEAF_ENV"
 ' "$T/app/openldap-leaf.sh" && rm -f "$T/app/openldap-leaf.sh.orig"
@@ -2126,6 +2199,24 @@ IDP_CUTOVER_BUNDLE_IDENTITY="$LEAF_VAL" envrun unpack-bundle "$UNP_M" "$UNP_K" "
 [ "$rc" -eq 3 ] && ! grep -qF -- "$LEAF_VAL" "$T/envdump" && ! grep -qF -- "$LEAF_VAL" "$T/probe" && ! grep -q '^docker run' "$T/log" \
   && ok "unpack-bundle with $ID_NAME in its environment: refused (3), no child has it, no docker run" \
   || bad "unpack-bundle env refused" "rc=$rc; dump=$(grep -cF -- "$LEAF_VAL" "$T/envdump"); $(grep -F -- "$LEAF_VAL" "$T/envdump" | cut -d= -f1)"
+# IDP_LDAP_ADMIN_PASSWORD (L1): unset at the top. Past cutover-done, up's compose up alone gets the
+# value, as LDAP_ADMIN_PASSWORD and LDAP_CONFIG_PASSWORD; no child before it (dirname, hostname, the
+# data checks' docker runs, every wrapped command) and not the sourced common.env. The name as a
+# prefix, as above; the stub marks the dump before compose up's own environment.
+done_host
+L1_DB="stand-in-db-$$"
+IDP_KEYCLOAK_DB_PASSWORD="$L1_DB" IDP_LDAP_ADMIN_PASSWORD="$LEAF_VAL" LEAF_STDIN= envrun up; rc=$?
+pre="$(sed -n '/^MARK compose up$/q;p' "$T/envdump")"
+post="$(sed -n '/^MARK compose up$/,$p' "$T/envdump")"
+[ "$rc" -eq 0 ] && [ "$(up_starts)" = "$DONE_UP" ] && [ "$(grep -cx 'MARK compose up' "$T/envdump")" -eq 1 ] \
+  && [ "$(grep -c '^PATH=' <<< "$pre")" -ge 5 ] && ! grep -qF -- "$LEAF_VAL" <<< "$pre" \
+  && ! grep -qE '^(IDP_LDAP_ADMIN_PASSWORD|LDAP_ADMIN_KEPT)=' "$T/envdump" \
+  && grep -qxF "LDAP_ADMIN_PASSWORD=$LEAF_VAL" <<< "$post" && grep -qxF "LDAP_CONFIG_PASSWORD=$LEAF_VAL" <<< "$post" \
+  && [ -z "$(grep -F -- "$LEAF_VAL" <<< "$post" | grep -vxE "LDAP_(ADMIN|CONFIG)_PASSWORD=$LEAF_VAL")" ] \
+  && ! grep -qF -- "$LEAF_VAL" "$T/probe" && ! grep -q 'IDP_LDAP_ADMIN_PASSWORD' "$T/probe" && no_value \
+  && ok "up past cutover-done: IDP_LDAP_ADMIN_PASSWORD in no child's environment, the value in compose up's (and its children's) alone, under the LDAP names ($(grep -c '^PATH=' <<< "$pre") dumps before it)" \
+  || bad "post-cutover up env" "rc=$rc; pre=$(grep -cF -- "$LEAF_VAL" <<< "$pre"); $(grep -F -- "$LEAF_VAL" "$T/envdump" | cut -d= -f1 | sort -u | tr '\n' ' '); $OUT"
+unset pre post L1_DB
 
 # identity-platform.sh never traces and never exports the name (comments aside).
 code="$(grep -vE '^[[:space:]]*#' "$SRC/identity-platform.sh")"

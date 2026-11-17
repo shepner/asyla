@@ -16,8 +16,11 @@
 # exists (on d05, never on a replica), up starts keycloak-db, openldap and keycloak together
 # (`--profile restored up -d --wait`) and needs IDP_LDAP_ADMIN_PASSWORD as well as
 # IDP_KEYCLOAK_DB_PASSWORD (exit 1, nothing started, without either: a compose run missing a value
-# would recreate a container without it); verify then checks all three. Before it, up and verify are
-# M1's, and up ignores IDP_LDAP_ADMIN_PASSWORD (unset before any child runs).
+# would recreate a container without it), and refuses (exit 1, nothing started) when openldap-data,
+# openldap-config or keycloak-db is missing or empty (check_post_cutover_data); verify then checks
+# all three. Before it, up and verify are M1's, and up ignores IDP_LDAP_ADMIN_PASSWORD. Whatever the
+# switch, IDP_LDAP_ADMIN_PASSWORD is unset before any child runs; only post-cutover up's compose up
+# gets the value (as LDAP_ADMIN_PASSWORD and LDAP_CONFIG_PASSWORD).
 # No secret is in any file here or on the host. The workstation resolves the values from OpenBao
 # at deploy (build_host.py start_env, pull_token_env) and hands them to this process's environment;
 # this script maps them onto the names compose.yml passes by name. Only the long-running services
@@ -96,7 +99,8 @@
 #               VAULT_DEX_CLIENT_SECRET= lines, to keycloak-configure apply's stdin, then reconcile's
 #               (DEPLOY.md cutover step 6 at bd0c6bff); needs both restored-* and both started-*
 #               markers and keycloak healthy; re-runnable, after cutover-done too (DEPLOY.md: the
-#               configuration steps are idempotent). It needs the repin (fcbed3fe's keycloak-configure
+#               configuration steps are idempotent; past cutover-done refused, exit 3, when a data
+#               dir is missing or empty, as up). It needs the repin (fcbed3fe's keycloak-configure
 #               does not read stdin). Refused (exit 3, no docker run) with either name in the
 #               environment, on a replica, a terminal or an empty read.
 #   start-openldap  reads IDP_LDAP_ADMIN_PASSWORD's value as one line on stdin; it reaches the
@@ -147,6 +151,27 @@ if [ -n "${IDP_CUTOVER_BUNDLE_IDENTITY+x}" ]; then
   CUT_ID_IN_ENV=true
 fi
 unset IDP_CUTOVER_BUNDLE_IDENTITY
+# IDP_LDAP_ADMIN_PASSWORD: only up past cutover-done takes it from the environment (build_host.py
+# start_env); start-openldap and configure refuse while it is set (LDAP_ADMIN_IN_ENV). Note its
+# presence; when up is among the switches, keep a private copy (never exported; xtrace off from here
+# on in that run, as start-openldap's read does); then unset it before any child runs (dirname below
+# included) or common.env is sourced. Only post-cutover up's docker compose up gets the value, under
+# compose.yml's names (do_up).
+LDAP_ADMIN_IN_ENV=false
+LDAP_ADMIN_KEPT=""
+if [ -n "${IDP_LDAP_ADMIN_PASSWORD+x}" ]; then
+  LDAP_ADMIN_IN_ENV=true
+  for sw_arg in "$@"; do
+    if [ "$sw_arg" = up ]; then
+      { set +x; } 2>/dev/null
+      LDAP_ADMIN_KEPT="$IDP_LDAP_ADMIN_PASSWORD"
+      break
+    fi
+  done
+  unset sw_arg
+fi
+export -n LDAP_ADMIN_KEPT
+unset IDP_LDAP_ADMIN_PASSWORD
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="$SCRIPT_DIR/compose.yml"
@@ -255,18 +280,18 @@ POST_CUTOVER=false
 cutover_is_done() { [ -e "$STATE_DIR/$CUTOVER_DONE" ]; }
 
 # up's values on d05: IDP_KEYCLOAK_DB_PASSWORD always; IDP_LDAP_ADMIN_PASSWORD once cutover-done
-# exists (exit 1, nothing started, without it), and unset before it (M1 starts nothing that takes
-# it). Presence only; never prints a value.
+# exists (exit 1, nothing started, without it: LDAP_ADMIN_KEPT, the top's private copy), and dropped
+# before it (M1 starts nothing that takes it). Presence only; never prints a value.
 up_secrets() {
   require_db_secret
   if cutover_is_done; then
-    if [ -z "${IDP_LDAP_ADMIN_PASSWORD:-}" ]; then
+    if [ "${#LDAP_ADMIN_KEPT}" -eq 0 ]; then
       echo "[ERROR] IDP_LDAP_ADMIN_PASSWORD is not in this process's environment; past $STATE_DIR/$CUTOVER_DONE up starts openldap and keycloak too and needs it (build_host.py start_env, from OpenBao); not starting" >&2
       exit 1
     fi
     POST_CUTOVER=true
   else
-    unset IDP_LDAP_ADMIN_PASSWORD
+    LDAP_ADMIN_KEPT=""
     POST_CUTOVER=false
   fi
 }
@@ -283,22 +308,19 @@ replica_db_secret() {
     exit 1
   fi
   IDP_KEYCLOAK_DB_PASSWORD="$v"
-  unset IDP_LDAP_ADMIN_PASSWORD IDP_DEPLOY_DEX_CLIENT_SECRET
+  LDAP_ADMIN_KEPT=""
+  unset IDP_DEPLOY_DEX_CLIENT_SECRET
   echo "[INFO] Replica of $SERVING_HOST ($(hostname -s)): keycloak-db with a throwaway password; openldap and keycloak never start"
 }
 
 # Exports only the names a long-running service lists (compose.yml). Never PGPASSWORD or
-# VAULT_DEX_CLIENT_SECRET: their one-shots take the value on stdin.
+# VAULT_DEX_CLIENT_SECRET: their one-shots take the value on stdin. The LDAP names are not exported
+# here: do_up's post-cutover compose up alone gets them, from LDAP_ADMIN_KEPT.
 map_secrets() {
   if [ -n "${IDP_KEYCLOAK_DB_PASSWORD:-}" ]; then
     KC_DB_PASSWORD="$IDP_KEYCLOAK_DB_PASSWORD"
     POSTGRES_PASSWORD="$IDP_KEYCLOAK_DB_PASSWORD"
     export KC_DB_PASSWORD POSTGRES_PASSWORD
-  fi
-  if [ -n "${IDP_LDAP_ADMIN_PASSWORD:-}" ]; then
-    LDAP_ADMIN_PASSWORD="$IDP_LDAP_ADMIN_PASSWORD"
-    LDAP_CONFIG_PASSWORD="$IDP_LDAP_ADMIN_PASSWORD"
-    export LDAP_ADMIN_PASSWORD LDAP_CONFIG_PASSWORD
   fi
 }
 
@@ -475,18 +497,57 @@ ensure_dirs() {
   mkdir -p "$APP_ROOT/ca" "$APP_ROOT/keycloak-db"
 }
 
+# keycloak-db's image, as compose.yml pins it (a test checks they are equal): every up pulls it
+# (pull_missing), it does not follow theOrg's tag, and it has sh, ls and grep. The data check runs in it.
+KC_DB_IMAGE="postgres:16.14-bookworm@sha256:64154d0babcb1741988719e703419af0382b19953706149f9872fbd0f438efa8"
+POST_DATA_DIRS=(openldap-data openldap-config keycloak-db)
+
+# Past cutover-done the three services start over the restored data: refuse when openldap-data,
+# openldap-config or keycloak-db is missing or empty (lost+found aside), so that a lost or unmounted
+# data dir never starts as a fresh, empty directory. The host check comes first: `docker run -v`
+# would create a missing dir. Each dir is then listed read-only, as root (whatever its owner and
+# mode), in keycloak-db's image: no pull, no network. Returns 1 when one fails.
+check_post_cutover_data() {   # check_post_cutover_data WHO
+  local who="$1" d dir rc
+  for d in "${POST_DATA_DIRS[@]}"; do
+    dir="$APP_ROOT/$d"
+    if [ ! -d "$dir" ]; then
+      echo "[ERROR] $who: refused: $dir is missing; past $STATE_DIR/$CUTOVER_DONE openldap and keycloak need their restored data; nothing started or changed" >&2
+      return 1
+    fi
+    rc=0
+    docker run --rm --pull never --network none --user 0:0 --entrypoint sh -v "$dir:/d:ro" "$KC_DB_IMAGE" \
+      -c 'test -n "$(ls -A /d | grep -vx lost+found)"' </dev/null >/dev/null 2>&1 || rc=$?
+    if [ "$rc" -eq 1 ]; then
+      echo "[ERROR] $who: refused: $dir is empty; past $STATE_DIR/$CUTOVER_DONE openldap and keycloak need their restored data; nothing started or changed" >&2
+      return 1
+    elif [ "$rc" -ne 0 ]; then
+      echo "[ERROR] $who: refused: could not check that $dir holds data (docker run exited $rc); nothing started or changed" >&2
+      return 1
+    fi
+  done
+}
+
 # M1: networks, images, the root CA, the leaf report, then keycloak-db alone, waited for until
 # healthy. --no-deps and the one service name: nothing else starts, whatever its profile.
-# POST_CUTOVER (up_secrets): the same, then keycloak-db, openldap and keycloak together with
-# map_secrets' exports (--profile restored, no ops one-shot), waited for START_WAIT_S.
+# POST_CUTOVER (up_secrets): the same, with the data check (check_post_cutover_data) before
+# ensure_dirs, then keycloak-db, openldap and keycloak together (--profile restored, no ops
+# one-shot), waited for START_WAIT_S, with map_secrets' exports and the LDAP names from
+# LDAP_ADMIN_KEPT in that compose process's environment alone (its own subshell).
 do_up() {
   ensure_networks || return
   pull_missing || return
+  if [ "$POST_CUTOVER" = true ]; then
+    check_post_cutover_data up || return 1
+  fi
   ensure_dirs || return
   place_ca || return
   check_leaf
   if [ "$POST_CUTOVER" = true ]; then
-    run_compose --profile restored up -d --wait --wait-timeout "$START_WAIT_S" keycloak-db openldap keycloak || {
+    ( LDAP_ADMIN_PASSWORD="$LDAP_ADMIN_KEPT" LDAP_CONFIG_PASSWORD="$LDAP_ADMIN_KEPT"
+      builtin export LDAP_ADMIN_PASSWORD LDAP_CONFIG_PASSWORD
+      builtin exec docker compose -f "$COMPOSE_FILE" --project-directory "$SCRIPT_DIR" --profile restored \
+        up -d --wait --wait-timeout "$START_WAIT_S" keycloak-db openldap keycloak ) || {
       echo "[ERROR] keycloak-db, openldap and keycloak did not all become healthy within ${START_WAIT_S}s" >&2
       return 1
     }
@@ -1269,9 +1330,12 @@ do_restore_openldap() {
 # marker or cutover-done present, keycloak-db not running and healthy (start-keycloak), a terminal
 # on stdin or an empty read. Exit 2 for an ARG; 1 when the service does not become healthy.
 do_start() {   # do_start SWITCH VALUE_NAME SERVICE MARKER [ARG...]
-  local sw="$1" name="$2" svc="$3" marker="$4" h id rc=0
+  local sw="$1" name="$2" svc="$3" marker="$4" h id rc=0 in_env=false
   shift 4
-  if [ -n "${!name+x}" ]; then
+  # IDP_LDAP_ADMIN_PASSWORD is unset at the top; its presence is LDAP_ADMIN_IN_ENV.
+  if [ "$name" = IDP_LDAP_ADMIN_PASSWORD ]; then in_env="$LDAP_ADMIN_IN_ENV"
+  elif [ -n "${!name+x}" ]; then in_env=true; fi
+  if [ "$in_env" = true ]; then
     echo "[ERROR] $sw: refused: $name is set in the environment; unset it and write the value as one line to $sw's stdin (scripts/app_switch.sh does); nothing changed" >&2
     return 3
   fi
@@ -1388,7 +1452,8 @@ restored_health() {
 do_configure() {
   local sw=configure n h cmd rc=0
   for n in IDP_LDAP_ADMIN_PASSWORD IDP_DEPLOY_DEX_CLIENT_SECRET; do
-    if [ -n "${!n+x}" ]; then
+    # IDP_LDAP_ADMIN_PASSWORD is unset at the top; its presence is LDAP_ADMIN_IN_ENV.
+    if { [ "$n" = IDP_LDAP_ADMIN_PASSWORD ] && $LDAP_ADMIN_IN_ENV; } || [ -n "${!n+x}" ]; then
       echo "[ERROR] $sw: refused: $n is set in the environment; unset it and write the two values as one line each to $sw's stdin (scripts/app_switch.sh does); nothing changed" >&2
       return 3
     fi
@@ -1405,6 +1470,7 @@ do_configure() {
   cutover_gate "$sw" || return
   if [ -e "$STATE_DIR/$CUTOVER_DONE" ]; then
     echo "[INFO] $sw: $STATE_DIR/$CUTOVER_DONE exists: a re-run after the cutover (apply and reconcile are idempotent)"
+    check_post_cutover_data "$sw" || return 3
   fi
   h="$(kc_health </dev/null)"
   if [ "$h" != healthy ]; then
@@ -1748,8 +1814,9 @@ usage() {
   echo "                    in the environment (from OpenBao at deploy; never in a file)" >&2
   echo "                    (replica: a throwaway password made at run time; still keycloak-db alone)" >&2
   echo "                    Once cutover-done exists (d05): keycloak-db, openldap and keycloak together" >&2
-  echo "                    (--profile restored up -d --wait); needs IDP_LDAP_ADMIN_PASSWORD too, else exit 1" >&2
-  echo "  pull            - Pull all six images now (needs IDENTITY_PLATFORM_REGISTRY_PULL_TOKEN)" >&2
+  echo "                    (--profile restored up -d --wait); needs IDP_LDAP_ADMIN_PASSWORD too, else exit 1;" >&2
+  echo "                    exit 1 too when openldap-data, openldap-config or keycloak-db is missing or empty" >&2
+  echo "  pull           - Pull all six images now (needs IDENTITY_PLATFORM_REGISTRY_PULL_TOKEN)" >&2
   echo "  images          - Pull missing images, then list the default services' images (build_host.py's replica guard)" >&2
   echo "  verify          - Networks, the root CA and keycloak-db healthy (fatal; once cutover-done exists on" >&2
   echo "                    d05, openldap and keycloak healthy too); the openldap leaf (reported)" >&2
