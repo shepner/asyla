@@ -1,26 +1,30 @@
 #!/bin/bash
-# app_switch.sh HOST APP SWITCH [VAR] [ARG...]: the operator's one-off app command. Runs
+# app_switch.sh HOST APP SWITCH [VAR [VAR2]] [ARG...]: the operator's one-off app command. Runs
 # ~/scripts/HOST/apps/APP/APP.sh SWITCH [ARG...] on HOST over one ssh, with ssh's stdin passed
 # straight to it. With a VAR, its value is read from this process's environment (the credentials
 # capability puts it there) into a shell variable, the variable is unset from the environment
 # before any child runs (so neither ssh nor the remote shell inherits it), and bash's builtin printf
 # writes the value, one line, to ssh's stdin; the app script reads that line itself (e.g.
-# identity-platform.sh leaf-issue). Nothing is exported on the host: the remote command is the
-# script, the switch and its checked ARGs alone. A value is never in an argv, the output, a file or
-# any environment past this shell's start. With no VAR, ssh's stdin is /dev/null.
+# identity-platform.sh leaf-issue). With two VARs, both values go the same way, one line each, in
+# the order given (VAR's line first); the app script reads exactly two lines (identity-platform.sh
+# configure). Nothing is exported on the host: the remote command is the script, the switch and its
+# checked ARGs alone. A value is never in an argv, the output, a file or any environment past this
+# shell's start. With no VAR, ssh's stdin is /dev/null.
 #
-# VAR or ARG: the word after SWITCH is the VAR when it is an upper-case name (^[A-Z_][A-Z0-9_]*$);
-# every other word is an ARG. So a VAR always comes first, and an upper-case name is never taken as
-# an ARG: given to a switch that takes no VAR, it is refused ("takes no VAR"), never passed on, and
-# a second one anywhere after it is refused ("at most one VAR") before any child runs.
+# VAR or ARG: each of the first two words after SWITCH is a VAR when it is an upper-case name
+# (^[A-Z_][A-Z0-9_]*$; the second only when the first is one); every other word is an ARG. So VARs
+# always come first, and an upper-case name is never taken as an ARG: given to a switch that takes
+# no VAR, it is refused ("takes no VAR"), never passed on, and one anywhere after the VARs (a third,
+# or one after an ARG) is refused ("at most two VARs, given first") before any child runs. The same
+# name twice is refused.
 #
-# Allowlist: HOST/host.toml's [[app]] APP has `switch_env`, a table of SWITCH -> the VAR it takes
-# (a list of at most one name), e.g. d05's identity-platform:
-# { "leaf-issue" = ["LDAP_PROVISIONER_PASSWORD"], "leaf-renew" = [] }. A switch not in it is
-# refused; the VAR given must be exactly that switch's (none when its list is empty). At most one
-# VAR, on the command line and in the list. A VAR that is unset, empty or holds a newline is refused
-# (one line on stdin). A replica's spec is refused (its apps are another host's tree; build_host.py
-# runs those).
+# Allowlist: HOST/host.toml's [[app]] APP has `switch_env`, a table of SWITCH -> the VARs it takes
+# (a list of at most two distinct names, in the order they go on stdin), e.g. d05's
+# identity-platform: { "leaf-issue" = ["LDAP_PROVISIONER_PASSWORD"], "leaf-renew" = [] }. A switch
+# not in it is refused; the VARs given must be exactly that switch's, in its order (none when its
+# list is empty). At most two VARs, on the command line and in the list. A VAR that is unset, empty
+# or holds a newline or a carriage return is refused (one line each on stdin). A replica's spec is
+# refused (its apps are another host's tree; build_host.py runs those).
 # ARGs: the [[app]]'s optional `switch_args`, a table of SWITCH -> a list of patterns, one per
 # argument, e.g. { "fetch-bundle" = ['^m5-[0-9a-f]{12}$'] }. A switch in switch_args takes exactly
 # that many ARGs, each fully matching its pattern (Python re.fullmatch; each pattern anchored ^...$);
@@ -46,6 +50,9 @@
 # and, a VAR with an ARG (once identity-platform.sh implements fetch-bundle; asyla #654):
 #   python3 core/tools/credentials.py exec THEORG_REGISTRY_PULL_TOKEN -- \
 #     projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform fetch-bundle THEORG_REGISTRY_PULL_TOKEN m5-<12 hex>
+# and two VARs (once switch_env lists two for the switch):
+#   python3 core/tools/credentials.py exec VAR VAR2 -- \
+#     projects/asyla-hosts/scripts/app_switch.sh HOST APP SWITCH VAR VAR2
 # This script's path, before any command runs: bash 3.2 (ws01's /bin/bash) loses BASH_SOURCE once
 # a function imported from the environment has been called (an exported [, say).
 self="${BASH_SOURCE[0]}"
@@ -60,7 +67,7 @@ GUEST_USER="docker"
 
 refuse() { echo "app_switch: $*" >&2; exit 2; }
 
-[ $# -ge 3 ] || refuse "usage: app_switch.sh HOST APP SWITCH [VAR] [ARG...]"
+[ $# -ge 3 ] || refuse "usage: app_switch.sh HOST APP SWITCH [VAR [VAR2]] [ARG...]"
 host="$1" app="$2" switch="$3"
 shift 3
 name_re='^[a-z][a-z0-9-]*$'
@@ -78,9 +85,10 @@ done
 # child runs (dirname, python3, ssh): no other process carries it. Unset first: an assignment keeps
 # the export flag of a same-named variable the environment brought in (val=x exported would hand
 # the value to every child).
-unset -v var val
-var="" val=""
-# The first word is the VAR when it is an upper-case name (the header); the rest are ARGs.
+unset -v var val var2 val2 given
+var="" val="" var2="" val2=""
+# The first word is the VAR when it is an upper-case name (the header), and the word after it VAR2
+# when it is one too; the rest are ARGs. Each value is checked, copied, then its name unset.
 if [ $# -ge 1 ] && [[ "$1" =~ $var_re ]]; then
   var="$1"
   shift
@@ -89,18 +97,29 @@ if [ $# -ge 1 ] && [[ "$1" =~ $var_re ]]; then
   case "${!var}" in *$'\n'*|*$'\r'*) refuse "$var holds a newline; one line on stdin" ;; esac
   val="${!var}"
   unset "$var"
+  if [ $# -ge 1 ] && [[ "$1" =~ $var_re ]]; then
+    var2="$1"
+    shift
+    [[ "$var2" != "$var" ]] || refuse "VAR $var given twice; two VARs are two names"
+    [[ ! "$var2" =~ $reserved_re ]] || refuse "VAR $var2 is a shell or ssh variable, or this script's own; not sent"
+    [[ -n ${!var2:-} ]] || refuse "$var2 is unset or empty in this environment"
+    case "${!var2}" in *$'\n'*|*$'\r'*) refuse "$var2 holds a newline; one line on stdin" ;; esac
+    val2="${!var2}"
+    unset "$var2"
+  fi
 fi
-# An upper-case name is never an ARG: a second one is a second VAR, refused before any child runs
-# (its value would still be in this environment).
+# An upper-case name is never an ARG: one after the VARs is a third VAR, or a VAR after an ARG,
+# refused before any child runs (its value would still be in this environment).
 for a in ${1+"$@"}; do
-  [[ ! "$a" =~ $var_re ]] || refuse "at most one VAR, given first (one line on ssh stdin); $a is an upper-case name, not an ARG"
+  [[ ! "$a" =~ $var_re ]] || refuse "at most two VARs, given first (one line each on ssh stdin); $a is an upper-case name, not an ARG"
 done
+given="$var${var2:+ $var2}"
 
 REPO="$(cd "$(dirname "$self")/.." && pwd)"
 spec="$REPO/$host/host.toml"
 [ -f "$spec" ] || refuse "$host has no host.toml in this repo"
 
-# The switch's VAR from the spec (none: an empty output), once its ARGs are checked against
+# The switch's VARs from the spec, space-separated in order (none: an empty output), once its ARGs are checked against
 # switch_args (ARGs are plain values, so they go in python3's argv).
 allowed="$(python3 -I - "$spec" "$app" "$switch" ${1+"$@"} <<'PY'
 import re, sys, tomllib
@@ -121,9 +140,9 @@ if not isinstance(table, dict) or not table:
 if switch not in table:
     no(f"{path}: [[app]] {app!r} switch_env does not allow {switch!r} (allowed: {', '.join(sorted(table))})")
 names = table[switch]
-if not isinstance(names, list) or len(names) > 1 \
+if not isinstance(names, list) or len(names) > 2 or len(set(map(str, names))) != len(names) \
         or not all(isinstance(n, str) and re.fullmatch(r"[A-Z_][A-Z0-9_]*", n) for n in names):
-    no(f"{path}: [[app]] {app!r} switch_env {switch!r} must be a list of at most one variable name")
+    no(f"{path}: [[app]] {app!r} switch_env {switch!r} must be a list of at most two distinct variable names")
 args = apps[0].get("switch_args", {})
 if not isinstance(args, dict) or not set(args) <= set(table):
     no(f"{path}: [[app]] {app!r} switch_args must be a table whose switches are all in switch_env")
@@ -142,15 +161,15 @@ if len(given) != len(rx):
 for i, (r, a) in enumerate(zip(rx, given), 1):
     if not r.fullmatch(a):
         no(f"{switch}: ARG {i} does not match {r.pattern}")
-print("\n".join(names))
+print(" ".join(names))
 PY
 )" || refuse "refused (above)"
 
-if [ "$var" != "$allowed" ]; then
-  if [ -n "$var" ] && [ -n "$allowed" ]; then
-    refuse "$switch takes $allowed; $var is not listed in $host's switch_env"
-  elif [ -n "$var" ]; then
-    refuse "$switch takes no VAR; $var is not listed in $host's switch_env"
+if [ "$given" != "$allowed" ]; then
+  if [ -n "$given" ] && [ -n "$allowed" ]; then
+    refuse "$switch takes $allowed; $given is not listed in $host's switch_env (the names and their order)"
+  elif [ -n "$given" ]; then
+    refuse "$switch takes no VAR; $given is not listed in $host's switch_env"
   else
     refuse "$switch needs exactly: $allowed"
   fi
@@ -162,7 +181,15 @@ for a in ${1+"$@"}; do
 done
 ssh_cmd=(ssh -o BatchMode=yes -o ConnectTimeout=10 -i "$SSH_KEY" "$GUEST_USER@$host" "$cmd")
 shown="$switch${1+ $*}"
-if [ -n "$var" ]; then
+if [ -n "$var2" ]; then
+  echo "app_switch: $host $app $shown (over ssh stdin, one line each: $var, $var2)" >&2
+  rc=0
+  # As below, both values in one builtin printf: VAR's line, then VAR2's.
+  builtin printf '%s\n' "$val" "$val2" | (builtin exec "${ssh_cmd[@]}") || rc=$?
+  val="" val2=""
+  unset -v val val2
+  exit "$rc"
+elif [ -n "$var" ]; then
   echo "app_switch: $host $app $shown (over ssh stdin: $var)" >&2
   rc=0
   # `builtin exec` in its own subshell: the ssh program, never a function, and its exit status kept

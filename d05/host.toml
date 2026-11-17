@@ -57,8 +57,8 @@ allow = ["10.0.0.0/24"]    # a subnet, not a host (operator, 2026-10-25): the tr
 # not in start_env on purpose: start runs `up`, which must never get it or issue. build_host.py has
 # no one-off app command with its own values; the operator runs the leaf switches with
 # scripts/app_switch.sh, which allows only the switches in switch_env (SWITCH -> a list of at most
-# one name: the one value it writes to ssh stdin, read by the app script itself; nothing is exported
-# on the host; build_host.py does not read this key). A build never issues or renews.
+# two names: the values it writes to ssh stdin, one line each in the list's order, read by the app
+# script itself; nothing is exported on the host; build_host.py does not read this key). A build never issues or renews.
 [[app]]
 name = "identity-platform"
 start = ["up"]

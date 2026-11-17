@@ -6,14 +6,18 @@
 # remote exit kept, the value in no trace or child environment however bash is started (bash -x,
 # SHELLOPTS=xtrace or allexport, a BASH_ENV setting -x, val/var exported in the incoming
 # environment), and every refusal (exit 2, no ssh): a switch not in switch_env, a VAR not listed
-# for it, a listed VAR missing, a VAR unset, empty or holding a newline, more than one VAR (on the
-# command line or in a switch_env list), a shell variable or the script's own name (GUEST_USER, REPO,
-# SSH_KEY) as VAR, build_host.py's ssh override set,
+# for it, a listed VAR missing, a VAR unset, empty or holding a newline, two VARs to a one-VAR
+# switch, more than two in a switch_env list or one named twice, a shell variable or the script's
+# own name (GUEST_USER, REPO, SSH_KEY) as VAR, build_host.py's ssh override set,
 # an app with no switch_env, an unknown app or host, a replica.
 # Plain ARGs (switch_args): the checked ARGs on the remote command, shell-quoted, with or without a
 # VAR (d05's fetch-bundle form); refused before ssh: a wrong count, an ARG not matching its pattern
 # (a shell-meta character, a trailing newline), ARGs to a switch with none, an upper-case word to a
 # switch that takes no VAR, a switch_args switch not in switch_env, an unanchored or broken pattern.
+# Two VARs (a switch_env list of two): one ssh, stdin the two values one line each in the list's
+# order, with or without an ARG, under every start above and the exported functions; refused: the
+# other order, one of the two, none, the same name twice, a third, a VAR after an ARG, a reserved
+# name second, and each value unset, empty or holding a newline or carriage return.
 # Every value is a plain stand-in word made at run time. Nothing reaches a host.
 # Run: bash scripts/tests/test_app_switch_sh.sh
 set -uo pipefail
@@ -53,8 +57,8 @@ cp "$REPO/scripts/app_switch.sh" "$F/scripts/"
 cat > "$F/h01/host.toml" <<'EOF'
 [[app]]
 name = "two"
-switch_env = { "pair" = ["AAA", "BBB"], "one" = ["AAA"], "none" = [], "fetch" = ["AAA"], "two-args" = [], "quoted" = [] }
-switch_args = { "fetch" = ['^m5-[0-9a-f]{12}$'], "two-args" = ['^[a-z]+$', '^[0-9]+$'], "quoted" = ['^[a-z ;]+$'] }
+switch_env = { "pair" = ["AAA", "BBB"], "pair-arg" = ["AAA", "BBB"], "triple" = ["AAA", "BBB", "CCC"], "dup" = ["AAA", "AAA"], "one" = ["AAA"], "none" = [], "fetch" = ["AAA"], "two-args" = [], "quoted" = [] }
+switch_args = { "fetch" = ['^m5-[0-9a-f]{12}$'], "pair-arg" = ['^[a-z]+$'], "two-args" = ['^[a-z]+$', '^[0-9]+$'], "quoted" = ['^[a-z ;]+$'] }
 [[app]]
 name = "plain"
 [[app]]
@@ -73,7 +77,7 @@ EOF
 printf '[replica]\nof = "h01"\n[[app]]\nname = "two"\nswitch_env = { "none" = [] }\n' > "$F/h02/host.toml"
 
 # A plain stand-in word per run, unlike any real value.
-V1="stand-in-value-a-$$" V2="stand-in-value-b-$$"
+V1="stand-in-value-a-$$" V2="stand-in-value-b-$$" V3="stand-in-value-c-$$"
 
 go() {   # go SCRIPT ARG...: run it with HOME, PATH and the stub files set; env names in $GO_ENV
   : > "$T/log"; : > "$T/stdin"; : > "$T/envdump"
@@ -87,7 +91,7 @@ go() {   # go SCRIPT ARG...: run it with HOME, PATH and the stub files set; env 
 }
 nowhere() {   # no value in the output, the ssh argv log or any child's environment
   local v
-  for v in "$V1" "$V2"; do
+  for v in "$V1" "$V2" "$V3"; do
     grep -qF -- "$v" <<< "$OUT" && return 1
     grep -qF -- "$v" "$T/log" "$T/envdump" && return 1
   done
@@ -222,6 +226,58 @@ for shadow in printf '[' ssh; do
 done
 rm -f "$T/shadow"
 
+# --- two VARs (switch_env lists two): one ssh, the remote command the script, switch and ARGs
+# alone, ssh's stdin the two values one line each in switch_env's order, neither in any argv,
+# output, trace or child environment ---
+P="$F/scripts/app_switch.sh"
+two_ok() {   # two_ok LABEL REMOTE: the last go ran (0): one ssh, REMOTE, stdin V1 then V2, nothing leaked
+  [ "$rc" -eq 0 ] && [ "$(grep -c '^SSH$' "$T/log")" -eq 1 ] && [ "$(args | tail -n 1)" = "$2" ] \
+    && [ "$(cat "$T/stdin")" = "$V1
+$V2" ] && [ "$(wc -l < "$T/stdin" | tr -d ' ')" -eq 2 ] && nowhere \
+    && ! grep -qE '^(AAA|BBB)=' "$T/envdump" \
+    && ok "$1" || bad "$1" "rc=$rc; $(args | tail -n 1); stdin lines=$(wc -l < "$T/stdin" | tr -d ' ')"
+}
+GO_ENV="AAA=$V1 BBB=$V2" go "$P" h01 two pair AAA BBB; rc=$?
+two_ok "two VARs (pair AAA BBB): one ssh, the switch alone, stdin AAA's line then BBB's, neither name nor value in a child" "~/scripts/h01/apps/two/two.sh pair"
+grep -qF "(over ssh stdin, one line each: AAA, BBB)" <<< "$OUT" && [ "$(args | head -n 1)" = "-o" ] \
+  && ok "two VARs: the run line names both, in order; build_host.py's ssh options" || bad "two VARs run line" "$OUT"
+GO_ENV="AAA=$V1 BBB=$V2" go "$P" h01 two pair-arg AAA BBB abc; rc=$?
+two_ok "two VARs and an ARG (pair-arg AAA BBB abc): the ARG on the remote command, the values on stdin" "~/scripts/h01/apps/two/two.sh pair-arg abc"
+GO_ENV="STUB_SSH_RC=6 AAA=$V1 BBB=$V2" go "$P" h01 two pair AAA BBB; rc=$?
+[ "$rc" -eq 6 ] && nowhere && ok "the remote command's exit is app_switch's (6, two VARs)" || bad "exit kept with two VARs" "rc=$rc"
+for start in "SHELLOPTS=xtrace" "-x" "BASH_ENV=$T/bashenv" "SHELLOPTS=allexport" "val2=x var2=y given=z"; do
+  case "$start" in
+    -x) GO_ENV="AAA=$V1 BBB=$V2" go -x "$P" h01 two pair AAA BBB; rc=$? ;;
+    *) GO_ENV="$start AAA=$V1 BBB=$V2" go "$P" h01 two pair AAA BBB; rc=$? ;;
+  esac
+  traced_seen=true
+  case "$start" in *xtrace|-x|BASH_ENV*) grep -q '^+' <<< "$OUT" || traced_seen=false ;; esac
+  $traced_seen && ! grep -qE '^(val2|var2)=' "$T/envdump" \
+    && two_ok "two VARs started with $start: the values in no trace, output, argv or child environment" "~/scripts/h01/apps/two/two.sh pair" \
+    || bad "two VARs with $start" "trace seen=$traced_seen; $(grep -E '^(val2|var2)=' "$T/envdump" | cut -c1-6)"
+done
+for shadow in printf '[' ssh; do
+  case "$shadow" in
+    printf) printf() { builtin printf 'printf %s\n' "$*" >> "$STUB_SHADOW"; builtin printf "$@"; } ;;
+    '[') [() { builtin printf '[ %s\n' "$*" >> "$STUB_SHADOW"; builtin [ "$@"; } ;;
+    ssh) ssh() { { builtin printf 'ssh stdin '; cat; } >> "$STUB_SHADOW"; } ;;
+  esac
+  : > "$T/shadow"
+  export -f "$shadow"
+  GO_ENV="STUB_SHADOW=$T/shadow AAA=$V1 BBB=$V2" go "$P" h01 two pair AAA BBB; rc=$?
+  unset -f "$shadow"
+  ! grep -qF -e "$V1" -e "$V2" "$T/shadow" \
+    && two_ok "two VARs with an exported $shadow function: it never sees either value" "~/scripts/h01/apps/two/two.sh pair" \
+    || bad "two VARs, exported $shadow function" "seen=$(grep -cF -e "$V1" -e "$V2" "$T/shadow")"
+done
+rm -f "$T/shadow"
+# Each value refused locally (exit 2, no ssh) when empty or holding a newline or CR: env takes them as words.
+rawpair() {   # rawpair NAME=VALUE...: pair AAA BBB with exactly these in the environment
+  : > "$T/log"; : > "$T/stdin"; : > "$T/envdump"
+  OUT="$(env "$@" HOME="$T/home" PATH="$T/bin:$PATH" STUB_LOG="$T/log" STUB_STDIN="$T/stdin" \
+    STUB_ENVDUMP="$T/envdump" bash "$P" h01 two pair AAA BBB 2>&1)"
+}
+
 # --- refusals: exit 2, no ssh, no value in the output ---
 refused() {   # refused RC LABEL PATTERN: the last go refused (2) with PATTERN in its output
   local rc="$1" label="$2" pat="$3"
@@ -235,9 +291,10 @@ GO_ENV="AAA=$V1" go "$S" d05 identity-platform leaf-issue AAA; refused $? "a VAR
 go "$S" d05 identity-platform leaf-issue; refused $? "a listed VAR missing (leaf-issue with none)" "needs exactly: LDAP_PROVISIONER_PASSWORD"
 GO_ENV="IDP_KEYCLOAK_DB_PASSWORD=$V1" go "$S" d05 identity-platform restore-openldap IDP_KEYCLOAK_DB_PASSWORD; refused $? "a VAR to a switch that takes none (restore-openldap)" "not listed|takes no"
 go "$S" d05 identity-platform restore-keycloak; refused $? "a listed VAR missing (restore-keycloak with none)" "needs exactly: IDP_KEYCLOAK_DB_PASSWORD"
-GO_ENV="AAA=$V1 BBB=$V2" go "$F/scripts/app_switch.sh" h01 two one AAA BBB; refused $? "more than one VAR on the command line" "at most one VAR"
-GO_ENV="LDAP_PROVISIONER_PASSWORD=$V1 AAA=$V2" go "$S" d05 identity-platform leaf-issue LDAP_PROVISIONER_PASSWORD AAA; refused $? "more than one VAR for leaf-issue" "at most one VAR"
-GO_ENV="AAA=$V1" go "$F/scripts/app_switch.sh" h01 two pair AAA; refused $? "a switch_env list naming two VARs" "at most one variable name"
+GO_ENV="AAA=$V1 BBB=$V2" go "$F/scripts/app_switch.sh" h01 two one AAA BBB; refused $? "two VARs to a switch that takes one" "takes AAA; AAA BBB is not listed"
+GO_ENV="LDAP_PROVISIONER_PASSWORD=$V1 AAA=$V2" go "$S" d05 identity-platform leaf-issue LDAP_PROVISIONER_PASSWORD AAA; refused $? "two VARs for leaf-issue" "takes LDAP_PROVISIONER_PASSWORD; LDAP_PROVISIONER_PASSWORD AAA is not listed"
+GO_ENV="AAA=$V1 BBB=$V2" go "$F/scripts/app_switch.sh" h01 two triple AAA BBB; refused $? "a switch_env list naming three VARs" "at most two distinct variable names"
+GO_ENV="AAA=$V1" go "$F/scripts/app_switch.sh" h01 two dup AAA; refused $? "a switch_env list naming one VAR twice" "at most two distinct variable names"
 go "$S" d05 identity-platform leaf-issue LDAP_PROVISIONER_PASSWORD; refused $? "a VAR unset" "unset or empty"
 GO_ENV="LDAP_PROVISIONER_PASSWORD=" go "$S" d05 identity-platform leaf-issue LDAP_PROVISIONER_PASSWORD; refused $? "a VAR empty" "unset or empty"
 : > "$T/log"; : > "$T/stdin"; : > "$T/envdump"
@@ -255,6 +312,25 @@ go "$S" nohost identity-platform leaf-renew; refused $? "an unknown host" "no ho
 go "$F/scripts/app_switch.sh" h02 two none; refused $? "a replica's spec" "replica"
 go "$S" d05 identity-platform; refused $? "too few arguments" "usage"
 go "$S" 'd05;x' identity-platform leaf-renew; refused $? "a host name with other characters" "HOST must match"
+# Two VARs: names, order, count and each value.
+GO_ENV="AAA=$V1 BBB=$V2" go "$P" h01 two pair BBB AAA; refused $? "two VARs in the other order" "takes AAA BBB; BBB AAA is not listed"
+GO_ENV="AAA=$V1" go "$P" h01 two pair AAA; refused $? "one VAR of a pair" "takes AAA BBB; AAA is not listed"
+GO_ENV="BBB=$V2" go "$P" h01 two pair BBB; refused $? "the pair's second VAR alone" "takes AAA BBB; BBB is not listed"
+go "$P" h01 two pair; refused $? "no VAR for a pair" "needs exactly: AAA BBB"
+GO_ENV="AAA=$V1" go "$P" h01 two pair AAA AAA; refused $? "the same VAR twice" "VAR AAA given twice"
+GO_ENV="AAA=$V1 BBB=$V2 CCC=$V3" go "$P" h01 two pair AAA BBB CCC; refused $? "three VARs" "at most two VARs, given first"
+GO_ENV="AAA=$V1 BBB=$V2" go "$P" h01 two none AAA BBB; refused $? "two VARs to a switch that takes none" "takes no VAR; AAA BBB is not listed"
+GO_ENV="AAA=$V1" go "$P" h01 two pair AAA PATH; refused $? "a shell variable as VAR2 (PATH)" "VAR PATH is a shell or ssh variable"
+GO_ENV="AAA=$V1 SSH_KEY=$V2" go "$P" h01 two pair AAA SSH_KEY; refused $? "the script's own name as VAR2 (SSH_KEY)" "VAR SSH_KEY is a shell or ssh variable"
+rawpair AAA="$V1"; refused $? "VAR2 unset" "BBB is unset or empty"
+rawpair AAA="$V1" BBB=; refused $? "VAR2 empty" "BBB is unset or empty"
+rawpair AAA= BBB="$V2"; refused $? "VAR empty, VAR2 set" "AAA is unset or empty"
+rawpair AAA="$V1" BBB="$V2
+$V3"; refused $? "VAR2 holding a newline" "BBB holds a newline"
+rawpair AAA="$V1" BBB="$V2"$'\r'; refused $? "VAR2 holding a carriage return" "BBB holds a newline"
+rawpair AAA="$V1"$'\r' BBB="$V2"; refused $? "VAR holding a carriage return" "AAA holds a newline"
+rawpair AAA="$V1
+$V3" BBB="$V2"; refused $? "VAR holding a newline" "AAA holds a newline"
 
 # --- ARG refusals: before ssh ---
 H="$F/scripts/app_switch.sh"
@@ -272,7 +348,8 @@ go "$S" d05 identity-platform leaf-renew abc; refused $? "an ARG to a d05 switch
 GO_ENV="LDAP_PROVISIONER_PASSWORD=$V1" go "$S" d05 identity-platform leaf-issue LDAP_PROVISIONER_PASSWORD abc; refused $? "an ARG to leaf-issue (VAR, no ARGs)" "takes no ARG"
 GO_ENV="ABC=$V1" go "$H" h01 two two-args ABC abc 42; refused $? "an upper-case word to a switch with ARGs and no VAR: a VAR, not an ARG" "takes no VAR"
 go "$H" h01 two fetch m5-0123456789ab; refused $? "an ARG without the switch's VAR" "needs exactly: AAA"
-GO_ENV="AAA=$V1 BBB=$V2" go "$H" h01 two fetch AAA m5-0123456789ab BBB; refused $? "a second VAR after an ARG (its value in no child environment)" "at most one VAR"
+GO_ENV="AAA=$V1 BBB=$V2" go "$H" h01 two fetch AAA m5-0123456789ab BBB; refused $? "a second VAR after an ARG (its value in no child environment)" "at most two VARs, given first"
+GO_ENV="AAA=$V1 BBB=$V2" go "$H" h01 two pair-arg AAA abc BBB; refused $? "VAR2 after an ARG (its value in no child environment)" "at most two VARs, given first"
 go "$H" h01 stray x; refused $? "a switch_args switch not in switch_env" "all in switch_env"
 go "$H" h01 unanchored x a; refused $? "an unanchored switch_args pattern" "anchored patterns"
 go "$H" h01 broken x a; refused $? "a switch_args pattern that does not compile" "does not compile"
