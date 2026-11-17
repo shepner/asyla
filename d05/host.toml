@@ -45,9 +45,11 @@ allow = ["10.0.0.0/24"]    # a subnet, not a host (operator, 2026-10-25): the tr
 # M1: its networks, images and root CA, and keycloak-db alone; openldap and keycloak start only at
 # the M5 cutover, after a restore. Values the workstation resolves from OpenBao and sends over SSH
 # stdin at use (build_host.py, App environment): the theorg-registry pull token for the image pulls
-# (as IDENTITY_PLATFORM_REGISTRY_PULL_TOKEN) and keycloak-db's password, which up needs. The LDAP
-# admin value and the deploy Dex client value are not sent: M1 starts nothing that takes them (the
-# M5 cutover adds them). No restore: M1 holds no data of its own, and identity-platform.sh restore
+# (as IDENTITY_PLATFORM_REGISTRY_PULL_TOKEN), keycloak-db's password, which up needs, and the LDAP
+# admin's, which up needs once cutover-done exists (it then starts keycloak-db, openldap and
+# keycloak together and refuses, starting nothing, without both); before cutover-done up unsets it
+# and starts keycloak-db alone. The deploy Dex client value is not sent: only configure takes it,
+# on stdin (switch_env). No restore: M1 holds no data of its own, and identity-platform.sh restore
 # refuses (the M5 cutover's), which would stop the build. Its images are pinned
 # (IDENTITY_PLATFORM_TAG and digests), so up's pull of missing images is the only pull it needs.
 # A replica (test01 as [replica] of = "d05") needs no key here, as d06's ticketing: build_host.py
@@ -65,7 +67,7 @@ start = ["up"]
 verify = ["verify"]
 restore = false
 pull_token_env = "THEORG_REGISTRY_PULL_TOKEN"
-start_env = ["IDP_KEYCLOAK_DB_PASSWORD"]
+start_env = ["IDP_KEYCLOAK_DB_PASSWORD", "IDP_LDAP_ADMIN_PASSWORD"]
 # switch_args (scripts/app_switch.sh): SWITCH -> one anchored pattern per plain ARG; a switch not in
 # it takes no ARG. The M5 cutover bundle (theOrg deploy/d05/CUTOVER-BUNDLE.md, asyla #654):
 # fetch-bundle takes the theorg-registry pull token on ssh stdin and the package version as its one
@@ -76,6 +78,7 @@ start_env = ["IDP_KEYCLOAK_DB_PASSWORD"]
 # it on its stdin), restore-openldap no value. The build's restore stays false: identity-platform.sh
 # restore refuses (exit 1) and points at these two. configure (cutover step 6) takes two values, no
 # ARG: the LDAP admin's password, then the deploy Dex client's secret, one line each on ssh stdin;
-# keycloak-configure gets both on its stdin.
-switch_env = { "leaf-issue" = ["LDAP_PROVISIONER_PASSWORD"], "leaf-renew" = [], "leaf-schedule-install" = [], "leaf-schedule-status" = [], "leaf-schedule-remove" = [], "fetch-bundle" = ["THEORG_REGISTRY_PULL_TOKEN"], "unpack-bundle" = ["IDP_CUTOVER_BUNDLE_IDENTITY"], "reset-cutover" = [], "cutover-clean" = [], "restore-keycloak" = ["IDP_KEYCLOAK_DB_PASSWORD"], "restore-openldap" = [], "start-openldap" = ["IDP_LDAP_ADMIN_PASSWORD"], "start-keycloak" = ["IDP_KEYCLOAK_DB_PASSWORD"], "configure" = ["IDP_LDAP_ADMIN_PASSWORD", "IDP_DEPLOY_DEX_CLIENT_SECRET"] }
+# keycloak-configure gets both on its stdin. cutover-done (after the cutover's verification) takes
+# no value and no ARG.
+switch_env = { "leaf-issue" = ["LDAP_PROVISIONER_PASSWORD"], "leaf-renew" = [], "leaf-schedule-install" = [], "leaf-schedule-status" = [], "leaf-schedule-remove" = [], "fetch-bundle" = ["THEORG_REGISTRY_PULL_TOKEN"], "unpack-bundle" = ["IDP_CUTOVER_BUNDLE_IDENTITY"], "reset-cutover" = [], "cutover-clean" = [], "restore-keycloak" = ["IDP_KEYCLOAK_DB_PASSWORD"], "restore-openldap" = [], "start-openldap" = ["IDP_LDAP_ADMIN_PASSWORD"], "start-keycloak" = ["IDP_KEYCLOAK_DB_PASSWORD"], "configure" = ["IDP_LDAP_ADMIN_PASSWORD", "IDP_DEPLOY_DEX_CLIENT_SECRET"], "cutover-done" = [] }
 switch_args = { "fetch-bundle" = ['^m5-[0-9a-f]{12}$'], "unpack-bundle" = ['^[0-9a-f]{64}$', '^[0-9a-f]{64}$', '^[0-9a-f]{64}$'] }
