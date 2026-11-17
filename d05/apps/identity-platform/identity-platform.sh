@@ -42,6 +42,21 @@
 # At start this script notes whether LDAP_PROVISIONER_PASSWORD is set in its environment and unsets
 # it, without reading the value, so that no child ever inherits it; leaf-issue and leaf-renew then
 # refuse (exit 3).
+# The M5 cutover bundle (asyla #654; theOrg deploy/d05/CUTOVER-BUNDLE.md at CUTOVER_BUNDLE_COMMIT):
+#   fetch-bundle VERSION  reads the theorg-registry pull token as one line on stdin; pulls the
+#               cutover-bundle image if missing (the token in that docker pull's environment alone,
+#               through the credential helper, as pull) and downloads the package's bundle.tar.age to
+#               cutover/ with curl, the token on curl's config stdin (-K -) alone.
+#   unpack-bundle MANIFESTS_SHA256 KC_SUM OL_SUM  reads the age identity as one line on stdin and
+#               writes it to the image's unpack on stdin alone; the two targets are backup/ and
+#               openldap-backup/ (the dirs the restores read).
+#   reset-cutover  empties both targets (lost+found kept) after a failed unpack; refused once a
+#               restore marker or a restored container exists. cutover-clean removes the ciphertext.
+#   A marker per finished step in cutover-state/ (fetched, unpacked; restored-openldap and
+#   restored-keycloak from the restores, not written yet): start-openldap, start-keycloak and
+#   configure are gated on them (cutover_gate), and still refuse in this round.
+#   THEORG_REGISTRY_PULL_TOKEN and IDP_CUTOVER_BUNDLE_IDENTITY are noted and unset at start, as
+#   LDAP_PROVISIONER_PASSWORD is; fetch-bundle and unpack-bundle then refuse (exit 3). Each runs alone.
 # Data under /mnt/docker/IdentityPlatform. No backup here yet: the data is the Mini's until M5.
 
 set -euo pipefail
@@ -54,6 +69,17 @@ if [ -n "${LDAP_PROVISIONER_PASSWORD+x}" ]; then
   LEAF_PW_IN_ENV=true
 fi
 unset LDAP_PROVISIONER_PASSWORD
+# The same for the cutover's two stdin values (fetch-bundle, unpack-bundle).
+CUT_PULL_IN_ENV=false
+if [ -n "${THEORG_REGISTRY_PULL_TOKEN+x}" ]; then
+  CUT_PULL_IN_ENV=true
+fi
+unset THEORG_REGISTRY_PULL_TOKEN
+CUT_ID_IN_ENV=false
+if [ -n "${IDP_CUTOVER_BUNDLE_IDENTITY+x}" ]; then
+  CUT_ID_IN_ENV=true
+fi
+unset IDP_CUTOVER_BUNDLE_IDENTITY
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="$SCRIPT_DIR/compose.yml"
@@ -81,6 +107,21 @@ CA_FINGERPRINT="CD:39:1A:56:AE:00:0B:01:A4:43:3A:73:F2:2D:98:A3:73:E5:BB:08:E8:D
 CA_FILE="$APP_ROOT/ca/root_ca.crt"
 LEAF_DIR="$APP_ROOT/openldap-tls"
 LEAF_SCRIPT="$SCRIPT_DIR/openldap-leaf.sh"
+
+# The M5 cutover bundle. The image is pinned to theOrg identity-platform #87 at its approved commit
+# (CI green, NOT merged yet): repin to the merged main commit here, one line.
+CUTOVER_BUNDLE_COMMIT="7ac1bfb4ba3402f16d029765cdc92c51a5fab769"
+CUTOVER_IMAGE="$REGISTRY/theorg/identity-platform-cutover-bundle:$CUTOVER_BUNDLE_COMMIT"
+CUTOVER_PKG_URL="https://$REGISTRY/api/packages/theorg/generic/identity-platform-cutover"
+CUTOVER_VERSION_RE='^m5-[0-9a-f]{12}$'
+SHA256_RE='^[0-9a-f]{64}$'
+CUT_DIR="$APP_ROOT/cutover"
+BUNDLE="$CUT_DIR/bundle.tar.age"
+STATE_DIR="$APP_ROOT/cutover-state"
+# unpack's two targets: the dirs keycloak-backup and openldap-backup mount at /backup (compose.yml),
+# so the restores read what unpack wrote.
+KC_TARGET="$APP_ROOT/backup"
+OL_TARGET="$APP_ROOT/openldap-backup"
 
 # The renewer's systemd units: the service is a template (@USER@, @SCRIPT@), filled in and
 # installed only by leaf-schedule-install.
@@ -171,15 +212,19 @@ PULL_CONFIG=""
 remove_pull_config() { if [ -n "$PULL_CONFIG" ]; then rm -rf "$PULL_CONFIG"; fi; }
 trap remove_pull_config EXIT
 
+ensure_pull_config() {
+  if [ -z "$PULL_CONFIG" ]; then
+    PULL_CONFIG="$(mktemp -d)" || return
+    printf '{"credHelpers":{"%s":"identity-platform-env"}}\n' "$REGISTRY" > "$PULL_CONFIG/config.json" || return
+  fi
+}
+
 pull_compose() {
   if [ -z "${IDENTITY_PLATFORM_REGISTRY_PULL_TOKEN:-}" ]; then
     echo "[ERROR] IDENTITY_PLATFORM_REGISTRY_PULL_TOKEN is not in this process's environment; the pull token comes from the workstation (build_host.py pull_token_env)" >&2
     return 1
   fi
-  if [ -z "$PULL_CONFIG" ]; then
-    PULL_CONFIG="$(mktemp -d)" || return
-    printf '{"credHelpers":{"%s":"identity-platform-env"}}\n' "$REGISTRY" > "$PULL_CONFIG/config.json" || return
-  fi
+  ensure_pull_config || return
   ( export DOCKER_CONFIG="$PULL_CONFIG" PATH="$SCRIPT_DIR:$PATH"; run_compose "$@" )
 }
 
@@ -614,6 +659,106 @@ do_leaf_schedule_remove() {
   fi
 }
 
+# --- The M5 cutover bundle (theOrg deploy/d05/CUTOVER-BUNDLE.md at CUTOVER_BUNDLE_COMMIT) ---
+# One marker per finished step in cutover-state/, each written atomically (a temp file in the same
+# dir, then mv), each `key value` lines: fetched (version, sha256), unpacked (unpack's four lines);
+# restored-openldap and restored-keycloak come from the restores (not written yet).
+write_state() {   # write_state NAME LINE...
+  local name="$1" tmp
+  shift
+  mkdir -p "$STATE_DIR" || return
+  tmp="$(mktemp "$STATE_DIR/.$name.XXXXXX")" || return
+  if printf '%s\n' "$@" > "$tmp" && chmod 0644 "$tmp" && mv -f "$tmp" "$STATE_DIR/$name"; then
+    echo "[INFO] $STATE_DIR/$name written"
+  else
+    rm -f "$tmp"
+    echo "[ERROR] could not write $STATE_DIR/$name" >&2
+    return 1
+  fi
+}
+
+state_value() {   # state_value NAME KEY: the value, or nothing
+  [ -f "$STATE_DIR/$1" ] || return 0
+  sed -nE "s/^$2 ([^ ]+)\$/\\1/p" "$STATE_DIR/$1" | head -n 1
+}
+
+file_sha256() { sha256_hex < "$1"; }
+
+# fetch-bundle VERSION: the package's bundle.tar.age to cutover/, and the cutover image if missing.
+# The token is one line on this script's stdin (scripts/app_switch.sh writes it), read as leaf-issue
+# reads its value: a local never exported, xtrace and allexport off, stdin then /dev/null. It reaches
+# two programs alone: curl, on its config stdin (`-K -`; -q first so no .curlrc is read), and the
+# image's docker pull, in that subshell's environment, through the credential helper (as pull).
+# Never an argv, a file or a log. Refused (exit 3, nothing called) when THEORG_REGISTRY_PULL_TOKEN
+# or IDENTITY_PLATFORM_REGISTRY_PULL_TOKEN is in the environment, stdin is a terminal or the read is
+# empty, and over an existing bundle or unpacked marker (cutover-clean or reset-cutover first); exit
+# 2 for a VERSION that is not m5-<12 hex>. The download goes to a temp name in cutover/, then mv;
+# prints its size and sha256 and writes the fetched marker.
+do_fetch_bundle() {
+  local ver="${1:-}" tre='^[A-Za-z0-9_.-]+$' tmp rc=0 sum size
+  if $CUT_PULL_IN_ENV || [ -n "${IDENTITY_PLATFORM_REGISTRY_PULL_TOKEN+x}" ]; then
+    echo "[ERROR] fetch-bundle: refused: the pull token is set in the environment; write it as one line to fetch-bundle's stdin (scripts/app_switch.sh does); not fetching" >&2
+    return 3
+  fi
+  if [ $# -ne 1 ] || [[ ! $ver =~ $CUTOVER_VERSION_RE ]]; then
+    echo "[ERROR] fetch-bundle: usage: fetch-bundle VERSION (one ARG matching $CUTOVER_VERSION_RE: pack's version line)" >&2
+    return 2
+  fi
+  if [ -e "$BUNDLE" ]; then
+    echo "[ERROR] fetch-bundle: refused: $BUNDLE exists; run cutover-clean first (reset-cutover too after an unpack)" >&2
+    return 3
+  fi
+  if [ -e "$STATE_DIR/unpacked" ]; then
+    echo "[ERROR] fetch-bundle: refused: $STATE_DIR/unpacked exists (a bundle is already unpacked); run reset-cutover first" >&2
+    return 3
+  fi
+  if [ -t 0 ]; then
+    echo "[ERROR] fetch-bundle: refused: stdin is a terminal; fetch-bundle reads the theorg-registry pull token as one line on stdin (scripts/app_switch.sh writes it); not fetching" >&2
+    return 3
+  fi
+  { set +x; } 2>/dev/null
+  set +a
+  unset -v tok
+  local +x tok=""
+  IFS= builtin read -r tok || true
+  exec </dev/null
+  if [[ -z $tok ]]; then
+    echo "[ERROR] fetch-bundle: refused: no pull token read on stdin; not fetching" >&2
+    return 3
+  fi
+  if [[ ! $tok =~ $tre ]]; then
+    unset -v tok
+    echo "[ERROR] fetch-bundle: refused: the value read holds characters outside [A-Za-z0-9_.-]; not fetching" >&2
+    return 3
+  fi
+  if ! docker image inspect "$CUTOVER_IMAGE" >/dev/null 2>&1; then
+    ensure_pull_config || { unset -v tok; return 1; }
+    echo "[INFO] pulling $CUTOVER_IMAGE"
+    # `builtin exec` in its own subshell: the docker program, never a function.
+    ( IDENTITY_PLATFORM_REGISTRY_PULL_TOKEN="$tok"
+      export IDENTITY_PLATFORM_REGISTRY_PULL_TOKEN DOCKER_CONFIG="$PULL_CONFIG" PATH="$SCRIPT_DIR:$PATH"
+      builtin exec docker pull "$CUTOVER_IMAGE" ) >&2 || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      unset -v tok
+      echo "[ERROR] fetch-bundle: docker pull $CUTOVER_IMAGE failed (exit $rc); nothing downloaded" >&2
+      return 1
+    fi
+  fi
+  mkdir -p "$CUT_DIR" && tmp="$(mktemp "$CUT_DIR/.bundle.XXXXXX")" || { unset -v tok; return 1; }
+  builtin printf 'header = "Authorization: token %s"\n' "$tok" \
+    | (builtin exec curl -q -K - --fail --silent --show-error --proto =https --connect-timeout 20 \
+        -o "$tmp" "$CUTOVER_PKG_URL/$ver/bundle.tar.age") || rc=$?
+  unset -v tok
+  if [ "$rc" -ne 0 ] || ! mv -f "$tmp" "$BUNDLE"; then
+    rm -f "$tmp"
+    echo "[ERROR] fetch-bundle: the download of $ver failed (curl exit $rc); nothing kept" >&2
+    return 1
+  fi
+  sum="$(file_sha256 "$BUNDLE")" && size="$(wc -c < "$BUNDLE" | tr -d ' ')" || return 1
+  echo "[INFO] $BUNDLE: $ver, $size bytes, sha256 $sum"
+  write_state fetched "version $ver" "sha256 $sum"
+}
+
 refuse_cutover() {
   echo "[ERROR] $1: M5 cutover, not yet written (theOrg identity-platform DEPLOY.md steps 5-6, after a restore); refused" >&2
   exit 1
@@ -689,6 +834,9 @@ usage() {
   echo "                    only with the operator's approval of the schedule (DEPLOY.md item 13)" >&2
   echo "  leaf-schedule-status  - The timer, the service's last result and leaf-status.json (read-only)" >&2
   echo "  leaf-schedule-remove  - Disable and remove the timer and its service" >&2
+  echo "  fetch-bundle VERSION - M5: pull the cutover-bundle image if missing and download the package's" >&2
+  echo "                    bundle.tar.age to cutover/; reads the theorg-registry pull token as one line on" >&2
+  echo "                    stdin (scripts/app_switch.sh). Runs alone" >&2
   echo "  start-openldap, start-keycloak, restore" >&2
   echo "                  - Refused: the M5 cutover, not yet written" >&2
   echo "  logs            - Follow logs (optionally for one service)" >&2
@@ -704,14 +852,24 @@ if [ "$1" = "logs" ]; then
   exit 0
 fi
 
+# The cutover switches with ARGs run alone, first, and take the rest as their ARGs.
+case "$1" in
+  fetch-bundle)
+    do_fetch_bundle "${@:2}" || exit $?
+    exit 0
+    ;;
+esac
+
 # leaf-issue runs alone: its stdin carries the provisioner password, and no other switch's
-# children may run before it holding that pipe.
+# children may run before it holding that pipe. So do the cutover switches (stdin or ARGs).
 if [ $# -gt 1 ]; then
   for cmd in "$@"; do
-    if [ "$cmd" = leaf-issue ]; then
-      echo "[ERROR] leaf-issue: refused: run it alone (it reads the provisioner password on stdin), not with: $*" >&2
-      exit 3
-    fi
+    case "$cmd" in
+      leaf-issue|fetch-bundle)
+        echo "[ERROR] $cmd: refused: run it alone (it reads a value on stdin or takes ARGs), not with: $*" >&2
+        exit 3
+        ;;
+    esac
   done
 fi
 

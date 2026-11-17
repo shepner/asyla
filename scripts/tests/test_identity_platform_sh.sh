@@ -15,6 +15,12 @@
 # empty read, or another switch beside it, and on a replica. up never issues, leaf-renew takes no
 # secret, and the renew schedule is installed only by leaf-schedule-install (never by up).
 # openldap-leaf.sh is the README's provenance blob.
+# fetch-bundle (the M5 cutover bundle) reads the theorg-registry pull token as one line on stdin: it
+# reaches curl on its config stdin (-K -) alone, and the cutover image's docker pull (only when the
+# image is missing) through the credential helper; refused (exit 3, no call, nothing written) with
+# either pull-token name in its environment, a terminal, an empty read or a value outside
+# [A-Za-z0-9_.-], over an existing bundle or unpacked marker, or beside another switch; exit 2 for
+# a bad VERSION; also under xtrace (SHELLOPTS and bash -x). curl is a stub.
 # Nothing here reaches a registry, the vault or a host; every value is a plain stand-in word made
 # at run time. Run: bash scripts/tests/test_identity_platform_sh.sh
 set -uo pipefail
@@ -106,7 +112,43 @@ case "$*" in
   "ps -q --filter"*) ;;
   *"--profile"*"config --images"*) printf 'postgres:16@sha256:aa\ngitea.asyla.org/theorg/identity-platform-openldap:%s\n' "$IDENTITY_PLATFORM_TAG" ;;
   *"config --images"*) echo 'postgres:16@sha256:aa' ;;
+  "image inspect "*cutover-bundle*)
+    echo "INSPECTENV ${IDENTITY_PLATFORM_REGISTRY_PULL_TOKEN+set}" >> "$STUB_LOG"
+    [ -z "${STUB_CUT_MISSING:-}" ]; exit ;;
   "image inspect"*) [ -z "${STUB_MISSING:-}" ]; exit ;;
+  # The cutover image's pull (fetch-bundle), through the credential helper as compose's pulls.
+  "pull "*)
+    echo "PULLCFG $(cat "$DOCKER_CONFIG/config.json" 2>/dev/null)" >> "$STUB_LOG"
+    printf 'gitea.asyla.org' | docker-credential-identity-platform-env get | grep -q '"Username":"theorg-registry"' \
+      && echo "HELPER_OK" >> "$STUB_LOG"
+    exit "${STUB_PULL_RC:-0}" ;;
+  # unpack (unpack-bundle): the identity line from stdin into STUB_ID_FILE (a temp file read only by
+  # the checks); STUB_UNPACK_RC 0 writes both STATUS files and prints the four lines (from its own
+  # ARGs, or STUB_UNPACK_OUT), 1 or 4 leaves a file without STATUS, 2 or 3 writes nothing.
+  "run "*cutover-bundle*" unpack "*)
+    echo "UNPACKENV ${IDP_CUTOVER_BUNDLE_IDENTITY+set}" >> "$STUB_LOG"
+    if [ -n "${STUB_ID_FILE:-}" ]; then cat > "$STUB_ID_FILE"; else cat > /dev/null; fi
+    m="" k="" o=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --expect-manifests-sha256) m="$2" ;; --expect-keycloak-summary) k="$2" ;; --expect-openldap-summary) o="$2" ;;
+      esac
+      shift
+    done
+    case "${STUB_UNPACK_RC:-0}" in
+      0) echo OK > "$IDENTITY_PLATFORM_ROOT/backup/STATUS"; echo OK > "$IDENTITY_PLATFORM_ROOT/openldap-backup/STATUS"
+         if [ -n "${STUB_UNPACK_OUT:-}" ]; then printf '%s\n' "$STUB_UNPACK_OUT"
+         else printf 'version m5-%s\nmanifests-sha256 %s\nkeycloak-summary-sha256 %s\nopenldap-summary-sha256 %s\n' "${m:0:12}" "$m" "$k" "$o"; fi ;;
+      1|4) echo partial > "$IDENTITY_PLATFORM_ROOT/backup/summary.txt" ;;
+    esac
+    exit "${STUB_UNPACK_RC:-0}" ;;
+  # reset-cutover's find in the image: run here on the mounted dir.
+  "run "*"--entrypoint find"*)
+    d=""; for a in "$@"; do case "$a" in *:/t) d="${a%:/t}" ;; esac; done
+    find "$d" -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf -- {} + ;;
+  *"ps -a -q openldap keycloak"*)
+    [ -z "${STUB_PS_FAIL:-}" ] || exit 1
+    [ -z "${STUB_RESTORED_CT:-}" ] || echo ctid ;;
   *" pull"*)
     echo "PULLCFG $(cat "$DOCKER_CONFIG/config.json" 2>/dev/null)" >> "$STUB_LOG"
     printf 'gitea.asyla.org' | docker-credential-identity-platform-env get | grep -q '"Username":"theorg-registry"' \
@@ -139,10 +181,25 @@ case "$1" in is-enabled|is-active) exit 1 ;; esac
 exit 0
 EOF
 printf '#!/bin/bash\nexit 0\n' > "$T/bin/flock"
-chmod +x "$T/bin/docker" "$T/bin/hostname" "$T/bin/sudo" "$T/bin/systemctl" "$T/bin/flock"
+# curl (fetch-bundle's download): logs its argv and which pull-token names are in its environment
+# (never a value), dumps its environment to STUB_CURL_ENV, keeps its `-K -` config (its stdin) in
+# STUB_CURL_CFG (a temp file read only by the checks), writes a fixed stand-in body to its -o path
+# and exits STUB_CURL_RC (the body written even then: a partial download).
+cat > "$T/bin/curl" <<'EOF'
+#!/bin/bash
+echo "curl $*" >> "$STUB_LOG"
+echo "CURLENV ${IDENTITY_PLATFORM_REGISTRY_PULL_TOKEN+set}${THEORG_REGISTRY_PULL_TOKEN+set}" >> "$STUB_LOG"
+[ -z "${STUB_CURL_ENV:-}" ] || env >> "$STUB_CURL_ENV"
+if [ -n "${STUB_CURL_CFG:-}" ]; then cat > "$STUB_CURL_CFG"; else cat > /dev/null; fi
+o=""
+while [ $# -gt 0 ]; do [ "$1" != -o ] || o="${2:-}"; shift; done
+[ -z "$o" ] || printf 'stand-in bundle body\n' > "$o"
+exit "${STUB_CURL_RC:-0}"
+EOF
+chmod +x "$T/bin/docker" "$T/bin/hostname" "$T/bin/sudo" "$T/bin/systemctl" "$T/bin/flock" "$T/bin/curl"
 # bash skips a file on PATH it cannot run (a noexec temp dir) and takes the next one: the real
 # docker would then act on this machine. Refuse to run then.
-for s in docker hostname sudo systemctl flock; do
+for s in docker hostname sudo systemctl flock curl; do
   [ "$(PATH="$T/bin:$PATH" command -v "$s")" = "$T/bin/$s" ] || { echo "stub $s not runnable in $T/bin" >&2; exit 2; }
 done
 
@@ -420,7 +477,8 @@ grep -q '"Username":"theorg-registry"' <<< "$out" && ok "helper get hands Docker
 # --- the openldap leaf ---
 # A plain stand-in word made at run time, unlike any real value.
 LEAF_VAL="stand-in-value-$$"
-# leaf_run SWITCH...: as run, with $LEAF_VAL as one line on the script's stdin (LEAF_STDIN, when set,
+# leaf_run SWITCH...: as run, with $LEAF_VAL as one line on the script's stdin (LEAF_BASH_X=1 runs it
+# under bash -x; LEAF_STDIN, when set,
 # is written instead, as is: LEAF_STDIN= gives an empty stdin). LEAF_IN_ENV=1 also puts
 # LDAP_PROVISIONER_PASSWORD=$LEAF_VAL in its environment, LEAF_IN_ENV=empty puts it there empty.
 leaf_run() {
@@ -433,7 +491,7 @@ leaf_run() {
   # shellcheck disable=SC2086  # LEAF_EXTRA is NAME=value words
   OUT="$(leaf_stdin | env ${envset[@]+"${envset[@]}"} ${LEAF_EXTRA:-} HOME="$T/home" PATH="$T/bin:$PATH" STUB_LOG="$T/log" \
     STUB_NET="$T/net" STUB_HOST="${STUB_HOST:-d05}" IDENTITY_PLATFORM_DB_WAIT_S=120 \
-    IDENTITY_PLATFORM_SYSTEMD_DIR="$T/systemd" bash "$T/app/identity-platform.sh" "$@" 2>&1)"
+    IDENTITY_PLATFORM_SYSTEMD_DIR="$T/systemd" bash ${LEAF_BASH_X:+-x} "$T/app/identity-platform.sh" "$@" 2>&1)"
   rc=$?
   return "$rc"
 }
@@ -715,6 +773,137 @@ PATH="$T/mvfail:$PATH" run leaf-renew; rc=$?
 [ "$rc" -eq 1 ] && [ ! -e "$ROOT/leaf-status.json" ] && [ -z "$(ls -A "$ROOT" | grep '^\.leaf-status')" ] \
   && ok "no status file before and mv fails: none after (never a partial one)" || bad "atomic none" "rc=$rc; $(ls -A "$ROOT")"
 
+# --- fetch-bundle: the M5 cutover bundle's download ---
+# The pull token is $LEAF_VAL, one line on stdin. It reaches curl on its config stdin (-K -) alone,
+# and the cutover image's docker pull (only when the image is missing) through the credential
+# helper, in that pull's environment alone. Never an argv, a log, the output or a file under the
+# host's dirs.
+CUT_NAME="THEORG_REGISTRY_PULL_TOKEN"
+CUT_VER="m5-0123456789ab"
+CUT_IMAGE="gitea.asyla.org/theorg/identity-platform-cutover-bundle:$(sed -nE 's/^CUTOVER_BUNDLE_COMMIT="([0-9a-f]{40})"$/\1/p' "$SRC/identity-platform.sh")"
+CUT_URL="https://gitea.asyla.org/api/packages/theorg/generic/identity-platform-cutover/$CUT_VER/bundle.tar.age"
+CUT_SCHEME="token"   # the Authorization scheme Gitea takes
+printf 'stand-in bundle body\n' > "$T/body"
+BODY_SUM="$(if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi < "$T/body" | awk '{print $1}')"
+BODY_SIZE="$(wc -c < "$T/body" | tr -d ' ')"
+# fetch_run SWITCH...: leaf_run with curl's config kept in $T/curlcfg and its environment in $T/curlenv
+# (FETCH_EXTRA: more NAME=value words).
+fetch_run() {
+  rm -f "$T/curlcfg"; : > "$T/curlenv"
+  LEAF_EXTRA="${FETCH_EXTRA:-} STUB_CURL_CFG=$T/curlcfg STUB_CURL_ENV=$T/curlenv" leaf_run "$@"
+}
+cfg_ok() { [ "$(cat "$T/curlcfg" 2>/dev/null)" = "header = \"Authorization: $CUT_SCHEME $LEAF_VAL\"" ]; }
+no_cut_left() {   # no bundle, no temp download and no fetched marker (or temp marker)
+  [ ! -e "$ROOT/cutover/bundle.tar.age" ] && [ -z "$(ls -A "$ROOT/cutover" 2>/dev/null)" ] \
+    && [ ! -e "$ROOT/cutover-state/fetched" ] && [ -z "$(ls -A "$ROOT/cutover-state" 2>/dev/null | grep '^\.')" ]
+}
+fetched_ok() {   # the bundle is the body, the marker names the version and its sha256, the output its size and sum
+  cmp -s "$T/body" "$ROOT/cutover/bundle.tar.age" && [ "$(ls -A "$ROOT/cutover")" = "bundle.tar.age" ] \
+    && [ "$(cat "$ROOT/cutover-state/fetched")" = "$(printf 'version %s\nsha256 %s' "$CUT_VER" "$BODY_SUM")" ] \
+    && [ -z "$(ls -A "$ROOT/cutover-state" | grep '^\.')" ] \
+    && echo "$OUT" | grep -qF "$CUT_VER, $BODY_SIZE bytes, sha256 $BODY_SUM"
+}
+curl_ok() {   # one curl call: -q first, the config on stdin, https only, the package URL last; no pull-token name in its env
+  [ "$(grep -c '^curl ' "$T/log")" -eq 1 ] \
+    && grep -qE "^curl -q -K - --fail --silent --show-error --proto =https --connect-timeout 20 -o $ROOT/cutover/\.bundle\.[A-Za-z0-9]+ $CUT_URL\$" "$T/log" \
+    && grep -qx 'CURLENV ' "$T/log" && [ "$(grep -c '^PATH=' "$T/curlenv")" -eq 1 ] && ! grep -qF -- "$LEAF_VAL" "$T/curlenv" \
+    && ! grep -qE "^($CUT_NAME|$PULL_NAME)=" "$T/curlenv" && cfg_ok
+}
+fetch_refused() {   # fetch_refused CODE WHAT PATTERN: that exit, PATTERN in the output, no docker or curl call, nothing written
+  [ "$rc" -eq "$1" ] && echo "$OUT" | grep -q -- "$3" && [ ! -s "$T/log" ] && [ ! -e "$T/curlcfg" ] && no_cut_left && no_value \
+    && ok "fetch-bundle $2: refused ($1), no docker or curl call, nothing written" \
+    || bad "fetch-bundle $2" "rc=$rc; $OUT; $(cat "$T/log")"
+}
+
+# The image present: no pull; the bundle and the fetched marker written.
+reset_host
+fetch_run fetch-bundle "$CUT_VER"; rc=$?
+[ "$rc" -eq 0 ] && fetched_ok && curl_ok && no_value \
+  && [ "$(grep -c '^docker ' "$T/log")" -eq 1 ] && grep -qx "docker image inspect $CUT_IMAGE" "$T/log" && grep -qx 'INSPECTENV ' "$T/log" \
+  && ok "fetch-bundle with the image present: no pull; curl gets the value on its config stdin alone; bundle, size, sha256 and fetched marker" \
+  || bad "fetch-bundle present" "rc=$rc; cfg=$(cfg_ok && echo ok || echo wrong); $OUT; $(cat "$T/log")"
+# The image missing: pulled first, through the credential helper (the value in that pull's env alone).
+reset_host
+FETCH_EXTRA="STUB_CUT_MISSING=1" fetch_run fetch-bundle "$CUT_VER"; rc=$?
+[ "$rc" -eq 0 ] && fetched_ok && curl_ok && no_value \
+  && grep -qx "docker pull $CUT_IMAGE" "$T/log" && grep -q '^PULLCFG {"credHelpers":{"gitea.asyla.org":"identity-platform-env"}}' "$T/log" \
+  && grep -qx HELPER_OK "$T/log" && grep -qx 'INSPECTENV ' "$T/log" \
+  && [ "$(grep -n "^docker pull" "$T/log" | cut -d: -f1)" -lt "$(grep -n '^curl ' "$T/log" | cut -d: -f1)" ] \
+  && ok "fetch-bundle with the image missing: pulls it through the credential helper first, then downloads" \
+  || bad "fetch-bundle missing" "rc=$rc; $OUT; $(cat "$T/log")"
+reset_host
+FETCH_EXTRA="STUB_CUT_MISSING=1 STUB_PULL_RC=1" fetch_run fetch-bundle "$CUT_VER"; rc=$?
+[ "$rc" -eq 1 ] && ! grep -q '^curl ' "$T/log" && no_cut_left && no_value && echo "$OUT" | grep -q 'docker pull .* failed' \
+  && ok "fetch-bundle: a failed image pull exits 1 before any download" || bad "fetch-bundle pull fails" "rc=$rc; $OUT; $(cat "$T/log")"
+reset_host
+FETCH_EXTRA="STUB_CURL_RC=22" fetch_run fetch-bundle "$CUT_VER"; rc=$?
+[ "$rc" -eq 1 ] && grep -q '^curl ' "$T/log" && no_cut_left && no_value && echo "$OUT" | grep -q 'download of .* failed (curl exit 22); nothing kept' \
+  && ok "fetch-bundle: a failed download exits 1 and keeps no bundle, temp file or marker" || bad "fetch-bundle curl fails" "rc=$rc; $OUT; $(ls -A "$ROOT/cutover" 2>/dev/null)"
+
+# The refusals, each before any docker or curl call.
+reset_host
+FETCH_EXTRA="$CUT_NAME=$LEAF_VAL" fetch_run fetch-bundle "$CUT_VER"; rc=$?
+fetch_refused 3 "with $CUT_NAME in its environment" 'the pull token is set in the environment'
+reset_host
+FETCH_EXTRA="$CUT_NAME=" fetch_run fetch-bundle "$CUT_VER"; rc=$?
+fetch_refused 3 "with $CUT_NAME set but empty" 'the pull token is set in the environment'
+reset_host
+FETCH_EXTRA="$PULL_NAME=$LEAF_VAL" fetch_run fetch-bundle "$CUT_VER"; rc=$?
+fetch_refused 3 "with $PULL_NAME in its environment" 'the pull token is set in the environment'
+reset_host
+tty_run fetch-bundle "$CUT_VER"; rc=$?
+rm -f "$T/curlcfg"; fetch_refused 3 "with a terminal on stdin" 'stdin is a terminal'
+reset_host
+LEAF_STDIN= fetch_run fetch-bundle "$CUT_VER"; rc=$?
+fetch_refused 3 "with an empty stdin" 'no pull token read on stdin'
+reset_host
+LEAF_STDIN=$'\n' fetch_run fetch-bundle "$CUT_VER"; rc=$?
+fetch_refused 3 "with an empty line on stdin" 'no pull token read on stdin'
+for bad_val in "stand in" "stand-in/value" "stand-in\"value" 'stand-in\value'; do
+  reset_host
+  LEAF_STDIN="$bad_val"$'\n' fetch_run fetch-bundle "$CUT_VER"; rc=$?
+  ! grep -qF -- "$bad_val" <<< "$OUT" || rc=99
+  fetch_refused 3 "with a value outside [A-Za-z0-9_.-] ($(printf '%q' "$bad_val"))" 'holds characters outside'
+done
+for args in "" "m5-0123456789a" "m5-0123456789AB" "m6-0123456789ab" "$CUT_VER $CUT_VER" "$CUT_VER up" "fetch-bundle"; do
+  reset_host
+  # shellcheck disable=SC2086
+  fetch_run fetch-bundle $args; rc=$?
+  fetch_refused 2 "with VERSION [$args]" 'fetch-bundle: usage: fetch-bundle VERSION'
+done
+for order in "up fetch-bundle" "leaf-renew fetch-bundle" "status fetch-bundle $CUT_VER"; do
+  reset_host
+  # shellcheck disable=SC2086
+  fetch_run $order; rc=$?
+  fetch_refused 3 "combined ($order)" 'fetch-bundle: refused: run it alone'
+done
+reset_host
+mkdir -p "$ROOT/cutover"; echo old > "$ROOT/cutover/bundle.tar.age"
+fetch_run fetch-bundle "$CUT_VER"; rc=$?
+[ "$rc" -eq 3 ] && echo "$OUT" | grep -q 'bundle.tar.age exists; run cutover-clean first' && [ ! -s "$T/log" ] \
+  && [ "$(cat "$ROOT/cutover/bundle.tar.age")" = old ] && [ ! -e "$ROOT/cutover-state/fetched" ] && no_value \
+  && ok "fetch-bundle over an existing bundle: refused (3), no call, the bundle kept" || bad "fetch-bundle existing" "rc=$rc; $OUT"
+reset_host
+mkdir -p "$ROOT/cutover-state"; echo "version $CUT_VER" > "$ROOT/cutover-state/unpacked"
+fetch_run fetch-bundle "$CUT_VER"; rc=$?
+[ "$rc" -eq 3 ] && echo "$OUT" | grep -q 'unpacked exists .*run reset-cutover first' && [ ! -s "$T/log" ] \
+  && [ ! -e "$ROOT/cutover/bundle.tar.age" ] && [ ! -e "$ROOT/cutover-state/fetched" ] && no_value \
+  && ok "fetch-bundle with an unpacked marker: refused (3), no call, nothing written" || bad "fetch-bundle unpacked" "rc=$rc; $OUT"
+
+# Under xtrace (SHELLOPTS=xtrace inherited, or bash -x), the image missing: the trace runs up to the
+# read, and the value is in no output, argv or file; curl and the pull still get it.
+for mode in SHELLOPTS bash-x; do
+  reset_host
+  if [ "$mode" = SHELLOPTS ]; then
+    FETCH_EXTRA="SHELLOPTS=xtrace STUB_CUT_MISSING=1" fetch_run fetch-bundle "$CUT_VER"; rc=$?
+  else
+    LEAF_BASH_X=1 FETCH_EXTRA="STUB_CUT_MISSING=1" fetch_run fetch-bundle "$CUT_VER"; rc=$?
+  fi
+  [ "$rc" -eq 0 ] && grep -q '^+.*do_fetch_bundle' <<< "$OUT" && fetched_ok && curl_ok && grep -qx HELPER_OK "$T/log" && no_value \
+    && ok "fetch-bundle under xtrace ($mode): traced up to the read, the value in no trace, argv or file; bundle fetched" \
+    || bad "fetch-bundle xtrace $mode" "rc=$rc; leaked=$(grep -cF -- "$LEAF_VAL" <<< "$OUT"); $(grep -c '^+' <<< "$OUT") trace lines; $(cat "$T/log")"
+done
+
 # --- LDAP_PROVISIONER_PASSWORD reaches openldap-leaf.sh issue and no other child ---
 # PATH wrappers for every outside command the script may run dump their environment to
 # $T/envdump, then run the real one; the $T/bin stubs (docker, hostname, sudo, systemctl, flock)
@@ -778,6 +967,26 @@ LEAF_IN_ENV=1 LEAF_STDIN= envrun leaf-renew; rc=$?
 [ "$rc" -eq 3 ] && [ "$(grep -c '^PATH=' "$T/envdump")" -ge 1 ] && ! grep -qF -- "$LEAF_VAL" "$T/envdump" && [ ! -s "$T/leafenv" ] \
   && grep -qx 'probe pw=' "$T/probe" \
   && ok "leaf-renew with the value set: refused (3), no child has it, openldap-leaf.sh not run" || bad "renew env" "rc=$rc"
+# fetch-bundle, with tok=x exported in its environment (the local is never exported): the image
+# present, the value in no child's environment; the image missing, it is in the docker pull's
+# environment (and so its children's: the stub's grep, cat, the helper) under the pull-token name
+# alone, never in curl's.
+for missing in "" 1; do
+  reset_host
+  rm -f "$T/curlcfg"; : > "$T/curlenv"
+  ENV_EXTRA="tok=x STUB_CUT_MISSING=$missing STUB_CURL_CFG=$T/curlcfg STUB_CURL_ENV=$T/curlenv" envrun fetch-bundle "$CUT_VER"; rc=$?
+  if [ -z "$missing" ]; then
+    leakok=true; ! grep -qF -- "$LEAF_VAL" "$T/envdump" || leakok=false
+  else
+    leakok=true
+    grep -qx "$PULL_NAME=$LEAF_VAL" "$T/envdump" || leakok=false
+    [ -z "$(grep -F -- "$LEAF_VAL" "$T/envdump" | grep -vx "$PULL_NAME=$LEAF_VAL")" ] || leakok=false
+  fi
+  [ "$rc" -eq 0 ] && $leakok && [ "$(grep -c '^PATH=' "$T/envdump")" -ge 5 ] && ! grep -qF -- "$LEAF_VAL" "$T/curlenv" \
+    && ! grep -q '^tok=' "$T/curlenv" && ! grep -qF -- "$LEAF_VAL" "$T/probe" && fetched_ok && curl_ok && no_value \
+    && ok "fetch-bundle (image $([ -n "$missing" ] && echo missing || echo present)) with tok=x exported: the value in curl's config alone$([ -n "$missing" ] && echo ' and the pull'"'"'s environment under the pull-token name')" \
+    || bad "fetch-bundle env (missing=$missing)" "rc=$rc; dump=$(grep -cF -- "$LEAF_VAL" "$T/envdump"); curl=$(grep -cF -- "$LEAF_VAL" "$T/curlenv"); $(cat "$T/log")"
+done
 
 # identity-platform.sh never traces and never exports the name (comments aside).
 code="$(grep -vE '^[[:space:]]*#' "$SRC/identity-platform.sh")"
