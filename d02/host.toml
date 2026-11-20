@@ -20,7 +20,14 @@ startup = "order=25,up=180"   # as VM 102: after d01 (20) when vmh02 boots
 # it) and has no setup/ of its own. smb.sh mounts the NAS media share (//10.0.0.24/media), which Plex
 # reads at /data, with D02_SMBCREDENTIALS, which the secrets phase installs before setup.
 [setup]
-steps = ["systemConfig.sh", "nfs.sh", "smb.sh", "docker.sh", "container_dns.sh", "bashrc.sh"]
+steps = ["systemConfig.sh", "nfs.sh", "smb.sh", "docker.sh", "container_dns.sh", "bashrc.sh", "node_exporter.sh"]
+
+# Node exporter (build/setup/node_exporter.sh) for theOrg's trends Prometheus (asyla standard
+# ASY-TRD), as d03, d05 and d07: port 9100 from the LAN only. theOrg adds the scrape job
+# asyla-d02-node (a hand-off; asyla ticket #626). On this running host the step is installed by
+# `build_host.py d02 build --only setup --step node_exporter.sh --apply` (the operator's run).
+[node_exporter]
+allow = ["10.0.0.0/24"]    # a subnet, not a host (operator, 2026-10-25): the trends Prometheus can move
 
 [[secret]]
 var = "D02_SMBCREDENTIALS"
