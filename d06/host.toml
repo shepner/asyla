@@ -30,7 +30,14 @@ cloudinit_storage = "local-data2"
 startup = "order=20"                                    # set at create, checked by verify
 
 [setup]
-steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "container_dns.sh", "bashrc.sh"]   # build/setup/, sent by the build
+steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "container_dns.sh", "bashrc.sh", "node_exporter.sh"]   # build/setup/, sent by the build
+
+# Node exporter (build/setup/node_exporter.sh) for theOrg's trends Prometheus (asyla standard
+# ASY-TRD), as d03, d05 and d07: port 9100 from the LAN only. theOrg adds the scrape job
+# asyla-d06-node (a hand-off; asyla ticket #626). On this running host the step is installed by
+# `build_host.py d06 build --only setup --step node_exporter.sh --apply` (the operator's run).
+[node_exporter]
+allow = ["10.0.0.0/24"]    # a subnet, not a host (operator, 2026-10-25): the trends Prometheus can move
 
 # No [[secret]]: d06 keeps no secret on disk (the operator's rule, 2026-10-18). Ticketing's values
 # and the proxy's Cloudflare key are resolved from OpenBao on the workstation at use (its [[app]],
