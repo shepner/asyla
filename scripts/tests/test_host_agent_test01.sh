@@ -223,9 +223,12 @@ for s in d.get("data",{}).get("result",[]):
 
     readback)
       nonce=$2 sender_name=$3 deadline=$4
+      # Loki's own container logs every query with its text, nonce included, and the docker source
+      # ships that too: the container selector leaves Loki's lines (caller=...) out, or its query
+      # log reads back as the echo line (seen in the first run, 2026-11-20T17:44Z).
       declare -A sel=(
         [journald]="{host=\"test01\",source=\"journald\"} |= \"host-agent-proof journald $nonce\""
-        [container]="{host=\"test01\",source=\"docker\"} |= \"host-agent-proof container $nonce\""
+        [container]="{host=\"test01\",source=\"docker\"} |= \"host-agent-proof container $nonce\" != \"caller=\""
         [udp]="{host=\"$sender_name\",source=\"syslog_relay\",relay=\"test01\"} |= \"host-agent-proof udp $nonce\""
       )
       declare -A got=()
