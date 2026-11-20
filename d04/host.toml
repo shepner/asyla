@@ -27,11 +27,6 @@ var = "D04_CLOUDFLARED_ENV"
 path = "/mnt/docker/cloudflared/.env"
 owner = "docker:docker"
 mode = "600"
-[[secret]]
-var = "D04_INTERNAL_PROXY_ENV"
-path = "/mnt/docker/internal-proxy/.env"
-owner = "docker:docker"
-mode = "600"
 
 # Restored from $DOCKER_D1/Gitea/mirror, d03's backup. Built twice (asyla hub
 # decisions/host-layout.md, Consequences 4 and 5): first as the DR test, from d03's last nightly,
@@ -45,6 +40,9 @@ verify = ["verify"]   # d04's copy: a local :3000 healthz failure fails verify
 name = "internal-access"
 repo = "~/local/asyla/projects/internal-access"
 run = ["scripts/deploy-host.sh {host}", "scripts/fleet.sh --host {host} restore up verify"]
+# Caddy's Let's Encrypt DNS-01 key at use from OpenBao, as d06 (asyla #634); fleet.sh sends it over SSH
+# stdin as CF_API_TOKEN (internal-access hosts/d04/host.conf TLS_DNS_FROM_WORKSTATION). No proxy .env.
+env = ["D04_CF_API_TOKEN"]
 [[external]]
 name = "external-access"
 repo = "~/local/asyla/projects/external-access"

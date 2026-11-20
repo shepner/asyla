@@ -170,6 +170,13 @@ d06 = build_host.load_spec("d06")
 check("d06's proxy takes D06_CF_API_TOKEN at use and d06 keeps no secret file",
       [e.get("env") for e in d06["external"]] == [["D06_CF_API_TOKEN"]] and not d06.get("secret"), str(d06.get("secret")))
 
+for h in ("d03", "d04"):
+    spec = build_host.load_spec(h)
+    ia = next((e for e in spec.get("external", []) if e["name"] == "internal-access"), {})
+    check(f"{h}'s proxy takes {h.upper()}_CF_API_TOKEN at use and no proxy .env is installed (#634)",
+          ia.get("env") == [f"{h.upper()}_CF_API_TOKEN"]
+          and not any(s["path"] == "/mnt/docker/internal-proxy/.env" for s in spec.get("secret", [])), str(ia))
+
 d03 = build_host.load_spec("d03")
 dm = next((e for e in d03.get("external", []) if e["name"] == "theorg-mini-deadman"), {})
 check("d03's theorg-mini-deadman is checked by verify (its timer)",
