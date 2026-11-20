@@ -81,7 +81,7 @@ make_db
 make_ini() {
   printf '[server]\nHTTP_PORT = 3000\n\n[cron.update_checker]\nENABLED = false\n\n[cron.cleanup_packages]\n%s\n' \
     "${1:-RUN_AT_START = false
-SCHEDULE = 30 1 * * *}" > "$T/app.ini"
+SCHEDULE = 10 3 * * *}" > "$T/app.ini"
 }
 make_ini
 
@@ -172,7 +172,7 @@ check "d04 verify, local and public up: passes" '[ "$RC" -eq 0 ] && grep -q "Loc
 #    does not warn.
 run_gitea 1 0 verify
 check "verify prints the three cleanup rules and the cron keys, no warning" \
-  '[ "$RC" -eq 0 ] && grep -qF "1|theOrg|1|container|0|7|'"''|''"'" <<<"$OUT" && grep -qF "2|asyla|1|container|0|7|" <<<"$OUT" && grep -qF "3|personal|1|container|0|7|" <<<"$OUT" && grep -qF "Cleanup rules for theOrg, asyla, personal as in the README" <<<"$OUT" && grep -qF "[INFO] app.ini [cron.cleanup_packages]: RUN_AT_START = false, SCHEDULE = 30 1 * * * as in the README" <<<"$OUT" && ! grep -q "WARN" <<<"$OUT"'
+  '[ "$RC" -eq 0 ] && grep -qF "1|theOrg|1|container|0|7|'"''|''"'" <<<"$OUT" && grep -qF "2|asyla|1|container|0|7|" <<<"$OUT" && grep -qF "3|personal|1|container|0|7|" <<<"$OUT" && grep -qF "Cleanup rules for theOrg, asyla, personal as in the README" <<<"$OUT" && grep -qF "[INFO] app.ini [cron.cleanup_packages]: RUN_AT_START = false, SCHEDULE = 10 3 * * * as in the README" <<<"$OUT" && ! grep -q "WARN" <<<"$OUT"'
 
 # 8. Drift (control for 7): personal's rule off, asyla's at 30 days, theOrg's with a keep pattern,
 #    and shepner's extra rule. verify warns naming the three owners, and still exits 0.
@@ -213,7 +213,7 @@ check "verify warns when app.ini cannot be read, exit 0" \
 # 13. ENABLED = false with the two keys right: a warning that the job does not run, exit 0.
 make_ini "ENABLED = false
 RUN_AT_START = false
-SCHEDULE = 30 1 * * *"
+SCHEDULE = 10 3 * * *"
 run_gitea 1 0 verify
 check "verify warns when the cleanup job is off, exit 0" \
   '[ "$RC" -eq 0 ] && grep -qF "[WARN] app.ini [cron.cleanup_packages] ENABLED is '"'"'false'"'"'" <<<"$OUT"'
@@ -227,7 +227,7 @@ check "verify notes app.ini changed after Gitea started" \
 # 15. Control for 14: Gitea started after app.ini was written, so no note.
 STANDIN_STARTED="2099-01-01T00:00:00.000000000Z" run_gitea 1 0 verify
 check "verify has no note when Gitea started after app.ini changed" \
-  '[ "$RC" -eq 0 ] && grep -qF "SCHEDULE = 30 1 * * * as in the README" <<<"$OUT" && ! grep -q "changed after Gitea started" <<<"$OUT"'
+  '[ "$RC" -eq 0 ] && grep -qF "SCHEDULE = 10 3 * * * as in the README" <<<"$OUT" && ! grep -q "changed after Gitea started" <<<"$OUT"'
 stop_standin
 
 if [ "$fails" -eq 0 ]; then

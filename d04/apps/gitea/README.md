@@ -69,9 +69,10 @@ Three package cleanup rules, turned on 2026-11-04 with the operator's approval, 
   still references it. Everything else older than 7 days is deleted with its files
   ([cleanup.go](https://github.com/go-gitea/gitea/blob/v1.27.3/services/packages/cleanup/cleanup.go),
   [container/cleanup.go](https://github.com/go-gitea/gitea/blob/v1.27.3/services/packages/container/cleanup.go)).
-- **When:** Gitea's `cleanup_packages` job, once a night at 01:30 America/Chicago, and never at
-  start (operator, 2026-11-06). app.ini `[cron.cleanup_packages]` sets `RUN_AT_START = false` and
-  `SCHEDULE = 30 1 * * *`. Gitea's defaults are `@midnight` and at every start
+- **When:** Gitea's `cleanup_packages` job, once a night at 03:10 America/Chicago, and never at
+  start (operator, 2026-11-06; the time was 01:30 until 2026-11-20, see "Why 03:10" below).
+  app.ini `[cron.cleanup_packages]` sets `RUN_AT_START = false` and
+  `SCHEDULE = 10 3 * * *`. Gitea's defaults are `@midnight` and at every start
   ([tasks_basic.go](https://github.com/go-gitea/gitea/blob/146cc3eec57174711eac0e0a0c7b38670c6e3922/services/cron/tasks_basic.go#L145-L157);
   Gitea reads each job's keys from its `cron.<name>` section,
   [setting/cron.go](https://github.com/go-gitea/gitea/blob/146cc3eec57174711eac0e0a0c7b38670c6e3922/modules/setting/cron.go#L13-L14),
@@ -95,9 +96,13 @@ Three package cleanup rules, turned on 2026-11-04 with the operator's approval, 
   start, so the change applies at Gitea's next start, the nightly backup's stop and start. It needs
   no extra restart, and `cron-config` never restarts Gitea. `gitea.sh verify` prints the two keys,
   warns when they differ or `ENABLED` is off, and notes when app.ini changed after Gitea started.
-- **Revisit before mid-March:** theOrg's deploy-all runs at 06:00 UTC: 00:00 CST, but 01:00 CDT,
-  until about 02:20. From mid-March (CDT), a 01:30 run would overlap it, so choose the time again
-  before then.
+- **Why 03:10 (asyla #651, chosen 2026-11-20):** theOrg's deploy-all runs at 06:00 UTC
+  (`.gitea/workflows/deploy-all.yml`, `cron: '0 6 * * *'`): 00:00 CST but 01:00 CDT. Its 52
+  scheduled runs from 2026-10-07 to 2026-11-20 (Gitea Actions API, read-only) took 1 to 114
+  minutes, the longest ending 07:54 UTC: 01:54 CST, or 02:54 CDT. The cleanup run takes 6 to 15
+  minutes, and the nightly backup stops Gitea at about 03:35. 03:10 starts after deploy-all's
+  longest end in both seasons, ends (at 15 minutes) before the backup, and exists on every day:
+  02:00-02:59 does not exist on 2027-03-14. The old 01:30 would overlap deploy-all from 2027-03-15.
 - **Why:** the registry grew about 2 GB a day from per-commit images (theOrg pushes every image
   tagged with the commit on each push to main), filling d04's disk and slowing the nightly backup.
   Hosts follow `latest` and are redeployed weekly, so none runs a version the rules remove.
