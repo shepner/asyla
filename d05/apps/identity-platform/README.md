@@ -6,8 +6,11 @@ federates, moved from the Mac Mini. asyla deploys it from theOrg identity-platfo
 carried to `47f65add` (`47f65add39763bc3ccd086e69e4b3c571d85098a`, *Publish images* run 22377
 green): keycloak and openldap in profile `restored`, and `deploy/d05/openldap-leaf.sh`; then to
 `fcbed3fe` (`fcbed3febc7e65bc7afbab980d6b3868a0b3fe53`, the #85 merge, *Publish images* run 22553
-green): `openldap-leaf.sh issue` takes the provisioner password on stdin only. theOrg's four images
-are tagged with that sha; the two upstream digests did not change.
+green): `openldap-leaf.sh issue` takes the provisioner password on stdin only; then to merged main
+`5dd8de6` (`5dd8de606a38b74c883eb7137770c37017ca8303`, the #88 merge, after #86 `a5415377` and #87
+`8ff2201a`; its tree is PR #88's `bd0c6bff`): every one-shot takes its value on stdin. theOrg's
+four images and the cutover-bundle image are tagged with that sha (each present in the registry,
+read 2026-11-20); the two upstream digests did not change.
 
 This folder is **M1** (agreed with theOrg): `up` creates the two networks, pulls the six images,
 places theOrg's root CA, reports on the openldap leaf, and starts **keycloak-db alone**. openldap
@@ -36,7 +39,7 @@ one-shots (backups, keycloak-configure) are never started by `up`.
 - openldap leaf: `/mnt/docker/IdentityPlatform/openldap-tls/{ldap.crt,ldap.key,ca.crt}`. `up` and
   `verify` only report it (missing is a warning, never fatal) and never issue.
   - `openldap-leaf.sh`: a byte-identical copy of theOrg identity-platform
-    `deploy/d05/openldap-leaf.sh` at `fcbed3fe` (git blob `1fae6b5c1c598e76e586899fca9250781825aea4`,
+    `deploy/d05/openldap-leaf.sh` at `5dd8de6`, unchanged since `fcbed3fe` (git blob `1fae6b5c1c598e76e586899fca9250781825aea4`,
     SHA-256 `2ea98d896a8c6085ea30f539883c33a543204fe994e231ef8663f2ff740681b1`). Never edit it
     here; a new version is a new copy and a new provenance line. It needs util-linux `flock` on the
     host (d05: util-linux 2.41.5, read 2026-11-14) and pulls `smallstep/step-cli:0.30.2` (pinned by
@@ -99,8 +102,8 @@ one-shots (backups, keycloak-configure) are never started by `up`.
   either after it; `IDP_DEPLOY_DEX_CLIENT_SECRET` goes only to `configure`, on stdin), and `identity-platform.sh` maps them
   onto the compose names (its header). Only the long-running services (keycloak, keycloak-db,
   openldap) name a secret in `compose.yml`; every one-shot (configure, the backup and restore runs)
-  takes its value on stdin, as theOrg's `bd0c6bff` (PR #88, not merged). The image tag and digests
-  stay at `fcbed3fe` until that reaches theOrg's main (pending repin; `compose.yml` header). Images are pulled with the theorg-registry token the
+  takes its value on stdin, as theOrg's merged main `5dd8de6` (PR #88), which the image tag is
+  pinned to (`compose.yml` header). Images are pulled with the theorg-registry token the
   workstation hands over at use (`pull_token_env`, as `IDENTITY_PLATFORM_REGISTRY_PULL_TOKEN`)
   through `docker-credential-identity-platform-env`, under a throwaway `DOCKER_CONFIG`.
 - Data: `/mnt/docker/IdentityPlatform/{ca,keycloak-db}` in M1. The system of record stays on the
@@ -119,8 +122,8 @@ runs the cutover image's `unpack` into the two dirs the restores read (`backup/`
 `openldap-backup/` under `/mnt/docker/IdentityPlatform`).
 
 - Pin: `CUTOVER_BUNDLE_COMMIT` in `identity-platform.sh` (one line) is theOrg identity-platform
-  `7ac1bfb` (`7ac1bfb4ba3402f16d029765cdc92c51a5fab769`), PR #87: approved, CI green, **not merged**.
-  Repin it to the merged main commit when #87 merges. The image is
+  merged main `5dd8de6` (`5dd8de606a38b74c883eb7137770c37017ca8303`; #87 merged as `8ff2201a`),
+  the same commit as `IDENTITY_PLATFORM_TAG`. The image is
   `gitea.asyla.org/theorg/identity-platform-cutover-bundle:<that commit>`.
 - The relay: the operator copies pack's output on the Mini into the commands below: its `version`
   line (`m5-<12 hex>`, fetch-bundle's ARG) and its three sha256 lines, `manifests-sha256`,
@@ -178,15 +181,13 @@ runs the cutover image's `unpack` into the two dirs the restores read (`backup/`
     --rm -T -e KEYCLOAK_BACKUP_PASSWORD_STDIN=1 keycloak-backup restore` on stdin alone (never
     `PGPASSWORD`, an argv, a file or a log). keycloak-db must be running and healthy. Refused (exit
     3) with `IDP_KEYCLOAK_DB_PASSWORD` in its environment, a terminal or an empty read on stdin.
-    Writes `restored-keycloak`. **It needs the theOrg pin repinned to theOrg's merged main** (the
-    `fcbed3fe` images' keycloak-backup does not take its password on stdin); asyla merges this to
-    master only after that repin.
+    Writes `restored-keycloak`.
   - `start-openldap` (cutover step 5): reads `IDP_LDAP_ADMIN_PASSWORD`'s value as one line on stdin
     and runs `docker compose --profile restored up -d --no-deps --wait --wait-timeout 300 openldap`
     (DEPLOY.md's form; the timeout is asyla's, `IDENTITY_PLATFORM_START_WAIT_S`) with the value only
     in that process's environment, as `LDAP_ADMIN_PASSWORD` and `LDAP_CONFIG_PASSWORD`. Then it
     checks an admin bind with it (the admin password is then the copy's) in theOrg's stdin form
-    (`rotate_ldap_admin_lab.py` at bd0c6bff): `docker exec -i ID ldapwhoami -x -H
+    (`rotate_ldap_admin_lab.py` at 5dd8de6): `docker exec -i ID ldapwhoami -x -H
     ldaps://localhost:636 -D cn=admin,dc=theorg,dc=local -y /dev/stdin`, the value on its stdin
     with no newline. A failed bind (49: the copy's password is not OpenBao's) leaves openldap
     running, writes no marker and exits 1. Writes `started-openldap` (`date`, `admin-bind ok`).
@@ -199,7 +200,7 @@ runs the cutover image's `unpack` into the two dirs the restores read (`backup/`
   - `configure` (cutover step 6): reads `IDP_LDAP_ADMIN_PASSWORD`'s then
     `IDP_DEPLOY_DEX_CLIENT_SECRET`'s value, one line each on stdin (`scripts/app_switch.sh` writes
     them in host.toml's `switch_env` order), and writes both, in theOrg's form (DEPLOY.md "Secrets on
-    stdin only" at bd0c6bff: `LDAP_ADMIN_PASSWORD=` and `VAULT_DEX_CLIENT_SECRET=` lines), to the
+    stdin only" at 5dd8de6: `LDAP_ADMIN_PASSWORD=` and `VAULT_DEX_CLIENT_SECRET=` lines), to the
     stdin of `docker compose --profile ops run --rm -T keycloak-configure apply`, then of the same
     with `reconcile` (never an argv, an environment, a file or a log; compose.yml passes neither by
     name, so the compose process needs neither). keycloak must be running and healthy. An apply
@@ -209,16 +210,14 @@ runs the cutover image's `unpack` into the two dirs the restores read (`backup/`
     it writes `configured` (`date`, `apply ok`, `reconcile ok`). It is re-runnable, after `configured` and `cutover-done` too (DEPLOY.md
     "Updating": the configuration steps are idempotent). Refused (exit 3, no docker run, nothing
     changed) with either name in the environment, on a replica, a terminal or an empty read of
-    either line; exit 2 for an ARG. **It needs the theOrg pin repinned to theOrg's merged main**
-    (the `fcbed3fe` images' keycloak-configure does not read its secrets on stdin); asyla merges
-    this to master only after that repin. The operator's run, the two VARs in that order:
+    either line; exit 2 for an ARG. The operator's run, the two VARs in that order:
 
     ```
     cd ~/local/asyla && python3 core/tools/credentials.py exec IDP_LDAP_ADMIN_PASSWORD IDP_DEPLOY_DEX_CLIENT_SECRET -- projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform configure IDP_LDAP_ADMIN_PASSWORD IDP_DEPLOY_DEX_CLIENT_SECRET
     ```
-  - `count-check` (cutover step 7, Counts; DEPLOY.md at `bd0c6bff`): no value, no ARG. First the
+  - `count-check` (cutover step 7, Counts; DEPLOY.md at `5dd8de6`): no value, no ARG. First the
     Mini's `backup/summary.txt` is read once (as root through keycloak-db's image, read-only) and
-    its sha256 must equal `unpacked`'s `keycloak-summary-sha256` (theOrg `bd0c6bff`
+    its sha256 must equal `unpacked`'s `keycloak-summary-sha256` (theOrg `5dd8de6`
     `scripts/cutover_bundle.sh`: the sha256 of `keycloak/summary.txt`), so the counts compared are
     the Mini's copy's; not equal: exit 1, no backup run, no marker. Then
     keycloak-backup backup on d05 into the emptied `count-check/` (`docker compose --profile ops
@@ -227,7 +226,7 @@ runs the cutover image's `unpack` into the two dirs the restores read (`backup/`
     untouched; keycloak-db's password taken from the running container, as `backup`, on its stdin
     alone), then its `summary.txt` compared with the Mini's `backup/summary.txt`: the `realm`,
     `users`, `clients`, `credentials` and `changesets` lines, sorted. `changesets` is count(*) of
-    Keycloak's Liquibase changelog (theOrg bd0c6bff `scripts/keycloak_backup.sh:175-182`), which
+    Keycloak's Liquibase changelog (theOrg 5dd8de6 `scripts/keycloak_backup.sh:175-182`), which
     restore already requires equal (`:553`): a difference means d05 ran a different Keycloak
     against the copy, and step 7 stops (exit 1, no marker). Both are read, and `count-check/` emptied, as root through keycloak-db's image
     (`--pull never --network none`, read-only for the reads). After the backup, whatever the
@@ -238,8 +237,6 @@ runs the cutover image's `unpack` into the two dirs the restores read (`backup/`
     (exit 3, nothing changed) on a replica, when `count-check/`, a target or `cutover-state/` is a
     symlink, with the lock busy, once `cutover-done` exists, and unless `unpacked`, both
     `restored-*`, both `started-*` and `configured` are valid. Re-runnable until `cutover-done`.
-    **It needs the theOrg pin repinned to theOrg's merged main** (`fcbed3fe`'s keycloak-backup has
-    no `KEYCLOAK_BACKUP_PASSWORD_STDIN`); asyla merges this to master only after that repin.
 
     ```
     cd ~/local/asyla/projects/asyla-hosts && scripts/app_switch.sh d05 identity-platform count-check
@@ -290,7 +287,7 @@ runs the cutover image's `unpack` into the two dirs the restores read (`backup/`
 `identity-platform.sh backup` is host-maintenance's nightly backup task (asyla #654; the operator's
 "Yes, mirror nightly", 2026-11-16). host-maintenance runs it with stdin `/dev/null` and
 `MAINT_FOREGROUND=1`, blocks until it exits and reads only the exit status: 0 counts as a fresh
-backup. So it exits 0 only when every step passed, in this order (theOrg `DEPLOY.md` at `bd0c6bff`):
+backup. So it exits 0 only when every step passed, in this order (theOrg `DEPLOY.md` at `5dd8de6`):
 
 1. `openldap-backup backup`, then `openldap-backup verify` (no secret).
 2. `keycloak-backup backup` with keycloak-db's password as one line on its stdin alone
@@ -322,5 +319,4 @@ A failed step exits 1 naming it; the later steps are skipped.
   first, then the named files and `manifest.sha256` are copied, then `STATUS` last, so a mirror cut
   off part-way has no `STATUS`. `.work`, `.prev`, `.lock` and unnamed files never reach the stage or
   the mirror. Files an older manifest named and the current one does not stay in the mirror.
-- Needs the repin to theOrg's merged main: `fcbed3fe`'s `keycloak-backup` does not read stdin.
 - Tests: `scripts/tests/test_identity_platform_backup_sh.sh` (stubs; the real `mirror-stage.sh`).

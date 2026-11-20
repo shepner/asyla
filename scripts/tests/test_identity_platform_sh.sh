@@ -351,9 +351,9 @@ done
 for n in LDAP_ADMIN_PASSWORD LDAP_CONFIG_PASSWORD POSTGRES_PASSWORD KC_DB_PASSWORD; do
   grep -qE "^      - $n\$" "$C" && ok "compose.yml: $n by name only" || bad "compose.yml: $n not by name"
 done
-# theOrg bd0c6bff: keycloak-backup's password and keycloak-configure's secrets go on stdin.
+# theOrg 5dd8de6: keycloak-backup's password and keycloak-configure's secrets go on stdin.
 for n in PGPASSWORD VAULT_DEX_CLIENT_SECRET; do
-  ! grep -q "$n" "$C" && ok "compose.yml: $n is not listed (stdin, bd0c6bff)" || bad "compose.yml lists $n" "$(grep -n "$n" "$C")"
+  ! grep -q "$n" "$C" && ok "compose.yml: $n is not listed (stdin, 5dd8de6)" || bad "compose.yml lists $n" "$(grep -n "$n" "$C")"
 done
 # The operator's rule (2026-11-16): no one-shot (profile ops) names a secret variable, in a list
 # entry, a map key or an interpolation.
@@ -369,7 +369,7 @@ done
 OL_HC="$(awk '/^  openldap:$/ {f=1; next} f && /^  [^ ]/ {f=0} f && /^      test:/' "$C")"
 grep -qF 'ldapsearch -x -H ldaps://localhost:636 -b \"\" -s base -LLL namingContexts' <<< "$OL_HC" \
   && ! grep -q '\$' <<< "$OL_HC" && ! grep -qE -- '(-w|-y|-D) ' <<< "$OL_HC" \
-  && ok "compose.yml: openldap's healthcheck is the anonymous rootDSE read, no \$-expanded password (bd0c6bff)" \
+  && ok "compose.yml: openldap's healthcheck is the anonymous rootDSE read, no \$-expanded password (5dd8de6)" \
   || bad "compose.yml: openldap healthcheck" "$OL_HC"
 ! grep -q 'KC_BOOTSTRAP_ADMIN' "$C" && ok "compose.yml: no KC_BOOTSTRAP_ADMIN_*" || bad "KC_BOOTSTRAP_ADMIN present"
 for s in keycloak openldap; do
@@ -394,13 +394,13 @@ awk '/^      identity-platform-edge:$/ {getline; if ($0 ~ /^        ipv4_address
 grep -qxF '      - KC_PROXY_TRUSTED_ADDRESSES=10.213.5.2' <<< "$KC" \
   && ok "compose.yml: KC_PROXY_TRUSTED_ADDRESSES=10.213.5.2 (Caddy alone)" || bad "compose.yml: KC_PROXY_TRUSTED_ADDRESSES"
 # theOrg identity-platform deploy/d05/compose.example.yml, read 2026-11-14 (git show): the same at
-# 701e893, 47f65add and fcbed3fe.
+# 701e893, 47f65add and fcbed3fe; read again 2026-11-20: the same at 5dd8de6.
 KC_IMAGE="quay.io/keycloak/keycloak:26.8.2@sha256:3879c623248408de29a5303178b5816c77e8dfef3890c361f8c0bbeaa979ba3b"
 DB_IMAGE="postgres:16.14-bookworm@sha256:64154d0babcb1741988719e703419af0382b19953706149f9872fbd0f438efa8"
 [ "$(grep -E '^    image:' <<< "$KC")" = "    image: $KC_IMAGE" ] \
-  && ok "compose.yml: keycloak's image is fcbed3fe's digest" || bad "compose.yml: keycloak image" "$(grep -E '^    image:' <<< "$KC")"
+  && ok "compose.yml: keycloak's image is 5dd8de6's digest" || bad "compose.yml: keycloak image" "$(grep -E '^    image:' <<< "$KC")"
 [ "$(grep -E '^    image:' <<< "$DB")" = "    image: $DB_IMAGE" ] \
-  && ok "compose.yml: keycloak-db's image is fcbed3fe's digest" || bad "compose.yml: keycloak-db image" "$(grep -E '^    image:' <<< "$DB")"
+  && ok "compose.yml: keycloak-db's image is 5dd8de6's digest" || bad "compose.yml: keycloak-db image" "$(grep -E '^    image:' <<< "$DB")"
 db_img_script="$(sed -nE 's/^KC_DB_IMAGE="(.*)"$/\1/p' "$SRC/identity-platform.sh")"
 [ "    image: $db_img_script" = "$(grep -E '^    image:' <<< "$DB")" ] \
   && ok "identity-platform.sh's KC_DB_IMAGE (the data check's image) equals compose.yml's keycloak-db image" \
@@ -474,7 +474,7 @@ grep -q '^SET POSTGRES_PASSWORD' "$T/log" && grep -q '^SET KC_DB_PASSWORD' "$T/l
 STUB_SET="$DB_NAME IDP_LDAP_ADMIN_PASSWORD IDP_DEPLOY_DEX_CLIENT_SECRET" run up; rc=$?
 [ "$rc" -eq 0 ] && grep -q '^SET POSTGRES_PASSWORD' "$T/log" \
   && ! grep -qE '^SET (LDAP_ADMIN_PASSWORD|LDAP_CONFIG_PASSWORD|PGPASSWORD|VAULT_DEX_CLIENT_SECRET)' "$T/log" \
-  && ok "up before cutover-done ignores the LDAP value when sent (no LDAP_* set); never exports PGPASSWORD or VAULT_DEX_CLIENT_SECRET (stdin, bd0c6bff)" \
+  && ok "up before cutover-done ignores the LDAP value when sent (no LDAP_* set); never exports PGPASSWORD or VAULT_DEX_CLIENT_SECRET (stdin, 5dd8de6)" \
   || bad "optional mapping" "rc=$rc; $(grep '^SET' "$T/log")"
 [ ! -e "$ROOT/openldap-data" ] && [ ! -e "$ROOT/openldap-config" ] && [ -d "$ROOT/keycloak-db" ] \
   && ok "up creates keycloak-db's dir, never openldap-data or openldap-config" || bad "up dirs" "$(ls "$ROOT")"
@@ -614,8 +614,11 @@ STUB_MISSING=1 STUB_SET="$DB_NAME" run up; rc=$?
 STUB_MISSING=1 STUB_SET="$DB_NAME $PULL_NAME" run up; rc=$?
 [ "$rc" -eq 0 ] && grep -q HELPER_OK "$T/log" && ok "up with an image missing: pulls it through the helper, then starts" || bad "up pulls missing" "rc=$rc; $OUT"
 tags="$(awk '/^TAG / {print $2}' "$T/log" | sort -u)"
-[ "$tags" = "fcbed3febc7e65bc7afbab980d6b3868a0b3fe53" ] \
-  && ok "theOrg's images are pinned to fcbed3fe's full sha in every compose call" || bad "tag pin" "[$tags]"
+[ "$tags" = "5dd8de606a38b74c883eb7137770c37017ca8303" ] \
+  && ok "theOrg's images are pinned to merged main 5dd8de6's full sha in every compose call" || bad "tag pin" "[$tags]"
+cut_commit="$(sed -nE 's/^CUTOVER_BUNDLE_COMMIT="([0-9a-f]{40})"$/\1/p' "$SRC/identity-platform.sh")"
+[ "$cut_commit" = "5dd8de606a38b74c883eb7137770c37017ca8303" ] \
+  && ok "the cutover-bundle image is pinned to merged main 5dd8de6's full sha" || bad "cutover pin" "[$cut_commit]"
 
 # The credential helper: read-only, and it never takes a value with unexpected characters.
 H="$SRC/docker-credential-identity-platform-env"

@@ -4,7 +4,8 @@
 # Switches can be combined.
 # From theOrg identity-platform DEPLOY.md "Production on d05" and deploy/d05/compose.example.yml at
 # 701e893 (main, the #82 merge), carried to 47f65add (profile `restored`, deploy/d05/openldap-leaf.sh)
-# and fcbed3fe (#85: openldap-leaf.sh issue takes the provisioner password on stdin).
+# and fcbed3fe (#85: openldap-leaf.sh issue takes the provisioner password on stdin), then to
+# theOrg's merged main 5dd8de6 (#86, #87, #88: every one-shot takes its value on stdin).
 # This is M1 (agreed with theOrg): networks, images, theOrg's root
 # CA, a report on the openldap leaf, and keycloak-db alone. openldap and keycloak are never started
 # here: their first start is the M5 cutover (DEPLOY.md steps 5-6), after a restore, and theOrg's
@@ -25,7 +26,7 @@
 # at deploy (build_host.py start_env, pull_token_env) and hands them to this process's environment;
 # this script maps them onto the names compose.yml passes by name. Only the long-running services
 # (keycloak, keycloak-db, openldap) name a secret; every one-shot (configure, the backup and
-# restore runs, break-glass) takes its value on stdin (theOrg bd0c6bff, the operator's rule of
+# restore runs, break-glass) takes its value on stdin (theOrg 5dd8de6, the operator's rule of
 # 2026-11-16), so map_secrets exports nothing a one-shot would read:
 #   IDP_KEYCLOAK_DB_PASSWORD       -> KC_DB_PASSWORD (keycloak), POSTGRES_PASSWORD (keycloak-db);
 #                                     up needs it. keycloak-backup takes it on stdin (restore-keycloak
@@ -41,7 +42,8 @@
 # never written to a file by this script); the rest of up is as on d05, and openldap and keycloak
 # still never start.
 # The openldap leaf (DEPLOY.md "Production on d05: directory (R10)"): openldap-leaf.sh beside this
-# script, a byte-identical copy of theOrg's deploy/d05/openldap-leaf.sh at fcbed3fe (README).
+# script, a byte-identical copy of theOrg's deploy/d05/openldap-leaf.sh at 5dd8de6, the same blob
+# as at fcbed3fe (README).
 #   leaf-issue  reads step-ca's `ldap` provisioner password (OpenBao secret/v2/certificate-management/
 #               step-ca/provisioners/ldap, field password) as one line on its own stdin, which the
 #               workstation writes (scripts/app_switch.sh, over ssh stdin), and writes it to
@@ -78,9 +80,7 @@
 #               openldap-config, with OPENLDAP_BACKUP_CONFIG_MOUNT=rw for that run; no secret.
 #   restore-keycloak  reads keycloak-db's password (IDP_KEYCLOAK_DB_PASSWORD, the name up reads) as
 #               one line on stdin and writes it to keycloak-backup restore's stdin alone
-#               (KEYCLOAK_BACKUP_PASSWORD_STDIN=1); keycloak-db must be running and healthy. It needs
-#               asyla's theOrg pin repinned to theOrg's merged main: the fcbed3fe images' keycloak-backup
-#               does not take its password on stdin.
+#               (KEYCLOAK_BACKUP_PASSWORD_STDIN=1); keycloak-db must be running and healthy.
 #               Both need a valid unpacked marker; each is refused (exit 3, no docker run, nothing
 #               changed) on a replica, once its own restored-* marker or cutover-done exists, and
 #               when a target or cutover-state/ is a symlink. The restore's own exit (3: a target
@@ -97,11 +97,10 @@
 #   configure  reads IDP_LDAP_ADMIN_PASSWORD's then IDP_DEPLOY_DEX_CLIENT_SECRET's value, one line
 #               each on stdin, and writes both, as theOrg's LDAP_ADMIN_PASSWORD= and
 #               VAULT_DEX_CLIENT_SECRET= lines, to keycloak-configure apply's stdin, then reconcile's
-#               (DEPLOY.md cutover step 6 at bd0c6bff); needs both restored-* and both started-*
+#               (DEPLOY.md cutover step 6 at 5dd8de6); needs both restored-* and both started-*
 #               markers and keycloak healthy; re-runnable, after cutover-done too (DEPLOY.md: the
 #               configuration steps are idempotent; past cutover-done refused, exit 3, when a data
-#               dir is missing or empty, as up). It needs the repin (fcbed3fe's keycloak-configure
-#               does not read stdin). Refused (exit 3, no docker run) with either name in the
+#               dir is missing or empty, as up). Refused (exit 3, no docker run) with either name in the
 #               environment, on a replica, a terminal or an empty read.
 #   start-openldap  reads IDP_LDAP_ADMIN_PASSWORD's value as one line on stdin; it reaches the
 #               compose process alone, as LDAP_ADMIN_PASSWORD and LDAP_CONFIG_PASSWORD, for
@@ -198,7 +197,7 @@ IDENTITY_PLATFORM_ROOT="$APP_ROOT"
 # theOrg's four images are pinned to the commit this folder is written from; the two upstream
 # images (keycloak, postgres) are pinned by digest in compose.yml. A pin by hand:
 # IDENTITY_PLATFORM_TAG_OVERRIDE=<a theOrg main sha whose images are published>.
-IDENTITY_PLATFORM_TAG="${IDENTITY_PLATFORM_TAG_OVERRIDE:-fcbed3febc7e65bc7afbab980d6b3868a0b3fe53}"
+IDENTITY_PLATFORM_TAG="${IDENTITY_PLATFORM_TAG_OVERRIDE:-5dd8de606a38b74c883eb7137770c37017ca8303}"
 REGISTRY="gitea.asyla.org"
 export IDENTITY_PLATFORM_ROOT IDENTITY_PLATFORM_TAG
 
@@ -211,9 +210,9 @@ CA_FILE="$APP_ROOT/ca/root_ca.crt"
 LEAF_DIR="$APP_ROOT/openldap-tls"
 LEAF_SCRIPT="$SCRIPT_DIR/openldap-leaf.sh"
 
-# The M5 cutover bundle. The image is pinned to theOrg identity-platform #87 at its approved commit
-# (CI green, NOT merged yet): repin to the merged main commit here, one line.
-CUTOVER_BUNDLE_COMMIT="7ac1bfb4ba3402f16d029765cdc92c51a5fab769"
+# The M5 cutover bundle. The image is pinned to theOrg identity-platform's merged main 5dd8de6
+# (#87 and #88 merged; its image published there), the same commit as IDENTITY_PLATFORM_TAG.
+CUTOVER_BUNDLE_COMMIT="5dd8de606a38b74c883eb7137770c37017ca8303"
 CUTOVER_IMAGE="$REGISTRY/theorg/identity-platform-cutover-bundle:$CUTOVER_BUNDLE_COMMIT"
 CUTOVER_PKG_URL="https://$REGISTRY/api/packages/theorg/generic/identity-platform-cutover"
 CUTOVER_VERSION_RE='^m5-[0-9a-f]{12}$'
@@ -263,7 +262,7 @@ SERVING_HOST="d05"
 DB_WAIT_S="${IDENTITY_PLATFORM_DB_WAIT_S:-120}"
 # start-openldap and start-keycloak: --wait-timeout for the restored service (asyla's addition, as up's).
 START_WAIT_S="${IDENTITY_PLATFORM_START_WAIT_S:-300}"
-# The admin DN (DEPLOY.md at bd0c6bff, "Verify" 1) start-openldap binds as.
+# The admin DN (DEPLOY.md at 5dd8de6, "Verify" 1) start-openldap binds as.
 LDAP_ADMIN_DN="cn=admin,dc=theorg,dc=local"
 
 # --profile restored and ops name every service, for the image list and the pulls only; a start
@@ -1218,7 +1217,7 @@ do_cutover_clean() {
   echo "[INFO] cutover-clean: no $BUNDLE, no temp download; the fetched marker is kept"
 }
 
-# The restores (DEPLOY.md "Production on d05", cutover step 5, at theOrg bd0c6bff): the unpacked
+# The restores (DEPLOY.md "Production on d05", cutover step 5, at theOrg 5dd8de6): the unpacked
 # copies (backup/ and openldap-backup/) into keycloak-db's empty database and openldap's empty data
 # and config volumes, through theOrg's ops one-shots. restore_gate SWITCH MARKER: the refusals both
 # share, each exit 3 with nothing changed: on a replica, a target or cutover-state/ a symlink, the
@@ -1326,14 +1325,14 @@ do_restore_openldap() {
 }
 
 # start-openldap and start-keycloak (DEPLOY.md "Production on d05", cutover steps 5-6, at theOrg
-# bd0c6bff): `--profile restored up -d --no-deps --wait SERVICE` over the restored data, with
+# 5dd8de6): `--profile restored up -d --no-deps --wait SERVICE` over the restored data, with
 # --wait-timeout START_WAIT_S (IDENTITY_PLATFORM_START_WAIT_S, default 300; asyla's, as up's). The
 # value (start-openldap: IDP_LDAP_ADMIN_PASSWORD; start-keycloak: IDP_KEYCLOAK_DB_PASSWORD) is one
 # line on this script's stdin (scripts/app_switch.sh writes it), read as leaf-issue reads its value,
 # and reaches the docker compose process alone, in its environment under the names compose.yml
 # passes by name (LDAP_ADMIN_PASSWORD and LDAP_CONFIG_PASSWORD; KC_DB_PASSWORD): never an argv, a
 # file or a log. start-openldap then checks an admin bind with it (step 5: the admin password is
-# then the copy's) in theOrg's stdin form (scripts/rotate_ldap_admin_lab.py at bd0c6bff):
+# then the copy's) in theOrg's stdin form (scripts/rotate_ldap_admin_lab.py at 5dd8de6):
 # ldapwhoami -y /dev/stdin in the container through docker exec -i, the value on its stdin with no
 # newline, as that lab sends it. A failed bind leaves openldap running, writes no marker and exits
 # 1. On success each writes its started-* marker (date; start-openldap also "admin-bind ok").
@@ -1443,7 +1442,7 @@ restored_health() {
   docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}no healthcheck{{end}}' "$id" 2>/dev/null || echo "unknown"
 }
 
-# configure (DEPLOY.md "Production on d05", cutover step 6, at theOrg bd0c6bff): keycloak-configure
+# configure (DEPLOY.md "Production on d05", cutover step 6, at theOrg 5dd8de6): keycloak-configure
 # apply, then reconcile; no ensure or bootstrap (the restored copy carries the realm and its client).
 # Two values, one line each on this script's stdin in this order (scripts/app_switch.sh writes them,
 # switch_env's order): IDP_LDAP_ADMIN_PASSWORD's, then IDP_DEPLOY_DEX_CLIENT_SECRET's, each read as
@@ -1461,8 +1460,7 @@ restored_health() {
 # restore ("re-run the configuration reconcile steps"). An apply that fails skips reconcile; either
 # failing returns its exit (3: keycloak-configure refused its stdin or settings) with no marker.
 # Past the refusals, before apply, it removes counted and configured, so a re-run leaves neither
-# stale (count-check runs again after it). On both 0 writes configured (date, apply ok, reconcile ok). It needs the repin: fcbed3fe's
-# keycloak-configure image does not read its secrets on stdin.
+# stale (count-check runs again after it). On both 0 writes configured (date, apply ok, reconcile ok).
 do_configure() {
   local sw=configure n h cmd rc=0
   for n in IDP_LDAP_ADMIN_PASSWORD IDP_DEPLOY_DEX_CLIENT_SECRET; do
@@ -1582,19 +1580,19 @@ do_cutover_done() {
   echo "[INFO] $sw: recorded; up now starts keycloak-db, openldap and keycloak and needs IDP_KEYCLOAK_DB_PASSWORD and IDP_LDAP_ADMIN_PASSWORD"
 }
 
-# count-check: DEPLOY.md cutover step 7, Counts (theOrg bd0c6bff): keycloak-backup backup on d05 into
+# count-check: DEPLOY.md cutover step 7, Counts (theOrg 5dd8de6): keycloak-backup backup on d05 into
 # its empty count-check/, then its summary.txt compared with the Mini's (backup/summary.txt, from the
 # bundle): the realm names, and per realm the users, the clients and the credentials by type must be
 # equal. Only the `realm`, `users`, `clients`, `credentials` and `changesets` lines count, compared
 # LC_ALL=C sorted; any other line is ignored. `changesets` is count(*) of Keycloak's Liquibase
-# changelog (theOrg bd0c6bff scripts/keycloak_backup.sh:175-182), which restore already requires equal
+# changelog (theOrg 5dd8de6 scripts/keycloak_backup.sh:175-182), which restore already requires equal
 # (:553, the whole summary): a difference means d05 ran a different Keycloak against the copy, which
 # step 7 must stop on. No value, no ARG (exit 2); no stdin is read. keycloak-db's
 # password is the running container's own (kc_db_password, as backup), on keycloak-backup backup's
 # stdin alone; `run -v count-check:/backup` replaces the service's backup/ mount for that run (Compose
 # v5.7.0, checked on ws01), so backup/ is never written. Before anything else is run, the Mini's
 # backup/summary.txt is read once through keycloak-db's image (read-only) and its sha256 must equal
-# unpacked's keycloak-summary-sha256 (theOrg bd0c6bff scripts/cutover_bundle.sh: the sha256 of
+# unpacked's keycloak-summary-sha256 (theOrg 5dd8de6 scripts/cutover_bundle.sh: the sha256 of
 # keycloak/summary.txt), so the counts compared are the Mini's copy's; not equal: exit 1, no backup
 # run, no marker. count-check/ is then emptied (its files are root-owned: find in keycloak-db's
 # image, --pull never, --network none, as reset-cutover), and d05's summary is read through that
@@ -1608,8 +1606,7 @@ do_cutover_done() {
 # printed (counts, not secrets), no marker. The backup failing: its exit, no marker. count-check/
 # not emptied, keycloak-db's password not taken, or a summary unreadable or without a realm line:
 # exit 1, no marker. Re-runnable until cutover-done; past the refusals a run first removes an
-# existing counted. It needs the repin to theOrg's merged main: fcbed3fe's keycloak-backup has no
-# KEYCLOAK_BACKUP_PASSWORD_STDIN.
+# existing counted.
 do_count_check() {
   local sw=count-check m k raw sum rc=0 mini new
   { set +x; } 2>/dev/null
@@ -1742,7 +1739,7 @@ count_dir_prune() {
 # nightly backup task runs `identity-platform.sh backup` (it looks for run_cmd's `backup)` line)
 # with stdin /dev/null and MAINT_FOREGROUND=1, blocks until it exits and reads only the exit: 0
 # counts as a fresh backup. So 0 only when all three steps passed, in this order (theOrg DEPLOY.md
-# at bd0c6bff, "Production on d05": Backup; "Keycloak: backup, restore and verify"; "Directory:
+# at 5dd8de6, "Production on d05": Backup; "Keycloak: backup, restore and verify"; "Directory:
 # backup, restore and verify"):
 #   1. openldap-backup backup, then verify (no secret);
 #   2. keycloak-backup backup with keycloak-db's password on its stdin alone
@@ -1755,8 +1752,7 @@ count_dir_prune() {
 # cutover-done exists, when backup/, openldap-backup/, mirror-stage/ or cutover-state/ is a symlink,
 # and when the cutover lock is busy. The lock is cutover_lock (exclusive, -n), as the cutover
 # switches take it: no configure, restore or other backup runs meanwhile, and a second backup is
-# refused here (3) rather than by theOrg's own /backup/.lock (1). Runs alone. No stdin is read. It
-# needs the repin to theOrg's merged main: fcbed3fe's keycloak-backup does not read stdin.
+# refused here (3) rather than by theOrg's own /backup/.lock (1). Runs alone. No stdin is read.
 do_backup() {
   local sw=backup rc=0 id n
   { set +x; } 2>/dev/null
@@ -1848,7 +1844,7 @@ manifest_names() {
 }
 
 # mirror_copy NAME (openldap | keycloak): one copy to MIRROR_DIR/NAME, per theOrg's mirroring rule
-# (DEPLOY.md at bd0c6bff, "Mirroring /backup"). The copy's files are root-owned and owner-only, so
+# (DEPLOY.md at 5dd8de6, "Mirroring /backup"). The copy's files are root-owned and owner-only, so
 # first mirror-stage.sh runs as root in the copy's own image (--network none, --pull never: steps 1
 # and 2 just ran it) with the copy and mirror-stage/NAME mounted: under flock -s on the copy's
 # .lock it stages the files manifest.sha256 names, the manifest, then STATUS last, checks them with
@@ -2043,8 +2039,7 @@ usage() {
   echo "                    differing line sets printed. backup/summary.txt's sha256 must be unpacked's" >&2
   echo "                    keycloak-summary-sha256 (else exit 1, no backup); count-check/ keeps only" >&2
   echo "                    summary.txt after. No value, no ARG; needs unpacked, both restored-*," >&2
-  echo "                    both started-* and configured. Runs alone. Not on a replica. Needs the repin to" >&2
-  echo "                    theOrg's merged main (fcbed3fe's keycloak-backup has no KEYCLOAK_BACKUP_PASSWORD_STDIN)" >&2
+  echo "                    both started-* and configured. Runs alone. Not on a replica" >&2
   echo "  cutover-done    - M5: record the go-live after the cutover's verification; no value, no ARG; needs" >&2
   echo "                    every marker (unpacked, both restored-*, both started-*, configured, counted) and" >&2
   echo "                    openldap and keycloak healthy; writes cutover-done (date, manifests-sha256);" >&2
@@ -2060,7 +2055,7 @@ usage() {
   echo "                    verify, keycloak-backup backup (keycloak-db's password from the running container," >&2
   echo "                    on its stdin) and verify, then both copies mirrored to $MIRROR_DIR" >&2
   echo "                    (STATUS last); 0 only when all passed. Refused (exit 3) before cutover-done, on a" >&2
-  echo "                    replica or with the cutover lock busy. Runs alone. Needs the theOrg repin" >&2
+  echo "                    replica or with the cutover lock busy. Runs alone" >&2
   echo "  restore         - Refused (exit 1): the M5 restores are restore-openldap and restore-keycloak" >&2
   echo "  logs            - Follow logs (optionally for one service)" >&2
 }
