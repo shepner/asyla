@@ -408,7 +408,7 @@ CC="$ROOT/count-check"
 KCDB="$(sed -n 's/^KC_DB_IMAGE="\(.*\)"$/\1/p' "$SRC/identity-platform.sh")"
 [ -n "$KCDB" ] || bad "KC_DB_IMAGE not found in the script"
 CC_M="$(printf 'a%.0s' {1..64})"
-CC_MARKERS="unpacked restored-openldap restored-keycloak started-openldap started-keycloak configured"
+CC_MARKERS="unpacked restored-openldap restored-keycloak started-openldap started-keycloak configured reset-off"
 # The Mini's summary (theOrg's SUMMARY_SQL lines) and d05's: the same counts, changesets included,
 # in another order.
 MINI_SUM=$'realm master\nrealm theorg\nusers master 1\nusers theorg 12\nclients master 7\nclients theorg 9\ncredentials theorg otp 3\ncredentials theorg webauthn 2\nchangesets 120'
@@ -431,6 +431,7 @@ cc_setup() {   # what configure leaves on d05 before cutover-done; backup/ holds
   printf 'date 2026-11-16T00:00:00Z\nadmin-bind ok\n' > "$ROOT/cutover-state/started-openldap"
   printf 'date 2026-11-16T00:00:00Z\n' > "$ROOT/cutover-state/started-keycloak"
   printf 'date 2026-11-16T00:00:00Z\napply ok\nreconcile ok\n' > "$ROOT/cutover-state/configured"
+  printf 'date 2026-11-16T00:00:00Z\nresetPasswordAllowed false\n' > "$ROOT/cutover-state/reset-off"
 }
 CC_MINI="docker run --rm --pull never --network none --user 0:0 --entrypoint cat -v T/dl/IdentityPlatform/backup:/s:ro $KCDB /s/summary.txt"
 CC_FIND="docker run --rm --network none --pull never --user 0:0 --entrypoint find -v T/dl/IdentityPlatform/count-check:/t $KCDB /t -xdev -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf --one-file-system --preserve-root=all {} +"
@@ -600,6 +601,10 @@ for m in $CC_MARKERS; do
 done
 cc_setup; printf 'date 2026-11-16T00:00:00Z\napply ok\n' > "$ROOT/cutover-state/configured"
 refused "count-check with configured without reconcile ok" "configured (no apply ok and reconcile ok)" -- count-check
+cc_setup; printf 'date 2026-11-16T00:00:00Z\nresetPasswordAllowed true\n' > "$ROOT/cutover-state/reset-off"
+refused "count-check with reset-off without resetPasswordAllowed false" "reset-off (no resetPasswordAllowed false)" -- count-check
+cc_setup; : > "$ROOT/cutover-state/reset-off"
+refused "count-check with reset-off empty" "reset-off (empty)" -- count-check
 cc_setup; printf 'version m5-%s\nmanifests-sha256 0123\n' "${CC_M:0:12}" > "$ROOT/cutover-state/unpacked"
 refused "count-check with unpacked's manifests-sha256 not 64 hex" "unpacked (manifests-sha256 '0123' is not 64 hex)" -- count-check
 cc_setup; printf 'version m5-%s\nmanifests-sha256 %s\n' "${CC_M:0:12}" "$CC_M" > "$ROOT/cutover-state/unpacked"

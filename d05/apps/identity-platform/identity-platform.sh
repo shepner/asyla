@@ -90,7 +90,8 @@
 #   docker run: the targets then hold unpack's files); unpacked; restored-openldap and
 #   restored-keycloak (date, the unpacked manifests-sha256) from the two restores; started-openldap
 #   (date, admin-bind ok) and started-keycloak (date) from the two starts; configured (date, apply
-#   ok, reconcile ok) from configure; cutover-done (date, the unpacked manifests-sha256) from the
+#   ok, reconcile ok) from configure; reset-off (date, resetPasswordAllowed false) from
+#   check-reset-off; cutover-done (date, the unpacked manifests-sha256) from the
 #   cutover-done switch. Each is written atomically, then synced (sync -f). start-openldap,
 #   start-keycloak and configure are gated on them (cutover_gate, exit 3 naming the missing or
 #   invalid marker: an unpacked whose version is not fetched's, an empty restored-* or started-*,
@@ -102,7 +103,15 @@
 #               markers and keycloak healthy; re-runnable, after cutover-done too (DEPLOY.md: the
 #               configuration steps are idempotent; past cutover-done refused, exit 3, when a data
 #               dir is missing or empty, as up). Refused (exit 3, no docker run) with either name in the
-#               environment, on a replica, a terminal or an empty read.
+#               environment, on a replica, a terminal or an empty read. It removes counted,
+#               reset-off and configured before apply.
+#   check-reset-off  reads IDP_DEPLOY_DEX_CLIENT_SECRET's value as one line on stdin and writes it,
+#               as theOrg's one VAULT_DEX_CLIENT_SECRET= line, to keycloak-configure check-reset-off's
+#               stdin alone (DEPLOY.md cutover step 6 at bb456ee: read-only; exit 1 unless realm
+#               theorg's resetPasswordAllowed is false). Needs configure's markers and configured, and
+#               keycloak healthy; refused (exit 3, no docker run) as configure is. On 0 writes
+#               reset-off; otherwise its exit (1, 3) with no marker. count-check and cutover-done
+#               need reset-off.
 #   start-openldap  reads IDP_LDAP_ADMIN_PASSWORD's value as one line on stdin; it reaches the
 #               compose process alone, as LDAP_ADMIN_PASSWORD and LDAP_CONFIG_PASSWORD, for
 #               `--profile restored up -d --no-deps --wait --wait-timeout START_WAIT_S openldap`; then
@@ -127,11 +136,12 @@
 #               only summary.txt. Equal: writes counted (date, manifests-sha256, counts equal);
 #               not equal: exit 1, both differing line sets printed. Refused (exit 3) on a replica,
 #               a symlink, the lock busy, past cutover-done, unless unpacked, both restored-*, both
-#               started-* and configured are valid.
+#               started-*, configured and reset-off are valid.
 #   cutover-done  no value, no ARG: the operator runs it after the cutover's verification. Refused
 #               (exit 3, nothing written) on a replica, with the lock busy, unless every marker is
 #               there and valid (cutover_gate: unpacked, both restored-*, both started-*,
-#               configured with apply ok and reconcile ok, and counted with counts equal; both
+#               configured with apply ok and reconcile ok, reset-off with resetPasswordAllowed
+#               false, and counted with counts equal; both
 #               restored-* and counted naming unpacked's manifests-sha256), and unless openldap and
 #               keycloak are running and healthy. Writes cutover-done (date, manifests-sha256); past
 #               it, prints that and exits 0. The cutover switches (those from fetch-bundle to here,
@@ -177,7 +187,7 @@
 #               summary, entryUUID digest included); each dir then keeps only summary.txt. Equal:
 #               mirror-checked (date, source mirror, both summary sha256s, summaries equal); not
 #               equal: exit 1, the differing lines printed (do_mirror_check).
-#   Then leaf-issue, start-openldap, start-keycloak, configure and cutover-done as after the M5
+#   Then leaf-issue, start-openldap, start-keycloak, configure, check-reset-off and cutover-done as after the M5
 #   restores: cutover_gate takes mirror-restored-openldap, mirror-restored-keycloak and
 #   mirror-checked in place of unpacked, both restored-* and counted; cutover-state/ holding
 #   markers of both paths is refused (exit 3) by every gated switch, and restore-openldap,
@@ -1513,8 +1523,9 @@ restored_health() {
 # says the configuration steps are idempotent and are re-run after an update, and after a directory
 # restore ("re-run the configuration reconcile steps"). An apply that fails skips reconcile; either
 # failing returns its exit (3: keycloak-configure refused its stdin or settings) with no marker.
-# Past the refusals, before apply, it removes counted and configured, so a re-run leaves neither
-# stale (count-check runs again after it). On both 0 writes configured (date, apply ok, reconcile ok).
+# Past the refusals, before apply, it removes counted, reset-off and configured, so a re-run leaves
+# none stale (check-reset-off and count-check run again after it). On both 0 writes configured
+# (date, apply ok, reconcile ok).
 do_configure() {
   local sw=configure n h cmd rc=0
   for n in IDP_LDAP_ADMIN_PASSWORD IDP_DEPLOY_DEX_CLIENT_SECRET; do
@@ -1564,11 +1575,11 @@ do_configure() {
     echo "[ERROR] $sw: refused: no IDP_DEPLOY_DEX_CLIENT_SECRET value read on stdin (line 2); nothing changed" >&2
     return 3
   fi
-  # A re-run leaves no stale marker: counted (a count of the old configuration) and configured go
-  # before apply; a failed run leaves neither.
-  if ! rm -f "$STATE_DIR/counted" "$STATE_DIR/configured"; then
+  # A re-run leaves no stale marker: counted (a count of the old configuration), reset-off (a check
+  # of it) and configured go before apply; a failed run leaves none.
+  if ! rm -f "$STATE_DIR/counted" "$STATE_DIR/reset-off" "$STATE_DIR/configured"; then
     unset -v ldap dex
-    echo "[ERROR] $sw: could not remove $STATE_DIR/counted and configured; no keycloak-configure run" >&2
+    echo "[ERROR] $sw: could not remove $STATE_DIR/counted, reset-off and configured; no keycloak-configure run" >&2
     return 1
   fi
   for cmd in apply reconcile; do
@@ -1588,15 +1599,85 @@ do_configure() {
   write_state configured "date $(date -u +%Y-%m-%dT%H:%M:%SZ </dev/null)" "apply ok" "reconcile ok"
 }
 
+# check-reset-off (DEPLOY.md "Production on d05", cutover step 6, at theOrg bb456ee, right after
+# configure): keycloak-configure's read-only check-reset-off, which GETs realm theorg over the admin
+# API and exits 1 unless resetPasswordAllowed is false (an absent realm or field fails too); a
+# failure stops the cutover before step 7. One value, IDP_DEPLOY_DEX_CLIENT_SECRET's, as one line on
+# this script's stdin (scripts/app_switch.sh writes it), read as configure reads its values; the run
+# gets it on its stdin alone in theOrg's form, exactly one line `VAULT_DEX_CLIENT_SECRET=<value>`
+# (theOrg refuses a second line, the name in its environment or a terminal, exit 3), written by
+# builtin printf into `builtin exec docker` (never an argv, an environment, a file or a log). Refused
+# (exit 3, no docker run, nothing changed) with IDP_DEPLOY_DEX_CLIENT_SECRET in the environment, on
+# a replica, cutover-state/ a symlink, the lock busy, a missing or invalid marker (cutover_gate:
+# configure's markers and a valid configured), keycloak not running and healthy, a terminal on stdin
+# or an empty read. Exit 2 for an ARG. Past the refusals, before the run, it removes reset-off, so
+# a failed check leaves none. On 0 writes reset-off (date, resetPasswordAllowed false), which
+# count-check (M5 path) and cutover-done (both paths) need; otherwise returns the run's exit (1: not
+# false; 3: it refused its stdin) with no marker. Re-runnable (it only reads), after cutover-done too
+# (configure, which removes reset-off, is).
+do_check_reset_off() {
+  local sw=check-reset-off h rc=0
+  if [ -n "${IDP_DEPLOY_DEX_CLIENT_SECRET+x}" ]; then
+    echo "[ERROR] $sw: refused: IDP_DEPLOY_DEX_CLIENT_SECRET is set in the environment; unset it and write the value as one line to $sw's stdin (scripts/app_switch.sh does); nothing changed" >&2
+    return 3
+  fi
+  if [ $# -ne 0 ]; then
+    echo "[ERROR] $sw: usage: $sw (no ARG)" >&2
+    return 2
+  fi
+  if is_replica; then
+    echo "[ERROR] $sw: refused: not on a replica ($(hostname -s </dev/null)); the cutover is d05's; nothing changed" >&2
+    return 3
+  fi
+  cutover_lock "$sw" || return
+  cutover_gate "$sw" || return
+  h="$(kc_health </dev/null)"
+  if [ "$h" != healthy ]; then
+    echo "[ERROR] $sw: refused: keycloak is $h, not running and healthy (start-keycloak first); nothing changed" >&2
+    return 3
+  fi
+  if [ -t 0 ]; then
+    echo "[ERROR] $sw: refused: stdin is a terminal; $sw reads IDP_DEPLOY_DEX_CLIENT_SECRET's value as one line on stdin (scripts/app_switch.sh writes it); nothing changed" >&2
+    return 3
+  fi
+  { set +x; } 2>/dev/null
+  set +a
+  unset -v dex
+  local +x dex=""
+  IFS= builtin read -r dex || true
+  exec </dev/null
+  if [[ -z $dex ]]; then
+    unset -v dex
+    echo "[ERROR] $sw: refused: no IDP_DEPLOY_DEX_CLIENT_SECRET value read on stdin; nothing changed" >&2
+    return 3
+  fi
+  if ! rm -f "$STATE_DIR/reset-off"; then
+    unset -v dex
+    echo "[ERROR] $sw: could not remove $STATE_DIR/reset-off; no keycloak-configure run" >&2
+    return 1
+  fi
+  echo "[INFO] $sw: keycloak-configure check-reset-off"
+  # As configure's runs: run_compose's argv, the docker program in its own subshell.
+  builtin printf 'VAULT_DEX_CLIENT_SECRET=%s\n' "$dex" \
+    | (builtin exec docker compose -f "$COMPOSE_FILE" --project-directory "$SCRIPT_DIR" \
+        --profile ops run --rm -T keycloak-configure check-reset-off) || rc=$?
+  unset -v dex
+  if [ "$rc" -ne 0 ]; then
+    echo "[ERROR] $sw: keycloak-configure check-reset-off exited $rc (1: realm theorg's resetPasswordAllowed is not false, or the realm or field is absent; 3: it refused its stdin or a setting); no reset-off marker; the cutover stops before step 7" >&2
+    return "$rc"
+  fi
+  write_state reset-off "date $(date -u +%Y-%m-%dT%H:%M:%SZ </dev/null)" "resetPasswordAllowed false"
+}
+
 # cutover-done: the go-live record, run by the operator after the cutover's verification (DEPLOY.md
 # step 8). No value, no ARG (exit 2). Refused (exit 3, nothing written) on a replica, cutover-state/
 # a symlink, the lock busy, a missing or invalid marker (cutover_gate: unpacked, both restored-*,
-# both started-*, configured and counted), an unpacked manifests-sha256 that is not 64 hex or a
+# both started-*, configured, reset-off and counted), an unpacked manifests-sha256 that is not 64 hex or a
 # restored-* or counted naming another, and openldap or keycloak not running and healthy. Past an existing cutover-done:
 # says so, exit 0, nothing written. Writes cutover-done (date, manifests-sha256): up then starts
 # all three services and needs both values; the restores, starts, reset-cutover and cutover-clean
 # refuse. On the mirror path (asyla #1101; cutover_gate: both mirror-restored-*, mirror-checked, both
-# started-* and configured) it writes cutover-done (date, source mirror, mirror-checked's two summary
+# started-*, configured and reset-off) it writes cutover-done (date, source mirror, mirror-checked's two summary
 # sha256s) instead, and up and backup then run as after M5.
 do_cutover_done() {
   local sw=cutover-done m f h svc lines=()
@@ -2003,7 +2084,7 @@ MIRROR_MAX_AGE_S=$((48 * 3600))
 MIRROR_MAX_AHEAD_S=300
 MIRROR_MAX_SKEW_S=$((2 * 3600))
 MIRROR_STATUS_RE='^OK [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
-MIRROR_M5_MARKERS=(fetched unpack-started unpacked restored-openldap restored-keycloak started-openldap started-keycloak configured counted "$CUTOVER_DONE")
+MIRROR_M5_MARKERS=(fetched unpack-started unpacked restored-openldap restored-keycloak started-openldap started-keycloak configured reset-off counted "$CUTOVER_DONE")
 
 # iso_epoch YYYY-MM-DDTHH:MM:SSZ: its seconds since 1970 (UTC), in bash arithmetic (no GNU date -d:
 # the tests run on macOS); returns 1 for anything else.
@@ -2602,10 +2683,11 @@ mirror_checked_ok() {
 # returns 3. unpacked counts only with a non-empty version equal to fetched's; started-openldap only
 # with its "admin-bind ok" line; configured only with its "apply ok" and "reconcile ok" lines; a
 # restored-* or started-keycloak marker only when it is a non-empty file; counted only with its
-# "counts equal" line. configure needs both restored-* and both started-*; count-check needs those,
-# unpacked and configured; cutover-done needs those and counted.
+# "counts equal" line; reset-off only with its "resetPasswordAllowed false" line. configure needs
+# both restored-* and both started-*; check-reset-off those and configured; count-check needs those,
+# unpacked, configured and reset-off; cutover-done needs those and counted.
 # The mirror path (asyla #1101): once any of MIRROR_PATH_MARKERS exists, start-openldap,
-# start-keycloak, configure and cutover-done need mirror-restored-openldap, mirror-restored-keycloak
+# start-keycloak, configure, check-reset-off and cutover-done need mirror-restored-openldap, mirror-restored-keycloak
 # (mirror_marker_ok) and mirror-checked (mirror_checked_ok) in place of unpacked, both restored-* and
 # counted, plus the same started-* and configured; restore-openldap, restore-keycloak and count-check
 # are refused there. A marker of each path (MIRROR_PATH_MARKERS and M5_PATH_MARKERS) is refused by
@@ -2639,15 +2721,17 @@ cutover_gate() {
     mirror:start-openldap) need=("${MIRROR_PATH_MARKERS[@]}") ;;
     mirror:start-keycloak) need=("${MIRROR_PATH_MARKERS[@]}" started-openldap) ;;
     mirror:configure) need=("${MIRROR_PATH_MARKERS[@]}" started-openldap started-keycloak) ;;
-    mirror:cutover-done) need=("${MIRROR_PATH_MARKERS[@]}" started-openldap started-keycloak configured) ;;
+    mirror:check-reset-off) need=("${MIRROR_PATH_MARKERS[@]}" started-openldap started-keycloak configured) ;;
+    mirror:cutover-done) need=("${MIRROR_PATH_MARKERS[@]}" started-openldap started-keycloak configured reset-off) ;;
     mirror:restore-keycloak|mirror:restore-openldap|mirror:count-check)
       echo "[ERROR] $1: refused: $1 is an M5 cutover switch and cutover-state/ is on the mirror path (${mir[*]}) (in $STATE_DIR); nothing done" >&2
       return 3 ;;
     m5:start-openldap) need=(unpacked restored-openldap) ;;
     m5:start-keycloak) need=(unpacked restored-keycloak started-openldap) ;;
     m5:configure) need=(restored-openldap restored-keycloak started-openldap started-keycloak) ;;
-    m5:count-check) need=(unpacked restored-openldap restored-keycloak started-openldap started-keycloak configured) ;;
-    m5:cutover-done) need=(unpacked restored-openldap restored-keycloak started-openldap started-keycloak configured counted) ;;
+    m5:check-reset-off) need=(restored-openldap restored-keycloak started-openldap started-keycloak configured) ;;
+    m5:count-check) need=(unpacked restored-openldap restored-keycloak started-openldap started-keycloak configured reset-off) ;;
+    m5:cutover-done) need=(unpacked restored-openldap restored-keycloak started-openldap started-keycloak configured reset-off counted) ;;
     m5:restore-keycloak|m5:restore-openldap) need=(unpacked) ;;
     *) echo "[ERROR] cutover_gate: no gate for $1" >&2; return 3 ;;
   esac
@@ -2667,6 +2751,8 @@ cutover_gate() {
       missing+=("started-openldap (no admin-bind ok)")
     elif [ "$m" = configured ] && ! { grep -qx 'apply ok' "$STATE_DIR/$m" && grep -qx 'reconcile ok' "$STATE_DIR/$m"; }; then
       missing+=("configured (no apply ok and reconcile ok)")
+    elif [ "$m" = reset-off ] && ! grep -qx 'resetPasswordAllowed false' "$STATE_DIR/$m"; then
+      missing+=("reset-off (no resetPasswordAllowed false)")
     elif [ "$m" = counted ] && ! grep -qx 'counts equal' "$STATE_DIR/$m"; then
       missing+=("counted (no counts equal)")
     fi
@@ -2781,6 +2867,11 @@ usage() {
   echo "                    IDP_DEPLOY_DEX_CLIENT_SECRET's value as one line each on stdin (scripts/app_switch.sh)" >&2
   echo "                    and writes both to each run's stdin; keycloak must be healthy; needs both restored-*" >&2
   echo "                    and both started-*; writes configured; re-runnable. Runs alone. Not on a replica" >&2
+  echo "  check-reset-off - M5 step 6, after configure: keycloak-configure check-reset-off (read-only: realm" >&2
+  echo "                    theorg's resetPasswordAllowed must be false); reads IDP_DEPLOY_DEX_CLIENT_SECRET's" >&2
+  echo "                    value as one line on stdin (scripts/app_switch.sh); keycloak must be healthy;" >&2
+  echo "                    needs configure's markers and configured; writes reset-off on 0, which" >&2
+  echo "                    count-check and cutover-done need; else its exit, no marker. Runs alone. Not on a replica" >&2
   echo "  count-check     - M5 step 7: keycloak-backup backup into the empty count-check/ (keycloak-db's" >&2
   echo "                    password from the running container, on its stdin), then its summary.txt's" >&2
   echo "                    realm, users, clients, credentials and changesets lines compared with" >&2
@@ -2788,9 +2879,10 @@ usage() {
   echo "                    differing line sets printed. backup/summary.txt's sha256 must be unpacked's" >&2
   echo "                    keycloak-summary-sha256 (else exit 1, no backup); count-check/ keeps only" >&2
   echo "                    summary.txt after. No value, no ARG; needs unpacked, both restored-*," >&2
-  echo "                    both started-* and configured. Runs alone. Not on a replica" >&2
+  echo "                    both started-*, configured and reset-off. Runs alone. Not on a replica" >&2
   echo "  cutover-done    - M5: record the go-live after the cutover's verification; no value, no ARG; needs" >&2
-  echo "                    every marker (unpacked, both restored-*, both started-*, configured, counted) and" >&2
+  echo "                    every marker (unpacked, both restored-*, both started-*, configured, reset-off," >&2
+  echo "                    counted) and" >&2
   echo "                    openldap and keycloak healthy; writes cutover-done (date, manifests-sha256);" >&2
   echo "                    exits 0 if it exists. Runs alone. Not on a replica" >&2
   echo "  restore-openldap - M5: openldap-backup restore of openldap-backup/ into the empty openldap-data and" >&2
@@ -2821,7 +2913,7 @@ usage() {
   echo "                    emptied openldap-count-check/ and count-check/ (each keeps only summary.txt after)," >&2
   echo "                    compared with the restored summaries (openldap's whole summary; keycloak's realm," >&2
   echo "                    users, clients, credentials and changesets lines); equal: writes mirror-checked," >&2
-  echo "                    which start-openldap, start-keycloak, configure and cutover-done then take in place" >&2
+  echo "                    which start-openldap, start-keycloak, configure, check-reset-off and cutover-done then take in place" >&2
   echo "                    of unpacked, both restored-* and counted; not equal: exit 1. No value, no ARG;" >&2
   echo "                    needs both mirror-restored-*, no M5 or later marker, keycloak-db healthy. Runs alone." >&2
   echo "                    Also on a replica" >&2
@@ -2877,6 +2969,10 @@ case "$1" in
     do_configure "${@:2}" || exit $?
     exit 0
     ;;
+  check-reset-off)
+    do_check_reset_off "${@:2}" || exit $?
+    exit 0
+    ;;
   count-check)
     do_count_check "${@:2}" || exit $?
     exit 0
@@ -2908,7 +3004,7 @@ esac
 if [ $# -gt 1 ]; then
   for cmd in "$@"; do
     case "$cmd" in
-      leaf-issue|fetch-bundle|unpack-bundle|reset-cutover|cutover-clean|restore-keycloak|restore-openldap|start-openldap|start-keycloak|configure|count-check|cutover-done|backup|restore-mirror|restore-mirror-accept-age|reset-mirror|mirror-check)
+      leaf-issue|fetch-bundle|unpack-bundle|reset-cutover|cutover-clean|restore-keycloak|restore-openldap|start-openldap|start-keycloak|configure|check-reset-off|count-check|cutover-done|backup|restore-mirror|restore-mirror-accept-age|reset-mirror|mirror-check)
         echo "[ERROR] $cmd: refused: run it alone (it reads a value on stdin, takes ARGs or holds the cutover lock), not with: $*" >&2
         exit 3
         ;;

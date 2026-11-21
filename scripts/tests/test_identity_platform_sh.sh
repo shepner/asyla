@@ -84,7 +84,7 @@ unset IDP_KEYCLOAK_DB_PASSWORD IDP_LDAP_ADMIN_PASSWORD IDP_DEPLOY_DEX_CLIENT_SEC
   STUB_RESTORE_RC STUB_RESTORE_PW_FILE STUB_DB_HEALTH OPENLDAP_BACKUP_CONFIG_MOUNT \
   STUB_ENV_NAMES STUB_UP_ENV STUB_UP_RC STUB_BIND_FILE STUB_BIND_RC STUB_NO_OL IDENTITY_PLATFORM_START_WAIT_S \
   STUB_KC_RUNNING STUB_KC_HEALTH STUB_CONF_IN STUB_APPLY_RC STUB_RECONCILE_RC CONF_STDIN STUB_OL_HEALTH \
-  STUB_DATA_RC
+  STUB_DATA_RC STUB_RESETOFF_RC
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SRC="$REPO/d05/apps/identity-platform"
@@ -258,13 +258,15 @@ case "$*" in
     if [ -n "${STUB_BIND_FILE:-}" ]; then cat > "$STUB_BIND_FILE"; else cat > /dev/null; fi
     exit "${STUB_BIND_RC:-0}" ;;
   # configure's keycloak-configure runs: stdin to $STUB_CONF_IN.CMD and the call's environment to
-  # $STUB_CONF_IN.CMD.env (temp files read only by the checks); exit STUB_APPLY_RC or STUB_RECONCILE_RC.
+  # $STUB_CONF_IN.CMD.env (temp files read only by the checks); exit STUB_APPLY_RC or STUB_RECONCILE_RC
+  # (check-reset-off's run, the same files: STUB_RESETOFF_RC).
   *"--profile ops run --rm -T keycloak-configure "*)
     c="${!#}"
     if [ -n "${STUB_CONF_IN:-}" ]; then cat > "$STUB_CONF_IN.$c"; env > "$STUB_CONF_IN.$c.env"; else cat > /dev/null; fi
     case "$c" in
       apply) exit "${STUB_APPLY_RC:-0}" ;;
       reconcile) exit "${STUB_RECONCILE_RC:-0}" ;;
+      check-reset-off) exit "${STUB_RESETOFF_RC:-0}" ;;
     esac ;;
   *"ps -q openldap") [ -n "${STUB_NO_OL:-}" ] || echo olid ;;
   *"ps -q keycloak") if [ -n "${STUB_KC_RUNNING:-}" ]; then echo kcid; fi ;;
@@ -1317,7 +1319,7 @@ done
 reset_setup; before="$(snap)"
 exec 7> "$ROOT/cutover-state/.lock"
 if "$T/bin/flock" -n 7; then
-  for sw in reset-cutover cutover-clean "fetch-bundle $CUT_VER" "unpack-bundle $UNP_M $UNP_K $UNP_O" restore-keycloak restore-openldap start-openldap start-keycloak configure count-check cutover-done restore-mirror restore-mirror-accept-age reset-mirror mirror-check; do
+  for sw in reset-cutover cutover-clean "fetch-bundle $CUT_VER" "unpack-bundle $UNP_M $UNP_K $UNP_O" restore-keycloak restore-openldap start-openldap start-keycloak configure check-reset-off count-check cutover-done restore-mirror restore-mirror-accept-age reset-mirror mirror-check; do
     # shellcheck disable=SC2086
     run $sw; rc=$?
     [ "$rc" -eq 3 ] && echo "$OUT" | grep -q "${sw%% *}: refused: another cutover switch is running" && [ ! -s "$T/log" ] \
@@ -1415,15 +1417,16 @@ gate_case() {   # gate_case SWITCH "MARKERS" MISSING|pass (GATE_UNPACKED: unpack
     elif [ "$m" = started-openldap ]; then printf 'date 2026-11-16T00:00:00Z\n%s\n' "${GATE_BIND-admin-bind ok}" > "$ROOT/cutover-state/$m"
     elif [ "$m" = configured ]; then printf 'date 2026-11-16T00:00:00Z\n%s\n' "${GATE_CONF-$'apply ok\nreconcile ok'}" > "$ROOT/cutover-state/$m"
     elif [ "$m" = counted ]; then printf 'date 2026-11-16T00:00:00Z\nmanifests-sha256 %s\n%s\n' "$UNP_M" "${GATE_COUNTED-counts equal}" > "$ROOT/cutover-state/$m"
+    elif [ "$m" = reset-off ]; then printf 'date 2026-11-16T00:00:00Z\n%s\n' "${GATE_RESETOFF-resetPasswordAllowed false}" > "$ROOT/cutover-state/$m"
     elif [[ $m == restored-* ]]; then printf 'date 2026-11-16T00:00:00Z\nmanifests-sha256 %s\n' "$UNP_M" > "$ROOT/cutover-state/$m"
     else echo "started from the stand-in bundle" > "$ROOT/cutover-state/$m"; fi
   done
   run "$1"; rc=$?
   # A switch past its gate goes on to its own checks (keycloak-db's or keycloak's health, stdin:
-  # empty here, or a terminal), each a refusal (3) with no up or run; configure's and cutover-done's
-  # is keycloak's (openldap is running and healthy in the stub).
+  # empty here, or a terminal), each a refusal (3) with no up or run; configure's, check-reset-off's
+  # and cutover-done's is keycloak's (openldap is running and healthy in the stub).
   if [ "$3" != pass ]; then pat="$1: refused: cutover marker missing or invalid: $3 ("
-  elif [ "$1" = configure ] || [ "$1" = cutover-done ]; then pat="$1: refused: keycloak is not running"
+  elif [ "$1" = configure ] || [ "$1" = check-reset-off ] || [ "$1" = cutover-done ]; then pat="$1: refused: keycloak is not running"
   else pat="$1: refused: "; fi
   [ "$rc" -eq 3 ] && echo "$OUT" | grep -qF -- "$pat" && { [ "$3" != pass ] || ! echo "$OUT" | grep -q 'marker missing'; } \
     && { [ ! -s "$T/log" ] || { [ "$3" = pass ] && ! grep -qE ' up | run |exec -i' "$T/log"; }; } \
@@ -1456,12 +1459,24 @@ GATE_UNPACKED="manifests-sha256 $UNP_M" gate_case start-keycloak "unpacked resto
 GATE_UNPACKED="version m5-fedcba987654" gate_case start-openldap "unpacked restored-openldap" "unpacked (version 'm5-fedcba987654' is not fetched's '$CUT_VER')"
 GATE_EMPTY=restored-openldap gate_case start-openldap "unpacked restored-openldap" "restored-openldap (empty)"
 GATE_EMPTY=restored-keycloak gate_case configure "$CONF_ALL" "restored-keycloak (empty)"
+# check-reset-off: configure's markers and configured (with apply ok and reconcile ok).
+RO_ALL="$CONF_ALL configured"
+gate_case check-reset-off "" "$RO_ALL"
+for m in $RO_ALL; do
+  gate_case check-reset-off "$(echo " $RO_ALL " | sed "s/ $m / /; s/^ //; s/ $//")" "$m"
+done
+GATE_CONF="apply ok" gate_case check-reset-off "$RO_ALL" "configured (no apply ok and reconcile ok)"
+GATE_EMPTY=configured gate_case check-reset-off "$RO_ALL" "configured (empty)"
+gate_case check-reset-off "$RO_ALL" pass
 # cutover-done: unpacked, both restored-*, both started-*, configured (with apply ok and reconcile
-# ok) and counted (with counts equal). count-check's gate (the same less counted) is in the backup test.
-DONE_ALL="unpacked $CONF_ALL configured counted"
+# ok), reset-off (with resetPasswordAllowed false) and counted (with counts equal). count-check's
+# gate (the same less counted) is in the backup test.
+DONE_ALL="unpacked $CONF_ALL configured reset-off counted"
 for m in $DONE_ALL; do
   gate_case cutover-done "$(echo " $DONE_ALL " | sed "s/ $m / /; s/^ //; s/ $//")" "$m"
 done
+GATE_RESETOFF="resetPasswordAllowed true" gate_case cutover-done "$DONE_ALL" "reset-off (no resetPasswordAllowed false)"
+GATE_EMPTY=reset-off gate_case cutover-done "$DONE_ALL" "reset-off (empty)"
 GATE_CONF="apply ok" gate_case cutover-done "$DONE_ALL" "configured (no apply ok and reconcile ok)"
 GATE_COUNTED="counts differ" gate_case cutover-done "$DONE_ALL" "counted (no counts equal)"
 GATE_EMPTY=counted gate_case cutover-done "$DONE_ALL" "counted (empty)"
@@ -1901,27 +1916,30 @@ CONF_EXTRA="STUB_KC_RUNNING=1 STUB_APPLY_RC=3" conf_run configure; rc=$?
 [ "$rc" -eq 3 ] && conf_calls_ok apply && [ ! -e "$T/confin.reconcile" ] && [ ! -e "$ROOT/cutover-state/configured" ] \
   && echo "$OUT" | grep -q 'keycloak-configure apply exited 3 .*reconcile not run' && conf_no_value \
   && ok "configure with apply exiting 3: no reconcile, no marker, exit 3" || bad "configure apply failure" "rc=$rc; $OUT; $(cat "$T/log")"
-# A re-run leaves no stale marker: counted and configured removed before apply; a failed apply
-# leaves neither, a passing run only the new configured.
-stale_markers() {   # an earlier run's configured and count-check's counted
+# A re-run leaves no stale marker: counted, reset-off and configured removed before apply; a failed
+# apply leaves none, a passing run only the new configured.
+stale_markers() {   # an earlier run's configured, check-reset-off's reset-off and count-check's counted
   printf 'date 2026-11-15T00:00:00Z\napply ok\nreconcile ok\n' > "$ROOT/cutover-state/configured"
+  printf 'date 2026-11-15T00:00:00Z\nresetPasswordAllowed false\n' > "$ROOT/cutover-state/reset-off"
   printf 'date 2026-11-15T00:00:00Z\nmanifests-sha256 %s\ncounts equal\n' "$UNP_M" > "$ROOT/cutover-state/counted"
 }
 conf_setup; stale_markers
 CONF_EXTRA="STUB_KC_RUNNING=1 STUB_APPLY_RC=1" conf_run configure; rc=$?
-[ "$rc" -eq 1 ] && conf_calls_ok apply && [ ! -e "$ROOT/cutover-state/configured" ] && [ ! -e "$ROOT/cutover-state/counted" ] && conf_no_value \
-  && ok "configure re-run with apply failing: the earlier configured and counted removed, no marker, exit 1" \
+[ "$rc" -eq 1 ] && conf_calls_ok apply && [ ! -e "$ROOT/cutover-state/configured" ] && [ ! -e "$ROOT/cutover-state/counted" ] \
+  && [ ! -e "$ROOT/cutover-state/reset-off" ] && conf_no_value \
+  && ok "configure re-run with apply failing: the earlier configured, reset-off and counted removed, no marker, exit 1" \
   || bad "configure stale markers on failure" "rc=$rc; $OUT; $(ls -A "$ROOT/cutover-state")"
 conf_setup; stale_markers
 conf_run configure; rc=$?
 [ "$rc" -eq 0 ] && conf_calls_ok apply reconcile && configured_ok && ! grep -q 2026-11-15 "$ROOT/cutover-state/configured" \
-  && [ ! -e "$ROOT/cutover-state/counted" ] && conf_no_value \
-  && ok "configure re-run: counted removed (count-check runs again), configured rewritten" \
+  && [ ! -e "$ROOT/cutover-state/counted" ] && [ ! -e "$ROOT/cutover-state/reset-off" ] && conf_no_value \
+  && ok "configure re-run: counted and reset-off removed (check-reset-off and count-check run again), configured rewritten" \
   || bad "configure stale markers on success" "rc=$rc; $OUT; $(ls -A "$ROOT/cutover-state")"
 conf_setup; stale_markers; before="$(snap)"
 CONF_EXTRA="" conf_run configure; rc=$?
-[ "$rc" -eq 3 ] && echo "$OUT" | grep -qF "configure: refused: keycloak is not running" && [ -e "$ROOT/cutover-state/configured" ] && [ -e "$ROOT/cutover-state/counted" ] && [ "$(snap)" = "$before" ] \
-  && ok "configure refused (keycloak not healthy): configured and counted kept, nothing changed" \
+[ "$rc" -eq 3 ] && echo "$OUT" | grep -qF "configure: refused: keycloak is not running" && [ -e "$ROOT/cutover-state/configured" ] \
+  && [ -e "$ROOT/cutover-state/counted" ] && [ -e "$ROOT/cutover-state/reset-off" ] && [ "$(snap)" = "$before" ] \
+  && ok "configure refused (keycloak not healthy): configured, reset-off and counted kept, nothing changed" \
   || bad "configure refusal kept markers" "rc=$rc; $OUT; $(ls -A "$ROOT/cutover-state")"
 conf_setup
 CONF_EXTRA="STUB_KC_RUNNING=1 STUB_RECONCILE_RC=1" conf_run configure; rc=$?
@@ -1990,6 +2008,123 @@ for mode in SHELLOPTS bash-x; do
     || bad "configure xtrace $mode" "rc=$rc; $(grep -c '^+' <<< "$OUT") trace lines; $(cat "$T/log")"
 done
 rm -f "$T/confin".* "$T/confwant"
+
+# --- check-reset-off (cutover step 6, after configure): keycloak-configure check-reset-off ---
+# One stand-in value (CD) as one line on stdin (RO_STDIN, a plain global, replaces it when set). The
+# run's stdin goes to $T/confin.check-reset-off: exactly theOrg's one VAULT_DEX_CLIENT_SECRET= line.
+printf 'VAULT_DEX_CLIENT_SECRET=%s\n' "$CD" > "$T/rowant"
+ro_setup() {   # what configure leaves, and an earlier check's reset-off (2026-11-15)
+  conf_setup
+  printf 'date 2026-11-16T00:00:00Z\napply ok\nreconcile ok\n' > "$ROOT/cutover-state/configured"
+  printf 'date 2026-11-15T00:00:00Z\nresetPasswordAllowed false\n' > "$ROOT/cutover-state/reset-off"
+}
+ro_run() {   # ro_run SWITCH...: conf_run's form with the one value on stdin
+  local LEAF_STDIN
+  if [ -n "${RO_STDIN+x}" ]; then LEAF_STDIN="$RO_STDIN"; else LEAF_STDIN="$CD"$'\n'; fi
+  rm -f "$T/confin".*
+  LEAF_EXTRA="${CONF_EXTRA-STUB_KC_RUNNING=1} STUB_ENV_NAMES=1 STUB_CONF_IN=$T/confin" leaf_run "$@"
+}
+ro_calls_ok() {   # kc_health's two calls, then exactly the one run; no secret name in any call's env; its stdin exactly one line
+  [ "$(grep '^docker ' "$T/log")" = "$(printf '%s\n%s\n%s' "$KC_PS" "$KC_INSPECT" "$CONF_RUN check-reset-off")" ] \
+    && [ "$(grep -c '^ENVNAMES' "$T/log")" -eq 3 ] && [ "$(grep '^ENVNAMES' "$T/log" | sort -u)" = "ENVNAMES" ] \
+    && cmp -s "$T/rowant" "$T/confin.check-reset-off" && [ "$(wc -l < "$T/confin.check-reset-off" | tr -d ' ')" -eq 1 ] \
+    && [ "$(ls "$T" | grep -c '^confin\.[^.]*$')" -eq 1 ]
+}
+reset_off_ok() {   # reset-off: a new UTC date, resetPasswordAllowed false; configured kept; no temp marker
+  local f="$ROOT/cutover-state/reset-off"
+  [ -f "$f" ] && [ "$(wc -l < "$f" | tr -d ' ')" -eq 2 ] \
+    && grep -qE '^date [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' "$f" && ! grep -q 2026-11-15 "$f" \
+    && [ "$(sed -n 2p "$f")" = "resetPasswordAllowed false" ] && configured_ok \
+    && [ -z "$(ls -A "$ROOT/cutover-state" | grep '^\.' | grep -vxF .lock)" ]
+}
+ro_refused() {   # ro_refused CODE WHAT PATTERN: that exit, PATTERN in the output, no run, nothing changed
+  [ "$rc" -eq "$1" ] && echo "$OUT" | grep -q -- "$3" && ! grep -q ' run ' "$T/log" \
+    && [ -z "$(ls "$T" | grep '^confin\.')" ] && [ "$(snap)" = "$before" ] && conf_no_value \
+    && ok "check-reset-off $2: refused ($1), no run, nothing changed" || bad "check-reset-off $2" "rc=$rc; $OUT; $(cat "$T/log")"
+}
+
+# The happy path, a re-run, and a re-run after cutover-done (no data check: it only reads).
+ro_setup
+ro_run check-reset-off; rc=$?
+[ "$rc" -eq 0 ] && ro_calls_ok && reset_off_ok && conf_no_value \
+  && ok "check-reset-off: keycloak healthy, then the exact run with one VAULT_DEX_CLIENT_SECRET= line on its stdin alone; reset-off rewritten" \
+  || bad "check-reset-off happy" "rc=$rc; $OUT; $(cat "$T/log")"
+ro_run check-reset-off; rc=$?
+[ "$rc" -eq 0 ] && ro_calls_ok && reset_off_ok && conf_no_value \
+  && ok "check-reset-off a second time (read-only): runs again (0)" || bad "check-reset-off re-run" "rc=$rc; $OUT; $(cat "$T/log")"
+echo done > "$ROOT/cutover-state/cutover-done"
+ro_run check-reset-off; rc=$?
+[ "$rc" -eq 0 ] && ro_calls_ok && reset_off_ok && conf_no_value \
+  && ok "check-reset-off after cutover-done: runs (0), no data check" || bad "check-reset-off after cutover-done" "rc=$rc; $OUT; $(cat "$T/log")"
+
+# theOrg's exit 1 (not false) and 3 (refused its stdin) pass through; the earlier reset-off is gone.
+for code in 1 3; do
+  ro_setup
+  CONF_EXTRA="STUB_KC_RUNNING=1 STUB_RESETOFF_RC=$code" ro_run check-reset-off; rc=$?
+  [ "$rc" -eq "$code" ] && ro_calls_ok && [ ! -e "$ROOT/cutover-state/reset-off" ] && configured_ok \
+    && echo "$OUT" | grep -q "keycloak-configure check-reset-off exited $code .*no reset-off marker" && conf_no_value \
+    && ok "check-reset-off with the check exiting $code: exit $code, the earlier reset-off removed, no marker" \
+    || bad "check-reset-off exit $code" "rc=$rc; $OUT; $(ls -A "$ROOT/cutover-state")"
+done
+
+# The refusals: each exits 3 (2 for an ARG) with no run and nothing changed (the earlier reset-off kept).
+for how in set empty; do
+  if [ "$how" = set ]; then e="IDP_DEPLOY_DEX_CLIENT_SECRET=$CD"; else e="IDP_DEPLOY_DEX_CLIENT_SECRET="; fi
+  ro_setup; before="$(snap)"
+  CONF_EXTRA="STUB_KC_RUNNING=1 $e" ro_run check-reset-off; rc=$?
+  [ ! -s "$T/log" ] || bad "check-reset-off with the value in its env called docker" "$(cat "$T/log")"
+  ro_refused 3 "with IDP_DEPLOY_DEX_CLIENT_SECRET in its environment ($how)" "check-reset-off: refused: IDP_DEPLOY_DEX_CLIENT_SECRET is set in the environment"
+done
+ro_setup; before="$(snap)"
+ro_run check-reset-off extra; rc=$?
+ro_refused 2 "with an ARG" "check-reset-off: usage: check-reset-off (no ARG)"
+ro_setup; before="$(snap)"
+STUB_HOST=test01 ro_run check-reset-off; rc=$?
+[ ! -s "$T/log" ] || bad "check-reset-off on a replica called docker" "$(cat "$T/log")"
+ro_refused 3 "on a replica" "check-reset-off: refused: not on a replica (test01)"
+ro_setup; mv "$ROOT/cutover-state" "$ROOT/cutover-state.real"; ln -s "$ROOT/cutover-state.real" "$ROOT/cutover-state"; before="$(snap)"
+ro_run check-reset-off; rc=$?
+ro_refused 3 "with cutover-state a symlink" "$ROOT/cutover-state is a symlink"
+ro_setup; rm -f "$ROOT/cutover-state/configured"; before="$(snap)"
+ro_run check-reset-off; rc=$?
+ro_refused 3 "with no configured marker (the gate)" "check-reset-off: refused: cutover marker missing or invalid: configured ("
+ro_setup; before="$(snap)"
+CONF_EXTRA="" ro_run check-reset-off; rc=$?
+ro_refused 3 "with keycloak not running" "check-reset-off: refused: keycloak is not running, not running and healthy"
+ro_setup; before="$(snap)"
+CONF_EXTRA="STUB_KC_RUNNING=1 STUB_KC_HEALTH=starting" ro_run check-reset-off; rc=$?
+ro_refused 3 "with keycloak starting" "check-reset-off: refused: keycloak is starting"
+ro_setup; before="$(snap)"; rm -f "$T/confin".*
+STUB_KC_RUNNING=1 tty_run check-reset-off; rc=$?
+ro_refused 3 "with a terminal on stdin" "check-reset-off: refused: stdin is a terminal"
+for c in "empty stdin:" "a blank line:"$'\n'; do
+  ro_setup; before="$(snap)"
+  RO_STDIN="${c#*:}"
+  ro_run check-reset-off; rc=$?
+  unset RO_STDIN
+  ro_refused 3 "with ${c%%:*}" "check-reset-off: refused: no IDP_DEPLOY_DEX_CLIENT_SECRET value read on stdin"
+done
+for order in "up check-reset-off" "verify check-reset-off"; do
+  ro_setup; before="$(snap)"
+  # shellcheck disable=SC2086
+  ro_run $order; rc=$?
+  ro_refused 3 "combined (${order%% *} first)" "check-reset-off: refused: run it alone"
+done
+
+# Under xtrace (SHELLOPTS=xtrace inherited, or bash -x): traced up to the read, the value in no
+# trace, argv or file; the run still gets it.
+for mode in SHELLOPTS bash-x; do
+  ro_setup
+  if [ "$mode" = SHELLOPTS ]; then
+    CONF_EXTRA="STUB_KC_RUNNING=1 SHELLOPTS=xtrace" ro_run check-reset-off; rc=$?
+  else
+    LEAF_BASH_X=1 ro_run check-reset-off; rc=$?
+  fi
+  [ "$rc" -eq 0 ] && grep -q '^+.*do_check_reset_off' <<< "$OUT" && ro_calls_ok && reset_off_ok && conf_no_value \
+    && ok "check-reset-off under xtrace ($mode): traced up to the read, the value in no trace, argv or file; reset-off" \
+    || bad "check-reset-off xtrace $mode" "rc=$rc; $(grep -c '^+' <<< "$OUT") trace lines; $(cat "$T/log")"
+done
+rm -f "$T/confin".* "$T/rowant"
 
 # --- up and verify past cutover-done (d05): keycloak-db, openldap and keycloak together ---
 # Two distinct stand-in values by prefix assignment (exported into run's environment for that call
@@ -2088,9 +2223,10 @@ STUB_DB_RUNNING=1 run verify; rc=$?
 
 # --- cutover-done (the go-live record): every marker, openldap and keycloak healthy ---
 OL_INSPECT="docker inspect -f {{if .State.Health}}{{.State.Health.Status}}{{else}}no healthcheck{{end}} olid"
-cd_setup() {   # what configure, then count-check, leave
+cd_setup() {   # what configure, then check-reset-off and count-check, leave
   conf_setup
   printf 'date 2026-11-16T00:00:00Z\napply ok\nreconcile ok\n' > "$ROOT/cutover-state/configured"
+  printf 'date 2026-11-16T00:00:00Z\nresetPasswordAllowed false\n' > "$ROOT/cutover-state/reset-off"
   printf 'date 2026-11-16T00:00:00Z\nmanifests-sha256 %s\ncounts equal\n' "$UNP_M" > "$ROOT/cutover-state/counted"
 }
 done_ok() {   # cutover-done: a UTC date and unpacked's manifests-sha256; no temp marker

@@ -22,7 +22,7 @@ REPO = Path(__file__).resolve().parents[2]
 README = REPO / "d05" / "apps" / "identity-platform" / "README.md"
 HEADING = "## Rebuild from the nas01 mirror (#1101)"
 ORDER = ["restore-mirror", "mirror-check", "leaf-issue", "leaf-schedule-install",
-         "start-openldap", "start-keycloak", "configure", "cutover-done"]
+         "start-openldap", "start-keycloak", "configure", "check-reset-off", "cutover-done"]
 CD = "cd ~/local/asyla && "
 
 with open(REPO / "d05" / "host.toml", "rb") as f:

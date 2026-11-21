@@ -21,9 +21,10 @@ This folder is **M1** (agreed with theOrg): `up` creates the two networks, pulls
 places theOrg's root CA, reports on the openldap leaf, and starts **keycloak-db alone**. openldap
 and keycloak first start at the M5 cutover (DEPLOY.md steps 5-6), after a restore into empty
 targets; `configure` runs keycloak-configure after them (behind the cutover marker gate below),
+then `check-reset-off` checks the realm's password reset is off,
 and `restore` refuses and points at `restore-openldap` and `restore-keycloak`. The cutover
 bundle's switches, the two restores, `start-openldap` / `start-keycloak`, `configure`,
-`count-check` and `cutover-done` are M5's switches ("Cutover bundle (M5 G2)"). Once `cutover-done` exists (on d05,
+`check-reset-off`, `count-check` and `cutover-done` are M5's switches ("Cutover bundle (M5 G2)"). Once `cutover-done` exists (on d05,
 never a replica), `up` starts keycloak-db, openldap and keycloak together and needs
 `IDP_LDAP_ADMIN_PASSWORD` too, and `verify` checks all three. The ops
 one-shots (backups, keycloak-configure) are never started by `up`.
@@ -104,7 +105,7 @@ one-shots (backups, keycloak-configure) are never started by `up`.
 - No secret is in any file, here or on the host. The workstation resolves them from OpenBao at
   deploy (`d05/host.toml`: `start_env` `IDP_KEYCLOAK_DB_PASSWORD` and `IDP_LDAP_ADMIN_PASSWORD`;
   `up` unsets the LDAP value before `cutover-done` and refuses (exit 1, nothing started) without
-  either after it; `IDP_DEPLOY_DEX_CLIENT_SECRET` goes only to `configure`, on stdin), and `identity-platform.sh` maps them
+  either after it; `IDP_DEPLOY_DEX_CLIENT_SECRET` goes only to `configure` and `check-reset-off`, on stdin), and `identity-platform.sh` maps them
   onto the compose names (its header). Only the long-running services (keycloak, keycloak-db,
   openldap) name a secret in `compose.yml`; every one-shot (configure, the backup and restore runs)
   takes its value on stdin, as theOrg's merged main since `5dd8de6` (PR #88); the image tag is
@@ -210,8 +211,9 @@ runs the cutover image's `unpack` into the two dirs the restores read (`backup/`
     with `reconcile` (never an argv, an environment, a file or a log; compose.yml passes neither by
     name, so the compose process needs neither). keycloak must be running and healthy. An apply
     that fails skips reconcile; either failing passes its exit through (3: it refused its stdin or
-    a setting) with no marker. Past the refusals, before apply, it removes `counted` and
-    `configured`, so a re-run leaves neither stale (`count-check` is run again after it). On both 0
+    a setting) with no marker. Past the refusals, before apply, it removes `counted`, `reset-off`
+    and `configured`, so a re-run leaves none stale (`check-reset-off` and `count-check` are run
+    again after it). On both 0
     it writes `configured` (`date`, `apply ok`, `reconcile ok`). It is re-runnable, after `configured` and `cutover-done` too (DEPLOY.md
     "Updating": the configuration steps are idempotent). Refused (exit 3, no docker run, nothing
     changed) with either name in the environment, on a replica, a terminal or an empty read of
@@ -219,6 +221,24 @@ runs the cutover image's `unpack` into the two dirs the restores read (`backup/`
 
     ```
     cd ~/local/asyla && python3 core/tools/credentials.py exec IDP_LDAP_ADMIN_PASSWORD IDP_DEPLOY_DEX_CLIENT_SECRET -- projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform configure IDP_LDAP_ADMIN_PASSWORD IDP_DEPLOY_DEX_CLIENT_SECRET
+    ```
+  - `check-reset-off` (cutover step 6, right after `configure`; DEPLOY.md at `bb456ee`): reads
+    `IDP_DEPLOY_DEX_CLIENT_SECRET`'s value as one line on stdin and writes it, in theOrg's form
+    (exactly one `VAULT_DEX_CLIENT_SECRET=` line), to the stdin of `docker compose --profile ops
+    run --rm -T keycloak-configure check-reset-off` alone (never an argv, an environment, a file or
+    a log). theOrg's check is read-only: it GETs realm `theorg` over the admin API and exits 1
+    unless `resetPasswordAllowed` is false (an absent realm or field fails too); a failure stops the
+    cutover before step 7. Needs configure's markers and a valid `configured`, and keycloak running
+    and healthy. Past the refusals, before the run, it removes `reset-off`. On 0 it writes
+    `reset-off` (`date`, `resetPasswordAllowed false`), which `count-check` (M5 path) and
+    `cutover-done` (both paths) need; otherwise its exit passes through (1: not false; 3: it
+    refused its stdin) with no marker. Re-runnable, after `cutover-done` too. Refused (exit 3, no
+    docker run, nothing changed) as `configure` is: the name in the environment, a replica, the
+    lock busy, a missing or invalid marker, keycloak not healthy, a terminal or an empty read; exit
+    2 for an ARG. The operator's run:
+
+    ```
+    cd ~/local/asyla && python3 core/tools/credentials.py exec IDP_DEPLOY_DEX_CLIENT_SECRET -- projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform check-reset-off IDP_DEPLOY_DEX_CLIENT_SECRET
     ```
   - `count-check` (cutover step 7, Counts; DEPLOY.md at `bb456ee`): no value, no ARG. First the
     Mini's `backup/summary.txt` is read once (as root through keycloak-db's image, read-only) and
@@ -241,7 +261,7 @@ runs the cutover image's `unpack` into the two dirs the restores read (`backup/`
     printed (counts, not secrets), no marker. The backup failing: its exit, no marker. Refused
     (exit 3, nothing changed) on a replica, when `count-check/`, a target or `cutover-state/` is a
     symlink, with the lock busy, once `cutover-done` exists, and unless `unpacked`, both
-    `restored-*`, both `started-*` and `configured` are valid. Re-runnable until `cutover-done`.
+    `restored-*`, both `started-*`, `configured` and `reset-off` are valid. Re-runnable until `cutover-done`.
 
     ```
     cd ~/local/asyla/projects/asyla-hosts && scripts/app_switch.sh d05 identity-platform count-check
@@ -249,7 +269,8 @@ runs the cutover image's `unpack` into the two dirs the restores read (`backup/`
   - `cutover-done` (after the cutover's step 8 verification): no value, no ARG. Refused (exit 3,
     nothing written) on a replica, with the lock busy, unless every marker is there and valid
     (`unpacked`, both `restored-*` naming `unpacked`'s `manifests-sha256`, both `started-*`,
-    `configured` with `apply ok` and `reconcile ok`, and `counted` with `counts equal` naming
+    `configured` with `apply ok` and `reconcile ok`, `reset-off` with `resetPasswordAllowed
+    false`, and `counted` with `counts equal` naming
     `unpacked`'s `manifests-sha256`), and unless openldap and keycloak are running
     and healthy. Writes `cutover-done` (`date`, `manifests-sha256`); once it exists it says so and
     exits 0. From then on a build's `up` starts all three services and needs both start_env values.
@@ -263,7 +284,7 @@ runs the cutover image's `unpack` into the two dirs the restores read (`backup/`
     `manifests-sha256`); otherwise the restore's own exit passes through with no marker (3: it
     refused a target that is not empty; 2: a mount or usage problem; 1: it failed).
   - `reset-cutover`, `unpack-bundle` and both restores refuse (exit 3, nothing touched) when `backup/`,
-    `openldap-backup/` or `cutover-state/` is a symlink (both starts and `configure`: `cutover-state/`). The eleven switches run one at a time: each
+    `openldap-backup/` or `cutover-state/` is a symlink (both starts, `configure` and `check-reset-off`: `cutover-state/`). The twelve switches run one at a time: each
     holds util-linux `flock -n` on `cutover-state/.lock` for its whole run, and refuses (exit 3,
     "another cutover switch is running") when it is busy.
 - The marker gate: one marker per step in `/mnt/docker/IdentityPlatform/cutover-state/`, each
@@ -271,16 +292,17 @@ runs the cutover image's `unpack` into the two dirs the restores read (`backup/`
   `restored-openldap` / `restored-keycloak` from the restores, and `cutover-done` from the
   `cutover-done` switch (`cutover-done` stops the starts, `reset-cutover`, `cutover-clean` and the restores;
   a `restored-*` marker stops `reset-cutover`), `started-openldap` / `started-keycloak` from the
-  starts, `configured` from `configure`, `counted` from `count-check`. `start-openldap` needs `unpacked` and `restored-openldap`,
+  starts, `configured` from `configure`, `reset-off` from `check-reset-off`, `counted` from `count-check`. `start-openldap` needs `unpacked` and `restored-openldap`,
   `start-keycloak` needs `unpacked`, `restored-keycloak` and `started-openldap`, `configure` needs
-  both `restored-*` and both `started-*`, `count-check` all of those, `unpacked` and `configured`
-  (only with its `apply ok` and `reconcile ok` lines), `cutover-done` those and `counted` (only
+  both `restored-*` and both `started-*`, `check-reset-off` those and `configured` (only with its
+  `apply ok` and `reconcile ok` lines), `count-check` all of those, `unpacked` and `reset-off`
+  (only with its `resetPasswordAllowed false` line), `cutover-done` those and `counted` (only
   with its `counts equal` line); `unpacked` counts only with a non-empty version equal to
   `fetched`'s, `started-openldap` only with its `admin-bind ok` line, a `restored-*` or `started-*`
   marker only when not empty. Each names the missing or invalid marker and exits 3. `restore` refuses (exit 1, never build_host.py's skip status 3) and
   points at `restore-openldap` and `restore-keycloak`.
-- Exit codes of the eleven cutover switches: 0 done; 2 a usage error (a wrong ARG, an ARG to
-  `reset-cutover`, `cutover-clean`, a restore, a start, `configure`, `count-check` or `cutover-done`); 3 refused, nothing changed (a replica, the value's name set
+- Exit codes of the twelve cutover switches: 0 done; 2 a usage error (a wrong ARG, an ARG to
+  `reset-cutover`, `cutover-clean`, a restore, a start, `configure`, `check-reset-off`, `count-check` or `cutover-done`); 3 refused, nothing changed (a replica, the value's name set
   in the environment, a terminal or an empty read on stdin, a marker or state check, combined with
   another switch); 1 a failure (a pull or download, a check after unpack, a target left not empty).
   unpack-bundle keeps unpack's own exit: 2 and 3 changed nothing; 1, 4 or any other failure may have
@@ -341,6 +363,7 @@ cd ~/local/asyla && projects/asyla-hosts/scripts/app_switch.sh d05 identity-plat
 cd ~/local/asyla && python3 core/tools/credentials.py exec IDP_LDAP_ADMIN_PASSWORD -- projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform start-openldap IDP_LDAP_ADMIN_PASSWORD
 cd ~/local/asyla && python3 core/tools/credentials.py exec IDP_KEYCLOAK_DB_PASSWORD -- projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform start-keycloak IDP_KEYCLOAK_DB_PASSWORD
 cd ~/local/asyla && python3 core/tools/credentials.py exec IDP_LDAP_ADMIN_PASSWORD IDP_DEPLOY_DEX_CLIENT_SECRET -- projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform configure IDP_LDAP_ADMIN_PASSWORD IDP_DEPLOY_DEX_CLIENT_SECRET
+cd ~/local/asyla && python3 core/tools/credentials.py exec IDP_DEPLOY_DEX_CLIENT_SECRET -- projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform check-reset-off IDP_DEPLOY_DEX_CLIENT_SECRET
 cd ~/local/asyla && projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform cutover-done
 ```
 
@@ -387,9 +410,9 @@ cd ~/local/asyla && projects/asyla-hosts/scripts/app_switch.sh d05 identity-plat
   start with an empty TLS volume (theOrg `DEPLOY.md` at `bb456ee`), the restore itself starts no
   slapd, and issuing last keeps the 24-hour leaf fresh for the start and issues nothing when
   `restore-mirror` refuses. If `leaf-issue` refuses over a valid leaf (exit 3), go on.
-- On this path the starts, `configure` and `cutover-done` take `mirror-restored-openldap`,
+- On this path the starts, `configure`, `check-reset-off` and `cutover-done` take `mirror-restored-openldap`,
   `mirror-restored-keycloak` and `mirror-checked` in place of `unpacked`, both `restored-*` and
-  `counted`. `restore-openldap`, `restore-keycloak` and `count-check` are refused on it.
+  `counted`; `cutover-done` needs `reset-off` here too. `restore-openldap`, `restore-keycloak` and `count-check` are refused on it.
 - Cadence: once before the Mini's rollback window closes, then quarterly as a ticket (not a
   schedule), and after a change to these switches or a theOrg repin. The proof runs on a test01
   replica of d05, never on d05 (the header of the script names the operator's steps):

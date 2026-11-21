@@ -295,7 +295,7 @@ fi
 exec 7>&-
 
 for m in mirror-checked fetched unpack-started unpacked restored-openldap restored-keycloak started-openldap \
-  started-keycloak configured counted cutover-done started-stand-in; do
+  started-keycloak configured reset-off counted cutover-done started-stand-in; do
   setup; : > "$SW/$m"
   refused "$m exists" "refused: $SW/$m exists" -- reset-mirror
 done

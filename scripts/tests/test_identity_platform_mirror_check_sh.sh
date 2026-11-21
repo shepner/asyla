@@ -13,7 +13,8 @@
 # restored summary that is not its marker's (no backup run), openldap's or keycloak's counts
 # differing (lines printed, no marker, a stale mirror-checked removed), a dir that cannot be emptied
 # or pruned. A backup failing: its exit, no marker, the dir pruned.
-# The gate on the mirror path: start-openldap, start-keycloak, configure and cutover-done take both
+# The gate on the mirror path: start-openldap, start-keycloak, configure, check-reset-off and
+# cutover-done (which needs reset-off too) take both
 # mirror-restored-* and mirror-checked (each missing or invalid one named); restore-openldap and
 # count-check refused there; markers of both paths refused by every gated switch; cutover-done
 # writes cutover-done with source mirror and both sha256s.
@@ -264,7 +265,7 @@ exec 7> "$SW/.lock"
 if "$T/bin/flock" -n 7; then refused "the cutover lock held" "mirror-check: refused: another cutover switch is running" -- mirror-check
 else bad "the test could not take the cutover lock"; fi
 exec 7>&-
-for m in fetched unpack-started unpacked restored-openldap restored-keycloak started-openldap started-keycloak configured counted cutover-done; do
+for m in fetched unpack-started unpacked restored-openldap restored-keycloak started-openldap started-keycloak configured reset-off counted cutover-done; do
   setup; echo "date 2026-11-21T00:00:00Z" > "$SW/$m"
   refused "with $m (an M5 or later marker)" "mirror-check: refused: $SW/$m exists" -- mirror-check
 done
@@ -329,6 +330,7 @@ gate() {   # gate SWITCH "MARKERS" MISSING|pass: markers written over a setup wi
       mirror-restored-*) : ;;   # setup wrote both
       started-openldap) printf 'date 2026-11-21T00:00:00Z\nadmin-bind ok\n' > "$SW/$m" ;;
       configured) printf 'date 2026-11-21T00:00:00Z\napply ok\nreconcile ok\n' > "$SW/$m" ;;
+      reset-off) printf 'date 2026-11-21T00:00:00Z\n%s\n' "${GATE_RESETOFF-resetPasswordAllowed false}" > "$SW/$m" ;;
       *) printf 'date 2026-11-21T00:00:00Z\n' > "$SW/$m" ;;
     esac
   done
@@ -351,9 +353,14 @@ gate start-keycloak "$MP" "started-openldap"
 gate start-keycloak "$MP started-openldap" pass
 gate configure "$MP started-openldap" "started-keycloak"
 gate configure "$MP started-openldap started-keycloak" pass
-gate cutover-done "$MP started-openldap started-keycloak" "configured"
-gate cutover-done "mirror-restored-openldap mirror-restored-keycloak started-openldap started-keycloak configured" "mirror-checked"
-gate cutover-done "$MP started-openldap started-keycloak configured" pass
+gate check-reset-off "$MP started-openldap started-keycloak" "configured"
+gate check-reset-off "mirror-restored-openldap mirror-restored-keycloak started-openldap started-keycloak configured" "mirror-checked"
+gate check-reset-off "$MP started-openldap started-keycloak configured" pass
+gate cutover-done "$MP started-openldap started-keycloak" "configured reset-off"
+gate cutover-done "$MP started-openldap started-keycloak configured" "reset-off"
+GATE_RESETOFF="resetPasswordAllowed true" gate cutover-done "$MP started-openldap started-keycloak configured reset-off" "reset-off (no resetPasswordAllowed false)"
+gate cutover-done "mirror-restored-openldap mirror-restored-keycloak started-openldap started-keycloak configured reset-off" "mirror-checked"
+gate cutover-done "$MP started-openldap started-keycloak configured reset-off" pass
 # An invalid mirror-restored-* or a mirror-checked for other restores is named.
 setup; checked; grep -v '^source mirror$' "$SW/mirror-restored-keycloak" > "$T/m" && cat "$T/m" > "$SW/mirror-restored-keycloak"
 run -- start-openldap; rc=$?
@@ -371,15 +378,15 @@ run -- configure; rc=$?
 # Mixed paths: refused by every gated switch.
 for m5 in fetched unpacked restored-openldap counted; do
   mixed_ok=1
-  for sw in start-openldap start-keycloak configure cutover-done restore-openldap count-check; do
+  for sw in start-openldap start-keycloak configure check-reset-off cutover-done restore-openldap count-check; do
     setup; checked; echo "date 2026-11-21T00:00:00Z" > "$SW/$m5"
     run -- "$sw"; rc=$?
     [ "$rc" -eq 3 ] && echo "$OUT" | grep -qF "$sw: refused: cutover-state/ mixes the mirror path (mirror-restored-openldap mirror-restored-keycloak mirror-checked) and the M5 cutover path ($m5)" \
       && no_run || { bad "mixed $m5 $sw" "rc=$rc; $OUT"; mixed_ok=0; }
   done
-  # The ok line only when all six cases passed: a bad above has already set fail.
+  # The ok line only when all seven cases passed: a bad above has already set fail.
   [ "$mixed_ok" -eq 1 ] || continue
-  ok "mixed paths ($m5 with the mirror markers): start-openldap, start-keycloak, configure, cutover-done, restore-openldap and count-check refused (3), no docker run"
+  ok "mixed paths ($m5 with the mirror markers): start-openldap, start-keycloak, configure, check-reset-off, cutover-done, restore-openldap and count-check refused (3), no docker run"
 done
 # M5-only switches on the mirror path.
 for sw in restore-openldap count-check; do
@@ -398,6 +405,7 @@ setup; checked
 printf 'date 2026-11-21T00:00:00Z\nadmin-bind ok\n' > "$SW/started-openldap"
 printf 'date 2026-11-21T00:00:00Z\n' > "$SW/started-keycloak"
 printf 'date 2026-11-21T00:00:00Z\napply ok\nreconcile ok\n' > "$SW/configured"
+printf 'date 2026-11-21T00:00:00Z\nresetPasswordAllowed false\n' > "$SW/reset-off"
 run STUB_RESTORED=1 -- cutover-done; rc=$?
 [ "$rc" -eq 0 ] && grep -qx 'source mirror' "$SW/cutover-done" \
   && grep -qx "openldap-summary-sha256 $(sha_of "$ROOT/openldap-backup/summary.txt")" "$SW/cutover-done" \

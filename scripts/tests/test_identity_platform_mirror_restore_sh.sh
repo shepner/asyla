@@ -342,7 +342,7 @@ else
   bad "could not take the cutover lock for the lock-held case"
 fi
 exec 7>&-
-for m in fetched unpack-started unpacked restored-openldap restored-keycloak started-openldap started-keycloak configured counted cutover-done; do
+for m in fetched unpack-started unpacked restored-openldap restored-keycloak started-openldap started-keycloak configured reset-off counted cutover-done; do
   setup
   echo "date 2026-11-16T00:00:00Z" > "$SW/$m"
   refused "the M5 marker $m" "refused: $SW/$m exists (an M5 cutover marker" -- restore-mirror
