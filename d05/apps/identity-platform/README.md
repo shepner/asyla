@@ -320,3 +320,54 @@ A failed step exits 1 naming it; the later steps are skipped.
   off part-way has no `STATUS`. `.work`, `.prev`, `.lock` and unnamed files never reach the stage or
   the mirror. Files an older manifest named and the current one does not stay in the mirror.
 - Tests: `scripts/tests/test_identity_platform_backup_sh.sh` (stubs; the real `mirror-stage.sh`).
+
+## Rebuild from the nas01 mirror (#1101)
+
+After d05 is rebuilt, both copies come back from the nightly mirror above, not from the Mini's
+bundle (`identity-platform.sh`'s header, "After a rebuild"). The operator commands, in order, each
+run alone from the workstation:
+
+```
+cd ~/local/asyla && python3 core/tools/credentials.py exec GITLAB_TOKEN GITEA_TOKEN ASYLA_HOSTS_DEPLOY_USER ASYLA_HOSTS_DEPLOY_TOKEN THEORG_REGISTRY_PULL_TOKEN IDP_KEYCLOAK_DB_PASSWORD IDP_LDAP_ADMIN_PASSWORD -- python3 projects/asyla-hosts/scripts/build_host.py d05 build --apply --confirm d05
+cd ~/local/asyla && projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform restore-mirror
+cd ~/local/asyla && projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform mirror-check
+cd ~/local/asyla && python3 core/tools/credentials.py exec LDAP_PROVISIONER_PASSWORD -- projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform leaf-issue LDAP_PROVISIONER_PASSWORD
+cd ~/local/asyla && projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform leaf-schedule-install
+cd ~/local/asyla && python3 core/tools/credentials.py exec IDP_LDAP_ADMIN_PASSWORD -- projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform start-openldap IDP_LDAP_ADMIN_PASSWORD
+cd ~/local/asyla && python3 core/tools/credentials.py exec IDP_KEYCLOAK_DB_PASSWORD -- projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform start-keycloak IDP_KEYCLOAK_DB_PASSWORD
+cd ~/local/asyla && python3 core/tools/credentials.py exec IDP_LDAP_ADMIN_PASSWORD IDP_DEPLOY_DEX_CLIENT_SECRET -- projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform configure IDP_LDAP_ADMIN_PASSWORD IDP_DEPLOY_DEX_CLIENT_SECRET
+cd ~/local/asyla && projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform cutover-done
+```
+
+- The build: d05 is not disposable, so the operator approves the exact command. `--confirm d05`
+  is what `build_host.py` checks before it destroys d05's VM; a plain build skips an existing VM,
+  and `--recreate` (with that `--confirm`) replaces it. Before `cutover-done` the build's `up`
+  starts keycloak-db alone, which `restore-mirror` needs running and healthy.
+- `restore-mirror` refuses (exit 3, nothing changed) a mirror older than 48 hours, among other
+  checks. To restore an older mirror anyway, run `restore-mirror-accept-age` in its place (the same
+  switch with the age check off, with a warning):
+
+  ```
+  cd ~/local/asyla && projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform restore-mirror-accept-age
+  ```
+
+  A copy already restored (a valid `mirror-restored-*` marker) is skipped on a re-run.
+- `mirror-check` compares fresh summaries with the restored ones; exit 1 prints the lines that
+  differ. Do not start anything until it exits 0.
+- `leaf-issue` goes after `mirror-check`, right before `start-openldap`: the restored slapd does not
+  start with an empty TLS volume (theOrg `DEPLOY.md` at `5dd8de6`), the restore itself starts no
+  slapd, and issuing last keeps the 24-hour leaf fresh for the start and issues nothing when
+  `restore-mirror` refuses. If `leaf-issue` refuses over a valid leaf (exit 3), go on.
+- On this path the starts, `configure` and `cutover-done` take `mirror-restored-openldap`,
+  `mirror-restored-keycloak` and `mirror-checked` in place of `unpacked`, both `restored-*` and
+  `counted`. `restore-openldap`, `restore-keycloak` and `count-check` are refused on it.
+- Cadence: once before the Mini's rollback window closes, then quarterly as a ticket (not a
+  schedule), and after a change to these switches or a theOrg repin. The proof runs on a test01
+  replica of d05, never on d05 (the header of the script names the operator's steps):
+
+  ```
+  cd ~/local/asyla/projects/asyla-hosts && scripts/tests/test_identity_platform_mirror_restore_test01.sh
+  ```
+
+- Tests: `scripts/tests/test_identity_platform_mirror_runbook.py` (this section's switches and
+  values against `switch_env`, in order).
