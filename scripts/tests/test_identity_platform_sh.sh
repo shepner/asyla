@@ -32,7 +32,8 @@
 # run (--pull never) and refuses a stale one; reset-cutover deletes only what an unpack wrote (no
 # unpack-started or unpacked: refused over files, a no-op over empty targets), refuses past
 # cutover-done, a restored-* marker, a restored or ops container, and a symlinked target or
-# cutover-state; cutover-clean refuses past cutover-done; the gate refuses an empty or
+# cutover-state; cutover-clean refuses past cutover-done; fetch-bundle, unpack-bundle, reset-cutover
+# and cutover-clean refuse once any mirror-path marker exists; the gate refuses an empty or
 # version-mismatched unpacked and an empty restored-*; a held cutover-state/.lock refuses every
 # cutover switch (the flock stub is a real flock(2) through python3).
 # restore-openldap and restore-keycloak run the exact compose ops one-shots (openldap's with
@@ -1331,6 +1332,23 @@ reset_setup; before="$(snap)"
 run reset-cutover extra; rc=$?
 [ "$rc" -eq 2 ] && echo "$OUT" | grep -q 'usage: reset-cutover (no ARG)' && [ ! -s "$T/log" ] && [ "$(snap)" = "$before" ] \
   && ok "reset-cutover with an ARG: usage (2), nothing changed" || bad "reset-cutover ARG" "rc=$rc; $OUT"
+# The mirror path (asyla #1101, review R2): with any mirror-path marker (a file, or a dangling
+# symlink), fetch-bundle, unpack-bundle, reset-cutover and cutover-clean each refuse (3) with no
+# docker or curl call and nothing changed (the bundle and both targets' files kept).
+for mk in mirror-restored-openldap mirror-restored-keycloak mirror-checked "mirror-checked link"; do
+  reset_setup; rm -f "$ROOT/cutover-state/fetched" "$ROOT/cutover-state/unpacked" "$ROOT/cutover-state/unpack-started"
+  if [ "$mk" = "mirror-checked link" ]; then ln -s "$ROOT/nowhere" "$ROOT/cutover-state/mirror-checked"; mk=mirror-checked
+  else echo "date 2026-11-21T00:00:00Z" > "$ROOT/cutover-state/$mk"; fi
+  before="$(snap)"
+  for sw in "fetch-bundle $CUT_VER" "unpack-bundle $UNP_M $UNP_K $UNP_O" reset-cutover cutover-clean; do
+    # shellcheck disable=SC2086
+    run $sw </dev/null; rc=$?
+    [ "$rc" -eq 3 ] && echo "$OUT" | grep -qF "${sw%% *}: refused: $ROOT/cutover-state/$mk exists (cutover-state/ is on the mirror path" \
+      && [ ! -s "$T/log" ] && [ "$(snap)" = "$before" ] \
+      && ok "${sw%% *} with $mk$([ -L "$ROOT/cutover-state/$mk" ] && echo ' (a dangling symlink)'): refused (3), no call, nothing changed" \
+      || bad "${sw%% *} with $mk" "rc=$rc; $OUT; $(cat "$T/log")"
+  done
+done
 # The image missing: empty targets succeed; a target holding files fails (1), files kept, marker gone.
 reset_setup; rm -rf "$ROOT/backup"/* "$ROOT/backup/sub" "$ROOT/openldap-backup"/* "$ROOT/openldap-backup/.dotfile"
 mkdir -p "$ROOT/backup/lost+found"

@@ -14,7 +14,9 @@
 # Refusals (exit 3, nothing changed): the value's name in the environment, each symlinked path, the
 # lock held, each M5 marker, an invalid marker, both markers valid, compose unable to tell, a
 # container, each target holding data, keycloak-db not healthy, the NAS not mounted, each bad STATUS,
-# a mirror older than 48 hours (restore-mirror-accept-age restores it), a bad manifest or one with
+# a mirror older than 48 hours, a STATUS more than 300 s in the future, or the two copies' STATUS
+# times (a restored copy's from its marker) more than 2 hours apart (restore-mirror-accept-age
+# restores each, with a warning), a bad manifest or one with
 # no summary.txt, the mirror changed while staged, combined with another switch. Exit 2 for an ARG.
 # Failures: a stage or target that does not match its manifest (exit 1, no STATUS, no restore);
 # the restores' exits pass through with no marker; a re-run skips a valid marker.
@@ -199,9 +201,9 @@ setup() {   # a rebuilt host: empty targets (backup/ and openldap-data with lost
   make_mirror "$MIR/openldap" 2 "${OL_FILES[@]}"
   make_mirror "$MIR/keycloak" 2 "${KC_FILES[@]}"
 }
-valid_marker() {   # valid_marker NAME: a mirror-restored-NAME as the switch writes it
-  printf 'date 2026-11-20T00:00:00Z\nsource mirror\nstatus OK 2026-11-19T03:45:00Z\nsummary-sha256 %s\n' \
-    "$(printf 'a%.0s' {1..64})" > "$SW/mirror-restored-$1"
+valid_marker() {   # valid_marker NAME: a mirror-restored-NAME as the switch writes it (status: the mirror's STATUS)
+  printf 'date 2026-11-20T00:00:00Z\nsource mirror\nstatus %s\nsummary-sha256 %s\n' \
+    "$(head -n 1 "$MIR/$1/STATUS")" "$(printf 'a%.0s' {1..64})" > "$SW/mirror-restored-$1"
 }
 docker_lines() { grep '^docker ' "$T/log"; }
 no_run() { ! docker_lines | grep -q ' run '; }   # no docker run and no compose run (ps and inspect only)
@@ -390,10 +392,51 @@ run -- restore-mirror-accept-age; rc=$?
   && [ "$(sed -n 3p "$SW/mirror-restored-openldap")" = "status $old" ] && check_marker keycloak \
   && ok "restore-mirror-accept-age: the old mirror restored, with a warning; both markers" || bad "accept-age" "rc=$rc; $OUT"
 setup
+make_mirror "$MIR/openldap" 47.5 "${OL_FILES[@]}"
 make_mirror "$MIR/keycloak" 47.5 "${KC_FILES[@]}"
 run -- restore-mirror; rc=$?
-[ "$rc" -eq 0 ] && ! echo "$OUT" | grep -q WARN && check_marker keycloak \
-  && ok "a mirror 47 hours old is restored without a warning" || bad "47 hours" "rc=$rc; $OUT"
+[ "$rc" -eq 0 ] && ! echo "$OUT" | grep -q WARN && check_marker openldap && check_marker keycloak \
+  && ok "mirrors 47 hours old are restored without a warning" || bad "47 hours" "rc=$rc; $OUT"
+
+# --- a STATUS in the future (more than 300 s), and the two copies more than 2 hours apart ---
+setup
+make_mirror "$MIR/openldap" -0.1 "${OL_FILES[@]}"
+make_mirror "$MIR/keycloak" -0.1 "${KC_FILES[@]}"
+refused_ro "a STATUS 6 minutes in the future" "refused: the openldap mirror's STATUS is" -- restore-mirror
+echo "$OUT" | grep -qE "STATUS is 3[0-9]{2} seconds in the future .*more than 300 .*to restore it anyway: restore-mirror-accept-age" \
+  && ok "the future refusal gives the seconds and names restore-mirror-accept-age" || bad "future refusal text" "$OUT"
+run -- restore-mirror-accept-age; rc=$?
+[ "$rc" -eq 0 ] && echo "$OUT" | grep -qF "[WARN] restore-mirror-accept-age: the openldap mirror's STATUS is" \
+  && check_marker openldap && check_marker keycloak \
+  && ok "restore-mirror-accept-age: a STATUS in the future restored, with a warning; both markers" || bad "future accept-age" "rc=$rc; $OUT"
+setup
+make_mirror "$MIR/openldap" -0.05 "${OL_FILES[@]}"
+make_mirror "$MIR/keycloak" -0.05 "${KC_FILES[@]}"
+run -- restore-mirror; rc=$?
+[ "$rc" -eq 0 ] && ! echo "$OUT" | grep -q WARN && check_marker openldap && check_marker keycloak \
+  && ok "a STATUS 3 minutes in the future is restored without a warning" || bad "3 minutes ahead" "rc=$rc; $OUT"
+setup
+make_mirror "$MIR/keycloak" 4.5 "${KC_FILES[@]}"
+refused_ro "the copies 2.5 hours apart" "refused: the openldap and keycloak STATUS times differ by" -- restore-mirror
+echo "$OUT" | grep -qE "differ by 1(49|50|51) minutes \(openldap: OK [^;]+; keycloak: $(head -n 1 "$MIR/keycloak/STATUS")\), more than 2 hours .*restore-mirror-accept-age" \
+  && ok "the skew refusal gives the minutes, both STATUS lines and names restore-mirror-accept-age" || bad "skew refusal text" "$OUT"
+run -- restore-mirror-accept-age; rc=$?
+[ "$rc" -eq 0 ] && echo "$OUT" | grep -qF "[WARN] restore-mirror-accept-age: the openldap and keycloak STATUS times differ by" \
+  && check_marker openldap && check_marker keycloak \
+  && ok "restore-mirror-accept-age: copies 2.5 hours apart restored, with a warning; both markers" || bad "skew accept-age" "rc=$rc; $OUT"
+setup
+make_mirror "$MIR/keycloak" 3.5 "${KC_FILES[@]}"
+run -- restore-mirror; rc=$?
+[ "$rc" -eq 0 ] && ! echo "$OUT" | grep -q WARN && check_marker openldap && check_marker keycloak \
+  && ok "copies 1.5 hours apart are restored without a warning" || bad "1.5 hours apart" "rc=$rc; $OUT"
+setup
+make_mirror "$MIR/keycloak" 5 "${KC_FILES[@]}"
+valid_marker keycloak
+make_mirror "$MIR/keycloak" 2 "${KC_FILES[@]}"
+refused_ro "openldap 3 hours from keycloak's marker (its mirror fresh)" \
+  "refused: the openldap and keycloak STATUS times differ by" -- restore-mirror
+echo "$OUT" | grep -qF "keycloak: $(sed -n 's/^status //p' "$SW/mirror-restored-keycloak")" \
+  && ok "the skew with a restored copy takes its marker's status line, not its mirror's" || bad "skew vs marker" "$OUT"
 for iso in 2024-02-29T12:00:00Z 2000-03-01T00:00:00Z 1999-12-31T23:59:59Z 1970-01-01T00:00:00Z; do
   setup
   echo "OK $iso" > "$MIR/openldap/STATUS"

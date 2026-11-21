@@ -152,10 +152,13 @@
 #               IDP_KEYCLOAK_DB_PASSWORD in the environment, a symlink, the lock busy, any M5 marker
 #               (fetched to cutover-done), an invalid mirror-restored-* or both valid, an openldap or
 #               keycloak container, a target holding data, keycloak-db not healthy, the NAS not
-#               mounted, a mirror STATUS not "OK <UTC time>", a mirror older than 48 hours, a bad
-#               manifest, or a mirror that changed while staged (do_restore_mirror). Exit 2 for an ARG.
-#   restore-mirror-accept-age  the same, but a mirror older than 48 hours is restored, with a
-#               warning (a second switch name: switch_args takes an exact ARG count).
+#               mounted, a mirror STATUS not "OK <UTC time>", a mirror older than 48 hours, a STATUS
+#               more than 300 s in the future, the two copies' STATUS times more than 2 hours apart,
+#               a bad manifest, or a mirror that changed while staged (do_restore_mirror). Exit 2
+#               for an ARG.
+#   restore-mirror-accept-age  the same, but a mirror older than 48 hours, a STATUS in the future
+#               or two copies' times apart is restored, with a warning (a second switch name:
+#               switch_args takes an exact ARG count).
 #   mirror-check  no value, no ARG; runs alone, under the cutover lock; also on a replica. After
 #               both mirror-restored-* (and before start-openldap): fresh summaries compared with
 #               each restored summary.txt (whose sha256 must be its marker's): keycloak-backup
@@ -953,7 +956,8 @@ file_sha256() { sha256_hex < "$1"; }
 # Never an argv, a file or a log. Refused (exit 3, nothing called) on a replica (before stdin is
 # read), when THEORG_REGISTRY_PULL_TOKEN
 # or IDENTITY_PLATFORM_REGISTRY_PULL_TOKEN is in the environment, stdin is a terminal or the read is
-# empty, and over an existing bundle or unpacked marker (cutover-clean or reset-cutover first); exit
+# empty, over an existing bundle or unpacked marker (cutover-clean or reset-cutover first), and once
+# any MIRROR_PATH_MARKERS marker exists (refuse_mirror_path: a host restored from the mirror); exit
 # 2 for a VERSION that is not m5-<12 hex>. The download goes to a temp name in cutover/, then mv;
 # prints its size and sha256 and writes the fetched marker.
 do_fetch_bundle() {
@@ -971,6 +975,7 @@ do_fetch_bundle() {
     return 3
   fi
   cutover_lock fetch-bundle || return
+  refuse_mirror_path fetch-bundle || return
   if [ -e "$BUNDLE" ]; then
     echo "[ERROR] fetch-bundle: refused: $BUNDLE exists; run cutover-clean first (reset-cutover too after an unpack)" >&2
     return 3
@@ -1044,8 +1049,8 @@ target_empty() {   # target_empty DIR: missing, or holding nothing but lost+foun
 # bundle whose sha256 is not the fetched one, a fetched version that is not m5-<MANIFESTS_SHA256's
 # first 12 hex> (a wrong bundle), an unpacked marker, an unpack-started marker without unpacked (a
 # previous unpack did not finish), a target holding more than lost+found (run reset-cutover), a
-# target or cutover-state/ that is a symlink, the cutover lock busy, or the image missing (run
-# fetch-bundle). Exit 2 for ARGs that are not three 64-hex. Past every refusal and the identity
+# target or cutover-state/ that is a symlink, the cutover lock busy, any MIRROR_PATH_MARKERS marker
+# (refuse_mirror_path), or the image missing (run fetch-bundle). Exit 2 for ARGs that are not three 64-hex. Past every refusal and the identity
 # read, the unpack-started marker (fetched version, MANIFESTS_SHA256), then the docker run
 # (--pull never: the image fetch-bundle pulled, never a registry).
 # unpack's own exit is kept: 1 or 4 leave files without STATUS (reset-cutover before a retry), 2 or 3
@@ -1068,6 +1073,7 @@ do_unpack_bundle() {
   fi
   refuse_symlinks unpack-bundle "$KC_TARGET" "$OL_TARGET" "$STATE_DIR" || return
   cutover_lock unpack-bundle || return
+  refuse_mirror_path unpack-bundle || return
   ver="$(state_value fetched version)"
   if [ ! -f "$STATE_DIR/fetched" ] || [ ! -f "$BUNDLE" ]; then
     echo "[ERROR] unpack-bundle: refused: no fetched bundle ($STATE_DIR/fetched and $BUNDLE); run fetch-bundle first; nothing changed" >&2
@@ -1154,8 +1160,8 @@ do_unpack_bundle() {
 # present) so that unpack-bundle can run again. It deletes only what an unpack wrote: with neither
 # an unpack-started nor an unpacked marker it refuses (exit 3, nothing changed), unless both targets
 # are empty already (a no-op, exit 0). Refused (exit 3, nothing changed) also on a replica, when a
-# target or cutover-state/ is a symlink, the cutover lock is busy, cutover-done or a restored-*
-# marker exists, or `compose --profile restored --profile ops ps -a -q openldap keycloak
+# target or cutover-state/ is a symlink, the cutover lock is busy, any MIRROR_PATH_MARKERS marker
+# exists (refuse_mirror_path), cutover-done or a restored-* marker exists, or `compose --profile restored --profile ops ps -a -q openldap keycloak
 # keycloak-backup openldap-backup` lists a container or fails: past a restore the targets are the
 # restores' input, never emptied here. Then the unpacked marker goes first (a crash mid-delete
 # leaves no unpacked over a partial target; unpack-started stays, so a reset can run again), each
@@ -1177,6 +1183,7 @@ do_reset_cutover() {
   fi
   refuse_symlinks reset-cutover "$KC_TARGET" "$OL_TARGET" "$STATE_DIR" || return
   cutover_lock reset-cutover || return
+  refuse_mirror_path reset-cutover || return
   if [ -e "$STATE_DIR/$CUTOVER_DONE" ]; then
     echo "[ERROR] reset-cutover: refused: $STATE_DIR/$CUTOVER_DONE exists (the cutover is done); nothing changed" >&2
     return 3
@@ -1231,7 +1238,8 @@ do_reset_cutover() {
 # cutover-clean: the ciphertext, fetch-bundle's temp downloads (cutover/.bundle.*) and a temp
 # fetched marker removed; the fetched marker is kept, because cutover_gate checks unpacked
 # against it (a new fetch-bundle rewrites it); idempotent. A bundle can always be fetched again, so no marker
-# gates it. Refused (exit 3) on a replica, with the cutover lock busy, and once cutover-done exists.
+# gates it. Refused (exit 3) on a replica, with the cutover lock busy, once any MIRROR_PATH_MARKERS
+# marker exists (refuse_mirror_path), and once cutover-done exists.
 do_cutover_clean() {
   if [ $# -ne 0 ]; then
     echo "[ERROR] cutover-clean: usage: cutover-clean (no ARG)" >&2
@@ -1242,6 +1250,7 @@ do_cutover_clean() {
     return 3
   fi
   cutover_lock cutover-clean || return
+  refuse_mirror_path cutover-clean || return
   if [ -e "$STATE_DIR/$CUTOVER_DONE" ]; then
     echo "[ERROR] cutover-clean: refused: $STATE_DIR/$CUTOVER_DONE exists (the cutover is done); nothing changed" >&2
     return 3
@@ -1956,8 +1965,10 @@ mirror_copy() {
 #      openldap-config holding more than lost+found; for keycloak, backup/ holding more, or
 #      keycloak-db not running and healthy (theOrg's restore refuses a database with tables); the NAS
 #      share not mounted; the mirror's STATUS not "OK <UTC ISO time>"; a STATUS older than
-#      MIRROR_MAX_AGE_S (48 hours; the coordinator's rule) under restore-mirror (the switch
-#      restore-mirror-accept-age restores it, with a warning). Exit 2 for any ARG.
+#      MIRROR_MAX_AGE_S (48 hours; the coordinator's rule), a STATUS more than MIRROR_MAX_AHEAD_S
+#      (300 s) in the future, or the two copies' STATUS times (a copy restored already: its marker's)
+#      more than MIRROR_MAX_SKEW_S (2 hours) apart, all three under restore-mirror (the switch
+#      restore-mirror-accept-age restores it, with a warning; asyla #1101 review R2). Exit 2 for any ARG.
 #   2. Stage (mirror_restage): the files the mirror's manifest.sha256 names, then the manifest, copied
 #      as this user to mirror-stage/NAME (emptied first), checked there with sha256sum -c; then the
 #      mirror's STATUS and manifest read again, and either changed (a backup wrote the mirror
@@ -1976,6 +1987,8 @@ mirror_copy() {
 # Allowed on a replica (the restore proof): it reads the mirror through the replica's read-only
 # NAS mount and writes only local disk. Runs alone, under the cutover lock (backup's too).
 MIRROR_MAX_AGE_S=$((48 * 3600))
+MIRROR_MAX_AHEAD_S=300
+MIRROR_MAX_SKEW_S=$((2 * 3600))
 MIRROR_STATUS_RE='^OK [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
 MIRROR_M5_MARKERS=(fetched unpack-started unpacked restored-openldap restored-keycloak started-openldap started-keycloak configured counted "$CUTOVER_DONE")
 
@@ -2016,7 +2029,7 @@ mirror_targets() {
 }
 
 do_restore_mirror() {   # do_restore_mirror ACCEPT_AGE(true|false) [ARG...]: the dispatcher sets ACCEPT_AGE
-  local accept="$1" sw=restore-mirror n m d i todo=() lines=() ids h line t now age
+  local accept="$1" sw=restore-mirror n m d i todo=() lines=() ids h line t now age ts=() sl=() skew
   shift
   if $accept; then sw=restore-mirror-accept-age; fi
   if [ -n "${IDP_KEYCLOAK_DB_PASSWORD+x}" ]; then
@@ -2090,6 +2103,13 @@ do_restore_mirror() {   # do_restore_mirror ACCEPT_AGE(true|false) [ARG...]: the
       return 3
     fi
     age=$((now - t))
+    if [ $((t - now)) -gt "$MIRROR_MAX_AHEAD_S" ]; then
+      if ! $accept; then
+        echo "[ERROR] $sw: refused: the $n mirror's STATUS is $((t - now)) seconds in the future ($line), more than $MIRROR_MAX_AHEAD_S (a clock is wrong); to restore it anyway: restore-mirror-accept-age; nothing changed" >&2
+        return 3
+      fi
+      echo "[WARN] $sw: the $n mirror's STATUS is $((t - now)) seconds in the future ($line); restoring it anyway" >&2
+    fi
     if [ "$age" -gt "$MIRROR_MAX_AGE_S" ]; then
       if ! $accept; then
         echo "[ERROR] $sw: refused: the $n mirror is $((age / 3600)) hours old ($line), older than $((MIRROR_MAX_AGE_S / 3600)); to restore it anyway: restore-mirror-accept-age; nothing changed" >&2
@@ -2099,6 +2119,32 @@ do_restore_mirror() {   # do_restore_mirror ACCEPT_AGE(true|false) [ARG...]: the
     fi
     lines+=("$line")
   done
+  # One night's pair: the two copies' STATUS times (a copy restored already: its marker's status
+  # line) within MIRROR_MAX_SKEW_S of each other.
+  for n in openldap keycloak; do
+    line=""
+    if [ -e "$STATE_DIR/mirror-restored-$n" ]; then
+      line="$(grep -m 1 -E '^status OK ' "$STATE_DIR/mirror-restored-$n" </dev/null)" || line=""
+      line="${line#status }"
+    else
+      for i in "${!todo[@]}"; do [ "${todo[$i]}" != "$n" ] || line="${lines[$i]}"; done
+    fi
+    if ! t="$(iso_epoch "${line#OK }")"; then
+      echo "[ERROR] $sw: refused: no valid STATUS time for the $n copy ($line); nothing changed" >&2
+      return 3
+    fi
+    ts+=("$t")
+    sl+=("$line")
+  done
+  skew=$((ts[0] - ts[1]))
+  [ "$skew" -ge 0 ] || skew=$((-skew))
+  if [ "$skew" -gt "$MIRROR_MAX_SKEW_S" ]; then
+    if ! $accept; then
+      echo "[ERROR] $sw: refused: the openldap and keycloak STATUS times differ by $((skew / 60)) minutes (openldap: ${sl[0]}; keycloak: ${sl[1]}), more than $((MIRROR_MAX_SKEW_S / 3600)) hours (not one night's backup); to restore them anyway: restore-mirror-accept-age; nothing changed" >&2
+      return 3
+    fi
+    echo "[WARN] $sw: the openldap and keycloak STATUS times differ by $((skew / 60)) minutes (openldap: ${sl[0]}; keycloak: ${sl[1]}); restoring anyway" >&2
+  fi
   # Each stage is held to the STATUS line checked above (a newer one: refused, run again).
   for i in "${!todo[@]}"; do
     mirror_restage "${todo[$i]}" "${lines[$i]}" || return
@@ -2395,6 +2441,18 @@ mirror_checked_ok() {
 # every gated switch: the two paths never mix.
 MIRROR_PATH_MARKERS=(mirror-restored-openldap mirror-restored-keycloak mirror-checked)
 M5_PATH_MARKERS=(fetched unpack-started unpacked restored-openldap restored-keycloak counted)
+# refuse_mirror_path SWITCH: exit 3 when any of MIRROR_PATH_MARKERS exists (a file, or a symlink
+# even dangling): fetch-bundle, unpack-bundle, reset-cutover and cutover-clean are the M5 path's,
+# and a host restored from the mirror is never fetched into, unpacked into or emptied by them.
+refuse_mirror_path() {
+  local m
+  for m in "${MIRROR_PATH_MARKERS[@]}"; do
+    if [ -e "$STATE_DIR/$m" ] || [ -L "$STATE_DIR/$m" ]; then
+      echo "[ERROR] $1: refused: $STATE_DIR/$m exists (cutover-state/ is on the mirror path: this host was restored from the NAS mirror; $1 is an M5 cutover switch); nothing changed" >&2
+      return 3
+    fi
+  done
+}
 cutover_gate() {
   local m v fv need=() missing=() mir=() m5=() path=m5 what="cutover marker"
   for m in "${MIRROR_PATH_MARKERS[@]}"; do [ ! -e "$STATE_DIR/$m" ] && [ ! -L "$STATE_DIR/$m" ] || mir+=("$m"); done
@@ -2582,7 +2640,7 @@ usage() {
   echo "                    (a valid one is skipped). No value, no ARG. Refused (exit 3) past any M5 marker," >&2
   echo "                    with a container or data present, keycloak-db unhealthy, the NAS unmounted, a" >&2
   echo "                    STATUS not OK, or a mirror older than 48 hours. Runs alone. Also on a replica" >&2
-  echo "  restore-mirror-accept-age - restore-mirror, restoring a mirror older than 48 hours too (with a warning)" >&2
+  echo "  restore-mirror-accept-age - restore-mirror, restoring a mirror older than 48 hours, a STATUS in the future or copies over 2 hours apart too (with a warning)" >&2
   echo "  mirror-check    - After restore-mirror: fresh openldap-backup and keycloak-backup backups into the" >&2
   echo "                    emptied openldap-count-check/ and count-check/ (each keeps only summary.txt after)," >&2
   echo "                    compared with the restored summaries (openldap's whole summary; keycloak's realm," >&2
