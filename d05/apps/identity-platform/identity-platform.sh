@@ -159,6 +159,15 @@
 #   restore-mirror-accept-age  the same, but a mirror older than 48 hours, a STATUS in the future
 #               or two copies' times apart is restored, with a warning (a second switch name:
 #               switch_args takes an exact ARG count).
+#   reset-mirror  no value, no ARG; runs alone, under the cutover lock; also on a replica. After a
+#               failed restore-mirror: each copy without a valid mirror-restored-* marker that
+#               restore-mirror left something of (mirror-stage/NAME or an invalid marker) has its
+#               dirs emptied as root and removed (openldap: openldap-backup/, openldap-data,
+#               openldap-config; keycloak: backup/ and keycloak-db/, keycloak-db stopped first), then
+#               its marker and stage removed. Refused (exit 3, nothing changed) past mirror-checked,
+#               a start, configure or any M5 marker, with an openldap, keycloak or backup one-shot
+#               container, a symlink or a mount point among its dirs, APP_ROOT on the NAS share, or
+#               data no restore-mirror wrote. The NAS mirror is never touched (do_reset_mirror).
 #   mirror-check  no value, no ARG; runs alone, under the cutover lock; also on a replica. After
 #               both mirror-restored-* (and before start-openldap): fresh summaries compared with
 #               each restored summary.txt (whose sha256 must be its marker's): keycloak-backup
@@ -2239,7 +2248,7 @@ mirror_restore() {
   if [ "$rc" -ne 0 ]; then
     pw=""
     unset -v pw
-    echo "[ERROR] $sw: copying the stage into $tgt exited $rc (3: it was not empty; 1: it may be part-written: empty it as root before a re-run); $name not restored, no marker" >&2
+    echo "[ERROR] $sw: copying the stage into $tgt exited $rc (3: it was not empty; 1: it may be part-written: reset-mirror empties it, then a re-run); $name not restored, no marker" >&2
     return "$rc"
   fi
   if [ "$name" = openldap ]; then
@@ -2255,11 +2264,169 @@ mirror_restore() {
     unset -v pw
   fi
   if [ "$rc" -ne 0 ]; then
-    echo "[ERROR] $sw: $svc restore exited $rc (3: it refused a target that is not empty or, for keycloak, the stdin value; 2: a mount or usage problem; 1: it failed); no mirror-restored-$name marker; $tgt holds the copy: empty it as root (and the restore's targets) before a re-run" >&2
+    echo "[ERROR] $sw: $svc restore exited $rc (3: it refused a target that is not empty or, for keycloak, the stdin value; 2: a mount or usage problem; 1: it failed); no mirror-restored-$name marker; $tgt holds the copy: reset-mirror empties it and the restore's targets, then a re-run (README)" >&2
     return "$rc"
   fi
   write_state "mirror-restored-$name" "date $(date -u +%Y-%m-%dT%H:%M:%SZ </dev/null)" "source mirror" \
     "status $line" "summary-sha256 $sum"
+}
+
+# reset-mirror (asyla #1101, review R3): after a failed restore-mirror, the dirs of each copy whose
+# restore did not finish emptied, so that restore-mirror can run again. No value, no stdin, no ARG
+# (exit 2); runs alone, under the cutover lock; also on a replica (the restore proof's host). Every
+# refusal comes before anything is stopped or deleted. Refused (exit 3, nothing changed): APP_ROOT
+# the NAS share (DOCKER_D1) or below it, as given or resolved (pwd -P); one of its dirs a symlink;
+# the cutover lock busy; mirror-checked, any M5 or later marker (MIRROR_M5_MARKERS: started-*,
+# configured and cutover-done among them) or any started-*; an openldap, keycloak or backup one-shot
+# container (or compose unable to tell); APP_ROOT, mirror-stage/ or one of the dirs a mount point (it
+# empties only plain dirs on the data disk: a mount could be the NAS share); a copy with neither a
+# valid mirror-restored-* marker nor anything restore-mirror leaves (mirror-stage/NAME, a
+# mirror-restored-NAME) whose dirs hold data (restore-mirror did not write them). A copy with a
+# valid mirror-restored-* marker finished: it is never touched. Exit 1, nothing changed, when
+# mountpoint (util-linux) is not on PATH or keycloak-db's image is not here.
+# Then per copy still to reset (openldap, then keycloak): for keycloak, keycloak-db stopped (compose
+# stop: its container stays; theOrg's restore writes into its database) and checked not running;
+# each of the copy's dirs (mirror_reset_dirs) emptied but for lost+found as root in keycloak-db's
+# image (find, --pull never, --network none, as count_dir_clear; its GNU rm 9.1 also with
+# --one-file-system --preserve-root=all, so a mount below a dir, which -v binds recursively, is
+# skipped and left, never emptied: the list then fails the reset), listed again as root, and removed
+# when empty (rmdir, as this user), so it is missing again, as on a fresh build: restore-mirror
+# makes backup/ and openldap-backup/, theOrg's openldap restore its two dirs, and up's ensure_dirs
+# keycloak-db/, whose postgres entrypoint then initialises an empty database (no PG_VERSION); a dir
+# holding only lost+found is kept. Last, the copy's mirror-restored-NAME (an invalid one) and
+# mirror-stage/NAME go, so a reset cut off part-way can run again. The NAS mirror is never read or
+# written. Exit 1 when a dir still holds files or a step fails. Next (README): for keycloak, the
+# build's up (it starts keycloak-db again); then restore-mirror.
+KC_DB_DIR="$APP_ROOT/keycloak-db"
+mirror_reset_dirs() {   # mirror_reset_dirs NAME: the dirs restore-mirror writes for that copy
+  case "$1" in
+    openldap) printf '%s\n' "$OL_TARGET" "$APP_ROOT/openldap-data" "$APP_ROOT/openldap-config" ;;
+    keycloak) printf '%s\n' "$KC_TARGET" "$KC_DB_DIR" ;;
+  esac
+}
+
+path_under() {   # path_under P ROOT: P is ROOT or below it (as strings); an empty ROOT is nothing
+  [ -n "$2" ] || return 1
+  case "$1/" in "${2%/}"/*) return 0 ;; esac
+  return 1
+}
+
+# mirror_reset_dir DIR: emptied but for lost+found as root, listed again as root, removed when empty.
+mirror_reset_dir() {
+  local sw=reset-mirror d="$1" rc=0 names
+  [ -e "$d" ] || return 0
+  docker run --rm --network none --pull never --user 0:0 --entrypoint find -v "$d:/t" "$KC_DB_IMAGE" \
+    /t -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf --one-file-system --preserve-root=all {} + </dev/null || rc=$?
+  if ! names="$(docker run --rm --network none --pull never --user 0:0 --entrypoint ls -v "$d:/t:ro" "$KC_DB_IMAGE" -A /t </dev/null)"; then
+    echo "[ERROR] $sw: could not list $d as root after emptying it (find exit $rc); the marker and stage kept: run $sw again" >&2
+    return 1
+  fi
+  case "$names" in
+    "")
+      if ! rmdir "$d" </dev/null; then
+        echo "[ERROR] $sw: $d is empty but could not be removed (rmdir, as this user: is $APP_ROOT this user's?); the marker and stage kept" >&2
+        return 1
+      fi
+      echo "[INFO] $sw: $d emptied and removed" ;;
+    lost+found) echo "[INFO] $sw: $d emptied (lost+found kept)" ;;
+    *)
+      echo "[ERROR] $sw: $d still holds files (find exit $rc): $(tr '\n' ' ' <<<"$names"); the marker and stage kept: run $sw again" >&2
+      return 1 ;;
+  esac
+}
+
+do_reset_mirror() {
+  local sw=reset-mirror n d f ids ra="" rn="" todo=() dirs=()
+  if [ $# -ne 0 ]; then
+    echo "[ERROR] $sw: usage: $sw (no ARG)" >&2
+    return 2
+  fi
+  # Never the NAS: APP_ROOT, as given and resolved, is not the share or below it.
+  if [ -d "$APP_ROOT" ]; then ra="$(cd "$APP_ROOT" 2>/dev/null && pwd -P)" || ra=""; fi
+  if [ -d "$DOCKER_D1" ]; then rn="$(cd "$DOCKER_D1" 2>/dev/null && pwd -P)" || rn=""; fi
+  if path_under "$APP_ROOT" "$DOCKER_D1" || path_under "$ra" "$DOCKER_D1" || path_under "$ra" "$rn"; then
+    echo "[ERROR] $sw: refused: $APP_ROOT${ra:+ ($ra)} is the NAS share $DOCKER_D1 or below it; $sw never deletes there; nothing changed" >&2
+    return 3
+  fi
+  dirs=("$OL_TARGET" "$APP_ROOT/openldap-data" "$APP_ROOT/openldap-config" "$KC_TARGET" "$KC_DB_DIR"
+    "$MIRROR_STAGE" "$MIRROR_STAGE/openldap" "$MIRROR_STAGE/keycloak")
+  refuse_symlinks "$sw" "$STATE_DIR" "${dirs[@]}" || return
+  cutover_lock "$sw" || return
+  for f in "$STATE_DIR/mirror-checked" "${MIRROR_M5_MARKERS[@]/#/$STATE_DIR/}" "$STATE_DIR"/started-*; do
+    if [ -e "$f" ] || [ -L "$f" ]; then
+      echo "[ERROR] $sw: refused: $f exists (mirror-checked, a start, configure or an M5 cutover marker: $sw empties only a restore that did not finish); nothing changed" >&2
+      return 3
+    fi
+  done
+  if ! ids="$(run_compose --profile restored --profile ops ps -a -q openldap keycloak keycloak-backup openldap-backup </dev/null)"; then
+    echo "[ERROR] $sw: refused: docker compose ps for openldap, keycloak and the backup one-shots failed (cannot tell whether one exists); nothing changed" >&2
+    return 3
+  fi
+  if [ -n "$ids" ]; then
+    echo "[ERROR] $sw: refused: an openldap, keycloak or backup one-shot container exists (started, or a restore still running); nothing changed" >&2
+    return 3
+  fi
+  if ! command -v mountpoint >/dev/null 2>&1; then
+    echo "[ERROR] $sw: mountpoint (util-linux) is not on PATH; cannot tell a mount from a dir; nothing changed" >&2
+    return 1
+  fi
+  for d in "$APP_ROOT" "${dirs[@]}"; do
+    if [ -e "$d" ] && mountpoint -q "$d" </dev/null; then
+      echo "[ERROR] $sw: refused: $d is a mount point ($sw empties only plain dirs on the data disk; a mount could be the NAS share); nothing changed" >&2
+      return 3
+    fi
+  done
+  for n in openldap keycloak; do
+    if mirror_marker_ok "$n"; then
+      echo "[INFO] $sw: $STATE_DIR/mirror-restored-$n is valid: $n's restore finished; not touched"
+      continue
+    fi
+    if [ -e "$MIRROR_STAGE/$n" ] || [ -e "$STATE_DIR/mirror-restored-$n" ] || [ -L "$STATE_DIR/mirror-restored-$n" ]; then
+      todo+=("$n")
+      continue
+    fi
+    while IFS= read -r d; do
+      [ "$d" != "$KC_DB_DIR" ] || continue   # the build's database: restore-mirror never ran into it
+      if ! target_empty "$d"; then
+        echo "[ERROR] $sw: refused: $d holds more than lost+found (or cannot be listed), and neither $MIRROR_STAGE/$n nor $STATE_DIR/mirror-restored-$n is there: restore-mirror did not write it; nothing changed" >&2
+        return 3
+      fi
+    done < <(mirror_reset_dirs "$n")
+  done
+  if [ ${#todo[@]} -eq 0 ]; then
+    echo "[INFO] $sw: nothing to reset (each copy finished, or restore-mirror left nothing of it); nothing changed"
+    return 0
+  fi
+  if ! docker image inspect "$KC_DB_IMAGE" >/dev/null 2>&1 </dev/null; then
+    echo "[ERROR] $sw: keycloak-db's image ($KC_DB_IMAGE) is not here, so the root-owned files cannot be removed; nothing changed" >&2
+    return 1
+  fi
+  for n in "${todo[@]}"; do
+    if [ "$n" = keycloak ]; then
+      echo "[INFO] $sw: stopping keycloak-db (theOrg's keycloak restore writes into its database)"
+      if ! run_compose stop keycloak-db </dev/null; then
+        echo "[ERROR] $sw: docker compose stop keycloak-db failed; keycloak's dirs not emptied" >&2
+        return 1
+      fi
+      if ! ids="$(run_compose ps -q keycloak-db </dev/null)" || [ -n "$ids" ]; then
+        echo "[ERROR] $sw: keycloak-db is still running (or compose cannot tell); keycloak's dirs not emptied" >&2
+        return 1
+      fi
+    fi
+    while IFS= read -r d; do
+      mirror_reset_dir "$d" || return 1
+    done < <(mirror_reset_dirs "$n")
+    rm -f "$STATE_DIR/mirror-restored-$n" && rm -rf "$MIRROR_STAGE/$n" || return 1
+    if [ -e "$STATE_DIR/mirror-restored-$n" ] || [ -L "$STATE_DIR/mirror-restored-$n" ] || [ -e "$MIRROR_STAGE/$n" ]; then
+      echo "[ERROR] $sw: $STATE_DIR/mirror-restored-$n or $MIRROR_STAGE/$n is still there" >&2
+      return 1
+    fi
+    echo "[INFO] $sw: $n reset: its dirs empty, no mirror-restored-$n, no $MIRROR_STAGE/$n"
+  done
+  case " ${todo[*]} " in
+    *" keycloak "*) echo "[INFO] $sw: done (${todo[*]}); keycloak-db is stopped with no data dir: next the build's up (README), then restore-mirror" ;;
+    *) echo "[INFO] $sw: done (${todo[*]}); next: restore-mirror" ;;
+  esac
 }
 
 # mirror-check (asyla #1101): restore-mirror's counterpart of count-check, run after both copies are
@@ -2641,6 +2808,11 @@ usage() {
   echo "                    with a container or data present, keycloak-db unhealthy, the NAS unmounted, a" >&2
   echo "                    STATUS not OK, or a mirror older than 48 hours. Runs alone. Also on a replica" >&2
   echo "  restore-mirror-accept-age - restore-mirror, restoring a mirror older than 48 hours, a STATUS in the future or copies over 2 hours apart too (with a warning)" >&2
+  echo "  reset-mirror    - After a failed restore-mirror: each copy whose restore did not finish has its dirs" >&2
+  echo "                    emptied as root and removed (keycloak: keycloak-db stopped first, its data dir" >&2
+  echo "                    too), then its marker and stage; a valid mirror-restored-* is never touched." >&2
+  echo "                    Refused past mirror-checked, a start or any M5 marker. Next: for keycloak the" >&2
+  echo "                    build's up, then restore-mirror. No value, no ARG. Runs alone. Also on a replica" >&2
   echo "  mirror-check    - After restore-mirror: fresh openldap-backup and keycloak-backup backups into the" >&2
   echo "                    emptied openldap-count-check/ and count-check/ (each keeps only summary.txt after)," >&2
   echo "                    compared with the restored summaries (openldap's whole summary; keycloak's realm," >&2
@@ -2717,6 +2889,10 @@ case "$1" in
     do_restore_mirror true "${@:2}" || exit $?
     exit 0
     ;;
+  reset-mirror)
+    do_reset_mirror "${@:2}" || exit $?
+    exit 0
+    ;;
   mirror-check)
     do_mirror_check "${@:2}" || exit $?
     exit 0
@@ -2728,7 +2904,7 @@ esac
 if [ $# -gt 1 ]; then
   for cmd in "$@"; do
     case "$cmd" in
-      leaf-issue|fetch-bundle|unpack-bundle|reset-cutover|cutover-clean|restore-keycloak|restore-openldap|start-openldap|start-keycloak|configure|count-check|cutover-done|backup|restore-mirror|restore-mirror-accept-age|mirror-check)
+      leaf-issue|fetch-bundle|unpack-bundle|reset-cutover|cutover-clean|restore-keycloak|restore-openldap|start-openldap|start-keycloak|configure|count-check|cutover-done|backup|restore-mirror|restore-mirror-accept-age|reset-mirror|mirror-check)
         echo "[ERROR] $cmd: refused: run it alone (it reads a value on stdin, takes ARGs or holds the cutover lock), not with: $*" >&2
         exit 3
         ;;

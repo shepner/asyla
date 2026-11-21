@@ -360,6 +360,22 @@ cd ~/local/asyla && projects/asyla-hosts/scripts/app_switch.sh d05 identity-plat
   ```
 
   A copy already restored (a valid `mirror-restored-*` marker) is skipped on a re-run.
+- When `restore-mirror` fails part-way (exit 1, or 3 over a target it left not empty), its error
+  names `reset-mirror`: it empties, as root, the dirs of each copy whose restore did not finish
+  (keycloak: keycloak-db stopped, its data dir too) and removes its marker and stage; a valid
+  `mirror-restored-*` is never touched and the NAS mirror is never read or written. It refuses
+  (exit 3, nothing changed) past `mirror-checked`, a start or any M5 marker, with an openldap,
+  keycloak or backup one-shot container, a symlink or a mount point among its dirs, `APP_ROOT` on
+  the NAS share, or data no `restore-mirror` wrote. When it reset keycloak (its last line says so),
+  the build's `apps` phase alone starts keycloak-db again on an empty database (`--confirm` is the
+  `vm` phase's only; this phase takes the pull token and `start_env`). Then `restore-mirror` again:
+
+  ```
+  cd ~/local/asyla && projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform reset-mirror
+  cd ~/local/asyla && python3 core/tools/credentials.py exec THEORG_REGISTRY_PULL_TOKEN IDP_KEYCLOAK_DB_PASSWORD IDP_LDAP_ADMIN_PASSWORD -- python3 projects/asyla-hosts/scripts/build_host.py d05 build --apply --only apps --app identity-platform
+  cd ~/local/asyla && projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform restore-mirror
+  ```
+
 - `mirror-check` compares fresh summaries with the restored ones; exit 1 prints the lines that
   differ. Do not start anything until it exits 0.
 - `leaf-issue` goes after `mirror-check`, right before `start-openldap`: the restored slapd does not

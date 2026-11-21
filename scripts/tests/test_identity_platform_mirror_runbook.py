@@ -80,8 +80,8 @@ def switch_of(cmd: list[str]) -> tuple[str, list[str]]:
 class Runbook(unittest.TestCase):
     def setUp(self):
         self.blocks = blocks(section())
-        self.assertGreaterEqual(len(self.blocks), 4,
-                                "the main block, the --recreate build, the accept-age block, the proof")
+        self.assertGreaterEqual(len(self.blocks), 5, "the main block, the --recreate build, the accept-age "
+                                                     "block, the reset-mirror block, the proof")
 
     def test_order(self):
         main = self.blocks[0]
@@ -89,7 +89,8 @@ class Runbook(unittest.TestCase):
         self.assertEqual(got, ORDER)
 
     def test_switch_values_match_switch_env(self):
-        lines = self.blocks[0][1:] + self.blocks[2]
+        reset = [l for l in self.blocks[3] if "app_switch.sh" in l]
+        lines = self.blocks[0][1:] + self.blocks[2] + reset
         for line in lines:
             names, cmd = parse(line)
             sw, rest = switch_of(cmd)
@@ -119,8 +120,22 @@ class Runbook(unittest.TestCase):
         src = (REPO / "scripts" / "build_host.py").read_text()
         self.assertIn("skipping (use --recreate)", src, "phase_vm no longer skips an existing VM: reword the README")
 
+    def test_reset_block(self):
+        # reset-mirror, then (after a keycloak reset) the apps phase alone, then restore-mirror again.
+        b = self.blocks[3]
+        self.assertEqual(len(b), 3)
+        self.assertEqual(switch_of(parse(b[0])[1])[0], "reset-mirror")
+        self.assertEqual(switch_of(parse(b[2])[1])[0], "restore-mirror")
+        names, cmd = parse(b[1])
+        self.assertEqual(cmd, ["python3", "projects/asyla-hosts/scripts/build_host.py", "d05", "build",
+                               "--apply", "--only", "apps", "--app", "identity-platform"])
+        # env_needed for apps: the pull token and start_env (no CREDENTIALS, no --confirm: phase_vm's).
+        self.assertEqual(names, [APP["pull_token_env"]] + APP["start_env"])
+        sh = (REPO / "d05" / "apps" / "identity-platform" / "identity-platform.sh").read_text()
+        self.assertIn("reset-mirror)", sh, "the dispatcher has no reset-mirror")
+
     def test_proof_line(self):
-        self.assertEqual(self.blocks[3], [
+        self.assertEqual(self.blocks[-1], [
             "cd ~/local/asyla/projects/asyla-hosts && scripts/tests/test_identity_platform_mirror_restore_test01.sh"])
         self.assertTrue((REPO / "scripts/tests/test_identity_platform_mirror_restore_test01.sh").is_file())
 
