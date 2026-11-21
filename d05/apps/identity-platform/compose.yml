@@ -2,18 +2,19 @@
 # the Mac Mini (asyla hub backlog 2026-11-09-d05-deploy-theorg-s-keycloak-keycloak-db-and-openldap-on-d05).
 # Written by asyla from theOrg identity-platform deploy/d05/compose.example.yml at 701e893 (main,
 # the #82 merge; DEPLOY.md "Production on d05"), carried to 47f65add (keycloak and openldap in
-# profile `restored`), fcbed3fe (#85: the example unchanged; no image or digest changed) and
-# 5dd8de6 (theOrg merged main, below). Run it with identity-platform.sh, which sets
-# IDENTITY_PLATFORM_ROOT and IDENTITY_PLATFORM_TAG and keeps M1's rule: only keycloak-db starts.
-# Pinned to theOrg's merged main 5dd8de606a38b74c883eb7137770c37017ca8303 (the #88 merge, after
-# #86 a5415377 and #87 8ff2201a; its tree is bd0c6bff's, read 2026-11-20), whose images are
-# published: keycloak-backup lists no PGPASSWORD (the password goes on stdin,
+# profile `restored`), fcbed3fe (#85: the example unchanged; no image or digest changed),
+# 5dd8de6 (the #88 merge) and bb456ee (theOrg merged main, below). Run it with identity-platform.sh,
+# which sets IDENTITY_PLATFORM_ROOT and IDENTITY_PLATFORM_TAG and keeps M1's rule: only keycloak-db starts.
+# Pinned to theOrg's merged main bb456ee07d47cf9beb906d5492c92d09a7239bfc (the #89 merge:
+# keycloak-configure's check-reset-off; deploy/d05/compose.example.yml unchanged from 5dd8de6, read
+# 2026-11-21), whose images are published. Since 5dd8de6 (the #88 merge, after #86 a5415377 and
+# #87 8ff2201a): keycloak-backup lists no PGPASSWORD (the password goes on stdin,
 # `run -T -e KEYCLOAK_BACKUP_PASSWORD_STDIN=1`), keycloak-configure lists no
 # VAULT_DEX_CLIENT_SECRET (its secrets go on stdin, #86), and openldap's healthcheck is an
 # anonymous rootDSE read with no password. Only the long-running services (keycloak, keycloak-db,
 # openldap) name a secret; no ops one-shot does. theOrg's own images are pinned by
 # IDENTITY_PLATFORM_TAG (identity-platform.sh); keycloak's and keycloak-db's digests are the
-# example's at 5dd8de6, unchanged since 701e893.
+# example's at bb456ee, unchanged since 701e893.
 # Changes from the example, each asyla's choice:
 # - both networks are external: identity-platform.sh creates them (edge with --internal), so
 #   internal-access hosts/d05's Caddy can join edge at 10.213.5.2 whichever project starts first;
@@ -22,7 +23,7 @@
 #   identity-platform.sh maps the workstation's IDP_* values onto these names;
 # - KC_BOOTSTRAP_ADMIN_USERNAME and KC_BOOTSTRAP_ADMIN_PASSWORD are left out: asyla has no read of
 #   them, and the M5 cutover restores a sealed database that already has its admin;
-# - keycloak and openldap are in profile `restored`, as in the example since 47f65add (still at 5dd8de6), so no
+# - keycloak and openldap are in profile `restored`, as in the example since 47f65add (still at bb456ee), so no
 #   compose call without it (a bare `docker compose up -d` here included) can start them before the
 #   M5 cutover. After the cutover every compose command (pull, up, down, a recreate) needs
 #   COMPOSE_PROFILES=restored, or compose leaves both out with no error (DEPLOY.md, measured with
@@ -125,7 +126,7 @@ services:
       - ${IDENTITY_PLATFORM_ROOT:?}/openldap-config:/etc/ldap/slapd.d
       - ${IDENTITY_PLATFORM_ROOT:?}/openldap-tls:/container/service/slapd/assets/certs
     healthcheck:
-      # As 5dd8de6: no password, an anonymous read of the rootDSE over LDAPS (slapd's default
+      # As bb456ee: no password, an anonymous read of the rootDSE over LDAPS (slapd's default
       # frontend ACL lets anyone read it). The earlier ldapwhoami -w put the admin password in that
       # process's argv every 15 s. A slapd that stops answering times out here, so the check fails.
       test: ["CMD-SHELL", "ldapsearch -x -H ldaps://localhost:636 -b \"\" -s base -LLL namingContexts 2>/dev/null | grep -qx \"namingContexts: dc=theorg,dc=local\" || exit 1"]
@@ -140,7 +141,7 @@ services:
       - identity-platform-net
 
   # One-shot, profile ops (DEPLOY.md "Keycloak: backup, restore and verify"). Never started by up.
-  # The database password goes on stdin (`run -T -e KEYCLOAK_BACKUP_PASSWORD_STDIN=1`, 5dd8de6),
+  # The database password goes on stdin (`run -T -e KEYCLOAK_BACKUP_PASSWORD_STDIN=1`, bb456ee),
   # never listed here.
   keycloak-backup:
     image: gitea.asyla.org/theorg/identity-platform-keycloak-backup:${IDENTITY_PLATFORM_TAG:?}
@@ -202,7 +203,7 @@ services:
       - VAULT_DEX_CLIENT_ID=svc-identity-platform-deploy-a
       - VAULT_JWT_ROLE=svc-identity-platform-deploy
       # Not VAULT_DEX_CLIENT_SECRET or LDAP_ADMIN_PASSWORD: both go on stdin (`run -T`, #86,
-      # DEPLOY.md at 5dd8de6), never in this container's Config.Env.
+      # DEPLOY.md at bb456ee), never in this container's Config.Env.
     volumes:
       - ${IDENTITY_PLATFORM_ROOT:?}/ca:/run/theorg-ca:ro
     cpus: 1

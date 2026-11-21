@@ -8,7 +8,8 @@
 # Built as every other Docker host (host-layout decision 6). d05 is not disposable: a build or a
 # destroy needs --confirm d05 and the operator's approval of the exact action.
 # The identity-platform [[app]] is from theOrg identity-platform DEPLOY.md "Production on d05" at
-# 701e893 (main, the #82 merge), carried to 47f65add, fcbed3fe and 5dd8de6 (main, the #88 merge),
+# 701e893 (main, the #82 merge), carried to 47f65add, fcbed3fe, 5dd8de6 (main, the #88 merge) and
+# bb456ee (main, the #89 merge: check-reset-off),
 # M1 only: keycloak-db alone
 # (d05/apps/identity-platform/README.md).
 # No [[external]] yet: the proxy (internal-access hosts/d05) and the tunnel (external-access
@@ -42,7 +43,7 @@ allow = ["10.0.0.0/24"]    # a subnet, not a host (operator, 2026-10-25): the tr
 # No [[secret]]: d05 keeps no secret on disk, like d06 and d07. Every credential is a start_env or
 # [[external]] env value, resolved from OpenBao on the workstation and sent over SSH stdin at use.
 
-# theOrg's identity-platform (d05/apps/identity-platform; DEPLOY.md "Production on d05" at 5dd8de6),
+# theOrg's identity-platform (d05/apps/identity-platform; DEPLOY.md "Production on d05" at bb456ee),
 # M1: its networks, images and root CA, and keycloak-db alone; openldap and keycloak start only at
 # the M5 cutover, after a restore. Values the workstation resolves from OpenBao and sends over SSH
 # stdin at use (build_host.py, App environment): the theorg-registry pull token for the image pulls

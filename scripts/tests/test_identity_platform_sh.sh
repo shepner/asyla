@@ -395,13 +395,13 @@ awk '/^      identity-platform-edge:$/ {getline; if ($0 ~ /^        ipv4_address
 grep -qxF '      - KC_PROXY_TRUSTED_ADDRESSES=10.213.5.2' <<< "$KC" \
   && ok "compose.yml: KC_PROXY_TRUSTED_ADDRESSES=10.213.5.2 (Caddy alone)" || bad "compose.yml: KC_PROXY_TRUSTED_ADDRESSES"
 # theOrg identity-platform deploy/d05/compose.example.yml, read 2026-11-14 (git show): the same at
-# 701e893, 47f65add and fcbed3fe; read again 2026-11-20: the same at 5dd8de6.
+# 701e893, 47f65add and fcbed3fe; read again 2026-11-20: the same at 5dd8de6; 2026-11-21: at bb456ee.
 KC_IMAGE="quay.io/keycloak/keycloak:26.8.2@sha256:3879c623248408de29a5303178b5816c77e8dfef3890c361f8c0bbeaa979ba3b"
 DB_IMAGE="postgres:16.14-bookworm@sha256:64154d0babcb1741988719e703419af0382b19953706149f9872fbd0f438efa8"
 [ "$(grep -E '^    image:' <<< "$KC")" = "    image: $KC_IMAGE" ] \
-  && ok "compose.yml: keycloak's image is 5dd8de6's digest" || bad "compose.yml: keycloak image" "$(grep -E '^    image:' <<< "$KC")"
+  && ok "compose.yml: keycloak's image is bb456ee's digest" || bad "compose.yml: keycloak image" "$(grep -E '^    image:' <<< "$KC")"
 [ "$(grep -E '^    image:' <<< "$DB")" = "    image: $DB_IMAGE" ] \
-  && ok "compose.yml: keycloak-db's image is 5dd8de6's digest" || bad "compose.yml: keycloak-db image" "$(grep -E '^    image:' <<< "$DB")"
+  && ok "compose.yml: keycloak-db's image is bb456ee's digest" || bad "compose.yml: keycloak-db image" "$(grep -E '^    image:' <<< "$DB")"
 db_img_script="$(sed -nE 's/^KC_DB_IMAGE="(.*)"$/\1/p' "$SRC/identity-platform.sh")"
 [ "    image: $db_img_script" = "$(grep -E '^    image:' <<< "$DB")" ] \
   && ok "identity-platform.sh's KC_DB_IMAGE (the data check's image) equals compose.yml's keycloak-db image" \
@@ -615,11 +615,11 @@ STUB_MISSING=1 STUB_SET="$DB_NAME" run up; rc=$?
 STUB_MISSING=1 STUB_SET="$DB_NAME $PULL_NAME" run up; rc=$?
 [ "$rc" -eq 0 ] && grep -q HELPER_OK "$T/log" && ok "up with an image missing: pulls it through the helper, then starts" || bad "up pulls missing" "rc=$rc; $OUT"
 tags="$(awk '/^TAG / {print $2}' "$T/log" | sort -u)"
-[ "$tags" = "5dd8de606a38b74c883eb7137770c37017ca8303" ] \
-  && ok "theOrg's images are pinned to merged main 5dd8de6's full sha in every compose call" || bad "tag pin" "[$tags]"
+[ "$tags" = "bb456ee07d47cf9beb906d5492c92d09a7239bfc" ] \
+  && ok "theOrg's images are pinned to merged main bb456ee's full sha in every compose call" || bad "tag pin" "[$tags]"
 cut_commit="$(sed -nE 's/^CUTOVER_BUNDLE_COMMIT="([0-9a-f]{40})"$/\1/p' "$SRC/identity-platform.sh")"
-[ "$cut_commit" = "5dd8de606a38b74c883eb7137770c37017ca8303" ] \
-  && ok "the cutover-bundle image is pinned to merged main 5dd8de6's full sha" || bad "cutover pin" "[$cut_commit]"
+[ "$cut_commit" = "bb456ee07d47cf9beb906d5492c92d09a7239bfc" ] \
+  && ok "the cutover-bundle image is pinned to merged main bb456ee's full sha" || bad "cutover pin" "[$cut_commit]"
 
 # The credential helper: read-only, and it never takes a value with unexpected characters.
 H="$SRC/docker-credential-identity-platform-env"

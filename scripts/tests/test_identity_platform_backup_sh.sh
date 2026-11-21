@@ -542,7 +542,7 @@ cc_setup; printf '%s\nrealm extra\n' "$NEW_SUM" > "$T/newsummary"
 run -- count-check; rc=$?
 [ "$rc" -eq 1 ] && [ ! -e "$ROOT/cutover-state/counted" ] && printf '%s\n' "$OUT" | grep -qx '    realm extra' \
   && ok "count-check: a realm only in d05's: exit 1, named, no counted" || bad "count-check extra realm" "rc=$rc; $OUT"
-# changesets alone differing is a mismatch (keycloak_backup.sh:175-182 and :553 at theOrg 5dd8de6:
+# changesets alone differing is a mismatch (keycloak_backup.sh:175-182 and :553 at theOrg bb456ee:
 # Liquibase's changelog count, which restore requires equal): exit 1, the two changesets lines, no counted.
 cc_setup; printf '%s\n' "${NEW_SUM/changesets 120/changesets 131}" > "$T/newsummary"
 run -- count-check; rc=$?

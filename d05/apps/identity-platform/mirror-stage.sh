@@ -3,7 +3,7 @@
 # backup copy (keycloak-backup's or openldap-backup's /backup). Run as root inside that copy's own
 # image (docker run --user 0:0 --network none --pull never), because the copy's files are
 # root-owned and owner-only; the host user then mirrors STAGE to the NAS.
-# theOrg identity-platform DEPLOY.md at 5dd8de6, "Mirroring /backup" and the directory's mirror
+# theOrg identity-platform DEPLOY.md at bb456ee, "Mirroring /backup" and the directory's mirror
 # rule: copy only under `flock -s SRC/.lock` (the shared side of the backup's own lock: it waits for
 # a running backup, and a backup started meanwhile is refused and leaves the copy alone); the
 # copy's own STATUS removed first, the data files and manifest.sha256, then STATUS last; never
