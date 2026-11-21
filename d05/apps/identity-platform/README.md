@@ -339,10 +339,18 @@ cd ~/local/asyla && python3 core/tools/credentials.py exec IDP_LDAP_ADMIN_PASSWO
 cd ~/local/asyla && projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform cutover-done
 ```
 
-- The build: d05 is not disposable, so the operator approves the exact command. `--confirm d05`
-  is what `build_host.py` checks before it destroys d05's VM; a plain build skips an existing VM,
-  and `--recreate` (with that `--confirm`) replaces it. Before `cutover-done` the build's `up`
-  starts keycloak-db alone, which `restore-mirror` needs running and healthy.
+- The build: d05 is not disposable, so the operator approves the exact command. The line above is
+  for a d05 whose VM is gone: its `vm` phase skips a VM that still exists unless `--recreate`
+  (`phase_vm` in `build_host.py`), and the rest of the build then runs on the old VM. For a d05 VM
+  that still exists, the build replaces it with `--recreate`; `--confirm d05` is what `build_host.py`
+  checks before it destroys d05's VM:
+
+  ```
+  cd ~/local/asyla && python3 core/tools/credentials.py exec GITLAB_TOKEN GITEA_TOKEN ASYLA_HOSTS_DEPLOY_USER ASYLA_HOSTS_DEPLOY_TOKEN THEORG_REGISTRY_PULL_TOKEN IDP_KEYCLOAK_DB_PASSWORD IDP_LDAP_ADMIN_PASSWORD -- python3 projects/asyla-hosts/scripts/build_host.py d05 build --apply --recreate --confirm d05
+  ```
+
+  Before `cutover-done` the build's `up` starts keycloak-db alone, which `restore-mirror` needs
+  running and healthy.
 - `restore-mirror` refuses (exit 3, nothing changed) a mirror older than 48 hours, among other
   checks. To restore an older mirror anyway, run `restore-mirror-accept-age` in its place (the same
   switch with the age check off, with a warning):

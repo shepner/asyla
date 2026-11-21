@@ -55,8 +55,10 @@
 #
 # Afterwards: revert the replica commit on master. The log is under
 # ~/.local/state/asyla/d05-1101/. Exit 0 when every case passed, 1 when one failed or the destroy
-# failed, 2 when refused before test01 was touched. The on-host part refuses to run anywhere but
-# test01.
+# failed, 2 when refused: before test01 was touched (no destroy: the usage, the replica guard, the
+# log dir), or on test01 by the on-host guards, which can come after the tmpfs copy (then after the
+# destroy). 129, 130 or 143 when interrupted by HUP, INT or TERM (after the destroy). Once the ssh
+# starts, every exit destroys test01. The on-host part refuses to run anywhere but test01.
 
 set -uo pipefail
 
@@ -83,6 +85,33 @@ sys.exit(0 if r.get("of") == "d05" and "identity-platform" in r.get("apps", ["id
   mkdir -p "$logdir" || exit 2
   log="$logdir/test01-proof-$(date -u +%Y%m%dT%H%M%SZ).log"
   echo "log: $log"
+  # The operator's "Yes, then destroy": pass, fail or interrupted, test01 may hold production identity
+  # data from here on, so the destroy is trapped before the ssh starts and runs once (the flag), on
+  # every exit: the end of the proof, a refusal, Ctrl-C (INT), kill (TERM) or a closed terminal (HUP).
+  # Bash runs a trap once the foreground pipeline ends, so a kill waits for the tar|ssh|tee to stop.
+  destroyed=0
+  destroy_test01() {
+    [ "$destroyed" -eq 0 ] || return 0
+    destroyed=1
+    trap '' INT TERM HUP   # a second Ctrl-C does not abandon the destroy
+    echo "destroying test01 (build_host.py test01 destroy --apply)" | tee -a "$log"
+    if ! (cd "$REPO" && python3 scripts/build_host.py test01 destroy --apply) 2>&1 | tee -a "$log"; then
+      echo "FAIL  build_host.py test01 destroy failed: destroy test01 now (header, step 2's command)" | tee -a "$log"
+      return 1
+    fi
+    if (cd "$REPO" && python3 scripts/build_host.py test01 destroy --apply) 2>&1 | tee -a "$log" | grep -x 'no such VM' >/dev/null; then   # no -q: under pipefail an early exit could SIGPIPE tee
+      echo "ok    test01 is destroyed (a second destroy finds no VM)" | tee -a "$log"
+    else
+      echo "FAIL  test01 still exists after the destroy: destroy it by hand now" | tee -a "$log"
+      return 1
+    fi
+    echo "next: revert the test01 replica commit on master" | tee -a "$log"
+  }
+  on_exit() { local st=$?; destroy_test01 || st=1; exit "$st"; }
+  trap on_exit EXIT
+  trap 'echo "interrupted (INT): the proof stopped" | tee -a "$log"; exit 130' INT
+  trap 'echo "interrupted (TERM): the proof stopped" | tee -a "$log"; exit 143' TERM
+  trap 'echo "interrupted (HUP): the proof stopped" | tee -a "$log"; exit 129' HUP
   COPYFILE_DISABLE=1 tar -C "$REPO" -cf - "$SELF" |
     ssh -o BatchMode=yes -o ConnectTimeout=10 -i ~/.ssh/docker_rsa docker@test01 "
       set -e
@@ -92,20 +121,7 @@ sys.exit(0 if r.get("of") == "d05" and "identity-platform" in r.get("apps", ["id
       exec bash \"\$D/$SELF\" --on-host \"\$D\" $want $RESTORE_SW" 2>&1 | tee "$log"
   rc=${PIPESTATUS[1]}
   echo "proof exit: $rc" | tee -a "$log"
-  # The operator's "Yes, then destroy": pass or fail, test01 holds production identity data now.
-  echo "destroying test01 (build_host.py test01 destroy --apply)" | tee -a "$log"
-  if ! (cd "$REPO" && python3 scripts/build_host.py test01 destroy --apply) 2>&1 | tee -a "$log"; then
-    echo "FAIL  build_host.py test01 destroy failed: destroy test01 now (header, step 2's command)" | tee -a "$log"
-    exit 1
-  fi
-  if (cd "$REPO" && python3 scripts/build_host.py test01 destroy --apply) 2>&1 | tee -a "$log" | grep -x 'no such VM' >/dev/null; then   # no -q: under pipefail an early exit could SIGPIPE tee
-    echo "ok    test01 is destroyed (a second destroy finds no VM)" | tee -a "$log"
-  else
-    echo "FAIL  test01 still exists after the destroy: destroy it by hand now" | tee -a "$log"
-    exit 1
-  fi
-  echo "next: revert the test01 replica commit on master" | tee -a "$log"
-  exit "$rc"
+  exit "$rc"   # on_exit destroys test01; a failed destroy makes it 1
 fi
 
 # ---- on test01 ----

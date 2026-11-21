@@ -80,7 +80,8 @@ def switch_of(cmd: list[str]) -> tuple[str, list[str]]:
 class Runbook(unittest.TestCase):
     def setUp(self):
         self.blocks = blocks(section())
-        self.assertGreaterEqual(len(self.blocks), 3, "the main block, the accept-age block, the proof")
+        self.assertGreaterEqual(len(self.blocks), 4,
+                                "the main block, the --recreate build, the accept-age block, the proof")
 
     def test_order(self):
         main = self.blocks[0]
@@ -88,7 +89,7 @@ class Runbook(unittest.TestCase):
         self.assertEqual(got, ORDER)
 
     def test_switch_values_match_switch_env(self):
-        lines = self.blocks[0][1:] + self.blocks[1]
+        lines = self.blocks[0][1:] + self.blocks[2]
         for line in lines:
             names, cmd = parse(line)
             sw, rest = switch_of(cmd)
@@ -99,7 +100,7 @@ class Runbook(unittest.TestCase):
                 self.assertEqual(rest, want, "app_switch VARs (no ARG on this path)")
 
     def test_accept_age_block(self):
-        self.assertEqual([switch_of(parse(l)[1])[0] for l in self.blocks[1]], ["restore-mirror-accept-age"])
+        self.assertEqual([switch_of(parse(l)[1])[0] for l in self.blocks[2]], ["restore-mirror-accept-age"])
 
     def test_build_line(self):
         names, cmd = parse(self.blocks[0][0])
@@ -108,8 +109,18 @@ class Runbook(unittest.TestCase):
         want = build_host_credentials() + [APP["pull_token_env"]] + APP["start_env"]
         self.assertEqual(names, want)
 
+    def test_recreate_build_line(self):
+        # phase_vm skips a VM that exists unless --recreate; this is the form for a d05 VM that does.
+        self.assertEqual(len(self.blocks[1]), 1)
+        names, cmd = parse(self.blocks[1][0])
+        self.assertEqual(cmd, ["python3", "projects/asyla-hosts/scripts/build_host.py", "d05", "build",
+                               "--apply", "--recreate", "--confirm", "d05"])
+        self.assertEqual(names, parse(self.blocks[0][0])[0])
+        src = (REPO / "scripts" / "build_host.py").read_text()
+        self.assertIn("skipping (use --recreate)", src, "phase_vm no longer skips an existing VM: reword the README")
+
     def test_proof_line(self):
-        self.assertEqual(self.blocks[2], [
+        self.assertEqual(self.blocks[3], [
             "cd ~/local/asyla/projects/asyla-hosts && scripts/tests/test_identity_platform_mirror_restore_test01.sh"])
         self.assertTrue((REPO / "scripts/tests/test_identity_platform_mirror_restore_test01.sh").is_file())
 
