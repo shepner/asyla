@@ -95,7 +95,7 @@ case "$*" in
       esac
     done
     n=$#
-    exec sh "$scr" "$s" "$st" "${@:n-1:1}" "${@:n:1}" ;;
+    PATH="$STUB_T/stagebin:$PATH" exec sh "$scr" "$s" "$st" "${@:n-1:1}" "${@:n:1}" ;;
 esac
 exit 0
 EOF
@@ -155,6 +155,17 @@ case "$dst" in
 esac
 exec /bin/cp "$@"
 EOF
+# rm for mirror-stage.sh's run only (the images' rm is GNU, macOS's is not): logs its argv to
+# $T/stagerm.log, then drops --one-file-system and --preserve-root=all and runs /bin/rm.
+mkdir -p "$T/stagebin"
+cat > "$T/stagebin/rm" <<'EOF'
+#!/bin/bash
+{ set +x; } 2>/dev/null
+echo "rm $*" | sed "s#$STUB_T#T#g" >> "$STUB_T/stagerm.log"
+e=(); for a in "$@"; do case "$a" in --one-file-system|--preserve-root=all) ;; *) e+=("$a") ;; esac; done
+exec /bin/rm "${e[@]}"
+EOF
+chmod +x "$T/stagebin/rm"
 chmod +x "$T/bin/docker" "$T/bin/hostname" "$T/bin/flock" "$T/bin/mountpoint" "$T/bin/cp"
 hash -r   # cp is hashed from the copies above; the check must see PATH's first cp
 for s in docker hostname flock mountpoint cp; do
@@ -344,9 +355,16 @@ stage_fails "a file not matching the manifest" "do not match" 'echo changed >> "
 # A stale stage (a STATUS and a stray file from an older run) is emptied first.
 setup
 mkdir -p "$ROOT/mirror-stage/openldap" && echo "OK stale" > "$ROOT/mirror-stage/openldap/STATUS" && echo x > "$ROOT/mirror-stage/openldap/old.ldif"
+: > "$T/stagerm.log"
 run -- backup; rc=$?
 [ "$rc" -eq 0 ] && [ ! -e "$ROOT/mirror-stage/openldap/old.ldif" ] && [ ! -e "$MIR/openldap/old.ldif" ] \
   && ok "a stale stage is emptied before staging" || bad "stale stage" "rc=$rc; $OUT"
+# mirror-stage.sh's root emptying of the -v bind stays on its filesystem: the line holds -xdev and
+# rm -rf --one-file-system --preserve-root=all, and the stale file reached rm with both flags.
+grep -qxF -- 'find "$stage" -xdev -mindepth 1 -maxdepth 1 -exec rm -rf --one-file-system --preserve-root=all {} +' "$SRC/mirror-stage.sh" \
+  && grep -qF -- "rm -rf --one-file-system --preserve-root=all T/dl/IdentityPlatform/mirror-stage/openldap/old.ldif" "$T/stagerm.log" \
+  && ok "mirror-stage.sh: its root find has -xdev and rm -rf --one-file-system --preserve-root=all" \
+  || bad "mirror-stage.sh flags" "$(grep -n 'find "\$stage"' "$SRC/mirror-stage.sh"); $(cat "$T/stagerm.log")"
 
 # A mirror copy cut off part-way leaves no STATUS (the old one already removed).
 setup

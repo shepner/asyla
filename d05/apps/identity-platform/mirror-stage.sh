@@ -28,7 +28,10 @@ exec 9<"$src/.lock"
 flock -s -w 1800 9 || fail "could not take $src/.lock shared within 30 minutes (a backup still running?); nothing staged"
 
 rm -f "$stage/STATUS"
-find "$stage" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+# As root on the -v bind: stay on STAGE's filesystem (a mount below it is left, never emptied).
+# Both images ship GNU find and rm: keycloak-backup is postgres bookworm, openldap-backup is
+# osixia/openldap:1.5.0 (Debian buster, coreutils 8.30, findutils 4.6).
+find "$stage" -xdev -mindepth 1 -maxdepth 1 -exec rm -rf --one-file-system --preserve-root=all {} +
 
 case "$(head -n 1 "$src/STATUS" 2>/dev/null || true)" in
   OK*) ;;
