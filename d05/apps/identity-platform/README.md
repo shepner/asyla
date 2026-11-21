@@ -24,7 +24,9 @@ targets; `configure` runs keycloak-configure after them (behind the cutover mark
 then `check-reset-off` checks the realm's password reset is off,
 and `restore` refuses and points at `restore-openldap` and `restore-keycloak`. The cutover
 bundle's switches, the two restores, `start-openldap` / `start-keycloak`, `configure`,
-`check-reset-off`, `count-check` and `cutover-done` are M5's switches ("Cutover bundle (M5 G2)"). Once `cutover-done` exists (on d05,
+`check-reset-off`, `count-check` and `cutover-done` are M5's switches ("Cutover bundle (M5 G2)"), and
+`rollback-stop` / `rollback-reset` stand d05's copy down and clear it after a rollback to the Mini
+("Rollback inside the Mini's window (M5)"). Once `cutover-done` exists (on d05,
 never a replica), `up` starts keycloak-db, openldap and keycloak together and needs
 `IDP_LDAP_ADMIN_PASSWORD` too, and `verify` checks all three. The ops
 one-shots (backups, keycloak-configure) are never started by `up`.
@@ -284,7 +286,7 @@ runs the cutover image's `unpack` into the two dirs the restores read (`backup/`
     `manifests-sha256`); otherwise the restore's own exit passes through with no marker (3: it
     refused a target that is not empty; 2: a mount or usage problem; 1: it failed).
   - `reset-cutover`, `unpack-bundle` and both restores refuse (exit 3, nothing touched) when `backup/`,
-    `openldap-backup/` or `cutover-state/` is a symlink (both starts, `configure` and `check-reset-off`: `cutover-state/`). The twelve switches run one at a time: each
+    `openldap-backup/` or `cutover-state/` is a symlink (both starts, `configure` and `check-reset-off`: `cutover-state/`). The fourteen switches (these twelve, `rollback-stop` and `rollback-reset`) run one at a time: each
     holds util-linux `flock -n` on `cutover-state/.lock` for its whole run, and refuses (exit 3,
     "another cutover switch is running") when it is busy.
 - The marker gate: one marker per step in `/mnt/docker/IdentityPlatform/cutover-state/`, each
@@ -300,14 +302,60 @@ runs the cutover image's `unpack` into the two dirs the restores read (`backup/`
   with its `counts equal` line); `unpacked` counts only with a non-empty version equal to
   `fetched`'s, `started-openldap` only with its `admin-bind ok` line, a `restored-*` or `started-*`
   marker only when not empty. Each names the missing or invalid marker and exits 3. `restore` refuses (exit 1, never build_host.py's skip status 3) and
-  points at `restore-openldap` and `restore-keycloak`.
-- Exit codes of the twelve cutover switches: 0 done; 2 a usage error (a wrong ARG, an ARG to
-  `reset-cutover`, `cutover-clean`, a restore, a start, `configure`, `check-reset-off`, `count-check` or `cutover-done`); 3 refused, nothing changed (a replica, the value's name set
+  points at `restore-openldap` and `restore-keycloak`. `rolled-back`, from `rollback-stop` (below),
+  stops the starts, the restores, `configure`, `check-reset-off`, `count-check`, `cutover-done` and
+  `backup` (exit 3) and `up` past `cutover-done` (exit 1), until
+  `rollback-reset` removes it.
+- Exit codes of the fourteen cutover switches: 0 done; 2 a usage error (a wrong ARG, an ARG to
+  `reset-cutover`, `cutover-clean`, a restore, a start, `configure`, `check-reset-off`, `count-check`, `cutover-done`, `rollback-stop` or `rollback-reset`); 3 refused, nothing changed (a replica, the value's name set
   in the environment, a terminal or an empty read on stdin, a marker or state check, combined with
   another switch); 1 a failure (a pull or download, a check after unpack, a target left not empty).
   unpack-bundle keeps unpack's own exit: 2 and 3 changed nothing; 1, 4 or any other failure may have
   left files: run `reset-cutover` before a retry. The restores keep the restore's own exit, as
   above. None runs on a replica.
+
+## Rollback inside the Mini's window (M5)
+
+When the cutover is rolled back to the Mini (theOrg `DEPLOY.md`'s 3-day rollback window), two
+switches stand d05's copy down and then clear it, each its own approval, run alone from the
+workstation. Both are the M5 path only (refused past any mirror-path marker), take no value and no
+ARG, hold the cutover lock and never run on a replica; both are allowed after `cutover-done`. They
+touch no DNS and no tunnel.
+
+- `rollback-stop`, once traffic is back on the Mini (or before step 9): it stops keycloak, then
+  openldap (keycloak reads openldap), and checks that neither runs. Containers, volumes, data dirs
+  and markers are kept for inspection; keycloak-db runs on. It writes `rolled-back`, which refuses
+  the gated switches, `cutover-done` and `backup` (exit 3) and `up` past `cutover-done` (exit 1).
+  It needs a `restored-*` or `started-*` marker (exit 3 otherwise: nothing to stand down). Run again,
+  it stops what runs, keeps the first `rolled-back` and exits 0. A stop failing, or one still
+  running: exit 1, no marker.
+
+  ```
+  cd ~/local/asyla && projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform rollback-stop
+  ```
+
+- `rollback-reset`, when d05's copy is to go: it needs `rolled-back` and nothing running
+  (openldap, keycloak, the ops one-shots). It removes the keycloak and openldap containers, stops
+  keycloak-db, empties as root (lost+found kept; `find -xdev`, `rm --one-file-system
+  --preserve-root=all`) `backup/`, `openldap-backup/`, `openldap-data/`, `openldap-config/`,
+  keycloak-db's data dir, `count-check/` and `openldap-count-check/`, then removes every cutover
+  marker but `fetched`, `rolled-back` last. `openldap-tls/`, `ca/`, the bundle (`cutover/`) and the
+  NAS mirror are never touched. It refuses (exit 3, nothing changed) with `APP_ROOT` on the NAS
+  share, a symlink, a non-dir or a mount point among its dirs (or `APP_ROOT` a mount point); exit 1,
+  nothing changed, without `mountpoint` or keycloak-db's image. A failure after that is exit 1 with
+  `rolled-back` kept: run it again. Then the build's `apps` phase alone starts keycloak-db on an
+  empty database, and the cutover starts over from `unpack-bundle` (the same bundle, as `fetched`
+  is kept; or `cutover-clean` and `fetch-bundle` for a new one):
+
+  ```
+  cd ~/local/asyla && projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform rollback-reset
+  cd ~/local/asyla && python3 core/tools/credentials.py exec THEORG_REGISTRY_PULL_TOKEN IDP_KEYCLOAK_DB_PASSWORD IDP_LDAP_ADMIN_PASSWORD -- python3 projects/asyla-hosts/scripts/build_host.py d05 build --apply --only apps --app identity-platform
+  cd ~/local/asyla && python3 core/tools/credentials.py exec IDP_CUTOVER_BUNDLE_IDENTITY -- projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform unpack-bundle IDP_CUTOVER_BUNDLE_IDENTITY MANIFESTS_SHA256 KC_SUM OL_SUM
+  ```
+
+- Tests: `scripts/tests/test_identity_platform_rollback_sh.sh` (the switches) and
+  `scripts/tests/test_identity_platform_mirror_runbook.py` (this section's commands against
+  `switch_env` and `switch_args`).
 
 ## Backup (M5 unit D)
 

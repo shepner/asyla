@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Offline test of d05/apps/identity-platform/README.md "Rebuild from the nas01 mirror (#1101)"
-(stdlib unittest; asyla #1101).
+and "Rollback inside the Mini's window (M5)" (stdlib unittest; asyla #1101, #654).
 
     python3 scripts/tests/test_identity_platform_mirror_runbook.py
 
@@ -21,6 +21,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 README = REPO / "d05" / "apps" / "identity-platform" / "README.md"
 HEADING = "## Rebuild from the nas01 mirror (#1101)"
+ROLLBACK_HEADING = "## Rollback inside the Mini's window (M5)"
 ORDER = ["restore-mirror", "mirror-check", "leaf-issue", "leaf-schedule-install",
          "start-openldap", "start-keycloak", "configure", "check-reset-off", "cutover-done"]
 CD = "cd ~/local/asyla && "
@@ -37,10 +38,10 @@ def build_host_credentials() -> list[str]:
     raise AssertionError("no CREDENTIALS in build_host.py")
 
 
-def section() -> str:
+def section(heading: str = HEADING) -> str:
     text = README.read_text()
-    assert text.count(HEADING) == 1, f"{HEADING!r} is not in the README exactly once"
-    body = text.split(HEADING, 1)[1]
+    assert text.count(heading) == 1, f"{heading!r} is not in the README exactly once"
+    body = text.split(heading, 1)[1]
     m = re.search(r"^## ", body, re.M)
     return body[: m.start()] if m else body
 
@@ -138,6 +139,54 @@ class Runbook(unittest.TestCase):
         self.assertEqual(self.blocks[-1], [
             "cd ~/local/asyla/projects/asyla-hosts && scripts/tests/test_identity_platform_mirror_restore_test01.sh"])
         self.assertTrue((REPO / "scripts/tests/test_identity_platform_mirror_restore_test01.sh").is_file())
+
+
+class RollbackRunbook(unittest.TestCase):
+    """README "Rollback inside the Mini's window (M5)" (asyla #654): rollback-stop alone; then
+    rollback-reset, the apps phase alone and unpack-bundle, each against switch_env/switch_args."""
+
+    def setUp(self):
+        self.blocks = blocks(section(ROLLBACK_HEADING))
+        self.assertEqual(len(self.blocks), 2, "the rollback-stop block, the rollback-reset block")
+
+    def test_stop_block(self):
+        b = self.blocks[0]
+        self.assertEqual(len(b), 1)
+        names, cmd = parse(b[0])
+        sw, rest = switch_of(cmd)
+        self.assertEqual(sw, "rollback-stop")
+        self.assertEqual(APP["switch_env"][sw], [])
+        self.assertEqual((names, rest), ([], []), "no value, no ARG")
+
+    def test_reset_block(self):
+        b = self.blocks[1]
+        self.assertEqual(len(b), 3)
+        names, cmd = parse(b[0])
+        sw, rest = switch_of(cmd)
+        self.assertEqual(sw, "rollback-reset")
+        self.assertEqual(APP["switch_env"][sw], [])
+        self.assertEqual((names, rest), ([], []), "no value, no ARG")
+        self.assertNotIn(sw, APP.get("switch_args", {}))
+        # The apps phase alone, as in the reset-mirror block (the same line).
+        self.assertEqual(b[1], blocks(section())[3][1])
+
+    def test_unpack_line(self):
+        line = self.blocks[1][2]
+        names, cmd = parse(line)
+        sw, rest = switch_of(cmd)
+        self.assertEqual(sw, "unpack-bundle")
+        want = APP["switch_env"][sw]
+        self.assertEqual(names, want, "credentials exec names")
+        self.assertEqual(rest[: len(want)], want, "app_switch VARs")
+        self.assertEqual(len(rest) - len(want), len(APP["switch_args"][sw]), "one placeholder per switch_args ARG")
+        cut = blocks(section("## Cutover bundle (M5 G2)"))
+        self.assertIn(line, [l for b in cut for l in b], "the Cutover section's unpack-bundle line")
+
+    def test_dispatcher(self):
+        sh = (REPO / "d05" / "apps" / "identity-platform" / "identity-platform.sh").read_text()
+        for sw in ("rollback-stop", "rollback-reset"):
+            with self.subTest(switch=sw):
+                self.assertRegex(sh, rf"(?m)^\s+{re.escape(sw)}\)", "the dispatcher has no " + sw)
 
 
 if __name__ == "__main__":
