@@ -81,6 +81,9 @@ start_env = ["IDP_KEYCLOAK_DB_PASSWORD", "IDP_LDAP_ADMIN_PASSWORD"]
 # ARG: the LDAP admin's password, then the deploy Dex client's secret, one line each on ssh stdin;
 # keycloak-configure gets both on its stdin. count-check (cutover step 7; keycloak-db's password
 # comes from the running container) and cutover-done (after the cutover's verification) take no
-# value and no ARG.
-switch_env = { "leaf-issue" = ["LDAP_PROVISIONER_PASSWORD"], "leaf-renew" = [], "leaf-schedule-install" = [], "leaf-schedule-status" = [], "leaf-schedule-remove" = [], "fetch-bundle" = ["THEORG_REGISTRY_PULL_TOKEN"], "unpack-bundle" = ["IDP_CUTOVER_BUNDLE_IDENTITY"], "reset-cutover" = [], "cutover-clean" = [], "restore-keycloak" = ["IDP_KEYCLOAK_DB_PASSWORD"], "restore-openldap" = [], "start-openldap" = ["IDP_LDAP_ADMIN_PASSWORD"], "start-keycloak" = ["IDP_KEYCLOAK_DB_PASSWORD"], "configure" = ["IDP_LDAP_ADMIN_PASSWORD", "IDP_DEPLOY_DEX_CLIENT_SECRET"], "count-check" = [], "cutover-done" = [] }
+# value and no ARG. After a rebuild (asyla #1101), restore-mirror restores both copies from the NAS
+# mirror instead of the bundle: no value (keycloak-db's password comes from the running container)
+# and no ARG; restore-mirror-accept-age is the same switch with the 48-hour age check off (a second
+# name, not an ARG, so switch_args stays exact).
+switch_env = { "leaf-issue" = ["LDAP_PROVISIONER_PASSWORD"], "leaf-renew" = [], "leaf-schedule-install" = [], "leaf-schedule-status" = [], "leaf-schedule-remove" = [], "fetch-bundle" = ["THEORG_REGISTRY_PULL_TOKEN"], "unpack-bundle" = ["IDP_CUTOVER_BUNDLE_IDENTITY"], "reset-cutover" = [], "cutover-clean" = [], "restore-keycloak" = ["IDP_KEYCLOAK_DB_PASSWORD"], "restore-openldap" = [], "start-openldap" = ["IDP_LDAP_ADMIN_PASSWORD"], "start-keycloak" = ["IDP_KEYCLOAK_DB_PASSWORD"], "configure" = ["IDP_LDAP_ADMIN_PASSWORD", "IDP_DEPLOY_DEX_CLIENT_SECRET"], "count-check" = [], "cutover-done" = [], "restore-mirror" = [], "restore-mirror-accept-age" = [] }
 switch_args = { "fetch-bundle" = ['^m5-[0-9a-f]{12}$'], "unpack-bundle" = ['^[0-9a-f]{64}$', '^[0-9a-f]{64}$', '^[0-9a-f]{64}$'] }

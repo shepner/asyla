@@ -139,6 +139,22 @@
 # Data under /mnt/docker/IdentityPlatform. backup (host-maintenance's nightly task, once cutover-done
 # exists; refused, exit 3, before it and on a replica): openldap-backup and keycloak-backup backup and
 # verify, then both copies mirrored to /mnt/nas/data1/docker/IdentityPlatform/mirror (do_backup).
+# After a rebuild (asyla #1101), the mirror is restored, not the Mini's bundle:
+#   restore-mirror  no value, no ARG; runs alone, under the cutover lock; also on a replica (test01,
+#               for the restore proof: it reads the mirror through the read-only NAS mount). Each
+#               copy without a valid mirror-restored-* marker (openldap, then keycloak) is staged
+#               from the mirror to mirror-stage/ and checked against its manifest, copied as root
+#               into its empty target, then restored by theOrg's restore (keycloak-db's password
+#               from the running container, on keycloak-backup's stdin alone); then
+#               mirror-restored-openldap / -keycloak (date, source mirror, the STATUS line, the
+#               restored summary.txt's sha256). Refused (exit 3, nothing changed) with
+#               IDP_KEYCLOAK_DB_PASSWORD in the environment, a symlink, the lock busy, any M5 marker
+#               (fetched to cutover-done), an invalid mirror-restored-* or both valid, an openldap or
+#               keycloak container, a target holding data, keycloak-db not healthy, the NAS not
+#               mounted, a mirror STATUS not "OK <UTC time>", a mirror older than 48 hours, a bad
+#               manifest, or a mirror that changed while staged (do_restore_mirror). Exit 2 for an ARG.
+#   restore-mirror-accept-age  the same, but a mirror older than 48 hours is restored, with a
+#               warning (a second switch name: switch_args takes an exact ARG count).
 
 set -euo pipefail
 
@@ -1824,19 +1840,20 @@ kc_db_password() {   # kc_db_password SWITCH
   echo "[INFO] $sw: keycloak-db's password taken from the running keycloak-db (not printed)"
 }
 
-# manifest_names FILE: the file names a theOrg manifest.sha256 lists, one per line; returns 1 (and
-# says why) unless every line is "<64 hex>  <plain file name>" naming neither STATUS nor itself.
+# manifest_names FILE [SWITCH]: the file names a theOrg manifest.sha256 lists, one per line; returns
+# 1 (and says why, as SWITCH: backup by default) unless every line is "<64 hex>  <plain file name>"
+# naming neither STATUS nor itself.
 manifest_names() {
-  local f="$1" line out=() re='^[0-9a-f]{64} [ *]([A-Za-z0-9][A-Za-z0-9._-]*)$'
+  local f="$1" who="${2:-backup}" line out=() re='^[0-9a-f]{64} [ *]([A-Za-z0-9][A-Za-z0-9._-]*)$'
   if [ ! -s "$f" ]; then
-    echo "[ERROR] backup: $f is missing or empty" >&2
+    echo "[ERROR] $who: $f is missing or empty" >&2
     return 1
   fi
   while IFS= read -r line || [ -n "$line" ]; do
     if [[ $line =~ $re ]] && [ "${BASH_REMATCH[1]}" != STATUS ] && [ "${BASH_REMATCH[1]}" != manifest.sha256 ]; then
       out+=("${BASH_REMATCH[1]}")
     else
-      echo "[ERROR] backup: $f has a line that is not '<sha256>  <file name>'" >&2
+      echo "[ERROR] $who: $f has a line that is not '<sha256>  <file name>'" >&2
       return 1
     fi
   done < "$f"
@@ -1887,6 +1904,282 @@ mirror_copy() {
   fi
   cp -p "$st/STATUS" "$dest/STATUS" || return 1
   echo "[INFO] backup: $name mirrored to $dest (STATUS last)"
+}
+
+# restore-mirror and restore-mirror-accept-age (asyla #1101; the operator's "Yes, switches",
+# 2026-11-21): a rebuilt d05 (or test01 as its replica, for the restore proof) restored from the
+# nightly NAS mirror (do_backup step 3), not from the Mini's cutover bundle. No value, no stdin, no
+# ARG (app_switch.sh's switch_args takes an exact ARG count, so the age override is a second switch
+# name, the coordinator's decision of 2026-11-21, not an ARG). The build is unchanged (restore =
+# false): its up starts keycloak-db alone, empty; then the operator runs this, alone.
+# Per copy still to restore (openldap first, then keycloak), in three passes, so that every refusal
+# comes before any target is written:
+#   1. Refusals (exit 3, nothing changed): IDP_KEYCLOAK_DB_PASSWORD in the environment (this switch
+#      takes no value); one of its paths a symlink; the cutover lock busy; cutover-done or any M5 marker
+#      in cutover-state/ (MIRROR_M5_MARKERS); a mirror-restored-* marker that is there but not valid
+#      (mirror_marker_ok); both markers valid (nothing left to restore); an openldap or keycloak
+#      container (or compose unable to tell); for openldap, openldap-backup/, openldap-data or
+#      openldap-config holding more than lost+found; for keycloak, backup/ holding more, or
+#      keycloak-db not running and healthy (theOrg's restore refuses a database with tables); the NAS
+#      share not mounted; the mirror's STATUS not "OK <UTC ISO time>"; a STATUS older than
+#      MIRROR_MAX_AGE_S (48 hours; the coordinator's rule) under restore-mirror (the switch
+#      restore-mirror-accept-age restores it, with a warning). Exit 2 for any ARG.
+#   2. Stage (mirror_restage): the files the mirror's manifest.sha256 names, then the manifest, copied
+#      as this user to mirror-stage/NAME (emptied first), checked there with sha256sum -c; then the
+#      mirror's STATUS and manifest read again, and either changed (a backup wrote the mirror
+#      meanwhile): exit 3, no target written; then STATUS staged last. The mirror is only read.
+#   3. Restore (mirror_restore): the stage copied into the empty target as root in the copy's own
+#      image (MIRROR_UNSTAGE_SH: mirror-stage.sh reversed: the named files, the manifest, sha256sum
+#      -c, STATUS last; the target root-owned 0700, files 0600), then theOrg's restore, which
+#      verifies the copy and refuses a target that is not empty (DEPLOY.md at 5dd8de6): openldap
+#      with OPENLDAP_BACKUP_CONFIG_MOUNT=rw for that run, no secret; keycloak with keycloak-db's
+#      password taken from the running container (kc_db_password) and written to the one-shot's
+#      stdin alone. The restore's own exit passes through (3: it refused), with no marker. On 0,
+#      mirror-restored-NAME (date, source mirror, the mirror's STATUS line, the restored
+#      summary.txt's sha256). A valid marker is skipped on a re-run, so a run that restored openldap
+#      and failed on keycloak restores keycloak alone next time (keycloak-db's password is taken
+#      before backup/ is written; a failure after that leaves backup/ to be emptied first).
+# Allowed on a replica (the restore proof): it reads the mirror through the replica's read-only
+# NAS mount and writes only local disk. Runs alone, under the cutover lock (backup's too).
+MIRROR_MAX_AGE_S=$((48 * 3600))
+MIRROR_STATUS_RE='^OK [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
+MIRROR_M5_MARKERS=(fetched unpack-started unpacked restored-openldap restored-keycloak started-openldap started-keycloak configured counted "$CUTOVER_DONE")
+
+# iso_epoch YYYY-MM-DDTHH:MM:SSZ: its seconds since 1970 (UTC), in bash arithmetic (no GNU date -d:
+# the tests run on macOS); returns 1 for anything else.
+iso_epoch() {
+  local re='^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})Z$' y m d hh mm ss era yoe doy doe
+  [[ $1 =~ $re ]] || return 1
+  y=$((10#${BASH_REMATCH[1]})) m=$((10#${BASH_REMATCH[2]})) d=$((10#${BASH_REMATCH[3]}))
+  hh=$((10#${BASH_REMATCH[4]})) mm=$((10#${BASH_REMATCH[5]})) ss=$((10#${BASH_REMATCH[6]}))
+  [ "$m" -ge 1 ] && [ "$m" -le 12 ] && [ "$d" -ge 1 ] && [ "$d" -le 31 ] && [ "$hh" -le 23 ] \
+    && [ "$mm" -le 59 ] && [ "$ss" -le 60 ] || return 1
+  # Days from the civil date (H. Hinnant's days_from_civil), years from March.
+  [ "$m" -gt 2 ] || y=$((y - 1))
+  era=$((y / 400)) yoe=$((y - y / 400 * 400))
+  doy=$(( (153 * ((m + 9) % 12) + 2) / 5 + d - 1 ))
+  doe=$(( yoe * 365 + yoe / 4 - yoe / 100 + doy ))
+  echo $(( (era * 146097 + doe - 719468) * 86400 + hh * 3600 + mm * 60 + ss ))
+}
+
+# mirror_marker_ok NAME: STATE_DIR/mirror-restored-NAME is a valid marker (a date line, source
+# mirror, an OK STATUS line, a 64-hex summary-sha256).
+mirror_marker_ok() {
+  local f="$STATE_DIR/mirror-restored-$1"
+  [ -f "$f" ] && [ -s "$f" ] && grep -qE '^date [^ ]+$' "$f" && grep -qx 'source mirror' "$f" \
+    && grep -qE '^status OK [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' "$f" \
+    && grep -qE '^summary-sha256 [0-9a-f]{64}$' "$f"
+}
+
+# mirror_targets NAME: the dirs a copy's restore needs empty (lost+found aside): its backup dir (the
+# restore's input) and, for openldap, the data and config volumes (keycloak's database is checked by
+# theOrg's restore: it refuses one with tables).
+mirror_targets() {
+  case "$1" in
+    openldap) printf '%s\n' "$OL_TARGET" "$APP_ROOT/openldap-data" "$APP_ROOT/openldap-config" ;;
+    keycloak) printf '%s\n' "$KC_TARGET" ;;
+  esac
+}
+
+do_restore_mirror() {   # do_restore_mirror ACCEPT_AGE(true|false) [ARG...]: the dispatcher sets ACCEPT_AGE
+  local accept="$1" sw=restore-mirror n m d i todo=() lines=() ids h line t now age
+  shift
+  if $accept; then sw=restore-mirror-accept-age; fi
+  if [ -n "${IDP_KEYCLOAK_DB_PASSWORD+x}" ]; then
+    echo "[ERROR] $sw: refused: IDP_KEYCLOAK_DB_PASSWORD is set in the environment; $sw takes no value (keycloak-db's password comes from the running container); nothing changed" >&2
+    return 3
+  fi
+  if [ $# -ne 0 ]; then
+    echo "[ERROR] $sw: usage: $sw (no ARG; restore-mirror-accept-age restores a mirror older than $((MIRROR_MAX_AGE_S / 3600)) hours)" >&2
+    return 2
+  fi
+  refuse_symlinks "$sw" "$STATE_DIR" "$KC_TARGET" "$OL_TARGET" "$APP_ROOT/openldap-data" "$APP_ROOT/openldap-config" \
+    "$MIRROR_STAGE" "$MIRROR_STAGE/openldap" "$MIRROR_STAGE/keycloak" \
+    "$MIRROR_DIR" "$MIRROR_DIR/openldap" "$MIRROR_DIR/keycloak" || return
+  cutover_lock "$sw" || return
+  for m in "${MIRROR_M5_MARKERS[@]}"; do
+    if [ -e "$STATE_DIR/$m" ]; then
+      echo "[ERROR] $sw: refused: $STATE_DIR/$m exists (an M5 cutover marker: this host's data is the cutover's, not a rebuild's); nothing changed" >&2
+      return 3
+    fi
+  done
+  for n in openldap keycloak; do
+    if mirror_marker_ok "$n"; then
+      echo "[INFO] $sw: $STATE_DIR/mirror-restored-$n is valid; $n is restored already, skipped"
+    elif [ -e "$STATE_DIR/mirror-restored-$n" ]; then
+      echo "[ERROR] $sw: refused: $STATE_DIR/mirror-restored-$n exists but is not a valid marker; nothing changed" >&2
+      return 3
+    else
+      todo+=("$n")
+    fi
+  done
+  if [ ${#todo[@]} -eq 0 ]; then
+    echo "[ERROR] $sw: refused: both copies are restored from the mirror already (mirror-restored-openldap and mirror-restored-keycloak); nothing changed" >&2
+    return 3
+  fi
+  if ! ids="$(run_compose --profile restored ps -a -q openldap keycloak </dev/null)"; then
+    echo "[ERROR] $sw: refused: docker compose ps for openldap and keycloak failed (cannot tell whether either container exists); nothing changed" >&2
+    return 3
+  fi
+  if [ -n "$ids" ]; then
+    echo "[ERROR] $sw: refused: an openldap or keycloak container exists (a restore goes only into a host where neither has started); nothing changed" >&2
+    return 3
+  fi
+  for n in "${todo[@]}"; do
+    while IFS= read -r d; do
+      if ! target_empty "$d"; then
+        echo "[ERROR] $sw: refused: $d holds more than lost+found (or cannot be listed); $n restores only into empty dirs; nothing changed" >&2
+        return 3
+      fi
+    done < <(mirror_targets "$n")
+    if [ "$n" = keycloak ]; then
+      h="$(db_health </dev/null)"
+      if [ "$h" != healthy ]; then
+        echo "[ERROR] $sw: refused: keycloak-db is $h, not running and healthy (run up first); nothing changed" >&2
+        return 3
+      fi
+    fi
+  done
+  if ! mountpoint -q "$DOCKER_D1" </dev/null; then
+    echo "[ERROR] $sw: refused: $DOCKER_D1 is not a mount point (the NAS share is not mounted); nothing changed" >&2
+    return 3
+  fi
+  now="$(date -u +%s </dev/null)" || return 1
+  for n in "${todo[@]}"; do
+    line="$(head -n 1 "$MIRROR_DIR/$n/STATUS" 2>/dev/null </dev/null)" || line=""
+    if [[ ! $line =~ $MIRROR_STATUS_RE ]]; then
+      echo "[ERROR] $sw: refused: $MIRROR_DIR/$n/STATUS is missing or not 'OK <UTC time>' (a mirror cut off part-way has none); nothing changed" >&2
+      return 3
+    fi
+    if ! t="$(iso_epoch "${line#OK }")"; then
+      echo "[ERROR] $sw: refused: $MIRROR_DIR/$n/STATUS has no valid time ($line); nothing changed" >&2
+      return 3
+    fi
+    age=$((now - t))
+    if [ "$age" -gt "$MIRROR_MAX_AGE_S" ]; then
+      if ! $accept; then
+        echo "[ERROR] $sw: refused: the $n mirror is $((age / 3600)) hours old ($line), older than $((MIRROR_MAX_AGE_S / 3600)); to restore it anyway: restore-mirror-accept-age; nothing changed" >&2
+        return 3
+      fi
+      echo "[WARN] $sw: the $n mirror is $((age / 3600)) hours old ($line); restoring it anyway" >&2
+    fi
+    lines+=("$line")
+  done
+  # Each stage is held to the STATUS line checked above (a newer one: refused, run again).
+  for i in "${!todo[@]}"; do
+    mirror_restage "${todo[$i]}" "${lines[$i]}" || return
+  done
+  for n in "${todo[@]}"; do
+    mirror_restore "$n" || return
+  done
+  echo "[INFO] $sw: done: restored from $MIRROR_DIR (${todo[*]}); next: mirror-check"
+}
+
+# mirror_restage NAME STATUS_LINE: MIRROR_DIR/NAME to mirror-stage/NAME, as this user (the mirror's
+# files are this user's, owner-only: mirror_copy). STATUS_LINE is the line pass 1 checked. Exit 3
+# (no target written) for a manifest that is not theOrg's form or names no summary.txt, and when the
+# mirror's STATUS or manifest changed while it was copied; 1 for a failed copy or check.
+mirror_restage() {
+  local sw=restore-mirror name="$1" s1="$2" src="$MIRROR_DIR/$1" st="$MIRROR_STAGE/$1" names n s2
+  if ! names="$(manifest_names "$src/manifest.sha256" "$sw")"; then
+    echo "[ERROR] $sw: refused: $src/manifest.sha256 is not a theOrg manifest; nothing restored" >&2
+    return 3
+  fi
+  if ! grep -qx summary.txt <<<"$names"; then
+    echo "[ERROR] $sw: refused: $src/manifest.sha256 names no summary.txt; nothing restored" >&2
+    return 3
+  fi
+  rm -rf "$st" && (umask 077 && mkdir -p "$st") || { echo "[ERROR] $sw: could not empty $st; nothing restored" >&2; return 1; }
+  for n in $names; do
+    cp -p "$src/$n" "$st/$n" </dev/null || { echo "[ERROR] $sw: could not copy $src/$n to $st; nothing restored" >&2; return 1; }
+  done
+  cp -p "$src/manifest.sha256" "$st/manifest.sha256" </dev/null || { echo "[ERROR] $sw: could not copy $src/manifest.sha256; nothing restored" >&2; return 1; }
+  if ! (cd "$st" && sha256sum --quiet -c manifest.sha256) </dev/null; then
+    echo "[ERROR] $sw: the files staged in $st do not match the mirror's manifest.sha256; nothing restored" >&2
+    return 1
+  fi
+  s2="$(head -n 1 "$src/STATUS" 2>/dev/null </dev/null)" || s2=""
+  if [ "$s2" != "$s1" ] || ! cmp -s "$src/manifest.sha256" "$st/manifest.sha256"; then
+    echo "[ERROR] $sw: refused: $src changed while it was copied (STATUS or manifest.sha256; a backup wrote the mirror?); run $sw again; nothing restored" >&2
+    return 3
+  fi
+  cp -p "$src/STATUS" "$st/STATUS" </dev/null || { echo "[ERROR] $sw: could not copy $src/STATUS; nothing restored" >&2; return 1; }
+  if [ "$(head -n 1 "$st/STATUS" </dev/null)" != "$s1" ]; then
+    echo "[ERROR] $sw: refused: $src/STATUS changed while it was copied; run $sw again; nothing restored" >&2
+    return 3
+  fi
+  echo "[INFO] $sw: $name staged from $src to $st and checked against its manifest ($s1)"
+}
+
+# The stage into an empty target, as root in the copy's image (mirror-stage.sh reversed): sh -c
+# MIRROR_UNSTAGE_SH mirror-unstage /stage /backup NAME...; exit 3 when the target holds more than
+# lost+found, 1 when a copy or the check fails (no STATUS written).
+MIRROR_UNSTAGE_SH='set -eu
+umask 077
+s=$1 t=$2
+shift 2
+left=$(ls -A "$t" | grep -vx lost+found || true)
+[ -z "$left" ] || { echo "[ERROR] mirror-unstage: $t is not empty; nothing copied" >&2; exit 3; }
+chown 0:0 "$t"
+chmod 0700 "$t"
+for n in "$@"; do cp "$s/$n" "$t/$n"; done
+cp "$s/manifest.sha256" "$t/manifest.sha256"
+(cd "$t" && sha256sum -c manifest.sha256 >/dev/null) || { echo "[ERROR] mirror-unstage: the files in $t do not match its manifest.sha256; no STATUS written" >&2; exit 1; }
+cp "$s/STATUS" "$t/.STATUS.tmp"
+mv -f "$t/.STATUS.tmp" "$t/STATUS"'
+
+# mirror_restore NAME: the staged copy into its target, theOrg's restore, then the marker.
+mirror_restore() {
+  local sw=restore-mirror name="$1" st="$MIRROR_STAGE/$1" tgt svc names n line sum rc=0 files=()
+  { set +x; } 2>/dev/null
+  set +a
+  unset -v pw
+  local +x pw=""
+  case "$name" in
+    openldap) tgt="$OL_TARGET" svc=openldap-backup ;;
+    keycloak) tgt="$KC_TARGET" svc=keycloak-backup ;;
+  esac
+  names="$(manifest_names "$st/manifest.sha256" "$sw")" || return 1
+  while IFS= read -r n; do files+=("$n"); done <<<"$names"   # no mapfile: bash 3.2 runs the tests
+  line="$(head -n 1 "$st/STATUS" </dev/null)" || return 1
+  if ! sum="$(file_sha256 "$st/summary.txt")" || [[ ! $sum =~ $SHA256_RE ]]; then
+    echo "[ERROR] $sw: could not hash $st/summary.txt; $name not restored" >&2
+    return 1
+  fi
+  # keycloak-db's password before the target is written, so a keycloak-db that went away fails
+  # with backup/ still empty (a re-run then needs nothing emptied).
+  if [ "$name" = keycloak ]; then
+    kc_db_password "$sw" || { echo "[ERROR] $sw: keycloak not restored, $tgt not written, no marker" >&2; return 1; }
+  fi
+  mkdir -p "$tgt" || return 1
+  echo "[INFO] $sw: $name: $st into $tgt as root in $svc's image (STATUS last)"
+  docker run --rm --network none --pull never --user 0:0 --entrypoint sh \
+    -v "$st:/stage:ro" -v "$tgt:/backup" "$REGISTRY/theorg/identity-platform-$svc:$IDENTITY_PLATFORM_TAG" \
+    -c "$MIRROR_UNSTAGE_SH" mirror-unstage /stage /backup "${files[@]}" </dev/null || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    pw=""
+    unset -v pw
+    echo "[ERROR] $sw: copying the stage into $tgt exited $rc (3: it was not empty; 1: it may be part-written: empty it as root before a re-run); $name not restored, no marker" >&2
+    return "$rc"
+  fi
+  if [ "$name" = openldap ]; then
+    echo "[INFO] $sw: openldap-backup restore of $OL_TARGET into openldap-data and openldap-config"
+    ( export OPENLDAP_BACKUP_CONFIG_MOUNT=rw; run_compose --profile ops run --rm -T openldap-backup restore ) </dev/null || rc=$?
+  else
+    echo "[INFO] $sw: keycloak-backup restore of $KC_TARGET into keycloak-db (keycloak-db's password on its stdin)"
+    # run_compose's argv, with `builtin exec docker` in its own subshell, as do_backup.
+    builtin printf '%s\n' "$pw" \
+      | (builtin exec docker compose -f "$COMPOSE_FILE" --project-directory "$SCRIPT_DIR" \
+          --profile ops run --rm -T -e KEYCLOAK_BACKUP_PASSWORD_STDIN=1 keycloak-backup restore) || rc=$?
+    pw=""
+    unset -v pw
+  fi
+  if [ "$rc" -ne 0 ]; then
+    echo "[ERROR] $sw: $svc restore exited $rc (3: it refused a target that is not empty or, for keycloak, the stdin value; 2: a mount or usage problem; 1: it failed); no mirror-restored-$name marker; $tgt holds the copy: empty it as root (and the restore's targets) before a re-run" >&2
+    return "$rc"
+  fi
+  write_state "mirror-restored-$name" "date $(date -u +%Y-%m-%dT%H:%M:%SZ </dev/null)" "source mirror" \
+    "status $line" "summary-sha256 $sum"
 }
 
 # cutover_gate SWITCH: the markers a cutover switch needs; prints the missing or invalid ones and
@@ -2056,6 +2349,13 @@ usage() {
   echo "                    on its stdin) and verify, then both copies mirrored to $MIRROR_DIR" >&2
   echo "                    (STATUS last); 0 only when all passed. Refused (exit 3) before cutover-done, on a" >&2
   echo "                    replica or with the cutover lock busy. Runs alone" >&2
+  echo "  restore-mirror  - After a rebuild (asyla #1101): restore both copies from the NAS mirror" >&2
+  echo "                    ($MIRROR_DIR): each staged and checked, copied into the empty target, then" >&2
+  echo "                    theOrg's restore; writes mirror-restored-openldap and mirror-restored-keycloak" >&2
+  echo "                    (a valid one is skipped). No value, no ARG. Refused (exit 3) past any M5 marker," >&2
+  echo "                    with a container or data present, keycloak-db unhealthy, the NAS unmounted, a" >&2
+  echo "                    STATUS not OK, or a mirror older than 48 hours. Runs alone. Also on a replica" >&2
+  echo "  restore-mirror-accept-age - restore-mirror, restoring a mirror older than 48 hours too (with a warning)" >&2
   echo "  restore         - Refused (exit 1): the M5 restores are restore-openldap and restore-keycloak" >&2
   echo "  logs            - Follow logs (optionally for one service)" >&2
 }
@@ -2116,6 +2416,14 @@ case "$1" in
     do_cutover_done "${@:2}" || exit $?
     exit 0
     ;;
+  restore-mirror)
+    do_restore_mirror false "${@:2}" || exit $?
+    exit 0
+    ;;
+  restore-mirror-accept-age)
+    do_restore_mirror true "${@:2}" || exit $?
+    exit 0
+    ;;
 esac
 
 # leaf-issue runs alone: its stdin carries the provisioner password, and no other switch's
@@ -2123,7 +2431,7 @@ esac
 if [ $# -gt 1 ]; then
   for cmd in "$@"; do
     case "$cmd" in
-      leaf-issue|fetch-bundle|unpack-bundle|reset-cutover|cutover-clean|restore-keycloak|restore-openldap|start-openldap|start-keycloak|configure|count-check|cutover-done|backup)
+      leaf-issue|fetch-bundle|unpack-bundle|reset-cutover|cutover-clean|restore-keycloak|restore-openldap|start-openldap|start-keycloak|configure|count-check|cutover-done|backup|restore-mirror|restore-mirror-accept-age)
         echo "[ERROR] $cmd: refused: run it alone (it reads a value on stdin, takes ARGs or holds the cutover lock), not with: $*" >&2
         exit 3
         ;;
