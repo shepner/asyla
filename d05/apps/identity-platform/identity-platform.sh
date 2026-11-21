@@ -193,6 +193,18 @@
 #   markers of both paths is refused (exit 3) by every gated switch, and restore-openldap,
 #   restore-keycloak and count-check are refused on the mirror path. cutover-done then writes
 #   cutover-done (date, source mirror, both summary sha256s), so up and backup run as after M5.
+# Rollback inside the Mini's window (asyla #654; the M5 path only; each no value, no ARG, runs
+# alone under the cutover lock; not on a replica; refused past any mirror-path marker):
+#   rollback-stop  after traffic is back on the Mini (or before step 9): keycloak, then openldap
+#               stopped, checked not running; containers, volumes, data and markers kept; writes
+#               rolled-back, which refuses every gated switch, cutover-done and backup (exit 3) and
+#               up past cutover-done (exit 1). Needs a restored-* or started-* marker. Idempotent
+#               (do_rollback_stop).
+#   rollback-reset its own approval, after rollback-stop: the keycloak and openldap containers
+#               removed, keycloak-db stopped, rollback_reset_dirs emptied as root (lost+found kept),
+#               then every cutover marker but fetched, rolled-back last. Never openldap-tls, ca, the
+#               bundle or the NAS mirror. Then the build's apps phase and unpack-bundle again
+#               (do_rollback_reset).
 
 set -euo pipefail
 
@@ -351,6 +363,10 @@ cutover_is_done() { [ -e "$STATE_DIR/$CUTOVER_DONE" ]; }
 # exists (exit 1, nothing started, without it: LDAP_ADMIN_KEPT, the top's private copy), and dropped
 # before it (M1 starts nothing that takes it). Presence only; never prints a value.
 up_secrets() {
+  if cutover_is_done && { [ -e "$STATE_DIR/$ROLLED_BACK" ] || [ -L "$STATE_DIR/$ROLLED_BACK" ]; }; then
+    echo "[ERROR] up: refused: $STATE_DIR/$ROLLED_BACK exists (rollback-stop stood d05's openldap and keycloak down after a rollback to the Mini); past $STATE_DIR/$CUTOVER_DONE up would start them again: run rollback-reset first; not starting" >&2
+    exit 1
+  fi
   require_db_secret
   if cutover_is_done; then
     if [ "${#LDAP_ADMIN_KEPT}" -eq 0 ]; then
@@ -1690,6 +1706,7 @@ do_cutover_done() {
     return 3
   fi
   cutover_lock "$sw" || return
+  refuse_rolled_back "$sw" || return
   if [ -e "$STATE_DIR/$CUTOVER_DONE" ]; then
     echo "[INFO] $sw: $STATE_DIR/$CUTOVER_DONE exists already (date $(state_value "$CUTOVER_DONE" date)); nothing changed"
     return 0
@@ -1922,6 +1939,7 @@ do_backup() {
   fi
   refuse_symlinks "$sw" "$KC_TARGET" "$OL_TARGET" "$MIRROR_STAGE" "$MIRROR_STAGE/openldap" "$MIRROR_STAGE/keycloak" || return
   cutover_lock "$sw" || return
+  refuse_rolled_back "$sw" || return
 
   echo "[INFO] $sw: step 1: openldap-backup backup, then verify"
   run_compose --profile ops run --rm -T openldap-backup backup </dev/null || { backup_failed 1 "openldap-backup backup" $?; return 1; }
@@ -2084,7 +2102,7 @@ MIRROR_MAX_AGE_S=$((48 * 3600))
 MIRROR_MAX_AHEAD_S=300
 MIRROR_MAX_SKEW_S=$((2 * 3600))
 MIRROR_STATUS_RE='^OK [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
-MIRROR_M5_MARKERS=(fetched unpack-started unpacked restored-openldap restored-keycloak started-openldap started-keycloak configured reset-off counted "$CUTOVER_DONE")
+MIRROR_M5_MARKERS=(fetched unpack-started unpacked restored-openldap restored-keycloak started-openldap started-keycloak configured reset-off counted "$CUTOVER_DONE" rolled-back)
 
 # iso_epoch YYYY-MM-DDTHH:MM:SSZ: its seconds since 1970 (UTC), in bash arithmetic (no GNU date -d:
 # the tests run on macOS); returns 1 for anything else.
@@ -2706,8 +2724,204 @@ refuse_mirror_path() {
     fi
   done
 }
+
+# refuse_rolled_back SWITCH: exit 3 while cutover-state/rolled-back exists (a file, or a symlink
+# even dangling): rollback-stop stood d05's openldap and keycloak down after a rollback to the Mini,
+# and nothing starts, restores, configures, checks, records or backs up d05's copy again until
+# rollback-reset has emptied it. cutover_gate calls it first, so every gated switch refuses.
+ROLLED_BACK=rolled-back
+refuse_rolled_back() {
+  if [ -e "$STATE_DIR/$ROLLED_BACK" ] || [ -L "$STATE_DIR/$ROLLED_BACK" ]; then
+    echo "[ERROR] $1: refused: $STATE_DIR/$ROLLED_BACK exists (rollback-stop stood d05's openldap and keycloak down after a rollback to the Mini); run rollback-reset, then start over from unpack-bundle (README); nothing changed" >&2
+    return 3
+  fi
+}
+
+# rollback-stop (asyla #654; the Mini's 3-day rollback window): stand d05's openldap and keycloak
+# down after a rollback to the Mini. No value, no stdin, no ARG (exit 2). The M5 path only. Refused
+# (exit 3, nothing changed) on a replica, cutover-state/ a symlink, the lock busy, any mirror-path
+# marker (refuse_mirror_path), and with no restored-* or started-* marker (no restore or start ran:
+# nothing to stand down). Stops keycloak, then openldap (two compose stops, keycloak first, as it
+# reads openldap), then checks that neither runs (compose ps -q); a stop failing or one still
+# running: exit 1, no marker. Keeps every container, volume, data dir and marker for inspection;
+# keycloak-db runs on. Writes rolled-back (date, keycloak openldap stopped), which refuses (exit 3)
+# start-openldap, start-keycloak, the restores, configure, check-reset-off, count-check,
+# cutover-done and backup, and up past cutover-done (exit 1), until rollback-reset. Allowed after
+# cutover-done. Idempotent: run again it stops what runs, keeps the first rolled-back and exits 0.
+# It touches no DNS and no tunnel: the operator runs it once traffic is back on the Mini (step 9
+# undone), or before step 9.
+do_rollback_stop() {
+  local sw=rollback-stop f found="" svc ids
+  if [ $# -ne 0 ]; then
+    echo "[ERROR] $sw: usage: $sw (no ARG)" >&2
+    return 2
+  fi
+  if is_replica; then
+    echo "[ERROR] $sw: refused: not on a replica ($(hostname -s </dev/null)); the cutover is d05's; nothing changed" >&2
+    return 3
+  fi
+  cutover_lock "$sw" || return
+  refuse_mirror_path "$sw" || return
+  for f in "$STATE_DIR"/restored-* "$STATE_DIR"/started-*; do
+    if [ -e "$f" ]; then found="$f"; break; fi
+  done
+  if [ -z "$found" ]; then
+    echo "[ERROR] $sw: refused: no restored-* or started-* marker in $STATE_DIR (no restore or start ran: nothing to stand down); nothing changed" >&2
+    return 3
+  fi
+  for svc in keycloak openldap; do
+    echo "[INFO] $sw: stopping $svc"
+    if ! run_compose --profile restored stop "$svc" </dev/null; then
+      echo "[ERROR] $sw: docker compose stop $svc failed; no $ROLLED_BACK marker" >&2
+      return 1
+    fi
+  done
+  if ! ids="$(run_compose --profile restored ps -q keycloak openldap </dev/null)" || [ -n "$ids" ]; then
+    echo "[ERROR] $sw: keycloak or openldap is still running (or compose cannot tell); no $ROLLED_BACK marker" >&2
+    return 1
+  fi
+  if [ -f "$STATE_DIR/$ROLLED_BACK" ]; then
+    echo "[INFO] $sw: keycloak and openldap are stopped; $STATE_DIR/$ROLLED_BACK exists already (date $(state_value "$ROLLED_BACK" date)); kept"
+    return 0
+  fi
+  write_state "$ROLLED_BACK" "date $(date -u +%Y-%m-%dT%H:%M:%SZ </dev/null)" "keycloak openldap stopped" || return 1
+  echo "[INFO] $sw: keycloak and openldap stopped; their containers, volumes, data and the markers kept for inspection; keycloak-db runs on. Next, when d05's copy is to go: rollback-reset (README)"
+}
+
+# rollback_reset_dirs: what unpack-bundle, the restores, the starts and count-check wrote, and
+# nothing else: backup/, openldap-backup/, openldap-data/, openldap-config/, keycloak-db's data
+# dir, count-check/ and openldap-count-check/. Never openldap-tls/, ca/, cutover/ (the
+# ciphertext), mirror-stage/ or the NAS mirror.
+rollback_reset_dirs() {
+  printf '%s\n' "$KC_TARGET" "$OL_TARGET" "$APP_ROOT/openldap-data" "$APP_ROOT/openldap-config" "$KC_DB_DIR" \
+    "$COUNT_DIR" "$OL_COUNT_DIR"
+}
+# The cutover-state markers rollback-reset removes (rolled-back last); fetched is kept.
+ROLLBACK_RESET_MARKERS=(unpack-started unpacked restored-openldap restored-keycloak started-openldap started-keycloak
+  configured reset-off counted "$CUTOVER_DONE")
+
+# rollback_reset_dir DIR: emptied as root but for lost+found (find -xdev, rm --one-file-system
+# --preserve-root=all, as reset-mirror), then listed again as root; the dir itself is kept.
+rollback_reset_dir() {
+  local sw=rollback-reset d="$1" rc=0 names
+  if [ ! -e "$d" ]; then
+    echo "[INFO] $sw: $d is not there; nothing to empty"
+    return 0
+  fi
+  docker run --rm --network none --pull never --user 0:0 --entrypoint find -v "$d:/t" "$KC_DB_IMAGE" \
+    /t -xdev -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf --one-file-system --preserve-root=all {} + </dev/null || rc=$?
+  if ! names="$(docker run --rm --network none --pull never --user 0:0 --entrypoint ls -v "$d:/t:ro" "$KC_DB_IMAGE" -A /t </dev/null)"; then
+    echo "[ERROR] $sw: could not list $d as root after emptying it (find exit $rc); $ROLLED_BACK and every marker kept: run $sw again" >&2
+    return 1
+  fi
+  case "$names" in
+    "") echo "[INFO] $sw: $d emptied" ;;
+    lost+found) echo "[INFO] $sw: $d emptied (lost+found kept)" ;;
+    *)
+      echo "[ERROR] $sw: $d still holds files (find exit $rc): $(tr '\n' ' ' <<<"$names"); $ROLLED_BACK and every marker kept: run $sw again" >&2
+      return 1 ;;
+  esac
+}
+
+# rollback-reset (asyla #654): after rollback-stop, empty d05's copy so the cutover can start over.
+# Its own approval; no value, no stdin, no ARG (exit 2). The M5 path only. Refused (exit 3, nothing
+# changed) on a replica, APP_ROOT the NAS share or below it, a symlink among cutover-state/ and the
+# dirs, the lock busy, any mirror-path marker, no rolled-back marker (a regular file), compose
+# unable to tell or an openldap, keycloak or ops one-shot container running, a dir that is not a
+# dir, and APP_ROOT or a dir a mount point. Exit 1, nothing changed: mountpoint not on PATH or
+# keycloak-db's image missing. Then: compose rm -f keycloak and openldap (checked gone); keycloak-db
+# stopped (checked); each of rollback_reset_dirs emptied as root and checked (rollback_reset_dir);
+# then every ROLLBACK_RESET_MARKERS marker removed, rolled-back last; fetched, the ciphertext,
+# openldap-tls/, ca/ and the NAS mirror are never touched. A failure: exit 1 with rolled-back kept,
+# so a re-run picks up where it stopped. Allowed after cutover-done (the 3-day window). Next
+# (README): the build's apps phase (up re-creates keycloak-db on its empty data dir), then
+# unpack-bundle again (or cutover-clean and fetch-bundle for a new bundle).
+do_rollback_reset() {
+  local sw=rollback-reset d m ids ra="" rn="" dirs=()
+  if [ $# -ne 0 ]; then
+    echo "[ERROR] $sw: usage: $sw (no ARG)" >&2
+    return 2
+  fi
+  if is_replica; then
+    echo "[ERROR] $sw: refused: not on a replica ($(hostname -s </dev/null)); the cutover is d05's; nothing changed" >&2
+    return 3
+  fi
+  # Never the NAS: APP_ROOT, as given and resolved, is not the share or below it (as reset-mirror).
+  if [ -d "$APP_ROOT" ]; then ra="$(cd "$APP_ROOT" 2>/dev/null && pwd -P)" || ra=""; fi
+  if [ -d "$DOCKER_D1" ]; then rn="$(cd "$DOCKER_D1" 2>/dev/null && pwd -P)" || rn=""; fi
+  if path_under "$APP_ROOT" "$DOCKER_D1" || path_under "$ra" "$DOCKER_D1" || path_under "$ra" "$rn"; then
+    echo "[ERROR] $sw: refused: $APP_ROOT${ra:+ ($ra)} is the NAS share $DOCKER_D1 or below it; $sw never deletes there; nothing changed" >&2
+    return 3
+  fi
+  while IFS= read -r d; do dirs+=("$d"); done < <(rollback_reset_dirs)
+  refuse_symlinks "$sw" "$STATE_DIR" "${dirs[@]}" || return
+  cutover_lock "$sw" || return
+  refuse_mirror_path "$sw" || return
+  if [ ! -f "$STATE_DIR/$ROLLED_BACK" ] || [ -L "$STATE_DIR/$ROLLED_BACK" ]; then
+    echo "[ERROR] $sw: refused: no $STATE_DIR/$ROLLED_BACK (run rollback-stop first: it stands keycloak and openldap down); nothing changed" >&2
+    return 3
+  fi
+  if ! ids="$(run_compose --profile restored --profile ops ps -q openldap keycloak keycloak-backup openldap-backup keycloak-configure </dev/null)"; then
+    echo "[ERROR] $sw: refused: docker compose ps for openldap, keycloak and the ops one-shots failed (cannot tell whether one runs); nothing changed" >&2
+    return 3
+  fi
+  if [ -n "$ids" ]; then
+    echo "[ERROR] $sw: refused: an openldap, keycloak or ops one-shot container is running (rollback-stop first); nothing changed" >&2
+    return 3
+  fi
+  for d in "${dirs[@]}"; do
+    if [ -e "$d" ] && [ ! -d "$d" ]; then
+      echo "[ERROR] $sw: refused: $d is not a directory; nothing changed" >&2
+      return 3
+    fi
+  done
+  if ! command -v mountpoint >/dev/null 2>&1; then
+    echo "[ERROR] $sw: mountpoint (util-linux) is not on PATH; cannot tell a mount from a dir; nothing changed" >&2
+    return 1
+  fi
+  for d in "$APP_ROOT" "${dirs[@]}"; do
+    if [ -e "$d" ] && mountpoint -q "$d" </dev/null; then
+      echo "[ERROR] $sw: refused: $d is a mount point ($sw empties only plain dirs on the data disk; a mount could be the NAS share); nothing changed" >&2
+      return 3
+    fi
+  done
+  if ! docker image inspect "$KC_DB_IMAGE" >/dev/null 2>&1 </dev/null; then
+    echo "[ERROR] $sw: keycloak-db's image ($KC_DB_IMAGE) is not here, so the root-owned files cannot be removed; nothing changed" >&2
+    return 1
+  fi
+  echo "[INFO] $sw: removing the keycloak and openldap containers"
+  if ! run_compose --profile restored rm -f keycloak openldap </dev/null; then
+    echo "[ERROR] $sw: docker compose rm -f keycloak openldap failed; nothing emptied; $ROLLED_BACK kept" >&2
+    return 1
+  fi
+  if ! ids="$(run_compose --profile restored ps -a -q keycloak openldap </dev/null)" || [ -n "$ids" ]; then
+    echo "[ERROR] $sw: a keycloak or openldap container is still there (or compose cannot tell); nothing emptied; $ROLLED_BACK kept" >&2
+    return 1
+  fi
+  echo "[INFO] $sw: stopping keycloak-db (its data dir is emptied next)"
+  if ! run_compose stop keycloak-db </dev/null; then
+    echo "[ERROR] $sw: docker compose stop keycloak-db failed; nothing emptied; $ROLLED_BACK kept" >&2
+    return 1
+  fi
+  if ! ids="$(run_compose ps -q keycloak-db </dev/null)" || [ -n "$ids" ]; then
+    echo "[ERROR] $sw: keycloak-db is still running (or compose cannot tell); nothing emptied; $ROLLED_BACK kept" >&2
+    return 1
+  fi
+  for d in "${dirs[@]}"; do
+    rollback_reset_dir "$d" || return 1
+  done
+  for m in "${ROLLBACK_RESET_MARKERS[@]}" "$ROLLED_BACK"; do
+    if ! rm -f "$STATE_DIR/$m" || [ -e "$STATE_DIR/$m" ] || [ -L "$STATE_DIR/$m" ]; then
+      echo "[ERROR] $sw: could not remove $STATE_DIR/$m; run $sw again" >&2
+      return 1
+    fi
+  done
+  echo "[INFO] $sw: done: the keycloak and openldap containers removed, keycloak-db stopped, ${dirs[*]} empty (lost+found kept), no cutover marker but fetched; openldap-tls, ca, the bundle and the NAS mirror untouched. Next: the build's apps phase (up re-creates keycloak-db), then unpack-bundle (README)"
+}
+
 cutover_gate() {
   local m v fv need=() missing=() mir=() m5=() path=m5 what="cutover marker"
+  refuse_rolled_back "$1" || return
   for m in "${MIRROR_PATH_MARKERS[@]}"; do [ ! -e "$STATE_DIR/$m" ] && [ ! -L "$STATE_DIR/$m" ] || mir+=("$m"); done
   for m in "${M5_PATH_MARKERS[@]}"; do [ ! -e "$STATE_DIR/$m" ] && [ ! -L "$STATE_DIR/$m" ] || m5+=("$m"); done
   if [ ${#mir[@]} -gt 0 ]; then
@@ -2917,6 +3131,17 @@ usage() {
   echo "                    of unpacked, both restored-* and counted; not equal: exit 1. No value, no ARG;" >&2
   echo "                    needs both mirror-restored-*, no M5 or later marker, keycloak-db healthy. Runs alone." >&2
   echo "                    Also on a replica" >&2
+  echo "  rollback-stop   - M5, after a rollback to the Mini: stop keycloak, then openldap (containers, volumes," >&2
+  echo "                    data and markers kept; keycloak-db runs on); writes rolled-back, which refuses the" >&2
+  echo "                    starts, restores, configure, check-reset-off, count-check, cutover-done and backup" >&2
+  echo "                    (3) and up past cutover-done (1). Needs a restored-* or started-* marker; refused on" >&2
+  echo "                    the mirror path. Idempotent. No value, no ARG. Runs alone. Not on a replica" >&2
+  echo "  rollback-reset  - M5, after rollback-stop: remove the keycloak and openldap containers, stop" >&2
+  echo "                    keycloak-db, empty backup/, openldap-backup/, openldap-data/, openldap-config/," >&2
+  echo "                    keycloak-db/, count-check/ and openldap-count-check/ as root (lost+found kept), then" >&2
+  echo "                    every cutover marker but fetched; never openldap-tls, ca, the bundle or the NAS" >&2
+  echo "                    mirror. Needs rolled-back and nothing running. Next: the build's apps phase, then" >&2
+  echo "                    unpack-bundle. No value, no ARG. Runs alone. Not on a replica" >&2
   echo "  restore         - Refused (exit 1): the M5 restores are restore-openldap and restore-keycloak" >&2
   echo "  logs            - Follow logs (optionally for one service)" >&2
 }
@@ -2997,6 +3222,14 @@ case "$1" in
     do_mirror_check "${@:2}" || exit $?
     exit 0
     ;;
+  rollback-stop)
+    do_rollback_stop "${@:2}" || exit $?
+    exit 0
+    ;;
+  rollback-reset)
+    do_rollback_reset "${@:2}" || exit $?
+    exit 0
+    ;;
 esac
 
 # leaf-issue runs alone: its stdin carries the provisioner password, and no other switch's
@@ -3004,7 +3237,7 @@ esac
 if [ $# -gt 1 ]; then
   for cmd in "$@"; do
     case "$cmd" in
-      leaf-issue|fetch-bundle|unpack-bundle|reset-cutover|cutover-clean|restore-keycloak|restore-openldap|start-openldap|start-keycloak|configure|check-reset-off|count-check|cutover-done|backup|restore-mirror|restore-mirror-accept-age|reset-mirror|mirror-check)
+      leaf-issue|fetch-bundle|unpack-bundle|reset-cutover|cutover-clean|restore-keycloak|restore-openldap|start-openldap|start-keycloak|configure|check-reset-off|count-check|cutover-done|backup|restore-mirror|restore-mirror-accept-age|reset-mirror|mirror-check|rollback-stop|rollback-reset)
         echo "[ERROR] $cmd: refused: run it alone (it reads a value on stdin, takes ARGs or holds the cutover lock), not with: $*" >&2
         exit 3
         ;;

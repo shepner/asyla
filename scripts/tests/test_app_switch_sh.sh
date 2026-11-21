@@ -383,7 +383,7 @@ go "$H" h01 unanchored x a; refused $? "an unanchored switch_args pattern" "anch
 go "$H" h01 broken x a; refused $? "a switch_args pattern that does not compile" "does not compile"
 
 # --- d05's allowlist: each value goes to its one switch alone ---
-"$REAL_PY" - "$REPO/d05/host.toml" <<'PY' && ok "d05 switch_env: LDAP_PROVISIONER_PASSWORD for leaf-issue, the pull token for fetch-bundle, the age identity for unpack-bundle, keycloak-db's for restore-keycloak and start-keycloak, the LDAP admin's for start-openldap, the LDAP admin's then the deploy Dex client's for configure, the deploy Dex client's alone for check-reset-off, no other VAR (reset-cutover, cutover-clean, restore-openldap, count-check, cutover-done, restore-mirror, restore-mirror-accept-age, reset-mirror and mirror-check none); no up or restore switch listed; build restore false; start_env keycloak-db's then the LDAP admin's; switch_args for fetch-bundle and unpack-bundle alone" || bad "d05 switch_env"
+"$REAL_PY" - "$REPO/d05/host.toml" <<'PY' && ok "d05 switch_env: LDAP_PROVISIONER_PASSWORD for leaf-issue, the pull token for fetch-bundle, the age identity for unpack-bundle, keycloak-db's for restore-keycloak and start-keycloak, the LDAP admin's for start-openldap, the LDAP admin's then the deploy Dex client's for configure, the deploy Dex client's alone for check-reset-off, no other VAR (reset-cutover, cutover-clean, restore-openldap, count-check, cutover-done, restore-mirror, restore-mirror-accept-age, reset-mirror, mirror-check, rollback-stop and rollback-reset none); no up or restore switch listed; build restore false; start_env keycloak-db's then the LDAP admin's; switch_args for fetch-bundle and unpack-bundle alone" || bad "d05 switch_env"
 import sys, tomllib
 a = [x for x in tomllib.load(open(sys.argv[1], "rb"))["app"] if x["name"] == "identity-platform"][0]
 se = a["switch_env"]
@@ -397,7 +397,8 @@ assert all(v == [] for k, v in se.items() if k not in want), se
 assert set(se) == {"leaf-issue", "leaf-renew", "leaf-schedule-install", "leaf-schedule-status", "leaf-schedule-remove",
                    "fetch-bundle", "unpack-bundle", "reset-cutover", "cutover-clean",
                    "restore-keycloak", "restore-openldap", "start-openldap", "start-keycloak", "configure", "check-reset-off",
-                   "count-check", "cutover-done", "restore-mirror", "restore-mirror-accept-age", "reset-mirror", "mirror-check"}, sorted(se)
+                   "count-check", "cutover-done", "restore-mirror", "restore-mirror-accept-age", "reset-mirror", "mirror-check",
+                   "rollback-stop", "rollback-reset"}, sorted(se)
 assert not {"up", "pull", "images", "verify", "down", "restore"} & set(se), se
 assert a["restore"] is False, a["restore"]
 assert a["start_env"] == ["IDP_KEYCLOAK_DB_PASSWORD", "IDP_LDAP_ADMIN_PASSWORD"], a["start_env"]

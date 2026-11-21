@@ -1319,7 +1319,7 @@ done
 reset_setup; before="$(snap)"
 exec 7> "$ROOT/cutover-state/.lock"
 if "$T/bin/flock" -n 7; then
-  for sw in reset-cutover cutover-clean "fetch-bundle $CUT_VER" "unpack-bundle $UNP_M $UNP_K $UNP_O" restore-keycloak restore-openldap start-openldap start-keycloak configure check-reset-off count-check cutover-done restore-mirror restore-mirror-accept-age reset-mirror mirror-check; do
+  for sw in reset-cutover cutover-clean "fetch-bundle $CUT_VER" "unpack-bundle $UNP_M $UNP_K $UNP_O" restore-keycloak restore-openldap start-openldap start-keycloak configure check-reset-off count-check cutover-done restore-mirror restore-mirror-accept-age reset-mirror mirror-check rollback-stop rollback-reset; do
     # shellcheck disable=SC2086
     run $sw; rc=$?
     [ "$rc" -eq 3 ] && echo "$OUT" | grep -q "${sw%% *}: refused: another cutover switch is running" && [ ! -s "$T/log" ] \
