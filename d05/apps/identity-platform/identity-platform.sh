@@ -133,8 +133,9 @@
 #               configured with apply ok and reconcile ok, and counted with counts equal; both
 #               restored-* and counted naming unpacked's manifests-sha256), and unless openldap and
 #               keycloak are running and healthy. Writes cutover-done (date, manifests-sha256); past
-#               it, prints that and exits 0. The eleven
-#   cutover switches each run alone, and one at a time: each holds flock(1) (util-linux) -n on
+#               it, prints that and exits 0. The cutover switches (those from fetch-bundle to here,
+#   and restore-mirror, restore-mirror-accept-age and mirror-check below) each run alone, and one
+#   at a time: each holds flock(1) (util-linux) -n on
 #   cutover-state/.lock for its whole run; a busy lock is refused (exit 3).
 # Data under /mnt/docker/IdentityPlatform. backup (host-maintenance's nightly task, once cutover-done
 # exists; refused, exit 3, before it and on a replica): openldap-backup and keycloak-backup backup and
@@ -155,6 +156,20 @@
 #               manifest, or a mirror that changed while staged (do_restore_mirror). Exit 2 for an ARG.
 #   restore-mirror-accept-age  the same, but a mirror older than 48 hours is restored, with a
 #               warning (a second switch name: switch_args takes an exact ARG count).
+#   mirror-check  no value, no ARG; runs alone, under the cutover lock; also on a replica. After
+#               both mirror-restored-* (and before start-openldap): fresh summaries compared with
+#               each restored summary.txt (whose sha256 must be its marker's): keycloak-backup
+#               backup into count-check/ (count-check's realm, users, clients, credentials and
+#               changesets lines) and openldap-backup backup into openldap-count-check/ (its whole
+#               summary, entryUUID digest included); each dir then keeps only summary.txt. Equal:
+#               mirror-checked (date, source mirror, both summary sha256s, summaries equal); not
+#               equal: exit 1, the differing lines printed (do_mirror_check).
+#   Then leaf-issue, start-openldap, start-keycloak, configure and cutover-done as after the M5
+#   restores: cutover_gate takes mirror-restored-openldap, mirror-restored-keycloak and
+#   mirror-checked in place of unpacked, both restored-* and counted; cutover-state/ holding
+#   markers of both paths is refused (exit 3) by every gated switch, and restore-openldap,
+#   restore-keycloak and count-check are refused on the mirror path. cutover-done then writes
+#   cutover-done (date, source mirror, both summary sha256s), so up and backup run as after M5.
 
 set -euo pipefail
 
@@ -242,6 +257,8 @@ KC_TARGET="$APP_ROOT/backup"
 OL_TARGET="$APP_ROOT/openldap-backup"
 # count-check's own keycloak-backup copy (DEPLOY.md cutover step 7), mounted over /backup for that run.
 COUNT_DIR="$APP_ROOT/count-check"
+# mirror-check's own openldap-backup copy (asyla #1101), mounted over /backup for that run.
+OL_COUNT_DIR="$APP_ROOT/openldap-count-check"
 
 # backup's nightly mirror (the operator's "Yes, mirror nightly", 2026-11-16): the NAS share
 # (build/setup/nfs.sh mounts /mnt/nas/data1/docker on d05), one dir per copy; the stage is this
@@ -1557,9 +1574,11 @@ do_configure() {
 # restored-* or counted naming another, and openldap or keycloak not running and healthy. Past an existing cutover-done:
 # says so, exit 0, nothing written. Writes cutover-done (date, manifests-sha256): up then starts
 # all three services and needs both values; the restores, starts, reset-cutover and cutover-clean
-# refuse.
+# refuse. On the mirror path (asyla #1101; cutover_gate: both mirror-restored-*, mirror-checked, both
+# started-* and configured) it writes cutover-done (date, source mirror, mirror-checked's two summary
+# sha256s) instead, and up and backup then run as after M5.
 do_cutover_done() {
-  local sw=cutover-done m f h svc
+  local sw=cutover-done m f h svc lines=()
   if [ $# -ne 0 ]; then
     echo "[ERROR] $sw: usage: $sw (no ARG)" >&2
     return 2
@@ -1574,17 +1593,25 @@ do_cutover_done() {
     return 0
   fi
   cutover_gate "$sw" || return
-  m="$(state_value unpacked manifests-sha256)"
-  if [[ ! $m =~ $SHA256_RE ]]; then
-    echo "[ERROR] $sw: refused: cutover marker missing or invalid: unpacked (manifests-sha256 '$m' is not 64 hex) (in $STATE_DIR); nothing done" >&2
-    return 3
-  fi
-  for f in restored-openldap restored-keycloak counted; do
-    if [ "$(state_value "$f" manifests-sha256)" != "$m" ]; then
-      echo "[ERROR] $sw: refused: cutover marker missing or invalid: $f (its manifests-sha256 is not unpacked's) (in $STATE_DIR); nothing done" >&2
+  # The gate passed on one path: mirror-checked is there only on the mirror path (asyla #1101).
+  if [ -e "$STATE_DIR/mirror-checked" ]; then
+    lines=("source mirror"
+      "openldap-summary-sha256 $(state_value mirror-checked openldap-summary-sha256)"
+      "keycloak-summary-sha256 $(state_value mirror-checked keycloak-summary-sha256)")
+  else
+    m="$(state_value unpacked manifests-sha256)"
+    if [[ ! $m =~ $SHA256_RE ]]; then
+      echo "[ERROR] $sw: refused: cutover marker missing or invalid: unpacked (manifests-sha256 '$m' is not 64 hex) (in $STATE_DIR); nothing done" >&2
       return 3
     fi
-  done
+    for f in restored-openldap restored-keycloak counted; do
+      if [ "$(state_value "$f" manifests-sha256)" != "$m" ]; then
+        echo "[ERROR] $sw: refused: cutover marker missing or invalid: $f (its manifests-sha256 is not unpacked's) (in $STATE_DIR); nothing done" >&2
+        return 3
+      fi
+    done
+    lines=("manifests-sha256 $m")
+  fi
   for svc in openldap keycloak; do
     h="$(restored_health "$svc" </dev/null)"
     if [ "$h" != healthy ]; then
@@ -1592,7 +1619,7 @@ do_cutover_done() {
       return 3
     fi
   done
-  write_state "$CUTOVER_DONE" "date $(date -u +%Y-%m-%dT%H:%M:%SZ </dev/null)" "manifests-sha256 $m" || return 1
+  write_state "$CUTOVER_DONE" "date $(date -u +%Y-%m-%dT%H:%M:%SZ </dev/null)" "${lines[@]}" || return 1
   echo "[INFO] $sw: recorded; up now starts keycloak-db, openldap and keycloak and needs IDP_KEYCLOAK_DB_PASSWORD and IDP_LDAP_ADMIN_PASSWORD"
 }
 
@@ -1674,15 +1701,7 @@ do_count_check() {
     return 1
   fi
 
-  mkdir -p "$COUNT_DIR" || return 1
-  if ! target_empty "$COUNT_DIR"; then
-    docker run --rm --network none --pull never --user 0:0 --entrypoint find -v "$COUNT_DIR:/t" "$KC_DB_IMAGE" \
-      /t -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf {} + </dev/null || rc=$?
-    if ! target_empty "$COUNT_DIR"; then
-      echo "[ERROR] $sw: $COUNT_DIR still holds files (find exit $rc); no backup run, no counted marker" >&2
-      return 1
-    fi
-  fi
+  count_dir_clear "$sw" "$COUNT_DIR" || { echo "[ERROR] $sw: no counted marker" >&2; return 1; }
 
   echo "[INFO] $sw: keycloak-backup backup into $COUNT_DIR (keycloak-db's password on its stdin)"
   kc_db_password "$sw" || { echo "[ERROR] $sw: no backup run, no counted marker" >&2; return 1; }
@@ -1733,20 +1752,35 @@ count_lines() {
   builtin printf '%s\n' "$1" | { grep -E '^(realm|users|clients|credentials|changesets) ' || true; } | LC_ALL=C sort
 }
 
-# count_dir_prune SWITCH: count-check/ emptied of all but summary.txt (and lost+found) through
-# keycloak-db's image, as its emptying: no Keycloak dump stays on disk. Returns 1, naming what is
-# left, when anything else remains.
+# count_dir_clear SWITCH DIR: DIR made and emptied (lost+found aside; its files are root-owned) through
+# keycloak-db's image (find, --pull never, --network none, as reset-cutover). Returns 1 when anything
+# is left: no backup is run into it.
+count_dir_clear() {
+  local rc=0
+  mkdir -p "$2" || return 1
+  target_empty "$2" && return 0
+  docker run --rm --network none --pull never --user 0:0 --entrypoint find -v "$2:/t" "$KC_DB_IMAGE" \
+    /t -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf {} + </dev/null || rc=$?
+  if ! target_empty "$2"; then
+    echo "[ERROR] $1: $2 still holds files (find exit $rc); no backup run" >&2
+    return 1
+  fi
+}
+
+# count_dir_prune SWITCH [DIR]: DIR (count-check/ by default) emptied of all but summary.txt (and
+# lost+found) through keycloak-db's image, as its emptying: no Keycloak or directory dump stays on
+# disk. Returns 1, naming what is left, when anything else remains.
 count_dir_prune() {
-  local rc=0 names left
-  docker run --rm --network none --pull never --user 0:0 --entrypoint find -v "$COUNT_DIR:/t" "$KC_DB_IMAGE" \
+  local rc=0 names left dir="${2:-$COUNT_DIR}"
+  docker run --rm --network none --pull never --user 0:0 --entrypoint find -v "$dir:/t" "$KC_DB_IMAGE" \
     /t -mindepth 1 -maxdepth 1 ! -name lost+found ! -name summary.txt -exec rm -rf {} + </dev/null || rc=$?
-  if ! names="$(ls -A "$COUNT_DIR" </dev/null)"; then
-    echo "[ERROR] $1: could not list $COUNT_DIR after removing all but summary.txt (find exit $rc)" >&2
+  if ! names="$(ls -A "$dir" </dev/null)"; then
+    echo "[ERROR] $1: could not list $dir after removing all but summary.txt (find exit $rc)" >&2
     return 1
   fi
   left="$(grep -vxF -e lost+found -e summary.txt <<<"$names" || true)"
   if [ -n "$left" ]; then
-    echo "[ERROR] $1: $COUNT_DIR still holds more than summary.txt (find exit $rc): $(tr '\n' ' ' <<<"$left")" >&2
+    echo "[ERROR] $1: $dir still holds more than summary.txt (find exit $rc): $(tr '\n' ' ' <<<"$left")" >&2
     return 1
   fi
 }
@@ -2182,21 +2216,210 @@ mirror_restore() {
     "status $line" "summary-sha256 $sum"
 }
 
+# mirror-check (asyla #1101): restore-mirror's counterpart of count-check, run after both copies are
+# restored from the mirror and before start-openldap (the proposal's step 2). No value, no stdin, no
+# ARG (exit 2). Per copy, the restored summary.txt (backup/ and openldap-backup/, read once through
+# keycloak-db's image, read-only: read_summary) must hash to its mirror-restored-* marker's
+# summary-sha256 (else exit 1, no backup run); then a fresh backup of what was restored, into its own
+# emptied dir (count_dir_clear; `run -v DIR:/backup` replaces the service's backup/ mount, as
+# count-check, so backup/ and openldap-backup/ are never written): openldap-backup backup into
+# openldap-count-check/ (no secret; openldap need not run) and keycloak-backup backup into
+# count-check/ (keycloak-db's password from the running container, kc_db_password, on its stdin
+# alone). Compared: keycloak's realm, users, clients, credentials and changesets lines (count_lines,
+# as count-check), and openldap's whole summary (theOrg's summary.txt holds names, counts and the
+# entryUUID digest only: no time, no attribute value). After each backup (whatever the comparison)
+# its dir keeps only summary.txt (count_dir_prune), so no dump stays on disk; anything else left:
+# exit 1, no marker. Refused (exit 3, nothing changed) with IDP_KEYCLOAK_DB_PASSWORD in the
+# environment, a symlink, the lock busy, any M5 or later marker (MIRROR_M5_MARKERS: started-*,
+# configured and cutover-done too: the check is of the copy as restored), either mirror-restored-*
+# missing or invalid, and keycloak-db not running and healthy. Equal: mirror-checked (date, source
+# mirror, openldap-summary-sha256, keycloak-summary-sha256, summaries equal), which start-openldap,
+# start-keycloak, configure and cutover-done need on this path; exit 0. Not equal: exit 1, the
+# differing lines printed (counts and digests, not secrets), no marker. A backup failing: its exit,
+# no marker. Allowed on a replica (the restore proof). Re-runnable; past the refusals a run first
+# removes an existing mirror-checked.
+do_mirror_check() {
+  local sw=mirror-check m n d h raw sum rc=0 ol_sum kc_sum ol_old ol_new kc_old kc_new
+  { set +x; } 2>/dev/null
+  set +a
+  unset -v pw
+  local +x pw=""
+  if [ -n "${IDP_KEYCLOAK_DB_PASSWORD+x}" ]; then
+    echo "[ERROR] $sw: refused: IDP_KEYCLOAK_DB_PASSWORD is set in the environment; $sw takes no value (keycloak-db's password comes from the running container); nothing changed" >&2
+    return 3
+  fi
+  if [ $# -ne 0 ]; then
+    echo "[ERROR] $sw: usage: $sw (no ARG)" >&2
+    return 2
+  fi
+  refuse_symlinks "$sw" "$STATE_DIR" "$KC_TARGET" "$OL_TARGET" "$COUNT_DIR" "$OL_COUNT_DIR" \
+    "$APP_ROOT/openldap-data" "$APP_ROOT/openldap-config" || return
+  cutover_lock "$sw" || return
+  for m in "${MIRROR_M5_MARKERS[@]}"; do
+    if [ -e "$STATE_DIR/$m" ]; then
+      echo "[ERROR] $sw: refused: $STATE_DIR/$m exists (an M5 cutover marker or a later step's: $sw checks the copies as restore-mirror left them, before start-openldap); nothing changed" >&2
+      return 3
+    fi
+  done
+  for n in openldap keycloak; do
+    if ! mirror_marker_ok "$n"; then
+      echo "[ERROR] $sw: refused: $STATE_DIR/mirror-restored-$n is missing or not a valid marker (restore-mirror first); nothing changed" >&2
+      return 3
+    fi
+  done
+  h="$(db_health </dev/null)"
+  if [ "$h" != healthy ]; then
+    echo "[ERROR] $sw: refused: keycloak-db is $h, not running and healthy (run up first); nothing changed" >&2
+    return 3
+  fi
+
+  rm -f "$STATE_DIR/mirror-checked" || return 1
+  # The restored summaries first, each read once: its bytes must be the ones restore-mirror hashed.
+  for n in openldap keycloak; do
+    if [ "$n" = openldap ]; then d="$OL_TARGET"; else d="$KC_TARGET"; fi
+    if ! raw="$(read_summary "$d")"; then
+      echo "[ERROR] $sw: could not read the restored $d/summary.txt; no backup run, no mirror-checked marker" >&2
+      return 1
+    fi
+    raw="${raw%x}"
+    sum="$(builtin printf '%s' "$raw" | sha256_hex)"
+    if [ "$sum" != "$(state_value "mirror-restored-$n" summary-sha256)" ]; then
+      echo "[ERROR] $sw: $d/summary.txt is not the restored copy's (its sha256 $sum is not mirror-restored-$n's summary-sha256); no backup run, no mirror-checked marker" >&2
+      return 1
+    fi
+    if [ "$n" = openldap ]; then
+      ol_sum="$sum" ol_old="$raw"
+    else
+      kc_sum="$sum" kc_old="$(count_lines "$raw")"
+    fi
+  done
+  if [ -z "$ol_old" ]; then
+    echo "[ERROR] $sw: the restored $OL_TARGET/summary.txt is empty; no backup run, no mirror-checked marker" >&2
+    return 1
+  fi
+  if ! grep -q '^realm ' <<<"$kc_old"; then
+    echo "[ERROR] $sw: could not read a realm line from the restored $KC_TARGET/summary.txt; no backup run, no mirror-checked marker" >&2
+    return 1
+  fi
+  count_dir_clear "$sw" "$OL_COUNT_DIR" || { echo "[ERROR] $sw: no mirror-checked marker" >&2; return 1; }
+  count_dir_clear "$sw" "$COUNT_DIR" || { echo "[ERROR] $sw: no mirror-checked marker" >&2; return 1; }
+
+  echo "[INFO] $sw: openldap-backup backup into $OL_COUNT_DIR"
+  run_compose --profile ops run --rm -T -v "$OL_COUNT_DIR:/backup" openldap-backup backup </dev/null || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "[ERROR] $sw: openldap-backup backup exited $rc; no keycloak backup run, no mirror-checked marker" >&2
+    count_dir_prune "$sw" "$OL_COUNT_DIR"
+    return "$rc"
+  fi
+  if raw="$(read_summary "$OL_COUNT_DIR")"; then ol_new="${raw%x}"; else ol_new=""; fi
+  count_dir_prune "$sw" "$OL_COUNT_DIR" || { echo "[ERROR] $sw: no mirror-checked marker" >&2; return 1; }
+
+  echo "[INFO] $sw: keycloak-backup backup into $COUNT_DIR (keycloak-db's password on its stdin)"
+  kc_db_password "$sw" || { echo "[ERROR] $sw: no keycloak backup run, no mirror-checked marker" >&2; return 1; }
+  # run_compose's argv, with `builtin exec docker` in its own subshell, as do_backup.
+  builtin printf '%s\n' "$pw" \
+    | (builtin exec docker compose -f "$COMPOSE_FILE" --project-directory "$SCRIPT_DIR" \
+        --profile ops run --rm -T -v "$COUNT_DIR:/backup" -e KEYCLOAK_BACKUP_PASSWORD_STDIN=1 keycloak-backup backup) || rc=$?
+  pw=""
+  unset -v pw
+  if [ "$rc" -ne 0 ]; then
+    echo "[ERROR] $sw: keycloak-backup backup exited $rc; no mirror-checked marker" >&2
+    count_dir_prune "$sw"
+    return "$rc"
+  fi
+  if raw="$(read_summary "$COUNT_DIR")"; then kc_new="$(count_lines "${raw%x}")"; else kc_new=""; fi
+  count_dir_prune "$sw" || { echo "[ERROR] $sw: no mirror-checked marker" >&2; return 1; }
+
+  if [ -z "$ol_new" ]; then
+    echo "[ERROR] $sw: could not read the fresh $OL_COUNT_DIR/summary.txt; no mirror-checked marker" >&2
+    return 1
+  fi
+  if ! grep -q '^realm ' <<<"$kc_new"; then
+    echo "[ERROR] $sw: could not read a realm line from the fresh $COUNT_DIR/summary.txt; no mirror-checked marker" >&2
+    return 1
+  fi
+  rc=0
+  if [ "$ol_old" != "$ol_new" ]; then
+    mirror_check_diff openldap "$OL_TARGET" "$OL_COUNT_DIR" "$ol_old" "$ol_new"
+    rc=1
+  fi
+  if [ "$kc_old" != "$kc_new" ]; then
+    mirror_check_diff keycloak "$KC_TARGET" "$COUNT_DIR" "$kc_old" "$kc_new"
+    rc=1
+  fi
+  [ "$rc" -eq 0 ] || return 1
+  write_state mirror-checked "date $(date -u +%Y-%m-%dT%H:%M:%SZ </dev/null)" "source mirror" \
+    "openldap-summary-sha256 $ol_sum" "keycloak-summary-sha256 $kc_sum" "summaries equal" || return 1
+  echo "[INFO] $sw: openldap's summary and keycloak's counts equal the restored copies' ($(grep -c '^realm ' <<<"$kc_new") realm(s)); next: leaf-issue, then start-openldap"
+}
+
+# mirror_check_diff NAME RESTORED_DIR FRESH_DIR OLD NEW: the lines only in each summary, to stderr.
+mirror_check_diff() {
+  {
+    if [ "$1" = keycloak ]; then
+      echo "[ERROR] mirror-check: keycloak's counts differ (realm, users, clients, credentials, changesets lines); no mirror-checked marker"
+    else
+      echo "[ERROR] mirror-check: openldap's summaries differ; no mirror-checked marker"
+    fi
+    echo "  only in the restored $2/summary.txt:"
+    LC_ALL=C comm -23 <(printf '%s\n' "$4" | LC_ALL=C sort) <(printf '%s\n' "$5" | LC_ALL=C sort) | sed 's/^/    /'
+    echo "  only in the fresh $3/summary.txt:"
+    LC_ALL=C comm -13 <(printf '%s\n' "$4" | LC_ALL=C sort) <(printf '%s\n' "$5" | LC_ALL=C sort) | sed 's/^/    /'
+  } >&2
+}
+
+# mirror_checked_ok: STATE_DIR/mirror-checked is a valid marker: a date line, source mirror,
+# summaries equal, and openldap-summary-sha256 and keycloak-summary-sha256 equal to the two
+# mirror-restored-* markers' summary-sha256 (so it checked these restores, not earlier ones).
+mirror_checked_ok() {
+  local f="$STATE_DIR/mirror-checked" n v
+  [ -f "$f" ] && [ -s "$f" ] && grep -qE '^date [^ ]+$' "$f" && grep -qx 'source mirror' "$f" \
+    && grep -qx 'summaries equal' "$f" || return 1
+  for n in openldap keycloak; do
+    v="$(state_value mirror-checked "$n-summary-sha256")"
+    [[ $v =~ $SHA256_RE ]] && [ "$v" = "$(state_value "mirror-restored-$n" summary-sha256)" ] || return 1
+  done
+}
+
 # cutover_gate SWITCH: the markers a cutover switch needs; prints the missing or invalid ones and
 # returns 3. unpacked counts only with a non-empty version equal to fetched's; started-openldap only
 # with its "admin-bind ok" line; configured only with its "apply ok" and "reconcile ok" lines; a
 # restored-* or started-keycloak marker only when it is a non-empty file; counted only with its
 # "counts equal" line. configure needs both restored-* and both started-*; count-check needs those,
 # unpacked and configured; cutover-done needs those and counted.
+# The mirror path (asyla #1101): once any of MIRROR_PATH_MARKERS exists, start-openldap,
+# start-keycloak, configure and cutover-done need mirror-restored-openldap, mirror-restored-keycloak
+# (mirror_marker_ok) and mirror-checked (mirror_checked_ok) in place of unpacked, both restored-* and
+# counted, plus the same started-* and configured; restore-openldap, restore-keycloak and count-check
+# are refused there. A marker of each path (MIRROR_PATH_MARKERS and M5_PATH_MARKERS) is refused by
+# every gated switch: the two paths never mix.
+MIRROR_PATH_MARKERS=(mirror-restored-openldap mirror-restored-keycloak mirror-checked)
+M5_PATH_MARKERS=(fetched unpack-started unpacked restored-openldap restored-keycloak counted)
 cutover_gate() {
-  local m v fv need=() missing=()
-  case "$1" in
-    start-openldap) need=(unpacked restored-openldap) ;;
-    start-keycloak) need=(unpacked restored-keycloak started-openldap) ;;
-    configure) need=(restored-openldap restored-keycloak started-openldap started-keycloak) ;;
-    count-check) need=(unpacked restored-openldap restored-keycloak started-openldap started-keycloak configured) ;;
-    cutover-done) need=(unpacked restored-openldap restored-keycloak started-openldap started-keycloak configured counted) ;;
-    restore-keycloak|restore-openldap) need=(unpacked) ;;
+  local m v fv need=() missing=() mir=() m5=() path=m5 what="cutover marker"
+  for m in "${MIRROR_PATH_MARKERS[@]}"; do [ ! -e "$STATE_DIR/$m" ] && [ ! -L "$STATE_DIR/$m" ] || mir+=("$m"); done
+  for m in "${M5_PATH_MARKERS[@]}"; do [ ! -e "$STATE_DIR/$m" ] && [ ! -L "$STATE_DIR/$m" ] || m5+=("$m"); done
+  if [ ${#mir[@]} -gt 0 ]; then
+    if [ ${#m5[@]} -gt 0 ]; then
+      echo "[ERROR] $1: refused: cutover-state/ mixes the mirror path (${mir[*]}) and the M5 cutover path (${m5[*]}) (in $STATE_DIR); nothing done" >&2
+      return 3
+    fi
+    path=mirror what="mirror-path marker"
+  fi
+  case "$path:$1" in
+    mirror:start-openldap) need=("${MIRROR_PATH_MARKERS[@]}") ;;
+    mirror:start-keycloak) need=("${MIRROR_PATH_MARKERS[@]}" started-openldap) ;;
+    mirror:configure) need=("${MIRROR_PATH_MARKERS[@]}" started-openldap started-keycloak) ;;
+    mirror:cutover-done) need=("${MIRROR_PATH_MARKERS[@]}" started-openldap started-keycloak configured) ;;
+    mirror:restore-keycloak|mirror:restore-openldap|mirror:count-check)
+      echo "[ERROR] $1: refused: $1 is an M5 cutover switch and cutover-state/ is on the mirror path (${mir[*]}) (in $STATE_DIR); nothing done" >&2
+      return 3 ;;
+    m5:start-openldap) need=(unpacked restored-openldap) ;;
+    m5:start-keycloak) need=(unpacked restored-keycloak started-openldap) ;;
+    m5:configure) need=(restored-openldap restored-keycloak started-openldap started-keycloak) ;;
+    m5:count-check) need=(unpacked restored-openldap restored-keycloak started-openldap started-keycloak configured) ;;
+    m5:cutover-done) need=(unpacked restored-openldap restored-keycloak started-openldap started-keycloak configured counted) ;;
+    m5:restore-keycloak|m5:restore-openldap) need=(unpacked) ;;
     *) echo "[ERROR] cutover_gate: no gate for $1" >&2; return 3 ;;
   esac
   for m in "${need[@]}"; do
@@ -2204,6 +2427,10 @@ cutover_gate() {
       missing+=("$m")
     elif [ ! -s "$STATE_DIR/$m" ]; then
       missing+=("$m (empty)")
+    elif [ "$m" = mirror-restored-openldap ] || [ "$m" = mirror-restored-keycloak ]; then
+      mirror_marker_ok "${m#mirror-restored-}" || missing+=("$m (not a valid marker)")
+    elif [ "$m" = mirror-checked ]; then
+      mirror_checked_ok || missing+=("mirror-checked (not summaries equal for these mirror-restored-* markers)")
     elif [ "$m" = unpacked ]; then
       v="$(state_value unpacked version)" fv="$(state_value fetched version)"
       [ -n "$v" ] && [ "$v" = "$fv" ] || missing+=("unpacked (version '$v' is not fetched's '$fv')")
@@ -2216,7 +2443,7 @@ cutover_gate() {
     fi
   done
   if [ ${#missing[@]} -gt 0 ]; then
-    echo "[ERROR] $1: refused: cutover marker missing or invalid: ${missing[*]} (in $STATE_DIR); nothing done" >&2
+    echo "[ERROR] $1: refused: $what missing or invalid: ${missing[*]} (in $STATE_DIR); nothing done" >&2
     return 3
   fi
 }
@@ -2356,6 +2583,14 @@ usage() {
   echo "                    with a container or data present, keycloak-db unhealthy, the NAS unmounted, a" >&2
   echo "                    STATUS not OK, or a mirror older than 48 hours. Runs alone. Also on a replica" >&2
   echo "  restore-mirror-accept-age - restore-mirror, restoring a mirror older than 48 hours too (with a warning)" >&2
+  echo "  mirror-check    - After restore-mirror: fresh openldap-backup and keycloak-backup backups into the" >&2
+  echo "                    emptied openldap-count-check/ and count-check/ (each keeps only summary.txt after)," >&2
+  echo "                    compared with the restored summaries (openldap's whole summary; keycloak's realm," >&2
+  echo "                    users, clients, credentials and changesets lines); equal: writes mirror-checked," >&2
+  echo "                    which start-openldap, start-keycloak, configure and cutover-done then take in place" >&2
+  echo "                    of unpacked, both restored-* and counted; not equal: exit 1. No value, no ARG;" >&2
+  echo "                    needs both mirror-restored-*, no M5 or later marker, keycloak-db healthy. Runs alone." >&2
+  echo "                    Also on a replica" >&2
   echo "  restore         - Refused (exit 1): the M5 restores are restore-openldap and restore-keycloak" >&2
   echo "  logs            - Follow logs (optionally for one service)" >&2
 }
@@ -2424,6 +2659,10 @@ case "$1" in
     do_restore_mirror true "${@:2}" || exit $?
     exit 0
     ;;
+  mirror-check)
+    do_mirror_check "${@:2}" || exit $?
+    exit 0
+    ;;
 esac
 
 # leaf-issue runs alone: its stdin carries the provisioner password, and no other switch's
@@ -2431,7 +2670,7 @@ esac
 if [ $# -gt 1 ]; then
   for cmd in "$@"; do
     case "$cmd" in
-      leaf-issue|fetch-bundle|unpack-bundle|reset-cutover|cutover-clean|restore-keycloak|restore-openldap|start-openldap|start-keycloak|configure|count-check|cutover-done|backup|restore-mirror|restore-mirror-accept-age)
+      leaf-issue|fetch-bundle|unpack-bundle|reset-cutover|cutover-clean|restore-keycloak|restore-openldap|start-openldap|start-keycloak|configure|count-check|cutover-done|backup|restore-mirror|restore-mirror-accept-age|mirror-check)
         echo "[ERROR] $cmd: refused: run it alone (it reads a value on stdin, takes ARGs or holds the cutover lock), not with: $*" >&2
         exit 3
         ;;
