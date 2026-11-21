@@ -106,6 +106,70 @@ Three package cleanup rules, turned on 2026-11-04 with the operator's approval, 
 
 History and the decision: asyla hub backlog `2026-11-03-hosts-gitea-registry-retention-for-theorg-images`.
 
+## Break-glass admin access (no identity provider)
+
+The way back in as a site admin when sign-in through the identity provider (or any password) does
+not work. Everything here runs on d04 through `docker exec`, so it needs only `ssh d04` as
+`docker`; it never touches an identity provider. Hub runbook: `runbooks/gitea-break-glass.md` in
+the asyla hub.
+
+**Tested:** every command below on a throwaway `docker.gitea.com/gitea:1.27.3` by theOrg,
+2026-11-08T02:52Z (theOrg people's-access plan piece 11; ms-procedural situation `70nkolo1`).
+Live on d04, read-only, 2026-11-20T14:47Z: `gitea admin user list --admin` listed one admin,
+`shepner` (ID 1, active); the only `GITEA__service` setting was `DISABLE_REGISTRATION=true`; Gitea
+1.27.3. Nothing was changed. The compose pins the floating tag `gitea:1`: after a minor upgrade,
+re-check the flags with `--help` before relying on them.
+
+Rules that apply to every command:
+
+- Run the CLI as the git user: `docker exec -u git gitea gitea admin ...`. As root it exits 1
+  ("not supposed to be run as root").
+- Gitea 1.27.3 takes a password only in argv (no stdin option), so it lands in the shell history
+  and process list. Use a temporary one with `--must-change-password`, or `--random-password`.
+- While must-change-password is set on a user, every API call as that user returns 403, tokens
+  included, until they sign in on the web and change it.
+
+**1. Who are the admins** (read-only):
+
+```bash
+ssh d04 'docker exec -u git gitea gitea admin user list --admin'
+```
+
+**2. Token path, no password** (works whether or not the password form is on):
+
+```bash
+ssh d04 'docker exec -u git gitea gitea admin user generate-access-token -u shepner -t break-glass-$(date -u +%Y%m%d) --scopes all --raw'
+```
+
+It prints an admin token once (`GET /api/v1/admin/users` → 200 with it). Keep it out of files and
+logs; use it for the repair, then revoke it with itself:
+`curl -fsS -X DELETE -H "Authorization: token <token>" https://gitea.asyla.org/api/v1/token/break-glass-<date>`
+(204; the token then gets 401). The CLI has no revoke; the web UI (Settings → Applications) also works.
+
+**3. Web sign-in, while the password form is on** (today's d04 config):
+
+```bash
+# reset an existing admin's password; they must change it at first sign-in
+ssh d04 'docker exec -u git gitea gitea admin user change-password -u shepner -p <temporary> --must-change-password'
+# or make a second admin; the password is printed once
+ssh d04 'docker exec -u git gitea gitea admin user create --username <name> --email <email> --admin --random-password --random-password-length 24 --must-change-password'
+```
+
+**4. Web sign-in, once the password form is off.** When SSO lands, theOrg's plan sets
+`GITEA__service__ENABLE_PASSWORD_SIGNIN_FORM=false`. From then on a CLI password reset no longer
+restores web sign-in (the correct password gets 403). The CLI token (2) and machine accounts'
+tokens keep working, so repairs through the API still do. The only way back to the web without the
+identity provider:
+
+1. In `compose.yml`, set `GITEA__service__ENABLE_PASSWORD_SIGNIN_FORM=true` (or remove the line),
+   and recreate the container: `~/scripts/d04/apps/gitea/gitea.sh up`. This is a production change
+   on the forge (operator's yes for the exact action).
+2. Reset the password as in (3) and sign in.
+3. Once the identity provider is back, set the line to `false` again and recreate the container.
+
+Open sign-up stays off throughout: the compose sets `GITEA__service__DISABLE_REGISTRATION=true`
+(the image default is open sign-up).
+
 ## Usage
 
 ```bash

@@ -19,17 +19,19 @@ cloudinit_storage = "local-data2"                       # as d03 on vmh01
 startup = "order=10"                                    # set at create, checked by verify
 
 [setup]
-steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "container_dns.sh", "bashrc.sh"]   # build/setup/, sent by the build
+steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "container_dns.sh", "bashrc.sh", "node_exporter.sh"]   # build/setup/, sent by the build
+
+# Node exporter (build/setup/node_exporter.sh) for theOrg's trends Prometheus (asyla standard
+# ASY-TRD), as d03, d05 and d07: port 9100 from the LAN only. theOrg adds the scrape job
+# asyla-d04-node (a hand-off; asyla ticket #626). On this running host the step is installed by
+# `build_host.py d04 build --only setup --step node_exporter.sh --apply` (the operator's run).
+[node_exporter]
+allow = ["10.0.0.0/24"]    # a subnet, not a host (operator, 2026-10-25): the trends Prometheus can move
 
 # The proxy's and the tunnel's, as d03's. Gitea's own secrets are inside its restored data (app.ini).
 [[secret]]
 var = "D04_CLOUDFLARED_ENV"
 path = "/mnt/docker/cloudflared/.env"
-owner = "docker:docker"
-mode = "600"
-[[secret]]
-var = "D04_INTERNAL_PROXY_ENV"
-path = "/mnt/docker/internal-proxy/.env"
 owner = "docker:docker"
 mode = "600"
 
@@ -45,6 +47,9 @@ verify = ["verify"]   # d04's copy: a local :3000 healthz failure fails verify
 name = "internal-access"
 repo = "~/local/asyla/projects/internal-access"
 run = ["scripts/deploy-host.sh {host}", "scripts/fleet.sh --host {host} restore up verify"]
+# Caddy's Let's Encrypt DNS-01 key at use from OpenBao, as d06 (asyla #634); fleet.sh sends it over SSH
+# stdin as CF_API_TOKEN (internal-access hosts/d04/host.conf TLS_DNS_FROM_WORKSTATION). No proxy .env.
+env = ["D04_CF_API_TOKEN"]
 [[external]]
 name = "external-access"
 repo = "~/local/asyla/projects/external-access"
