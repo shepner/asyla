@@ -73,11 +73,13 @@ case "$*" in
     [ -n "${STUB_NO_SUMMARY:-}" ] || cat "$STUB_T/newsummary" > "$d/summary.txt"
     exit 0 ;;
   # count-check's find in keycloak-db's image (the emptying and the prune), run here on the host
-  # dir with its own expression (after `-v DIR:/t IMAGE /t`).
+  # dir with its own expression (after `-v DIR:/t IMAGE /t`), less GNU rm's long flags (the host's
+  # rm may be BSD's; the logged argv keeps them).
   "run --rm --network none --pull never --user 0:0 --entrypoint find "*)
     [ -z "${STUB_FIND_RC:-}" ] || exit "$STUB_FIND_RC"
     for a in "$@"; do case "$a" in *:/t) d="${a%:/t}" ;; esac; done
-    find "$d" "${@:15}"
+    e=(); for a in "${@:15}"; do case "$a" in --one-file-system|--preserve-root=all) ;; *) e+=("$a") ;; esac; done
+    find "$d" "${e[@]}"
     exit 0 ;;
   # count-check's read of a summary.txt (cat in keycloak-db's image, read-only), here on the host dir.
   "run --rm --pull never --network none --user 0:0 --entrypoint cat "*)
@@ -413,8 +415,14 @@ cc_setup() {   # what configure leaves on d05 before cutover-done; backup/ holds
   printf 'date 2026-11-16T00:00:00Z\napply ok\nreconcile ok\n' > "$ROOT/cutover-state/configured"
 }
 CC_MINI="docker run --rm --pull never --network none --user 0:0 --entrypoint cat -v T/dl/IdentityPlatform/backup:/s:ro $KCDB /s/summary.txt"
-CC_FIND="docker run --rm --network none --pull never --user 0:0 --entrypoint find -v T/dl/IdentityPlatform/count-check:/t $KCDB /t -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf {} +"
-CC_PRUNE="docker run --rm --network none --pull never --user 0:0 --entrypoint find -v T/dl/IdentityPlatform/count-check:/t $KCDB /t -mindepth 1 -maxdepth 1 ! -name lost+found ! -name summary.txt -exec rm -rf {} +"
+CC_FIND="docker run --rm --network none --pull never --user 0:0 --entrypoint find -v T/dl/IdentityPlatform/count-check:/t $KCDB /t -xdev -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf --one-file-system --preserve-root=all {} +"
+CC_PRUNE="docker run --rm --network none --pull never --user 0:0 --entrypoint find -v T/dl/IdentityPlatform/count-check:/t $KCDB /t -xdev -mindepth 1 -maxdepth 1 ! -name lost+found ! -name summary.txt -exec rm -rf --one-file-system --preserve-root=all {} +"
+# stays_on_fs NAME: the find line for count-check/ holding exactly `-xdev` before -mindepth and
+# `rm -rf --one-file-system --preserve-root=all` (a mount -v binds below it is left, never emptied).
+stays_on_fs() {
+  docker_lines | grep -F -- "--entrypoint find -v T/dl/IdentityPlatform/count-check:/t " | grep -F -- "$1" \
+    | grep -F -- " /t -xdev -mindepth 1 -maxdepth 1 " | grep -qF -- " -exec rm -rf --one-file-system --preserve-root=all {} +"
+}
 # After the Mini's read (and the emptying, when count-check/ holds files): the backup, d05's read, the prune.
 CC_BACKUP="$C ps -q --status running keycloak-db
 docker inspect -f {{range .Config.Env}}{{if eq (index (split . \"=\") 0) \"POSTGRES_PASSWORD\"}}{{.}}{{end}}{{end}} dbid
@@ -458,6 +466,12 @@ run -- count-check; rc=$?
   && cc_only_summary lost+found \
   && ok "count-check over a stale count-check/: after the Mini's read, find empties it (lost+found kept), then the same calls" \
   || bad "count-check stale dir" "rc=$rc; $OUT; $(docker_lines)"
+stays_on_fs "! -name lost+found -exec" \
+  && ok "count_dir_clear: its root find has -xdev and rm -rf --one-file-system --preserve-root=all in the docker argv" \
+  || bad "count_dir_clear flags" "$(docker_lines)"
+stays_on_fs "! -name summary.txt -exec" \
+  && ok "count_dir_prune: its root find has -xdev and rm -rf --one-file-system --preserve-root=all in the docker argv" \
+  || bad "count_dir_prune flags" "$(docker_lines)"
 # find failing to empty it: exit 1, no backup, no counted.
 cc_setup; mkdir -p "$CC"; echo old > "$CC/summary.txt"
 run STUB_FIND_RC=1 -- count-check; rc=$?

@@ -79,7 +79,9 @@ case "$*" in
   "run --rm --network none --pull never --user 0:0 --entrypoint find "*)
     [ -z "${STUB_FIND_RC:-}" ] || exit "$STUB_FIND_RC"
     for a in "$@"; do case "$a" in *:/t) d="${a%:/t}" ;; esac; done
-    find "$d" "${@:15}"
+    # less GNU rm's long flags (the host's rm may be BSD's; the logged argv keeps them)
+    e=(); for a in "${@:15}"; do case "$a" in --one-file-system|--preserve-root=all) ;; *) e+=("$a") ;; esac; done
+    find "$d" "${e[@]}"
     exit 0 ;;
   "run --rm --pull never --network none --user 0:0 --entrypoint cat "*)
     for a in "$@"; do case "$a" in *:/s:ro) d="${a%:/s:ro}" ;; esac; done
@@ -190,12 +192,12 @@ $CAT -v $P/openldap-backup:/s:ro $KCDB /s/summary.txt
 $CAT -v $P/backup:/s:ro $KCDB /s/summary.txt
 $C --profile ops run --rm -T -v $P/openldap-count-check:/backup openldap-backup backup
 $CAT -v $P/openldap-count-check:/s:ro $KCDB /s/summary.txt
-$FIND -v $P/openldap-count-check:/t $KCDB /t -mindepth 1 -maxdepth 1 ! -name lost+found ! -name summary.txt -exec rm -rf {} +
+$FIND -v $P/openldap-count-check:/t $KCDB /t -xdev -mindepth 1 -maxdepth 1 ! -name lost+found ! -name summary.txt -exec rm -rf --one-file-system --preserve-root=all {} +
 $C ps -q --status running keycloak-db
 docker inspect -f {{range .Config.Env}}{{if eq (index (split . \"=\") 0) \"POSTGRES_PASSWORD\"}}{{.}}{{end}}{{end}} dbid
 $C --profile ops run --rm -T -v $P/count-check:/backup -e KEYCLOAK_BACKUP_PASSWORD_STDIN=1 keycloak-backup backup
 $CAT -v $P/count-check:/s:ro $KCDB /s/summary.txt
-$FIND -v $P/count-check:/t $KCDB /t -mindepth 1 -maxdepth 1 ! -name lost+found ! -name summary.txt -exec rm -rf {} +"
+$FIND -v $P/count-check:/t $KCDB /t -xdev -mindepth 1 -maxdepth 1 ! -name lost+found ! -name summary.txt -exec rm -rf --one-file-system --preserve-root=all {} +"
 happy() {   # happy LABEL [ENV=V...]: one run on a fresh setup, every check
   local label="$1" before after
   shift
@@ -230,9 +232,11 @@ STUB_HOST=test01 happy "mirror-check on a replica (test01)"
 # A dir left by an earlier run is emptied first (find, only then), then the run goes on.
 setup; mkdir -p "$ROOT/count-check" "$ROOT/openldap-count-check"; echo old > "$ROOT/count-check/keycloak.dump"
 run -- mirror-check; rc=$?
-[ "$rc" -eq 0 ] && docker_lines | grep -qxF "$FIND -v $P/count-check:/t $KCDB /t -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf {} +" \
-  && ! docker_lines | grep -qF "$P/openldap-count-check:/t $KCDB /t -mindepth 1 -maxdepth 1 ! -name lost+found -exec" \
-  && ok "a non-empty count-check/ emptied before the backups; an empty openldap-count-check/ not" || bad "emptying" "rc=$rc; $OUT"
+[ "$rc" -eq 0 ] && docker_lines | grep -qxF "$FIND -v $P/count-check:/t $KCDB /t -xdev -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf --one-file-system --preserve-root=all {} +" \
+  && ! docker_lines | grep -qF "$P/openldap-count-check:/t $KCDB /t -xdev -mindepth 1 -maxdepth 1 ! -name lost+found -exec" \
+  && ! docker_lines | grep -F -- "--entrypoint find " | grep -vF -- " /t -xdev -mindepth 1 -maxdepth 1 " | grep -q . \
+  && ! docker_lines | grep -F -- "--entrypoint find " | grep -vF -- " -exec rm -rf --one-file-system --preserve-root=all {} +" | grep -q . \
+  && ok "a non-empty count-check/ emptied before the backups; an empty openldap-count-check/ not; every root find (clear and prune) has -xdev and rm -rf --one-file-system --preserve-root=all" || bad "emptying" "rc=$rc; $OUT"
 setup; mkdir -p "$ROOT/openldap-count-check"; echo old > "$ROOT/openldap-count-check/data.ldif"
 run STUB_FIND_RC=1 -- mirror-check; rc=$?
 [ "$rc" -eq 1 ] && echo "$OUT" | grep -qF "mirror-check: $ROOT/openldap-count-check still holds files (find exit 1); no backup run" \

@@ -60,7 +60,7 @@ case "$*" in
   *" ps -q keycloak-db")
     { [ -e "$STUB_T/db-stopped" ] && [ -z "${STUB_DB_STAYS:-}" ]; } || echo dbid ;;
   "image inspect "*) [ -z "${STUB_NO_IMAGE:-}" ] || exit 1 ;;
-  "run --rm --network none --pull never --user 0:0 --entrypoint find -v "*":/t "*" /t -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf --one-file-system --preserve-root=all {} +")
+  "run --rm --network none --pull never --user 0:0 --entrypoint find -v "*":/t "*" /t -xdev -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf --one-file-system --preserve-root=all {} +")
     [ -z "${STUB_FIND_KEEP:-}" ] || exit 1
     find "$d" -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf {} + ;;
   "run --rm --network none --pull never --user 0:0 --entrypoint ls -v "*":/t:ro "*" -A /t")
@@ -188,7 +188,7 @@ C="docker compose -f compose.yml"
 PS="$C --profile restored --profile ops ps -a -q openldap keycloak keycloak-backup openldap-backup"
 pair() {   # pair DIR: the root find then the root ls of one dir (T-relative), as logged
   printf '%s\n' \
-    "docker run --rm --network none --pull never --user 0:0 --entrypoint find -v $1:/t $IMG /t -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf --one-file-system --preserve-root=all {} +" \
+    "docker run --rm --network none --pull never --user 0:0 --entrypoint find -v $1:/t $IMG /t -xdev -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf --one-file-system --preserve-root=all {} +" \
     "docker run --rm --network none --pull never --user 0:0 --entrypoint ls -v $1:/t:ro $IMG -A /t"
 }
 R="T/dl/IdentityPlatform"
@@ -208,6 +208,11 @@ for host in d05 test01; do
     || bad "$host both copies: state" "$(ls -AR "$ROOT")"
   echo "$OUT" | grep -qF "keycloak-db is stopped with no data dir: next the build's up" \
     && ok "$host, both copies: the last line names the build's up, then restore-mirror" || bad "$host next line" "$OUT"
+  [ "$(docker_lines | grep -c -- '--entrypoint find ')" -eq 5 ] \
+    && ! docker_lines | grep -F -- '--entrypoint find ' | grep -vF -- ' /t -xdev -mindepth 1 -maxdepth 1 ' | grep -q . \
+    && ! docker_lines | grep -F -- '--entrypoint find ' | grep -vF -- ' -exec rm -rf --one-file-system --preserve-root=all {} +' | grep -q . \
+    && ok "$host, mirror_reset_dir: each of the five root finds has -xdev and rm -rf --one-file-system --preserve-root=all in the docker argv" \
+    || bad "$host mirror_reset_dir flags" "$(docker_lines)"
 done
 run -- reset-mirror; rc=$?
 [ "$rc" -eq 0 ] && echo "$OUT" | grep -qF "nothing to reset" && [ "$(docker_lines)" = "$PS" ] \

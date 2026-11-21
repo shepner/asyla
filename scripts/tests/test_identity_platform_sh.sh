@@ -1229,7 +1229,7 @@ unset STUB_UNPACK_OUT
 # The docker stub runs reset-cutover's find here on the mounted dir; STUB_CUT_MISSING says the
 # cutover image is not here; STUB_RESTORED_CT lists a container, STUB_OPS_CT an ops one-shot's,
 # STUB_PS_FAIL fails compose ps.
-reset_find() { printf 'docker run --rm --network none --pull never --entrypoint find -v %s:/t %s /t -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf {} +' "$1" "$CUT_IMAGE"; }
+reset_find() { printf 'docker run --rm --network none --pull never --entrypoint find -v %s:/t %s /t -xdev -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf --one-file-system --preserve-root=all {} +' "$1" "$CUT_IMAGE"; }
 RESET_PS="docker compose -f compose.yml --profile restored --profile ops ps -a -q openldap keycloak keycloak-backup openldap-backup"
 reset_setup() {   # what an unpack leaves: the bundle, its three markers, files (lost+found too) in both targets
   unpack_setup
@@ -1254,6 +1254,11 @@ run reset-cutover; rc=$?
   && grep -qxF "$(reset_find "$ROOT/backup")" "$T/log" && grep -qxF "$(reset_find "$ROOT/openldap-backup")" "$T/log" \
   && ok "reset-cutover: both targets emptied by the pinned image's find (lost+found kept), no unpacked or unpack-started marker, bundle and fetched kept" \
   || bad "reset-cutover happy" "rc=$rc; $OUT; $(cat "$T/log")"
+[ "$(grep -c -- '--entrypoint find ' "$T/log")" -eq 2 ] \
+  && ! grep -F -- '--entrypoint find ' "$T/log" | grep -vF -- ' /t -xdev -mindepth 1 -maxdepth 1 ' | grep -q . \
+  && ! grep -F -- '--entrypoint find ' "$T/log" | grep -vF -- ' -exec rm -rf --one-file-system --preserve-root=all {} +' | grep -q . \
+  && ok "reset-cutover: each root find has -xdev and rm -rf --one-file-system --preserve-root=all in the docker argv (a mount below a target is left)" \
+  || bad "reset-cutover flags" "$(cat "$T/log")"
 # A failed unpack (unpack-started, no unpacked marker), files in the targets: the reset empties them.
 reset_setup; rm -f "$ROOT/cutover-state/unpacked"
 run reset-cutover; rc=$?

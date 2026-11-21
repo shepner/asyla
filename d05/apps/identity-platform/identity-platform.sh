@@ -1175,7 +1175,9 @@ do_unpack_bundle() {
 # restores' input, never emptied here. Then the unpacked marker goes first (a crash mid-delete
 # leaves no unpacked over a partial target; unpack-started stays, so a reset can run again), each
 # existing target is emptied but for lost+found by the pinned image's find (unpack's files are
-# root-owned; --pull never, --network none), and once both are verified empty the unpack-started
+# root-owned; --pull never, --network none; find -xdev, rm --one-file-system --preserve-root=all:
+# the image is FROM keycloak-db's postgres bookworm digest, theOrg 5dd8de6 Dockerfile.cutover-bundle
+# L9, so GNU find and rm; a mount below a target is left, and the target then fails), and once both are verified empty the unpack-started
 # marker goes. The ciphertext and the fetched marker are kept. With the image missing: targets
 # already empty succeed; a target holding files cannot be emptied here, so unpacked goes and it
 # fails (exit 1, unpack-started kept): cutover-clean and fetch-bundle (it pulls the image), then
@@ -1234,7 +1236,7 @@ do_reset_cutover() {
   for d in "$KC_TARGET" "$OL_TARGET"; do
     [ -d "$d" ] || continue
     docker run --rm --network none --pull never --entrypoint find -v "$d:/t" "$CUTOVER_IMAGE" \
-      /t -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf {} + </dev/null || rc=$?
+      /t -xdev -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf --one-file-system --preserve-root=all {} + </dev/null || rc=$?
   done
   if ! target_empty "$KC_TARGET" || ! target_empty "$OL_TARGET"; then
     echo "[ERROR] reset-cutover: a target still holds files (find exit $rc): $KC_TARGET, $OL_TARGET; unpack-started kept (run reset-cutover again)" >&2
@@ -1771,14 +1773,15 @@ count_lines() {
 }
 
 # count_dir_clear SWITCH DIR: DIR made and emptied (lost+found aside; its files are root-owned) through
-# keycloak-db's image (find, --pull never, --network none, as reset-cutover). Returns 1 when anything
-# is left: no backup is run into it.
+# keycloak-db's image (find, --pull never, --network none, as reset-cutover; find -xdev and GNU rm
+# --one-file-system --preserve-root=all, so a mount -v binds below DIR is left, never emptied).
+# Returns 1 when anything is left: no backup is run into it.
 count_dir_clear() {
   local rc=0
   mkdir -p "$2" || return 1
   target_empty "$2" && return 0
   docker run --rm --network none --pull never --user 0:0 --entrypoint find -v "$2:/t" "$KC_DB_IMAGE" \
-    /t -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf {} + </dev/null || rc=$?
+    /t -xdev -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf --one-file-system --preserve-root=all {} + </dev/null || rc=$?
   if ! target_empty "$2"; then
     echo "[ERROR] $1: $2 still holds files (find exit $rc); no backup run" >&2
     return 1
@@ -1791,7 +1794,7 @@ count_dir_clear() {
 count_dir_prune() {
   local rc=0 names left dir="${2:-$COUNT_DIR}"
   docker run --rm --network none --pull never --user 0:0 --entrypoint find -v "$dir:/t" "$KC_DB_IMAGE" \
-    /t -mindepth 1 -maxdepth 1 ! -name lost+found ! -name summary.txt -exec rm -rf {} + </dev/null || rc=$?
+    /t -xdev -mindepth 1 -maxdepth 1 ! -name lost+found ! -name summary.txt -exec rm -rf --one-file-system --preserve-root=all {} + </dev/null || rc=$?
   if ! names="$(ls -A "$dir" </dev/null)"; then
     echo "[ERROR] $1: could not list $dir after removing all but summary.txt (find exit $rc)" >&2
     return 1
@@ -2316,7 +2319,7 @@ mirror_reset_dir() {
   local sw=reset-mirror d="$1" rc=0 names
   [ -e "$d" ] || return 0
   docker run --rm --network none --pull never --user 0:0 --entrypoint find -v "$d:/t" "$KC_DB_IMAGE" \
-    /t -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf --one-file-system --preserve-root=all {} + </dev/null || rc=$?
+    /t -xdev -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf --one-file-system --preserve-root=all {} + </dev/null || rc=$?
   if ! names="$(docker run --rm --network none --pull never --user 0:0 --entrypoint ls -v "$d:/t:ro" "$KC_DB_IMAGE" -A /t </dev/null)"; then
     echo "[ERROR] $sw: could not list $d as root after emptying it (find exit $rc); the marker and stage kept: run $sw again" >&2
     return 1
