@@ -1,6 +1,6 @@
 #!/bin/bash
 # Offline test of `gitea.sh cron-config` (d04/apps/gitea/gitea.sh): it sets app.ini's
-# [cron.cleanup_packages] RUN_AT_START = false and SCHEDULE = 30 1 * * * (README, Registry
+# [cron.cleanup_packages] RUN_AT_START = false and SCHEDULE = 10 3 * * * (README, Registry
 # retention), changes no other byte, keeps a backup beside it, keeps app.ini's owner, group and
 # mode, and never prints app.ini's other lines (the real one holds Gitea's secrets). Touches no
 # host and no real Gitea: app.ini is a fixture (GITEA_APP_INI) with placeholder values, `docker`
@@ -57,7 +57,7 @@ ENABLED = false
 EOF
 }
 # The section as cron-config appends it.
-SECTION=$'[cron.cleanup_packages]\nRUN_AT_START = false\nSCHEDULE = 30 1 * * *\n'
+SECTION=$'[cron.cleanup_packages]\nRUN_AT_START = false\nSCHEDULE = 10 3 * * *\n'
 
 fresh() {  # an empty conf dir, as d04's (2775)
   chmod -R u+w "$CONF" 2>/dev/null
@@ -98,7 +98,7 @@ cp "$INI" "$T/orig"
 { cat "$T/orig"; printf '\n%s' "$SECTION"; } > "$T/want"
 run_gitea cron-config
 check "no section: appended, original is the prefix, one identical backup" \
-  '[ "$RC" -eq 0 ] && head -c "$(wc -c < "$T/orig")" "$INI" | cmp -s - "$T/orig" && cmp -s "$INI" "$T/want" && [ "$(backups)" = 1 ] && cmp -s "$CONF"/app.ini.bak-* "$T/orig" && grep -qF "RUN_AT_START: unset (Gitea'"'"'s default true) -> '"'"'false'"'"'" <<<"$OUT" && grep -qF "SCHEDULE: unset (Gitea'"'"'s default @midnight) -> '"'"'30 1 * * *'"'"'" <<<"$OUT" && grep -qF "applies at Gitea'"'"'s next start" <<<"$OUT" && [ -z "$(strays)" ]'
+  '[ "$RC" -eq 0 ] && head -c "$(wc -c < "$T/orig")" "$INI" | cmp -s - "$T/orig" && cmp -s "$INI" "$T/want" && [ "$(backups)" = 1 ] && cmp -s "$CONF"/app.ini.bak-* "$T/orig" && grep -qF "RUN_AT_START: unset (Gitea'"'"'s default true) -> '"'"'false'"'"'" <<<"$OUT" && grep -qF "SCHEDULE: unset (Gitea'"'"'s default @midnight) -> '"'"'10 3 * * *'"'"'" <<<"$OUT" && grep -qF "applies at Gitea'"'"'s next start" <<<"$OUT" && [ -z "$(strays)" ]'
 
 # 2. Run again: nothing to do, the file is not rewritten and no second backup is made.
 before="$(meta "$INI")"
@@ -110,15 +110,15 @@ check "re-run: already set, file untouched, no new backup" \
 #    change; ENABLED, OLDER_THAN, the comment and every other section stay byte for byte.
 fresh
 { base_ini; printf '\n[cron.cleanup_packages]\n; set by hand\nENABLED = true\nRUN_AT_START = true\nSCHEDULE=@midnight\nOLDER_THAN = 48h\n\n[log]\nLEVEL = Info\n'; } > "$INI"
-{ base_ini; printf '\n[cron.cleanup_packages]\n; set by hand\nENABLED = true\nRUN_AT_START = false\nSCHEDULE = 30 1 * * *\nOLDER_THAN = 48h\n\n[log]\nLEVEL = Info\n'; } > "$T/want"
+{ base_ini; printf '\n[cron.cleanup_packages]\n; set by hand\nENABLED = true\nRUN_AT_START = false\nSCHEDULE = 10 3 * * *\nOLDER_THAN = 48h\n\n[log]\nLEVEL = Info\n'; } > "$T/want"
 run_gitea cron-config
 check "section at the defaults: the two keys corrected, the rest byte-identical" \
-  '[ "$RC" -eq 0 ] && cmp -s "$INI" "$T/want" && grep -qF "RUN_AT_START: '"'"'true'"'"' -> '"'"'false'"'"'" <<<"$OUT" && grep -qF "SCHEDULE: '"'"'@midnight'"'"' -> '"'"'30 1 * * *'"'"'" <<<"$OUT" && [ "$(backups)" = 1 ] && ! grep -q "WARN" <<<"$OUT"'
+  '[ "$RC" -eq 0 ] && cmp -s "$INI" "$T/want" && grep -qF "RUN_AT_START: '"'"'true'"'"' -> '"'"'false'"'"'" <<<"$OUT" && grep -qF "SCHEDULE: '"'"'@midnight'"'"' -> '"'"'10 3 * * *'"'"'" <<<"$OUT" && [ "$(backups)" = 1 ] && ! grep -q "WARN" <<<"$OUT"'
 
 # 4. The section holds only OLDER_THAN: the two keys go in after it, before the blank line.
 fresh
 { base_ini; printf '\n[cron.cleanup_packages]\nOLDER_THAN = 48h\n\n[log]\nLEVEL = Info\n'; } > "$INI"
-{ base_ini; printf '\n[cron.cleanup_packages]\nOLDER_THAN = 48h\nRUN_AT_START = false\nSCHEDULE = 30 1 * * *\n\n[log]\nLEVEL = Info\n'; } > "$T/want"
+{ base_ini; printf '\n[cron.cleanup_packages]\nOLDER_THAN = 48h\nRUN_AT_START = false\nSCHEDULE = 10 3 * * *\n\n[log]\nLEVEL = Info\n'; } > "$T/want"
 run_gitea cron-config
 check "section with other keys only: the two keys inserted after its last key" \
   '[ "$RC" -eq 0 ] && cmp -s "$INI" "$T/want" && [ "$(backups)" = 1 ]'
@@ -134,7 +134,7 @@ check "no trailing newline, no section: newline added, section appended" \
 
 fresh
 { base_ini; printf '\n[cron.cleanup_packages]\nOLDER_THAN = 48h'; } > "$INI"
-{ base_ini; printf '\n[cron.cleanup_packages]\nOLDER_THAN = 48h\nRUN_AT_START = false\nSCHEDULE = 30 1 * * *\n'; } > "$T/want"
+{ base_ini; printf '\n[cron.cleanup_packages]\nOLDER_THAN = 48h\nRUN_AT_START = false\nSCHEDULE = 10 3 * * *\n'; } > "$T/want"
 run_gitea cron-config
 check "no trailing newline, section last: keys inserted after its last line" \
   '[ "$RC" -eq 0 ] && cmp -s "$INI" "$T/want"'
