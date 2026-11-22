@@ -1,16 +1,21 @@
 #!/bin/bash
-# Gitea Actions runner on d01-d03 (and any host whose spec gives it labels, such as the test01 build test host): native gitea-runner, systemd, jobs run on the host as `docker`.
+# Gitea Actions runner on d01-d03 (and any host whose spec gives it labels, such as the test01 build test host): native gitea-runner, systemd; jobs run on the host as `docker`, or in containers (docker mode).
 # Usage: gitea-runner.sh [switch ...]   Switches combine (e.g. install register up).
 # Shared by every host: ~/scripts/<host>/apps/gitea-runner/gitea-runner.sh is a symlink here.
 #
-#   install   Install or update (idempotent): nodejs if missing, the pinned binary (sha256 checked),
-#             /var/lib/gitea-runner/config.yaml with this host's labels, the systemd unit.
+#   install   Install or update (idempotent): nodejs if missing (host mode), the pinned binary
+#             (sha256 checked), /var/lib/gitea-runner/config.yaml with this host's labels, the unit.
 #   register  Register instance-wide. Reads the token from stdin (one line); never prints or
 #             stores it. Does nothing if already registered.
+#   config    Print the config.yaml install would write (read-only; for tests and review).
 #   up | down | restart | refresh | update | backup | status | logs
 #
-# Labels: RUNNER_LABELS below (hub ADR-010, ADR-011), all host mode. Changing them needs only
-# install + restart: the daemon takes labels from config.yaml, not from .runner.
+# Labels: d01-d03 keep RUNNER_LABELS below (hub ADR-010, ADR-011), host mode. Any other host reads
+# [runner] from its own host.toml: labels, and mode = "host" (default) or "docker". Docker mode
+# (ci01, asyla #1237) registers each label as NAME:docker://IMAGE (image = "..."), sets capacity
+# (1-99, default 10) and container.options (container_options = "DOCKER RUN FLAGS"); the rules are
+# build_host.py's check_runner_spec. Changing labels needs only install + restart: the daemon
+# takes labels from config.yaml, not from .runner.
 
 set -euo pipefail
 
@@ -27,6 +32,10 @@ UNIT="gitea-runner.service"
 RUN_AS="docker"
 RUNNER_NAME="$(hostname -s)"
 
+RUNNER_MODE=host
+RUNNER_IMAGE=""
+RUNNER_CAPACITY=""      # empty: config.yaml's capacity: 10
+RUNNER_OPTIONS=""
 case "$RUNNER_NAME" in
   d01|d02|d03) RUNNER_LABELS=(asyla "$RUNNER_NAME" docker) ;;
   # Any other host takes the labels its own spec gives it: [runner] labels in
@@ -36,22 +45,77 @@ case "$RUNNER_NAME" in
   *)
     RUNNER_SPEC="$SCRIPT_DIR/../../$RUNNER_NAME/host.toml"
     RUNNER_LABELS=()
-    while IFS= read -r label; do RUNNER_LABELS+=("$label"); done < <(python3 -c '
+    # One "KEY VALUE" line each: mode, then image, capacity and options (docker mode), then labels.
+    # IMAGE and OPTS are build_host.py's RUNNER_IMAGE and RUNNER_OPTS (test_gitea_runner_labels.sh
+    # checks they stay equal); KEYS is its RUNNER_KEYS.
+    if spec_lines=$(python3 -c '
 import re, sys, tomllib
-labels = tomllib.load(open(sys.argv[1], "rb")).get("runner", {}).get("labels", [])
+KEYS = ("enabled", "labels", "mode", "image", "capacity", "container_options")
+DOCKER_KEYS = ("image", "capacity", "container_options")
+IMAGE = r"[a-z0-9][a-z0-9._/-]*(:[0-9]+/[a-z0-9._/-]+)?(:[A-Za-z0-9_][A-Za-z0-9_.-]*)?(@sha256:[0-9a-f]{64})?"
+OPTS = r"-[A-Za-z0-9=,._:/@+ -]*"
+try:
+    r = tomllib.load(open(sys.argv[1], "rb")).get("runner", {})
+except (OSError, ValueError) as e:
+    sys.exit(f"{sys.argv[1]}: {e}")
+if not isinstance(r, dict):
+    sys.exit("[runner] is not a table")
+unknown = set(r) - set(KEYS)
+if unknown:
+    sys.exit(f"[runner]: unknown keys {sorted(unknown)}")
+labels = r.get("labels", [])
 if not labels or not isinstance(labels, list) or not all(isinstance(l, str) and re.fullmatch("[a-z0-9][a-z0-9-]*", l) for l in labels):
-    sys.exit(1)
-print("\n".join(labels))' "$RUNNER_SPEC" 2>/dev/null)
+    sys.exit("[runner] labels must be a non-empty list of names [a-z0-9][a-z0-9-]*")
+mode = r.get("mode", "host")
+if mode not in ("host", "docker"):
+    sys.exit(f"[runner] mode must be host or docker, not {mode!r}")
+out = [f"mode {mode}"]
+if mode == "host":
+    extra = [k for k in DOCKER_KEYS if k in r]
+    if extra:
+        sys.exit(f"[runner]: {extra} are for mode = \"docker\" only")
+else:
+    image = r.get("image")
+    if not (isinstance(image, str) and re.fullmatch(IMAGE, image)):
+        sys.exit(f"[runner] mode = \"docker\" needs image = \"REGISTRY/NAME[:TAG][@sha256:DIGEST]\", not {image!r}")
+    out.append(f"image {image}")
+    if "capacity" in r:
+        cap = r["capacity"]
+        if not isinstance(cap, int) or isinstance(cap, bool) or not 1 <= cap <= 99:
+            sys.exit(f"[runner] capacity must be a whole number 1-99, not {cap!r}")
+        out.append(f"capacity {cap}")
+    opts = r.get("container_options", "")
+    if not isinstance(opts, str) or (opts and not re.fullmatch(OPTS, opts)):
+        sys.exit(f"[runner] container_options must be docker run flags ({OPTS}), not {opts!r}")
+    if opts:
+        out.append(f"options {opts}")
+out += [f"label {l}" for l in labels]
+print("\n".join(out))' "$RUNNER_SPEC" 2>&1); then
+      while IFS= read -r line; do
+        case "$line" in
+          "mode "*)     RUNNER_MODE="${line#mode }" ;;
+          "image "*)    RUNNER_IMAGE="${line#image }" ;;
+          "capacity "*) RUNNER_CAPACITY="${line#capacity }" ;;
+          "options "*)  RUNNER_OPTIONS="${line#options }" ;;
+          "label "*)    RUNNER_LABELS+=("${line#label }") ;;
+        esac
+      done <<<"$spec_lines"
+    else
+      echo "[ERROR] $spec_lines" >&2
+    fi
     if [ "${#RUNNER_LABELS[@]}" -eq 0 ]; then
-      echo "[ERROR] no usable [runner] labels for $RUNNER_NAME in $RUNNER_SPEC" >&2
+      echo "[ERROR] no usable [runner] labels or mode for $RUNNER_NAME in $RUNNER_SPEC" >&2
       exit 1
     fi
     ;;
 esac
 
+# The label's execution part: host, or docker://IMAGE (each job in a container of that image).
+if [ "$RUNNER_MODE" = docker ]; then RUNNER_KIND="docker://$RUNNER_IMAGE"; else RUNNER_KIND=host; fi
+
 labels_csv() {
   local IFS=,
-  echo "${RUNNER_LABELS[*]/%/:host}"
+  echo "${RUNNER_LABELS[*]/%/:$RUNNER_KIND}"
 }
 
 is_registered() {
@@ -59,11 +123,29 @@ is_registered() {
 }
 
 render_config() {
-  cat "$SCRIPT_DIR/config.yaml"
+  local src="$SCRIPT_DIR/config.yaml"
+  if [ -n "$RUNNER_CAPACITY" ]; then
+    # Docker mode with a capacity: the spec's value in place of config.yaml's.
+    if ! grep -q '^  capacity: 10$' "$src"; then
+      echo "[ERROR] $src has no '  capacity: 10' line to set capacity $RUNNER_CAPACITY in" >&2
+      return 1
+    fi
+    sed "s/^  capacity: 10\$/  capacity: $RUNNER_CAPACITY/" "$src"
+  else
+    cat "$src"
+  fi
   echo "  # Rendered by gitea-runner.sh for $RUNNER_NAME."
   echo "  labels:"
   local l
-  for l in "${RUNNER_LABELS[@]}"; do echo "    - \"$l:host\""; done
+  for l in "${RUNNER_LABELS[@]}"; do echo "    - \"$l:$RUNNER_KIND\""; done
+  if [ "$RUNNER_MODE" = docker ]; then
+    echo
+    echo "container:"
+    echo "  # Docker mode ([runner] in $RUNNER_NAME/host.toml). docker_host stays at its default (empty):"
+    echo "  # the runner finds the daemon and mounts its socket into job containers, as on the Mini."
+    echo "  # Keys: https://gitea.com/gitea/runner/raw/tag/v4.1.0/internal/pkg/config/config.example.yaml"
+    if [ -n "$RUNNER_OPTIONS" ]; then echo "  options: \"$RUNNER_OPTIONS\""; fi
+  fi
 }
 
 install_binary() {
@@ -85,7 +167,8 @@ install_binary() {
 }
 
 do_install() {
-  if ! command -v node >/dev/null 2>&1; then
+  # Docker mode: actions run in the job container, with that image's node.
+  if [ "$RUNNER_MODE" = host ] && ! command -v node >/dev/null 2>&1; then
     # JavaScript actions (actions/checkout) run with the host's node in host mode.
     echo "[INFO] Installing nodejs (Debian package)"
     sudo apt-get update -qq
@@ -95,7 +178,8 @@ do_install() {
   sudo install -d -o "$RUN_AS" -m 0700 "$DATA_DIR"
   local cfg
   cfg=$(mktemp)
-  render_config > "$cfg"
+  # set -e does not apply here (run_cmd is called in an if), so a failed render is caught by hand.
+  render_config > "$cfg" || { rm -f "$cfg"; return 1; }
   if ! cmp -s "$cfg" "$DATA_DIR/config.yaml"; then
     install -m 0644 "$cfg" "$DATA_DIR/config.yaml"
     echo "[INFO] Installed $DATA_DIR/config.yaml (labels $(labels_csv))"
@@ -151,6 +235,7 @@ do_status() {
   echo "binary:     $("$BIN" --version 2>/dev/null || echo absent)"
   echo "node:       $(node --version 2>/dev/null || echo absent)"
   echo "registered: $(is_registered && echo yes || echo no)"
+  echo "mode:       $RUNNER_MODE"
   echo "labels:     $(labels_csv)"
   echo "service:    $(systemctl is-active "$UNIT" 2>/dev/null || true) ($(systemctl is-enabled "$UNIT" 2>/dev/null || echo not-installed))"
 }
@@ -170,12 +255,13 @@ run_cmd() {
       echo "[INFO] gitea-runner has no data to back up"
       ;;
     status)   do_status ;;
+    config)   render_config ;;
     *)        return 1 ;;
   esac
 }
 
 if [ $# -eq 0 ]; then
-  sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//' >&2
+  sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//' >&2
   exit 1
 fi
 
