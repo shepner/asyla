@@ -265,7 +265,13 @@ runs the cutover image's `unpack` into the two dirs the restores read (`backup/`
     - without-realm mode (no `configured`): `check-mail-off --without-realm` reads only
       `KEYCLOAK_MAIL` and the mail relay's client record from OpenBao, no Keycloak, and exits 1 if
       the coming `apply` would turn mail on. In the M5 cutover it runs **before step 6** (DEPLOY.md
-      at `d706369c`: no Keycloak yet, so before `start-keycloak` and `configure`).
+      at `d706369c`: no Keycloak yet, so before `start-keycloak` and `configure`). The run there is
+      the same operator command; the mode is automatic, and the output names it ("without-realm
+      mode (live realm not read; run again after configure)"):
+
+      ```
+      cd ~/local/asyla && python3 core/tools/credentials.py exec IDP_DEPLOY_DEX_CLIENT_SECRET -- projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform check-mail-off IDP_DEPLOY_DEX_CLIENT_SECRET
+      ```
     - realm mode (`configured` present): `check-mail-off` reads the live realm `theorg` as
       theorg-iga too (no LDAP password), and needs configure's markers, a valid `configured`
       (`cutover_gate`, as `check-reset-off`) and keycloak running and healthy. In the M5 cutover it
@@ -277,8 +283,9 @@ runs the cutover image's `unpack` into the two dirs the restores read (`backup/`
     Exit codes pass through: 0 mail off; 1 on, not proven off, or a setting refused (a bad
     `KEYCLOAK_MAIL` too); 3 its stdin refused. Refused (exit 3, no docker run, nothing changed)
     with the name in the environment, on a replica, the lock busy, `rolled-back`, in realm mode a
-    missing or invalid marker or keycloak not healthy, a terminal or an empty read; exit 2 for an
-    ARG. It writes no marker, removes none and is **not a `cutover-done` gate**: a failure is the
+    missing or invalid marker or keycloak not healthy, the keycloak-configure image not on d05
+    (pull it first: the apps phase; so a pull failure never reads as exit 1), a terminal or an
+    empty read; exit 2 for an ARG. It writes no marker, removes none and is **not a `cutover-done` gate**: a failure is the
     operator's stop, not the gate's. It always reads the relay record (the deploy role may read
     `secret/v2/communications/mail-relay/clients/keycloak`). The operator's run, in both modes:
 

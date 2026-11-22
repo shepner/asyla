@@ -1713,8 +1713,10 @@ do_check_reset_off() {
 #   without-realm mode (no configured: before configure, M5 step 6): `check-mail-off
 #     --without-realm`, which reads only KEYCLOAK_MAIL and the relay record, no Keycloak. After a
 #     failed configure there is no configured marker, so it runs this mode though a realm exists:
-#     configure again first (README).
-# It prints the mode it ran. One value, IDP_DEPLOY_DEX_CLIENT_SECRET's (theOrg's only stdin name for
+#     configure again first (README). Its output says the live realm was not read.
+# It prints the mode it ran. The keycloak-configure image (compose.yml's name for it, as mirror_copy
+# builds its images) must be on d05 already: a missing one is refused (exit 3, no compose run), so a pull
+# failure is never read as theOrg's exit 1. One value, IDP_DEPLOY_DEX_CLIENT_SECRET's (theOrg's only stdin name for
 # it, VAULT_DEX_CLIENT_SECRET), read and written as check-reset-off's. Refused (exit 3, no docker run,
 # nothing changed) with IDP_DEPLOY_DEX_CLIENT_SECRET in the environment, on a replica, cutover-state/
 # a symlink, the lock busy, rolled-back, in realm mode a missing or invalid marker or keycloak not
@@ -1748,6 +1750,10 @@ do_check_mail_off() {
     mode=without-realm
     args=(--without-realm)
   fi
+  if ! docker image inspect "$REGISTRY/theorg/identity-platform-keycloak-configure:$IDENTITY_PLATFORM_TAG" >/dev/null 2>&1 </dev/null; then
+    echo "[ERROR] $sw: refused: the keycloak-configure image is not on d05; pull it first (the apps phase); nothing changed" >&2
+    return 3
+  fi
   if [ -t 0 ]; then
     echo "[ERROR] $sw: refused: stdin is a terminal; $sw reads IDP_DEPLOY_DEX_CLIENT_SECRET's value as one line on stdin (scripts/app_switch.sh writes it); nothing changed" >&2
     return 3
@@ -1766,7 +1772,7 @@ do_check_mail_off() {
   if [ "$mode" = realm ]; then
     echo "[INFO] $sw: realm mode ($STATE_DIR/configured exists): keycloak-configure check-mail-off (the mail switch, the relay record and the live realm theorg)"
   else
-    echo "[INFO] $sw: without-realm mode (no $STATE_DIR/configured): keycloak-configure check-mail-off --without-realm (the mail switch and the relay record; no Keycloak read)"
+    echo "[INFO] $sw: without-realm mode (live realm not read; run again after configure) (no $STATE_DIR/configured): keycloak-configure check-mail-off --without-realm (the mail switch and the relay record; no Keycloak read)"
   fi
   # As check-reset-off's run: run_compose's argv, the docker program in its own subshell.
   builtin printf 'VAULT_DEX_CLIENT_SECRET=%s\n' "$dex" \
@@ -1777,7 +1783,7 @@ do_check_mail_off() {
     echo "[ERROR] $sw: keycloak-configure check-mail-off ($mode mode) exited $rc (1: mail is on, not proven off, or a setting refused; 3: it refused its stdin)" >&2
     return "$rc"
   fi
-  echo "[INFO] $sw: mail is off ($mode mode); no marker written"
+  echo "[INFO] $sw: mail is off ($mode mode); no marker written$([ "$mode" = realm ] || echo '; the live realm was not read: run again after configure')"
 }
 
 # cutover-done: the go-live record, run by the operator after the cutover's verification (DEPLOY.md

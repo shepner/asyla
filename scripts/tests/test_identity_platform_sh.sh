@@ -2153,12 +2153,15 @@ mo_setup() {   # mo_setup realm|without-realm: ro_setup's markers (configured re
   [ "$1" = realm ] || rm -f "$ROOT/cutover-state/configured"
 }
 mo_state() { ls -A "$ROOT/cutover-state" | grep -vxF .lock; cat "$ROOT/cutover-state/"* 2>/dev/null; }
+# Before the run, the image check: `docker image inspect` of compose.yml's keycloak-configure image.
+MO_INSPECT="docker image inspect gitea.asyla.org/theorg/identity-platform-keycloak-configure:$(sed -nE 's/^IDENTITY_PLATFORM_TAG="\$\{IDENTITY_PLATFORM_TAG_OVERRIDE:-([0-9a-f]{40})\}"$/\1/p' "$SRC/identity-platform.sh")"
+grep -qE ':[0-9a-f]{40}$' <<< "$MO_INSPECT" || bad "check-mail-off image name" "no IDENTITY_PLATFORM_TAG read from the script: $MO_INSPECT"
 mo_calls_ok() {   # mo_calls_ok MODE: that mode's calls; no secret name in any call's env; the run's stdin exactly one line
   local want n f
   if [ "$1" = realm ]; then
-    want="$(printf '%s\n%s\n%s' "$KC_PS" "$KC_INSPECT" "$CONF_RUN check-mail-off")"; n=3; f="$T/confin.check-mail-off"
+    want="$(printf '%s\n%s\n%s\n%s' "$KC_PS" "$KC_INSPECT" "$MO_INSPECT" "$CONF_RUN check-mail-off")"; n=4; f="$T/confin.check-mail-off"
   else
-    want="$CONF_RUN check-mail-off --without-realm"; n=1; f="$T/confin.check-mail-off--without-realm"
+    want="$(printf '%s\n%s' "$MO_INSPECT" "$CONF_RUN check-mail-off --without-realm")"; n=2; f="$T/confin.check-mail-off--without-realm"
   fi
   [ "$(grep '^docker ' "$T/log")" = "$want" ] \
     && [ "$(grep -c '^ENVNAMES' "$T/log")" -eq "$n" ] && [ "$(grep '^ENVNAMES' "$T/log" | sort -u)" = "ENVNAMES" ] \
@@ -2181,6 +2184,29 @@ for mode in realm without-realm; do
     && echo "$OUT" | grep -qF "check-mail-off: $mode mode (" && echo "$OUT" | grep -qF "mail is off ($mode mode); no marker written" \
     && ok "check-mail-off ($mode mode): the exact run with one VAULT_DEX_CLIENT_SECRET= line on its stdin alone, 0, no marker written or removed" \
     || bad "check-mail-off $mode happy" "rc=$rc; $OUT; $(cat "$T/log")"
+  # Without-realm says plainly that the live realm was not read; realm mode does not.
+  if [ "$mode" = realm ]; then
+    ! echo "$OUT" | grep -q 'live realm.*not read' && ok "check-mail-off (realm mode): no unread-realm notice" \
+      || bad "check-mail-off realm notice" "$OUT"
+  else
+    echo "$OUT" | grep -qF "check-mail-off: without-realm mode (live realm not read; run again after configure)" \
+      && echo "$OUT" | grep -qF "no marker written; the live realm was not read: run again after configure" \
+      && ok "check-mail-off (without-realm mode): the output says the live realm was not read" \
+      || bad "check-mail-off without-realm notice" "$OUT"
+  fi
+done
+# Under xtrace (SHELLOPTS=xtrace inherited, or bash -x), realm mode: traced up to the read, the
+# value in no trace, argv or file; the run still gets it; no marker change.
+for xm in SHELLOPTS bash-x; do
+  mo_setup realm; mbefore="$(mo_state)"
+  if [ "$xm" = SHELLOPTS ]; then
+    CONF_EXTRA="STUB_KC_RUNNING=1 SHELLOPTS=xtrace" ro_run check-mail-off; rc=$?
+  else
+    LEAF_BASH_X=1 ro_run check-mail-off; rc=$?
+  fi
+  [ "$rc" -eq 0 ] && grep -q '^+.*do_check_mail_off' <<< "$OUT" && mo_calls_ok realm && [ "$(mo_state)" = "$mbefore" ] && conf_no_value \
+    && ok "check-mail-off under xtrace ($xm): traced up to the read, the value in no trace, argv or file; no marker change" \
+    || bad "check-mail-off xtrace $xm" "rc=$rc; $(grep -c '^+' <<< "$OUT") trace lines; $(cat "$T/log")"
 done
 # A re-run in realm mode after cutover-done (read-only): runs again (0), no data check.
 mo_setup realm; echo done > "$ROOT/cutover-state/cutover-done"; mbefore="$(mo_state)"
@@ -2226,6 +2252,21 @@ done
 mo_setup realm; before="$(snap)"
 CONF_EXTRA="" ro_run check-mail-off; rc=$?
 mo_refused 3 "in realm mode with keycloak not running" "check-mail-off: refused: keycloak is not running, not running and healthy (realm mode needs it)"
+# configured a dangling symlink still chooses realm mode: its gate refuses (configured is not a
+# file), never a without-realm run.
+mo_setup realm; rm -f "$ROOT/cutover-state/configured"; ln -s "$ROOT/nowhere" "$ROOT/cutover-state/configured"; before="$(snap)"
+ro_run check-mail-off; rc=$?
+! echo "$OUT" | grep -q 'without-realm' || bad "check-mail-off with configured a dangling symlink ran without-realm" "$OUT"
+mo_refused 3 "with configured a dangling symlink (realm mode: its gate)" "check-mail-off: refused: cutover marker missing or invalid: configured (in"
+# The keycloak-configure image not on d05 (a pull failure would read as theOrg's exit 1): refused
+# after the image check, before any compose run, each mode.
+for mode in realm without-realm; do
+  mo_setup "$mode"; before="$(snap)"
+  if [ "$mode" = realm ]; then x="STUB_KC_RUNNING=1 STUB_MISSING=1"; else x="STUB_MISSING=1"; fi
+  CONF_EXTRA="$x" ro_run check-mail-off; rc=$?
+  [ "$(grep '^docker ' "$T/log" | tail -n 1)" = "$MO_INSPECT" ] || bad "check-mail-off $mode image missing: last call not the image check" "$(cat "$T/log")"
+  mo_refused 3 "($mode mode) with the keycloak-configure image not on d05" "check-mail-off: refused: the keycloak-configure image is not on d05; pull it first (the apps phase)"
+done
 mo_setup without-realm; before="$(snap)"; rm -f "$T/confin".*
 tty_run check-mail-off; rc=$?
 mo_refused 3 "with a terminal on stdin" "check-mail-off: refused: stdin is a terminal"
