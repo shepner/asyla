@@ -97,6 +97,9 @@ default, as every host before ci01 (asyla #1237: "host" so its CI jobs see the n
 NAS mounts: verify checks the two NAS docker shares (NAS_DOCKER_MOUNTS) only for a spec whose
 [setup].steps has nfs.sh, the step that mounts them; ci01 has no NFS step (CI needs no NAS).
 binfmt.sh as a step: verify checks that the qemu-aarch64 handler is enabled with flag F.
+[docker] containerd_root with docker.sh as a step: verify checks that the running containerd's
+command line (/proc/PID/cmdline, readable without root) has --root containerd_root (docker.sh's
+header says why).
 
 Gitea runner modes ([runner], read by docker/gitea-runner/gitea-runner.sh): mode = "host" (the
 default: jobs run on the host as `docker`) or "docker" (each job in a container of image =
@@ -272,6 +275,20 @@ VM_CPU = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 NAS_DOCKER_MOUNTS = ("/mnt/nas/data1/docker", "/mnt/nas/data2/docker")
 BINFMT_SCRIPT = "binfmt.sh"   # build/setup/: QEMU user binfmt for arm64 buildx legs (ci01)
 BINFMT_AARCH64 = "/proc/sys/fs/binfmt_misc/qemu-aarch64"
+# The running containerd's arguments, one per line ([docker] containerd_root; docker.sh).
+CONTAINERD_CMDLINE = "tr '\\0' '\\n' < /proc/$(systemctl show -p MainPID --value containerd)/cmdline"
+
+
+def containerd_root_flag(args: list[str]) -> str | None:
+    """The value of --root (or --root=X) in a containerd command line's arguments, else None."""
+    for i, a in enumerate(args):
+        if a == "--root" and i + 1 < len(args):
+            return args[i + 1]
+        if a.startswith("--root="):
+            return a.split("=", 1)[1]
+    return None
+
+
 # [runner] (docker/gitea-runner/gitea-runner.sh reads the same keys and refuses the same values).
 RUNNER_KEYS = ("enabled", "labels", "mode", "image", "capacity", "container_options")
 RUNNER_MODES = ("host", "docker")
@@ -2099,6 +2116,12 @@ def verify(spec: dict) -> int:
         check(f"qemu-aarch64 binfmt enabled with flag F ({BINFMT_SCRIPT})",
               r.returncode == 0 and lines[:1] == ["enabled"] and "F" in flags,
               f"{lines[:1]} flags {flags!r}" if r.returncode == 0 else f"no {BINFMT_AARCH64}")
+    croot = spec.get("docker", {}).get("containerd_root")
+    if croot and "docker.sh" in steps:
+        r = ssh(host, CONTAINERD_CMDLINE, check=False)
+        have = containerd_root_flag(r.stdout.splitlines()) if r.returncode == 0 else None
+        check("containerd runs with --root [docker] containerd_root (docker.sh)", have == croot,
+              f"{have or 'no --root'} vs {croot}")
     if "port_proxy.sh" in spec.get("setup", {}).get("steps", []):
         # Each proxy's socket is filtered, and an HTTP GET through it reaches the container (every
         # proxied target today is an exporter's web page).

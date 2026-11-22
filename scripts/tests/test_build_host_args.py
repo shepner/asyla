@@ -683,11 +683,11 @@ BINFMT_OK = "enabled\ninterpreter /usr/libexec/qemu-binfmt/aarch64-binfmt-P\nfla
 
 
 def verify_lines(spec: dict, mounts: str = "", qm_conf: str = "", binfmt: Done | None = None,
-                 runner_cfg: Done | None = None) -> tuple[list[str], list[str]]:
+                 runner_cfg: Done | None = None, containerd: Done | None = None) -> tuple[list[str], list[str]]:
     """verify(spec) against stand-ins: ssh answers from the arguments (the first ssh is hostname,
     uid and /mnt mounts; `qm config` gets QM_CONF; the binfmt entry BINFMT; RUNNER_CONFIG's label
-    lines RUNNER_CFG), and every helper that would reach GitLab, Gitea or a host's apps is a
-    no-op. Returns (the printed check lines, the ssh commands)."""
+    lines RUNNER_CFG; containerd's command line CONTAINERD), and every helper that would reach
+    GitLab, Gitea or a host's apps is a no-op. Returns (the printed check lines, the ssh commands)."""
     asked = []
 
     def fake(t, c):
@@ -702,6 +702,8 @@ def verify_lines(spec: dict, mounts: str = "", qm_conf: str = "", binfmt: Done |
             return binfmt or Done(1)
         if build_host.RUNNER_CONFIG in c:
             return runner_cfg or Done(1)
+        if c == build_host.CONTAINERD_CMDLINE:
+            return containerd or Done(1)
         if "sudo test -e" in c:
             return Done(1)   # no deploy token file
         return Done(0, "")
@@ -777,6 +779,23 @@ def ci01_cases() -> list[bool]:
     lines, asked = verify_lines(steps_(load(VM), ["docker.sh"]))
     out.append(check("verify: no binfmt.sh step: no binfmt line or read",
                      not any("binfmt" in l for l in lines) and not any("binfmt" in c for c in asked), repr(lines)))
+    # verify: [docker] containerd_root (docker.sh starts containerd with --root)
+    cr = '[docker]\ncontainerd_root = "/mnt/docker/containerd"\n'
+    label = "containerd runs with --root [docker] containerd_root (docker.sh)"
+    for args in ("/usr/bin/containerd\n--root\n/mnt/docker/containerd\n", "/usr/bin/containerd\n--root=/mnt/docker/containerd\n"):
+        lines, _ = verify_lines(steps_(load(VM + cr), ["docker.sh"]), containerd=Done(0, args))
+        out.append(check(f"verify: containerd {args.split()[1:]!r}: OK", has(lines, f"[OK] {label}"), repr(lines)))
+    lines, _ = verify_lines(steps_(load(VM + cr), ["docker.sh"]), containerd=Done(0, "/usr/bin/containerd\n"))
+    out.append(check("verify: containerd without --root: FAIL naming it",
+                     has(lines, f"[FAIL] {label}: no --root vs /mnt/docker/containerd"), repr(lines)))
+    lines, _ = verify_lines(steps_(load(VM + cr), ["docker.sh"]), containerd=Done(0, "/usr/bin/containerd\n--root\n/var/lib/containerd\n"))
+    out.append(check("verify: containerd with another root: FAIL",
+                     has(lines, f"[FAIL] {label}: /var/lib/containerd vs /mnt/docker/containerd"), repr(lines)))
+    lines, _ = verify_lines(steps_(load(VM + cr), ["docker.sh"]), containerd=Done(1))
+    out.append(check("verify: containerd not running: FAIL", has(lines, f"[FAIL] {label}"), repr(lines)))
+    lines, asked = verify_lines(steps_(load(VM + '[docker]\ndata_root = "/mnt/docker/engine"\n'), ["docker.sh"]))
+    out.append(check("verify: no containerd_root: no containerd line or read",
+                     not any("containerd" in l for l in lines) and build_host.CONTAINERD_CMDLINE not in asked, repr(lines)))
     # check_runner_spec
     r = load(VM + CI_RUNNER + 'capacity = 6\ncontainer_options = "--cpus=2 --memory=3g"\n')["runner"]
     out.append(check("[runner] docker mode with image, capacity and options is accepted",

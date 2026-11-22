@@ -24,9 +24,12 @@ cpu = "host"               # qm create --cpu; verify checks qm config
 steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "container_dns.sh", "bashrc.sh", "node_exporter.sh", "binfmt.sh"]   # build/setup/, sent by the build
 
 # daemon.json options (build/setup/docker.sh), as ci01's but without its registry mirror (no
-# registry-mirror app here).
+# registry-mirror app here). containerd_root, as ci01's: images and snapshots of Docker's containerd
+# image store live in containerd's root, which data_root does not move, so docker.sh starts
+# containerd with --root on the data disk and checks it (a build here proves that path for ci01).
 [docker]
 data_root = "/mnt/docker/engine"
+containerd_root = "/mnt/docker/containerd"
 default_address_pools = [{ base = "10.210.0.0/16", size = 24 }]
 
 # Node exporter as on d03 (build/setup/node_exporter.sh); nothing scrapes test01. Its one source is

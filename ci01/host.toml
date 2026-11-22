@@ -42,8 +42,12 @@ steps = ["systemConfig.sh", "docker.sh", "container_dns.sh", "bashrc.sh", "node_
 allow = ["10.0.0.0/24"]    # a subnet, not a host (operator, 2026-10-25): the trends Prometheus can move
 
 # dockerd's daemon.json (build/setup/docker.sh renders it from this table; a spec without it keeps
-# the old file). data_root puts images and build cache on the data disk, not the 32G OS disk, and
-# docker.service waits for that mount. The address pool gives 256 job networks of /24 (theOrg #960,
+# the old file). data_root puts dockerd's own data (containers, volumes, build cache) on the data
+# disk, not the 32G OS disk, and docker.service waits for that mount. containerd_root does the same
+# for images and snapshots: Docker 29's containerd image store (the default on a fresh install, and
+# what d06 runs) keeps them in containerd's root, which data_root does not move, so without it CI
+# images would fill the OS disk. docker.sh starts containerd with --root there (a containerd.service
+# drop-in) and checks it does. Not a daemon.json key. The address pool gives 256 job networks of /24 (theOrg #960,
 # address pools). 10.210.0.0/16 was checked free on the LAN on
 # 2026-11-22: no interface or route on d03, vmh01 or vmh02 uses it, and `ip route get 10.210.0.1`
 # there goes via 10.0.0.1 and out to the WAN (traceroute 10.0.0.2 -> 192.168.1.254 -> AT&T). The
@@ -51,6 +55,7 @@ allow = ["10.0.0.0/24"]    # a subnet, not a host (operator, 2026-10-25): the tr
 # http needs no insecure-registries entry: https://docs.docker.com/reference/cli/dockerd/#insecure-registries).
 [docker]
 data_root = "/mnt/docker/engine"
+containerd_root = "/mnt/docker/containerd"
 default_address_pools = [{ base = "10.210.0.0/16", size = 24 }]
 registry_mirrors = ["http://127.0.0.1:5000"]
 
