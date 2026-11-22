@@ -233,8 +233,9 @@ check_cleanup_rules() {
   fi
 }
 
-# Registry retention, when (README): Gitea's cleanup_packages job runs once a night at 01:30 local
-# time (the container's /etc/localtime, America/Chicago) and never at start (operator, 2026-11-06).
+# Registry retention, when (README): Gitea's cleanup_packages job runs once a night at 03:10 local
+# time (the container's /etc/localtime, America/Chicago) and never at start (operator, 2026-11-06;
+# the time moved from 01:30 on 2026-11-20 so it clears theOrg's deploy-all in CST and CDT, README).
 # Gitea's defaults are @midnight and at every start, and each run held the sqlite database for 6-15
 # min, 2-4 times a night (asyla hub backlog 2026-11-06-hosts-gitea-nightly-package-cleanup-locks-
 # the-forge). Gitea 1.27.3 reads [cron.cleanup_packages] RUN_AT_START and SCHEDULE; a 5-field
@@ -242,7 +243,7 @@ check_cleanup_rules() {
 # applies at its next start (the nightly backup's stop and start); cron-config never restarts it.
 # ENABLED is not managed: its default is true, and verify warns if the section turns it off.
 GITEA_CRON_SECTION="cron.cleanup_packages"
-GITEA_CRON_SETTINGS=("RUN_AT_START=false" "SCHEDULE=30 1 * * *")
+GITEA_CRON_SETTINGS=("RUN_AT_START=false" "SCHEDULE=10 3 * * *")
 
 # cron_ini check|apply [container StartedAt]: check prints the managed keys' values and warns on
 # drift (always exit 0); apply sets them, changing no other line: a timestamped backup beside
@@ -481,7 +482,7 @@ if [ $# -eq 0 ]; then
   echo "  restart  - Down then up" >&2
   echo "  verify   - curl local :3000 /api/healthz (fatal) and https://gitea.asyla.org;" >&2
   echo "             print the package cleanup rules and app.ini's [cron.cleanup_packages] (read-only; warns on drift)" >&2
-  echo "  cron-config - set app.ini [cron.cleanup_packages] RUN_AT_START = false, SCHEDULE = 30 1 * * * (01:30 local);" >&2
+  echo "  cron-config - set app.ini [cron.cleanup_packages] RUN_AT_START = false, SCHEDULE = 10 3 * * * (03:10 local);" >&2
   echo "             backup beside it first; applies at Gitea's next start, never restarts Gitea" >&2
   echo "  logs     - Follow logs (optionally for one service)" >&2
   exit 1

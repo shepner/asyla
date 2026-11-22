@@ -6,7 +6,11 @@
 #   host  - SSH target (default: d01)
 #
 # What it does:
-#   1. Runs update_scripts.sh on d01 to pull latest repo changes
+#   1. Runs update_scripts.sh on d01 to pull latest repo changes. d01 stores no GitLab credential:
+#      run this through the credentials capability so the deploy token reaches the updater on stdin
+#      (from ~/local/asyla: python3 core/tools/credentials.py exec ASYLA_HOSTS_DEPLOY_USER
+#      ASYLA_HOSTS_DEPLOY_TOKEN -- projects/asyla-hosts/d01/deploy.sh). Without them this step is
+#      skipped with a warning and the installed scripts are used.
 #   2. Deploys the internal Caddy from the internal-access repo (scripts/deploy-host.sh d01)
 #   3. Restarts cloudflared, internal-access, and media stack
 #
@@ -32,8 +36,13 @@ log "=== Deploying to $HOST ==="
 # ---------------------------------------------------------------------------
 # Pull latest scripts from repo
 # ---------------------------------------------------------------------------
-log "Running update_scripts.sh on $HOST..."
-ssh "$HOST" "~/update_scripts.sh"
+if [ -n "${ASYLA_HOSTS_DEPLOY_USER:-}" ] && [ -n "${ASYLA_HOSTS_DEPLOY_TOKEN:-}" ]; then
+  log "Running update_scripts.sh on $HOST (the deploy token on its stdin)..."
+  # printf is a bash builtin: the token is in no process's argv, only on the ssh stdin.
+  printf 'username=%s\npassword=%s\n' "$ASYLA_HOSTS_DEPLOY_USER" "$ASYLA_HOSTS_DEPLOY_TOKEN" | ssh "$HOST" "~/update_scripts.sh"
+else
+  log "WARN: no ASYLA_HOSTS_DEPLOY_USER/ASYLA_HOSTS_DEPLOY_TOKEN: scripts on $HOST not updated (run through credentials exec)"
+fi
 
 log "Deploying internal-access from $INTERNAL_ACCESS_REPO..."
 "$INTERNAL_ACCESS_REPO/scripts/deploy-host.sh" d01
