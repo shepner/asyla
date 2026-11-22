@@ -63,6 +63,8 @@ if d is None:
     sys.exit(0)   # no [docker] table (a [docker...] line of another table): the default
 if not isinstance(d, dict):
     sys.exit("[docker] must be a table")
+if not d:
+    sys.exit(0)   # an empty table: the default's bytes, not a re-rendering of them
 unknown = set(d) - {"data_root", "default_address_pools", "registry_mirrors"}
 if unknown:
     sys.exit(f"[docker]: unknown keys {sorted(unknown)} (known: data_root, default_address_pools, registry_mirrors)")
