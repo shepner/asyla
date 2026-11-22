@@ -1,0 +1,33 @@
+# registry-mirror on ci01 (README.md): a Docker Hub pull-through cache for ci01's own daemon
+# (daemon.json registry-mirrors = http://127.0.0.1:5000, from [docker] in ci01/host.toml; theOrg #1195).
+# Anonymous: no Docker Hub username or password anywhere.
+name: registry-mirror
+
+services:
+  registry-mirror:
+    # registry 2.8.3, pinned to its OCI index digest (Docker Hub tags API, read 2026-11-22:
+    # https://hub.docker.com/_/registry/tags, tag 2.8.3).
+    image: registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+    container_name: registry-mirror
+    restart: unless-stopped
+    environment:
+      # Proxy mode: a pull the cache lacks is fetched from Docker Hub, kept, and served from here after.
+      REGISTRY_PROXY_REMOTEURL: https://registry-1.docker.io
+    volumes:
+      - ${DOCKER_DL:-/mnt/docker}/registry-mirror:/var/lib/registry
+    ports:
+      # Loopback only: it serves ci01's daemon, nothing else. Docker treats 127.0.0.0/8 registries as
+      # insecure by default, so plain http needs no insecure-registries entry
+      # (https://docs.docker.com/reference/cli/dockerd/#insecure-registries).
+      - "127.0.0.1:5000:5000"
+    healthcheck:
+      # The image is alpine-based, so busybox wget is there (inference from the library image's
+      # Dockerfiles, alpine:3.x; not read for 2.8.3 itself).
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:5000/v2/"]
+      interval: 60s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+    logging:
+      driver: local
+      options: {max-size: "20m", max-file: "3"}
