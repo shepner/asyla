@@ -259,14 +259,17 @@ case "$*" in
     exit "${STUB_BIND_RC:-0}" ;;
   # configure's keycloak-configure runs: stdin to $STUB_CONF_IN.CMD and the call's environment to
   # $STUB_CONF_IN.CMD.env (temp files read only by the checks); exit STUB_APPLY_RC or STUB_RECONCILE_RC
-  # (check-reset-off's run, the same files: STUB_RESETOFF_RC).
+  # (check-reset-off's run, the same files: STUB_RESETOFF_RC; check-mail-off's, the files
+  # check-mail-off and check-mail-off--without-realm by mode: STUB_MAILOFF_RC).
   *"--profile ops run --rm -T keycloak-configure "*)
     c="${!#}"
+    [ "$c" != --without-realm ] || c="check-mail-off--without-realm"
     if [ -n "${STUB_CONF_IN:-}" ]; then cat > "$STUB_CONF_IN.$c"; env > "$STUB_CONF_IN.$c.env"; else cat > /dev/null; fi
     case "$c" in
       apply) exit "${STUB_APPLY_RC:-0}" ;;
       reconcile) exit "${STUB_RECONCILE_RC:-0}" ;;
       check-reset-off) exit "${STUB_RESETOFF_RC:-0}" ;;
+      check-mail-off|check-mail-off--without-realm) exit "${STUB_MAILOFF_RC:-0}" ;;
     esac ;;
   *"ps -q openldap") [ -n "${STUB_NO_OL:-}" ] || echo olid ;;
   *"ps -q keycloak") if [ -n "${STUB_KC_RUNNING:-}" ]; then echo kcid; fi ;;
@@ -397,13 +400,14 @@ awk '/^      identity-platform-edge:$/ {getline; if ($0 ~ /^        ipv4_address
 grep -qxF '      - KC_PROXY_TRUSTED_ADDRESSES=10.213.5.2' <<< "$KC" \
   && ok "compose.yml: KC_PROXY_TRUSTED_ADDRESSES=10.213.5.2 (Caddy alone)" || bad "compose.yml: KC_PROXY_TRUSTED_ADDRESSES"
 # theOrg identity-platform deploy/d05/compose.example.yml, read 2026-11-14 (git show): the same at
-# 701e893, 47f65add and fcbed3fe; read again 2026-11-20: the same at 5dd8de6; 2026-11-21: at bb456ee.
+# 701e893, 47f65add and fcbed3fe; read again 2026-11-20: the same at 5dd8de6; 2026-11-21: at bb456ee;
+# 2026-11-22: at d706369c.
 KC_IMAGE="quay.io/keycloak/keycloak:26.8.2@sha256:3879c623248408de29a5303178b5816c77e8dfef3890c361f8c0bbeaa979ba3b"
 DB_IMAGE="postgres:16.14-bookworm@sha256:64154d0babcb1741988719e703419af0382b19953706149f9872fbd0f438efa8"
 [ "$(grep -E '^    image:' <<< "$KC")" = "    image: $KC_IMAGE" ] \
-  && ok "compose.yml: keycloak's image is bb456ee's digest" || bad "compose.yml: keycloak image" "$(grep -E '^    image:' <<< "$KC")"
+  && ok "compose.yml: keycloak's image is d706369c's digest" || bad "compose.yml: keycloak image" "$(grep -E '^    image:' <<< "$KC")"
 [ "$(grep -E '^    image:' <<< "$DB")" = "    image: $DB_IMAGE" ] \
-  && ok "compose.yml: keycloak-db's image is bb456ee's digest" || bad "compose.yml: keycloak-db image" "$(grep -E '^    image:' <<< "$DB")"
+  && ok "compose.yml: keycloak-db's image is d706369c's digest" || bad "compose.yml: keycloak-db image" "$(grep -E '^    image:' <<< "$DB")"
 db_img_script="$(sed -nE 's/^KC_DB_IMAGE="(.*)"$/\1/p' "$SRC/identity-platform.sh")"
 [ "    image: $db_img_script" = "$(grep -E '^    image:' <<< "$DB")" ] \
   && ok "identity-platform.sh's KC_DB_IMAGE (the data check's image) equals compose.yml's keycloak-db image" \
@@ -617,11 +621,16 @@ STUB_MISSING=1 STUB_SET="$DB_NAME" run up; rc=$?
 STUB_MISSING=1 STUB_SET="$DB_NAME $PULL_NAME" run up; rc=$?
 [ "$rc" -eq 0 ] && grep -q HELPER_OK "$T/log" && ok "up with an image missing: pulls it through the helper, then starts" || bad "up pulls missing" "rc=$rc; $OUT"
 tags="$(awk '/^TAG / {print $2}' "$T/log" | sort -u)"
-[ "$tags" = "bb456ee07d47cf9beb906d5492c92d09a7239bfc" ] \
-  && ok "theOrg's images are pinned to merged main bb456ee's full sha in every compose call" || bad "tag pin" "[$tags]"
+[ "$tags" = "d706369c435a092948f4e86fad36f1a8a74cac51" ] \
+  && ok "theOrg's images are pinned to merged main d706369c's full sha in every compose call" || bad "tag pin" "[$tags]"
 cut_commit="$(sed -nE 's/^CUTOVER_BUNDLE_COMMIT="([0-9a-f]{40})"$/\1/p' "$SRC/identity-platform.sh")"
-[ "$cut_commit" = "bb456ee07d47cf9beb906d5492c92d09a7239bfc" ] \
-  && ok "the cutover-bundle image is pinned to merged main bb456ee's full sha" || bad "cutover pin" "[$cut_commit]"
+[ "$cut_commit" = "d706369c435a092948f4e86fad36f1a8a74cac51" ] \
+  && ok "the cutover-bundle image is pinned to merged main d706369c's full sha" || bad "cutover pin" "[$cut_commit]"
+# KEYCLOAK_MAIL is left out on purpose (theOrg #98: unset is off): no non-comment line of
+# compose.yml or identity-platform.sh names it, so no compose call can pass it.
+mail_lines="$(cat "$SRC/compose.yml" "$SRC/identity-platform.sh" | grep -vE '^[[:space:]]*#' | grep -F KEYCLOAK_MAIL || true)"
+[ -z "$mail_lines" ] \
+  && ok "KEYCLOAK_MAIL is on no non-comment line of compose.yml or identity-platform.sh (unset: mail off)" || bad "KEYCLOAK_MAIL named" "[$mail_lines]"
 
 # The credential helper: read-only, and it never takes a value with unexpected characters.
 H="$SRC/docker-credential-identity-platform-env"
@@ -1319,7 +1328,7 @@ done
 reset_setup; before="$(snap)"
 exec 7> "$ROOT/cutover-state/.lock"
 if "$T/bin/flock" -n 7; then
-  for sw in reset-cutover cutover-clean "fetch-bundle $CUT_VER" "unpack-bundle $UNP_M $UNP_K $UNP_O" restore-keycloak restore-openldap start-openldap start-keycloak configure check-reset-off count-check cutover-done restore-mirror restore-mirror-accept-age reset-mirror mirror-check rollback-stop rollback-reset; do
+  for sw in reset-cutover cutover-clean "fetch-bundle $CUT_VER" "unpack-bundle $UNP_M $UNP_K $UNP_O" restore-keycloak restore-openldap start-openldap start-keycloak configure check-reset-off check-mail-off count-check cutover-done restore-mirror restore-mirror-accept-age reset-mirror mirror-check rollback-stop rollback-reset; do
     # shellcheck disable=SC2086
     run $sw; rc=$?
     [ "$rc" -eq 3 ] && echo "$OUT" | grep -q "${sw%% *}: refused: another cutover switch is running" && [ ! -s "$T/log" ] \
@@ -1423,10 +1432,11 @@ gate_case() {   # gate_case SWITCH "MARKERS" MISSING|pass (GATE_UNPACKED: unpack
   done
   run "$1"; rc=$?
   # A switch past its gate goes on to its own checks (keycloak-db's or keycloak's health, stdin:
-  # empty here, or a terminal), each a refusal (3) with no up or run; configure's, check-reset-off's
-  # and cutover-done's is keycloak's (openldap is running and healthy in the stub).
+  # empty here, or a terminal), each a refusal (3) with no up or run; configure's, check-reset-off's,
+  # check-mail-off's (realm mode) and cutover-done's is keycloak's (openldap is running and healthy
+  # in the stub).
   if [ "$3" != pass ]; then pat="$1: refused: cutover marker missing or invalid: $3 ("
-  elif [ "$1" = configure ] || [ "$1" = check-reset-off ] || [ "$1" = cutover-done ]; then pat="$1: refused: keycloak is not running"
+  elif [ "$1" = configure ] || [ "$1" = check-reset-off ] || [ "$1" = check-mail-off ] || [ "$1" = cutover-done ]; then pat="$1: refused: keycloak is not running"
   else pat="$1: refused: "; fi
   [ "$rc" -eq 3 ] && echo "$OUT" | grep -qF -- "$pat" && { [ "$3" != pass ] || ! echo "$OUT" | grep -q 'marker missing'; } \
     && { [ ! -s "$T/log" ] || { [ "$3" = pass ] && ! grep -qE ' up | run |exec -i' "$T/log"; }; } \
@@ -1468,6 +1478,14 @@ done
 GATE_CONF="apply ok" gate_case check-reset-off "$RO_ALL" "configured (no apply ok and reconcile ok)"
 GATE_EMPTY=configured gate_case check-reset-off "$RO_ALL" "configured (empty)"
 gate_case check-reset-off "$RO_ALL" pass
+# check-mail-off in realm mode (configured present, as a file): check-reset-off's markers. With no
+# configured it is without-realm mode and takes no gate (its own tests below).
+for m in $CONF_ALL; do
+  gate_case check-mail-off "$(echo " $RO_ALL " | sed "s/ $m / /; s/^ //; s/ $//")" "$m"
+done
+GATE_CONF="apply ok" gate_case check-mail-off "$RO_ALL" "configured (no apply ok and reconcile ok)"
+GATE_EMPTY=configured gate_case check-mail-off "$RO_ALL" "configured (empty)"
+gate_case check-mail-off "$RO_ALL" pass
 # cutover-done: unpacked, both restored-*, both started-*, configured (with apply ok and reconcile
 # ok), reset-off (with resetPasswordAllowed false) and counted (with counts equal). count-check's
 # gate (the same less counted) is in the backup test.
@@ -2124,6 +2142,98 @@ for mode in SHELLOPTS bash-x; do
     && ok "check-reset-off under xtrace ($mode): traced up to the read, the value in no trace, argv or file; reset-off" \
     || bad "check-reset-off xtrace $mode" "rc=$rc; $(grep -c '^+' <<< "$OUT") trace lines; $(cat "$T/log")"
 done
+
+# --- check-mail-off (theOrg #98 at d706369c, cutover step 6): read-only, the mode by configured ---
+# Realm mode (configured present): kc_health's two calls, then `check-mail-off`; without-realm mode
+# (no configured): `check-mail-off --without-realm` alone, no keycloak read. The run's stdin goes to
+# $T/confin.check-mail-off or $T/confin.check-mail-off--without-realm (the stub's names by mode):
+# exactly the one VAULT_DEX_CLIENT_SECRET= line ($T/rowant). No marker is written or removed.
+mo_setup() {   # mo_setup realm|without-realm: ro_setup's markers (configured removed for without-realm)
+  ro_setup
+  [ "$1" = realm ] || rm -f "$ROOT/cutover-state/configured"
+}
+mo_state() { ls -A "$ROOT/cutover-state" | grep -vxF .lock; cat "$ROOT/cutover-state/"* 2>/dev/null; }
+mo_calls_ok() {   # mo_calls_ok MODE: that mode's calls; no secret name in any call's env; the run's stdin exactly one line
+  local want n f
+  if [ "$1" = realm ]; then
+    want="$(printf '%s\n%s\n%s' "$KC_PS" "$KC_INSPECT" "$CONF_RUN check-mail-off")"; n=3; f="$T/confin.check-mail-off"
+  else
+    want="$CONF_RUN check-mail-off --without-realm"; n=1; f="$T/confin.check-mail-off--without-realm"
+  fi
+  [ "$(grep '^docker ' "$T/log")" = "$want" ] \
+    && [ "$(grep -c '^ENVNAMES' "$T/log")" -eq "$n" ] && [ "$(grep '^ENVNAMES' "$T/log" | sort -u)" = "ENVNAMES" ] \
+    && cmp -s "$T/rowant" "$f" && [ "$(wc -l < "$f" | tr -d ' ')" -eq 1 ] \
+    && [ "$(ls "$T" | grep -c '^confin\.[^.]*$')" -eq 1 ]
+}
+mo_refused() {   # mo_refused CODE WHAT PATTERN: that exit, PATTERN in the output, no run, nothing changed
+  [ "$rc" -eq "$1" ] && echo "$OUT" | grep -q -- "$3" && ! grep -q ' run ' "$T/log" \
+    && [ -z "$(ls "$T" | grep '^confin\.')" ] && [ "$(snap)" = "$before" ] && conf_no_value \
+    && ok "check-mail-off $2: refused ($1), no run, nothing changed" || bad "check-mail-off $2" "rc=$rc; $OUT; $(cat "$T/log")"
+}
+
+# Both modes: the exact run (no argv tail in realm mode, --without-realm otherwise), the value on its
+# stdin alone and in no argv, the mode named, 0 passed through, no marker written or removed.
+# Without-realm runs with keycloak not running (it reads no Keycloak).
+for mode in realm without-realm; do
+  mo_setup "$mode"; mbefore="$(mo_state)"
+  if [ "$mode" = realm ]; then ro_run check-mail-off; rc=$?; else CONF_EXTRA="" ro_run check-mail-off; rc=$?; fi
+  [ "$rc" -eq 0 ] && mo_calls_ok "$mode" && [ "$(mo_state)" = "$mbefore" ] && conf_no_value \
+    && echo "$OUT" | grep -qF "check-mail-off: $mode mode (" && echo "$OUT" | grep -qF "mail is off ($mode mode); no marker written" \
+    && ok "check-mail-off ($mode mode): the exact run with one VAULT_DEX_CLIENT_SECRET= line on its stdin alone, 0, no marker written or removed" \
+    || bad "check-mail-off $mode happy" "rc=$rc; $OUT; $(cat "$T/log")"
+done
+# A re-run in realm mode after cutover-done (read-only): runs again (0), no data check.
+mo_setup realm; echo done > "$ROOT/cutover-state/cutover-done"; mbefore="$(mo_state)"
+ro_run check-mail-off; rc=$?
+[ "$rc" -eq 0 ] && mo_calls_ok realm && [ "$(mo_state)" = "$mbefore" ] && conf_no_value \
+  && ok "check-mail-off after cutover-done: runs (0), no data check, no marker change" || bad "check-mail-off after cutover-done" "rc=$rc; $OUT; $(cat "$T/log")"
+
+# theOrg's exit 1 (mail on or not proven off) and 3 (refused its stdin) pass through, each mode; no marker change.
+for mode in realm without-realm; do
+  for code in 1 3; do
+    mo_setup "$mode"; mbefore="$(mo_state)"
+    if [ "$mode" = realm ]; then x="STUB_KC_RUNNING=1 STUB_MAILOFF_RC=$code"; else x="STUB_MAILOFF_RC=$code"; fi
+    CONF_EXTRA="$x" ro_run check-mail-off; rc=$?
+    [ "$rc" -eq "$code" ] && mo_calls_ok "$mode" && [ "$(mo_state)" = "$mbefore" ] && conf_no_value \
+      && echo "$OUT" | grep -q "keycloak-configure check-mail-off ($mode mode) exited $code" && ! echo "$OUT" | grep -q 'mail is off' \
+      && ok "check-mail-off ($mode mode) with the check exiting $code: exit $code, no marker written or removed" \
+      || bad "check-mail-off $mode exit $code" "rc=$rc; $OUT; $(ls -A "$ROOT/cutover-state")"
+  done
+done
+
+# The refusals: each exits 3 (2 for an ARG) with no run and nothing changed.
+for how in set empty; do
+  if [ "$how" = set ]; then e="IDP_DEPLOY_DEX_CLIENT_SECRET=$CD"; else e="IDP_DEPLOY_DEX_CLIENT_SECRET="; fi
+  mo_setup realm; before="$(snap)"
+  CONF_EXTRA="STUB_KC_RUNNING=1 $e" ro_run check-mail-off; rc=$?
+  [ ! -s "$T/log" ] || bad "check-mail-off with the value in its env called docker" "$(cat "$T/log")"
+  mo_refused 3 "with IDP_DEPLOY_DEX_CLIENT_SECRET in its environment ($how)" "check-mail-off: refused: IDP_DEPLOY_DEX_CLIENT_SECRET is set in the environment"
+done
+for a in extra --without-realm; do
+  mo_setup without-realm; before="$(snap)"
+  ro_run check-mail-off "$a"; rc=$?
+  mo_refused 2 "with an ARG ($a)" "check-mail-off: usage: check-mail-off (no ARG"
+done
+mo_setup realm; before="$(snap)"
+STUB_HOST=test01 ro_run check-mail-off; rc=$?
+[ ! -s "$T/log" ] || bad "check-mail-off on a replica called docker" "$(cat "$T/log")"
+mo_refused 3 "on a replica" "check-mail-off: refused: not on a replica (test01)"
+for mode in realm without-realm; do
+  mo_setup "$mode"; echo "rolled back to the Mini" > "$ROOT/cutover-state/rolled-back"; before="$(snap)"
+  ro_run check-mail-off; rc=$?
+  mo_refused 3 "rolled back ($mode mode's markers)" "check-mail-off: refused: .*/rolled-back exists"
+done
+mo_setup realm; before="$(snap)"
+CONF_EXTRA="" ro_run check-mail-off; rc=$?
+mo_refused 3 "in realm mode with keycloak not running" "check-mail-off: refused: keycloak is not running, not running and healthy (realm mode needs it)"
+mo_setup without-realm; before="$(snap)"; rm -f "$T/confin".*
+tty_run check-mail-off; rc=$?
+mo_refused 3 "with a terminal on stdin" "check-mail-off: refused: stdin is a terminal"
+mo_setup without-realm; before="$(snap)"
+RO_STDIN=""
+ro_run check-mail-off; rc=$?
+unset RO_STDIN
+mo_refused 3 "with empty stdin" "check-mail-off: refused: no IDP_DEPLOY_DEX_CLIENT_SECRET value read on stdin"
 rm -f "$T/confin".* "$T/rowant"
 
 # --- up and verify past cutover-done (d05): keycloak-db, openldap and keycloak together ---

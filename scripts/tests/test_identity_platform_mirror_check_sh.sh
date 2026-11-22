@@ -13,8 +13,8 @@
 # restored summary that is not its marker's (no backup run), openldap's or keycloak's counts
 # differing (lines printed, no marker, a stale mirror-checked removed), a dir that cannot be emptied
 # or pruned. A backup failing: its exit, no marker, the dir pruned.
-# The gate on the mirror path: start-openldap, start-keycloak, configure, check-reset-off and
-# cutover-done (which needs reset-off too) take both
+# The gate on the mirror path: start-openldap, start-keycloak, configure, check-reset-off,
+# check-mail-off (realm mode) and cutover-done (which needs reset-off too) take both
 # mirror-restored-* and mirror-checked (each missing or invalid one named); restore-openldap and
 # count-check refused there; markers of both paths refused by every gated switch; cutover-done
 # writes cutover-done with source mirror and both sha256s.
@@ -356,6 +356,11 @@ gate configure "$MP started-openldap started-keycloak" pass
 gate check-reset-off "$MP started-openldap started-keycloak" "configured"
 gate check-reset-off "mirror-restored-openldap mirror-restored-keycloak started-openldap started-keycloak configured" "mirror-checked"
 gate check-reset-off "$MP started-openldap started-keycloak configured" pass
+# check-mail-off in realm mode (configured present) takes check-reset-off's gate; with no configured
+# it is without-realm mode and takes none (test_identity_platform_sh.sh).
+gate check-mail-off "mirror-restored-openldap mirror-restored-keycloak started-openldap started-keycloak configured" "mirror-checked"
+gate check-mail-off "$MP started-keycloak configured" "started-openldap"
+gate check-mail-off "$MP started-openldap started-keycloak configured" pass
 gate cutover-done "$MP started-openldap started-keycloak" "configured reset-off"
 gate cutover-done "$MP started-openldap started-keycloak configured" "reset-off"
 GATE_RESETOFF="resetPasswordAllowed true" gate cutover-done "$MP started-openldap started-keycloak configured reset-off" "reset-off (no resetPasswordAllowed false)"

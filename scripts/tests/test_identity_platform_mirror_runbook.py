@@ -23,7 +23,8 @@ README = REPO / "d05" / "apps" / "identity-platform" / "README.md"
 HEADING = "## Rebuild from the nas01 mirror (#1101)"
 ROLLBACK_HEADING = "## Rollback inside the Mini's window (M5)"
 ORDER = ["restore-mirror", "mirror-check", "leaf-issue", "leaf-schedule-install",
-         "start-openldap", "start-keycloak", "configure", "check-reset-off", "cutover-done"]
+         "start-openldap", "start-keycloak", "configure", "check-reset-off", "check-mail-off",
+         "cutover-done"]
 CD = "cd ~/local/asyla && "
 
 with open(REPO / "d05" / "host.toml", "rb") as f:

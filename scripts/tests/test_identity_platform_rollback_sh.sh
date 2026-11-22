@@ -10,7 +10,7 @@
 # lock held, each mirror-path marker, no restored-*/started-* marker, combined; exit 2 for an ARG;
 # exit 1 with no marker: a stop failing (openldap not stopped after keycloak's fails), one still
 # running, compose ps failing. While rolled-back exists: the starts, the restores, configure,
-# check-reset-off, count-check, cutover-done and backup refuse (3) with no docker call, and up past
+# check-reset-off, check-mail-off, count-check, cutover-done and backup refuse (3) with no docker call, and up past
 # cutover-done refuses (1).
 # rollback-reset: exactly the docker calls in order (ps of the services, image inspect, rm -f, ps -a,
 # stop keycloak-db, ps keycloak-db, then per present dir the root find with the safe-delete flags and
@@ -319,12 +319,12 @@ blocked() {   # blocked CODE SWITCH WHAT PATTERN
     || bad "$2 blocked ($3)" "rc=$rc; $OUT; $(cat "$T/log")"
 }
 PRE=1 stopped; before="$(snap)"
-for sw in start-openldap start-keycloak restore-openldap restore-keycloak configure check-reset-off count-check cutover-done; do
+for sw in start-openldap start-keycloak restore-openldap restore-keycloak configure check-reset-off check-mail-off count-check cutover-done; do
   run -- "$sw"; rc=$?
   blocked 3 "$sw" "before cutover-done" "$sw: refused: $SW/rolled-back exists"
 done
 stopped; before="$(snap)"
-for sw in start-openldap start-keycloak configure check-reset-off cutover-done backup; do
+for sw in start-openldap start-keycloak configure check-reset-off check-mail-off cutover-done backup; do
   run -- "$sw"; rc=$?
   blocked 3 "$sw" "past cutover-done" "$sw: refused: $SW/rolled-back exists"
 done

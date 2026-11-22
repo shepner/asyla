@@ -13,18 +13,29 @@ merged main `bb456ee` (`bb456ee07d47cf9beb906d5492c92d09a7239bfc`, the #89 merge
 and *Publish images* run 26059 green): keycloak-configure's read-only `check-reset-off` (DEPLOY.md
 cutover step 6). From `5dd8de6` to `bb456ee` nothing under `deploy/d05/` changed but
 `CUTOVER-BUNDLE.md`'s line references, and neither `scripts/keycloak_backup.sh`,
-`scripts/openldap_backup.sh`, `scripts/cutover_bundle.sh` nor a `Dockerfile.*`. theOrg's four
-images and the cutover-bundle image are tagged with that sha (each present in the registry, read
-2026-11-21); the two upstream digests did not change.
+`scripts/openldap_backup.sh`, `scripts/cutover_bundle.sh` nor a `Dockerfile.*`; then to merged
+main `d706369c` (`d706369c435a092948f4e86fad36f1a8a74cac51`, the #98 merge, 2026-11-22): the
+explicit mail switch `KEYCLOAK_MAIL` (`on` or `off`, unset is off) and keycloak-configure's
+read-only `check-mail-off` (`scripts/keycloak_realm.py`). From `bb456ee` to `d706369c` the only
+change to a d05 interface is in `deploy/d05/compose.example.yml`, which adds `- KEYCLOAK_MAIL` by
+name to keycloak-configure; `compose.yml` here leaves it out on purpose (unset is off, so mail and
+"Forgot password?" stay off; operator decision R3). `check-reset-off` and its stdin form,
+`scripts/cutover_bundle.sh`, `scripts/keycloak_backup.sh`, `scripts/openldap_backup.sh`, the
+`Dockerfile.*`, `publish-images.yml` and the rest of `deploy/` did not change; `cutover_mini.py`
+changed on the Mini's side only, and the bundle and manifest formats are unchanged. theOrg's four
+images and the cutover-bundle image are tagged with that sha by `publish-images.yml` on a push to
+main (`docker-compose.yml:438-442` at `d706369c`; the registry was not read for this pin; at
+`bb456ee` each was read present on 2026-11-21); the two upstream digests did not change.
 
 This folder is **M1** (agreed with theOrg): `up` creates the two networks, pulls the six images,
 places theOrg's root CA, reports on the openldap leaf, and starts **keycloak-db alone**. openldap
 and keycloak first start at the M5 cutover (DEPLOY.md steps 5-6), after a restore into empty
 targets; `configure` runs keycloak-configure after them (behind the cutover marker gate below),
-then `check-reset-off` checks the realm's password reset is off,
+then `check-reset-off` checks the realm's password reset is off and `check-mail-off` that mail is
+off (before configure too, without the realm),
 and `restore` refuses and points at `restore-openldap` and `restore-keycloak`. The cutover
 bundle's switches, the two restores, `start-openldap` / `start-keycloak`, `configure`,
-`check-reset-off`, `count-check` and `cutover-done` are M5's switches ("Cutover bundle (M5 G2)"), and
+`check-reset-off`, `check-mail-off`, `count-check` and `cutover-done` are M5's switches ("Cutover bundle (M5 G2)"), and
 `rollback-stop` / `rollback-reset` stand d05's copy down and clear it after a rollback to the Mini
 ("Rollback inside the Mini's window (M5)"). Once `cutover-done` exists (on d05,
 never a replica), `up` starts keycloak-db, openldap and keycloak together and needs
@@ -47,7 +58,7 @@ one-shots (backups, keycloak-configure) are never started by `up`.
 - openldap leaf: `/mnt/docker/IdentityPlatform/openldap-tls/{ldap.crt,ldap.key,ca.crt}`. `up` and
   `verify` only report it (missing is a warning, never fatal) and never issue.
   - `openldap-leaf.sh`: a byte-identical copy of theOrg identity-platform
-    `deploy/d05/openldap-leaf.sh` at `bb456ee`, unchanged since `fcbed3fe` (git blob `1fae6b5c1c598e76e586899fca9250781825aea4`,
+    `deploy/d05/openldap-leaf.sh` at `d706369c`, unchanged since `fcbed3fe` (git blob `1fae6b5c1c598e76e586899fca9250781825aea4`,
     SHA-256 `2ea98d896a8c6085ea30f539883c33a543204fe994e231ef8663f2ff740681b1`). Never edit it
     here; a new version is a new copy and a new provenance line. It needs util-linux `flock` on the
     host (d05: util-linux 2.41.5, read 2026-11-14) and pulls `smallstep/step-cli:0.30.2` (pinned by
@@ -107,11 +118,11 @@ one-shots (backups, keycloak-configure) are never started by `up`.
 - No secret is in any file, here or on the host. The workstation resolves them from OpenBao at
   deploy (`d05/host.toml`: `start_env` `IDP_KEYCLOAK_DB_PASSWORD` and `IDP_LDAP_ADMIN_PASSWORD`;
   `up` unsets the LDAP value before `cutover-done` and refuses (exit 1, nothing started) without
-  either after it; `IDP_DEPLOY_DEX_CLIENT_SECRET` goes only to `configure` and `check-reset-off`, on stdin), and `identity-platform.sh` maps them
+  either after it; `IDP_DEPLOY_DEX_CLIENT_SECRET` goes only to `configure`, `check-reset-off` and `check-mail-off`, on stdin), and `identity-platform.sh` maps them
   onto the compose names (its header). Only the long-running services (keycloak, keycloak-db,
   openldap) name a secret in `compose.yml`; every one-shot (configure, the backup and restore runs)
   takes its value on stdin, as theOrg's merged main since `5dd8de6` (PR #88); the image tag is
-  pinned to `bb456ee` (`compose.yml` header). Images are pulled with the theorg-registry token the
+  pinned to `d706369c` (`compose.yml` header). Images are pulled with the theorg-registry token the
   workstation hands over at use (`pull_token_env`, as `IDENTITY_PLATFORM_REGISTRY_PULL_TOKEN`)
   through `docker-credential-identity-platform-env`, under a throwaway `DOCKER_CONFIG`.
 - Data: `/mnt/docker/IdentityPlatform/{ca,keycloak-db}` in M1. The system of record stays on the
@@ -130,8 +141,8 @@ runs the cutover image's `unpack` into the two dirs the restores read (`backup/`
 `openldap-backup/` under `/mnt/docker/IdentityPlatform`).
 
 - Pin: `CUTOVER_BUNDLE_COMMIT` in `identity-platform.sh` (one line) is theOrg identity-platform
-  merged main `bb456ee` (`bb456ee07d47cf9beb906d5492c92d09a7239bfc`, the #89 merge; #87 merged as `8ff2201a`),
-  the same commit as `IDENTITY_PLATFORM_TAG`. The image is
+  merged main `d706369c` (`d706369c435a092948f4e86fad36f1a8a74cac51`, the #98 merge; #87 merged as
+  `8ff2201a`, #89 as `bb456ee`), the same commit as `IDENTITY_PLATFORM_TAG`. The image is
   `gitea.asyla.org/theorg/identity-platform-cutover-bundle:<that commit>`.
 - The relay: the operator copies pack's output on the Mini into the commands below: its `version`
   line (`m5-<12 hex>`, fetch-bundle's ARG) and its three sha256 lines, `manifests-sha256`,
@@ -242,6 +253,38 @@ runs the cutover image's `unpack` into the two dirs the restores read (`backup/`
     ```
     cd ~/local/asyla && python3 core/tools/credentials.py exec IDP_DEPLOY_DEX_CLIENT_SECRET -- projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform check-reset-off IDP_DEPLOY_DEX_CLIENT_SECRET
     ```
+  - Mail off: `check-mail-off` (theOrg #98 at `d706369c`; DEPLOY.md "Production on d05" and cutover step 6, and
+    `scripts/keycloak_realm.py check-mail-off`). `compose.yml` lists no `KEYCLOAK_MAIL`, so
+    keycloak-configure sees it unset, which is off: `apply` keeps the realm's SMTP server cleared
+    and `resetPasswordAllowed` false (operator decision R3). `check-mail-off` proves it, read-only.
+    It reads `IDP_DEPLOY_DEX_CLIENT_SECRET`'s value as one line on stdin and writes it, in theOrg's
+    form (exactly one `VAULT_DEX_CLIENT_SECRET=` line, theOrg's only stdin name for it), to the
+    stdin of `docker compose --profile ops run --rm -T keycloak-configure check-mail-off [--without-realm]`
+    alone. It runs on d05 only (refused on a replica), alone, under the cutover lock. The mode
+    follows `cutover-state/configured`, and the switch prints which ran:
+    - without-realm mode (no `configured`): `check-mail-off --without-realm` reads only
+      `KEYCLOAK_MAIL` and the mail relay's client record from OpenBao, no Keycloak, and exits 1 if
+      the coming `apply` would turn mail on. In the M5 cutover it runs **before step 6** (DEPLOY.md
+      at `d706369c`: no Keycloak yet, so before `start-keycloak` and `configure`).
+    - realm mode (`configured` present): `check-mail-off` reads the live realm `theorg` as
+      theorg-iga too (no LDAP password), and needs configure's markers, a valid `configured`
+      (`cutover_gate`, as `check-reset-off`) and keycloak running and healthy. In the M5 cutover it
+      runs again **after `configure` and `check-reset-off`**; on the mirror path, after `configure`
+      ("Rebuild from the nas01 mirror").
+    - After a failed `configure` there is no `configured`, so it runs without-realm mode though a
+      realm exists: run `configure` again first, then `check-mail-off`.
+
+    Exit codes pass through: 0 mail off; 1 on, not proven off, or a setting refused (a bad
+    `KEYCLOAK_MAIL` too); 3 its stdin refused. Refused (exit 3, no docker run, nothing changed)
+    with the name in the environment, on a replica, the lock busy, `rolled-back`, in realm mode a
+    missing or invalid marker or keycloak not healthy, a terminal or an empty read; exit 2 for an
+    ARG. It writes no marker, removes none and is **not a `cutover-done` gate**: a failure is the
+    operator's stop, not the gate's. It always reads the relay record (the deploy role may read
+    `secret/v2/communications/mail-relay/clients/keycloak`). The operator's run, in both modes:
+
+    ```
+    cd ~/local/asyla && python3 core/tools/credentials.py exec IDP_DEPLOY_DEX_CLIENT_SECRET -- projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform check-mail-off IDP_DEPLOY_DEX_CLIENT_SECRET
+    ```
   - `count-check` (cutover step 7, Counts; DEPLOY.md at `bb456ee`): no value, no ARG. First the
     Mini's `backup/summary.txt` is read once (as root through keycloak-db's image, read-only) and
     its sha256 must equal `unpacked`'s `keycloak-summary-sha256` (theOrg `bb456ee`
@@ -286,7 +329,7 @@ runs the cutover image's `unpack` into the two dirs the restores read (`backup/`
     `manifests-sha256`); otherwise the restore's own exit passes through with no marker (3: it
     refused a target that is not empty; 2: a mount or usage problem; 1: it failed).
   - `reset-cutover`, `unpack-bundle` and both restores refuse (exit 3, nothing touched) when `backup/`,
-    `openldap-backup/` or `cutover-state/` is a symlink (both starts, `configure` and `check-reset-off`: `cutover-state/`). The fourteen switches (these twelve, `rollback-stop` and `rollback-reset`) run one at a time: each
+    `openldap-backup/` or `cutover-state/` is a symlink (both starts, `configure`, `check-reset-off` and `check-mail-off`: `cutover-state/`). The fifteen switches (these twelve, `check-mail-off`, `rollback-stop` and `rollback-reset`) run one at a time: each
     holds util-linux `flock -n` on `cutover-state/.lock` for its whole run, and refuses (exit 3,
     "another cutover switch is running") when it is busy.
 - The marker gate: one marker per step in `/mnt/docker/IdentityPlatform/cutover-state/`, each
@@ -303,11 +346,12 @@ runs the cutover image's `unpack` into the two dirs the restores read (`backup/`
   `fetched`'s, `started-openldap` only with its `admin-bind ok` line, a `restored-*` or `started-*`
   marker only when not empty. Each names the missing or invalid marker and exits 3. `restore` refuses (exit 1, never build_host.py's skip status 3) and
   points at `restore-openldap` and `restore-keycloak`. `rolled-back`, from `rollback-stop` (below),
-  stops the starts, the restores, `configure`, `check-reset-off`, `count-check`, `cutover-done` and
+  stops the starts, the restores, `configure`, `check-reset-off`, `check-mail-off`, `count-check`, `cutover-done` and
   `backup` (exit 3) and `up` past `cutover-done` (exit 1), until
   `rollback-reset` removes it.
-- Exit codes of the fourteen cutover switches: 0 done; 2 a usage error (a wrong ARG, an ARG to
-  `reset-cutover`, `cutover-clean`, a restore, a start, `configure`, `check-reset-off`, `count-check`, `cutover-done`, `rollback-stop` or `rollback-reset`); 3 refused, nothing changed (a replica, the value's name set
+- Exit codes of the fifteen cutover switches (`check-mail-off` passes its run's exit through,
+  above: 1 there is mail on or not proven off): 0 done; 2 a usage error (a wrong ARG, an ARG to
+  `reset-cutover`, `cutover-clean`, a restore, a start, `configure`, `check-reset-off`, `check-mail-off`, `count-check`, `cutover-done`, `rollback-stop` or `rollback-reset`); 3 refused, nothing changed (a replica, the value's name set
   in the environment, a terminal or an empty read on stdin, a marker or state check, combined with
   another switch); 1 a failure (a pull or download, a check after unpack, a target left not empty).
   unpack-bundle keeps unpack's own exit: 2 and 3 changed nothing; 1, 4 or any other failure may have
@@ -412,8 +456,14 @@ cd ~/local/asyla && python3 core/tools/credentials.py exec IDP_LDAP_ADMIN_PASSWO
 cd ~/local/asyla && python3 core/tools/credentials.py exec IDP_KEYCLOAK_DB_PASSWORD -- projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform start-keycloak IDP_KEYCLOAK_DB_PASSWORD
 cd ~/local/asyla && python3 core/tools/credentials.py exec IDP_LDAP_ADMIN_PASSWORD IDP_DEPLOY_DEX_CLIENT_SECRET -- projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform configure IDP_LDAP_ADMIN_PASSWORD IDP_DEPLOY_DEX_CLIENT_SECRET
 cd ~/local/asyla && python3 core/tools/credentials.py exec IDP_DEPLOY_DEX_CLIENT_SECRET -- projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform check-reset-off IDP_DEPLOY_DEX_CLIENT_SECRET
+cd ~/local/asyla && python3 core/tools/credentials.py exec IDP_DEPLOY_DEX_CLIENT_SECRET -- projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform check-mail-off IDP_DEPLOY_DEX_CLIENT_SECRET
 cd ~/local/asyla && projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform cutover-done
 ```
+
+- `check-mail-off` runs after `configure` (and `check-reset-off`), so `configured` exists and it
+  runs in realm mode: it proves mail and "Forgot password?" are off in the restored realm. It
+  writes no marker and is not a `cutover-done` gate; a failure (exit 1) stops the runbook here for
+  the operator's decision ("Mail off: check-mail-off" above).
 
 - The build: d05 is not disposable, so the operator approves the exact command. The line above is
   for a d05 whose VM is gone: its `vm` phase skips a VM that still exists unless `--recreate`

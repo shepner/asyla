@@ -6,7 +6,9 @@
 # 701e893 (main, the #82 merge), carried to 47f65add (profile `restored`, deploy/d05/openldap-leaf.sh)
 # and fcbed3fe (#85: openldap-leaf.sh issue takes the provisioner password on stdin), then to
 # theOrg's merged main 5dd8de6 (#86, #87, #88: every one-shot takes its value on stdin) and
-# bb456ee (#89: keycloak-configure's read-only check-reset-off, DEPLOY.md cutover step 6).
+# bb456ee (#89: keycloak-configure's read-only check-reset-off, DEPLOY.md cutover step 6), then
+# d706369c (#98: the explicit mail switch KEYCLOAK_MAIL, unset is off, and the read-only
+# check-mail-off; d05 lists no KEYCLOAK_MAIL, so mail stays off).
 # This is M1 (agreed with theOrg): networks, images, theOrg's root
 # CA, a report on the openldap leaf, and keycloak-db alone. openldap and keycloak are never started
 # here: their first start is the M5 cutover (DEPLOY.md steps 5-6), after a restore, and theOrg's
@@ -43,8 +45,8 @@
 # never written to a file by this script); the rest of up is as on d05, and openldap and keycloak
 # still never start.
 # The openldap leaf (DEPLOY.md "Production on d05: directory (R10)"): openldap-leaf.sh beside this
-# script, a byte-identical copy of theOrg's deploy/d05/openldap-leaf.sh at bb456ee, the same blob
-# as at fcbed3fe (README).
+# script, a byte-identical copy of theOrg's deploy/d05/openldap-leaf.sh at d706369c, the same blob
+# as at fcbed3fe and bb456ee (README).
 #   leaf-issue  reads step-ca's `ldap` provisioner password (OpenBao secret/v2/certificate-management/
 #               step-ca/provisioners/ldap, field password) as one line on its own stdin, which the
 #               workstation writes (scripts/app_switch.sh, over ssh stdin), and writes it to
@@ -112,6 +114,17 @@
 #               keycloak healthy; refused (exit 3, no docker run) as configure is. On 0 writes
 #               reset-off; otherwise its exit (1, 3) with no marker. count-check and cutover-done
 #               need reset-off.
+#   check-mail-off  reads IDP_DEPLOY_DEX_CLIENT_SECRET's value as one line on stdin and writes it,
+#               as theOrg's one VAULT_DEX_CLIENT_SECRET= line, to keycloak-configure check-mail-off's
+#               stdin alone (DEPLOY.md cutover step 6 at d706369c, theOrg #98: read-only; exit 0
+#               when mail is off, 1 when on, not proven off or refused, 3 for a refused stdin). The
+#               mode follows cutover-state/configured: present, realm mode (`check-mail-off`: the
+#               live realm, KEYCLOAK_MAIL and the relay record; cutover_gate check-mail-off, as
+#               check-reset-off's, and keycloak healthy); absent, without-realm mode
+#               (`check-mail-off --without-realm`: KEYCLOAK_MAIL and the relay record only, before
+#               configure). Prints the mode. Refused (exit 3, no docker run) with the name in the
+#               environment, on a replica, rolled back, a terminal or an empty read; exit 2 for an
+#               ARG. Writes no marker; not a cutover-done gate. Its exit passes through.
 #   start-openldap  reads IDP_LDAP_ADMIN_PASSWORD's value as one line on stdin; it reaches the
 #               compose process alone, as LDAP_ADMIN_PASSWORD and LDAP_CONFIG_PASSWORD, for
 #               `--profile restored up -d --no-deps --wait --wait-timeout START_WAIT_S openldap`; then
@@ -197,7 +210,7 @@
 # alone under the cutover lock; not on a replica; refused past any mirror-path marker):
 #   rollback-stop  after traffic is back on the Mini (or before step 9): keycloak, then openldap
 #               stopped, checked not running; containers, volumes, data and markers kept; writes
-#               rolled-back, which refuses every gated switch, cutover-done and backup (exit 3) and
+#               rolled-back, which refuses every gated switch, check-mail-off, cutover-done and backup (exit 3) and
 #               up past cutover-done (exit 1). Needs a restored-* or started-* marker. Idempotent
 #               (do_rollback_stop).
 #   rollback-reset its own approval, after rollback-stop: the keycloak and openldap containers
@@ -263,7 +276,7 @@ IDENTITY_PLATFORM_ROOT="$APP_ROOT"
 # theOrg's four images are pinned to the commit this folder is written from; the two upstream
 # images (keycloak, postgres) are pinned by digest in compose.yml. A pin by hand:
 # IDENTITY_PLATFORM_TAG_OVERRIDE=<a theOrg main sha whose images are published>.
-IDENTITY_PLATFORM_TAG="${IDENTITY_PLATFORM_TAG_OVERRIDE:-bb456ee07d47cf9beb906d5492c92d09a7239bfc}"
+IDENTITY_PLATFORM_TAG="${IDENTITY_PLATFORM_TAG_OVERRIDE:-d706369c435a092948f4e86fad36f1a8a74cac51}"
 REGISTRY="gitea.asyla.org"
 export IDENTITY_PLATFORM_ROOT IDENTITY_PLATFORM_TAG
 
@@ -276,9 +289,11 @@ CA_FILE="$APP_ROOT/ca/root_ca.crt"
 LEAF_DIR="$APP_ROOT/openldap-tls"
 LEAF_SCRIPT="$SCRIPT_DIR/openldap-leaf.sh"
 
-# The M5 cutover bundle. The image is pinned to theOrg identity-platform's merged main bb456ee
-# (#87, #88 and #89 merged; its image published there), the same commit as IDENTITY_PLATFORM_TAG.
-CUTOVER_BUNDLE_COMMIT="bb456ee07d47cf9beb906d5492c92d09a7239bfc"
+# The M5 cutover bundle. The image is pinned to theOrg identity-platform's merged main d706369c
+# (#87, #88, #89 and #98 merged; its image published there, publish-images.yml tagging every image
+# with the main sha), the same commit as IDENTITY_PLATFORM_TAG. cutover_bundle.sh and
+# Dockerfile.cutover-bundle are unchanged from bb456ee.
+CUTOVER_BUNDLE_COMMIT="d706369c435a092948f4e86fad36f1a8a74cac51"
 CUTOVER_IMAGE="$REGISTRY/theorg/identity-platform-cutover-bundle:$CUTOVER_BUNDLE_COMMIT"
 CUTOVER_PKG_URL="https://$REGISTRY/api/packages/theorg/generic/identity-platform-cutover"
 CUTOVER_VERSION_RE='^m5-[0-9a-f]{12}$'
@@ -1685,6 +1700,86 @@ do_check_reset_off() {
   write_state reset-off "date $(date -u +%Y-%m-%dT%H:%M:%SZ </dev/null)" "resetPasswordAllowed false"
 }
 
+# check-mail-off (theOrg identity-platform #98 at d706369c; DEPLOY.md cutover step 6 and
+# scripts/keycloak_realm.py check-mail-off): keycloak-configure's read-only check that mail (the
+# realm's SMTP server and "Forgot password?") is off and that the next apply would keep it off.
+# compose.yml lists no KEYCLOAK_MAIL, so keycloak-configure sees it unset, which is off; the check
+# still reads the mail relay's client record from OpenBao (the deploy role may read it). Exit 0 when
+# off; 1 when on, not proven off or refused; 3 when it refused its stdin. The mode follows
+# cutover-state/configured (present as a file or a symlink, even dangling):
+#   realm mode (configured present: after configure): `check-mail-off`, which also reads the live
+#     realm theorg as theorg-iga; cutover_gate check-mail-off (check-reset-off's markers) and
+#     keycloak running and healthy, as check-reset-off.
+#   without-realm mode (no configured: before configure, M5 step 6): `check-mail-off
+#     --without-realm`, which reads only KEYCLOAK_MAIL and the relay record, no Keycloak. After a
+#     failed configure there is no configured marker, so it runs this mode though a realm exists:
+#     configure again first (README).
+# It prints the mode it ran. One value, IDP_DEPLOY_DEX_CLIENT_SECRET's (theOrg's only stdin name for
+# it, VAULT_DEX_CLIENT_SECRET), read and written as check-reset-off's. Refused (exit 3, no docker run,
+# nothing changed) with IDP_DEPLOY_DEX_CLIENT_SECRET in the environment, on a replica, cutover-state/
+# a symlink, the lock busy, rolled-back, in realm mode a missing or invalid marker or keycloak not
+# healthy, a terminal on stdin or an empty read. Exit 2 for an ARG. Writes no marker and removes
+# none: it is not a cutover-done gate. Its exit passes through. Re-runnable, after cutover-done too.
+do_check_mail_off() {
+  local sw=check-mail-off h rc=0 mode args=()
+  if [ -n "${IDP_DEPLOY_DEX_CLIENT_SECRET+x}" ]; then
+    echo "[ERROR] $sw: refused: IDP_DEPLOY_DEX_CLIENT_SECRET is set in the environment; unset it and write the value as one line to $sw's stdin (scripts/app_switch.sh does); nothing changed" >&2
+    return 3
+  fi
+  if [ $# -ne 0 ]; then
+    echo "[ERROR] $sw: usage: $sw (no ARG; the mode follows cutover-state/configured)" >&2
+    return 2
+  fi
+  if is_replica; then
+    echo "[ERROR] $sw: refused: not on a replica ($(hostname -s </dev/null)); the cutover is d05's; nothing changed" >&2
+    return 3
+  fi
+  cutover_lock "$sw" || return
+  refuse_rolled_back "$sw" || return
+  if [ -e "$STATE_DIR/configured" ] || [ -L "$STATE_DIR/configured" ]; then
+    mode=realm
+    cutover_gate "$sw" || return
+    h="$(kc_health </dev/null)"
+    if [ "$h" != healthy ]; then
+      echo "[ERROR] $sw: refused: keycloak is $h, not running and healthy (realm mode needs it); nothing changed" >&2
+      return 3
+    fi
+  else
+    mode=without-realm
+    args=(--without-realm)
+  fi
+  if [ -t 0 ]; then
+    echo "[ERROR] $sw: refused: stdin is a terminal; $sw reads IDP_DEPLOY_DEX_CLIENT_SECRET's value as one line on stdin (scripts/app_switch.sh writes it); nothing changed" >&2
+    return 3
+  fi
+  { set +x; } 2>/dev/null
+  set +a
+  unset -v dex
+  local +x dex=""
+  IFS= builtin read -r dex || true
+  exec </dev/null
+  if [[ -z $dex ]]; then
+    unset -v dex
+    echo "[ERROR] $sw: refused: no IDP_DEPLOY_DEX_CLIENT_SECRET value read on stdin; nothing changed" >&2
+    return 3
+  fi
+  if [ "$mode" = realm ]; then
+    echo "[INFO] $sw: realm mode ($STATE_DIR/configured exists): keycloak-configure check-mail-off (the mail switch, the relay record and the live realm theorg)"
+  else
+    echo "[INFO] $sw: without-realm mode (no $STATE_DIR/configured): keycloak-configure check-mail-off --without-realm (the mail switch and the relay record; no Keycloak read)"
+  fi
+  # As check-reset-off's run: run_compose's argv, the docker program in its own subshell.
+  builtin printf 'VAULT_DEX_CLIENT_SECRET=%s\n' "$dex" \
+    | (builtin exec docker compose -f "$COMPOSE_FILE" --project-directory "$SCRIPT_DIR" \
+        --profile ops run --rm -T keycloak-configure check-mail-off ${args[@]+"${args[@]}"}) || rc=$?
+  unset -v dex
+  if [ "$rc" -ne 0 ]; then
+    echo "[ERROR] $sw: keycloak-configure check-mail-off ($mode mode) exited $rc (1: mail is on, not proven off, or a setting refused; 3: it refused its stdin)" >&2
+    return "$rc"
+  fi
+  echo "[INFO] $sw: mail is off ($mode mode); no marker written"
+}
+
 # cutover-done: the go-live record, run by the operator after the cutover's verification (DEPLOY.md
 # step 8). No value, no ARG (exit 2). Refused (exit 3, nothing written) on a replica, cutover-state/
 # a symlink, the lock busy, a missing or invalid marker (cutover_gate: unpacked, both restored-*,
@@ -2702,10 +2797,11 @@ mirror_checked_ok() {
 # with its "admin-bind ok" line; configured only with its "apply ok" and "reconcile ok" lines; a
 # restored-* or started-keycloak marker only when it is a non-empty file; counted only with its
 # "counts equal" line; reset-off only with its "resetPasswordAllowed false" line. configure needs
-# both restored-* and both started-*; check-reset-off those and configured; count-check needs those,
+# both restored-* and both started-*; check-reset-off and check-mail-off (realm mode) those and
+# configured; count-check needs those,
 # unpacked, configured and reset-off; cutover-done needs those and counted.
 # The mirror path (asyla #1101): once any of MIRROR_PATH_MARKERS exists, start-openldap,
-# start-keycloak, configure, check-reset-off and cutover-done need mirror-restored-openldap, mirror-restored-keycloak
+# start-keycloak, configure, check-reset-off, check-mail-off (realm mode) and cutover-done need mirror-restored-openldap, mirror-restored-keycloak
 # (mirror_marker_ok) and mirror-checked (mirror_checked_ok) in place of unpacked, both restored-* and
 # counted, plus the same started-* and configured; restore-openldap, restore-keycloak and count-check
 # are refused there. A marker of each path (MIRROR_PATH_MARKERS and M5_PATH_MARKERS) is refused by
@@ -2745,7 +2841,7 @@ refuse_rolled_back() {
 # reads openldap), then checks that neither runs (compose ps -q); a stop failing or one still
 # running: exit 1, no marker. Keeps every container, volume, data dir and marker for inspection;
 # keycloak-db runs on. Writes rolled-back (date, keycloak openldap stopped), which refuses (exit 3)
-# start-openldap, start-keycloak, the restores, configure, check-reset-off, count-check,
+# start-openldap, start-keycloak, the restores, configure, check-reset-off, check-mail-off, count-check,
 # cutover-done and backup, and up past cutover-done (exit 1), until rollback-reset. Allowed after
 # cutover-done. Idempotent: run again it stops what runs, keeps the first rolled-back and exits 0.
 # It touches no DNS and no tunnel: the operator runs it once traffic is back on the Mini (step 9
@@ -2935,7 +3031,7 @@ cutover_gate() {
     mirror:start-openldap) need=("${MIRROR_PATH_MARKERS[@]}") ;;
     mirror:start-keycloak) need=("${MIRROR_PATH_MARKERS[@]}" started-openldap) ;;
     mirror:configure) need=("${MIRROR_PATH_MARKERS[@]}" started-openldap started-keycloak) ;;
-    mirror:check-reset-off) need=("${MIRROR_PATH_MARKERS[@]}" started-openldap started-keycloak configured) ;;
+    mirror:check-reset-off|mirror:check-mail-off) need=("${MIRROR_PATH_MARKERS[@]}" started-openldap started-keycloak configured) ;;
     mirror:cutover-done) need=("${MIRROR_PATH_MARKERS[@]}" started-openldap started-keycloak configured reset-off) ;;
     mirror:restore-keycloak|mirror:restore-openldap|mirror:count-check)
       echo "[ERROR] $1: refused: $1 is an M5 cutover switch and cutover-state/ is on the mirror path (${mir[*]}) (in $STATE_DIR); nothing done" >&2
@@ -2943,7 +3039,7 @@ cutover_gate() {
     m5:start-openldap) need=(unpacked restored-openldap) ;;
     m5:start-keycloak) need=(unpacked restored-keycloak started-openldap) ;;
     m5:configure) need=(restored-openldap restored-keycloak started-openldap started-keycloak) ;;
-    m5:check-reset-off) need=(restored-openldap restored-keycloak started-openldap started-keycloak configured) ;;
+    m5:check-reset-off|m5:check-mail-off) need=(restored-openldap restored-keycloak started-openldap started-keycloak configured) ;;
     m5:count-check) need=(unpacked restored-openldap restored-keycloak started-openldap started-keycloak configured reset-off) ;;
     m5:cutover-done) need=(unpacked restored-openldap restored-keycloak started-openldap started-keycloak configured reset-off counted) ;;
     m5:restore-keycloak|m5:restore-openldap) need=(unpacked) ;;
@@ -3086,6 +3182,12 @@ usage() {
   echo "                    value as one line on stdin (scripts/app_switch.sh); keycloak must be healthy;" >&2
   echo "                    needs configure's markers and configured; writes reset-off on 0, which" >&2
   echo "                    count-check and cutover-done need; else its exit, no marker. Runs alone. Not on a replica" >&2
+  echo "  check-mail-off  - keycloak-configure check-mail-off (read-only: mail off, its switch unset); reads" >&2
+  echo "                    IDP_DEPLOY_DEX_CLIENT_SECRET's value as one line on stdin (scripts/app_switch.sh)." >&2
+  echo "                    With cutover-state/configured: realm mode (the live realm too; configure's markers," >&2
+  echo "                    keycloak healthy); without: --without-realm (the mail switch and the relay record)." >&2
+  echo "                    Prints the mode; its exit passes through (0 off, 1 on or not proven, 3 stdin);" >&2
+  echo "                    no marker, not a cutover-done gate. Runs alone. Not on a replica" >&2
   echo "  count-check     - M5 step 7: keycloak-backup backup into the empty count-check/ (keycloak-db's" >&2
   echo "                    password from the running container, on its stdin), then its summary.txt's" >&2
   echo "                    realm, users, clients, credentials and changesets lines compared with" >&2
@@ -3133,7 +3235,7 @@ usage() {
   echo "                    Also on a replica" >&2
   echo "  rollback-stop   - M5, after a rollback to the Mini: stop keycloak, then openldap (containers, volumes," >&2
   echo "                    data and markers kept; keycloak-db runs on); writes rolled-back, which refuses the" >&2
-  echo "                    starts, restores, configure, check-reset-off, count-check, cutover-done and backup" >&2
+  echo "                    starts, restores, configure, check-reset-off, check-mail-off, count-check, cutover-done and backup" >&2
   echo "                    (3) and up past cutover-done (1). Needs a restored-* or started-* marker; refused on" >&2
   echo "                    the mirror path. Idempotent. No value, no ARG. Runs alone. Not on a replica" >&2
   echo "  rollback-reset  - M5, after rollback-stop: remove the keycloak and openldap containers, stop" >&2
@@ -3198,6 +3300,10 @@ case "$1" in
     do_check_reset_off "${@:2}" || exit $?
     exit 0
     ;;
+  check-mail-off)
+    do_check_mail_off "${@:2}" || exit $?
+    exit 0
+    ;;
   count-check)
     do_count_check "${@:2}" || exit $?
     exit 0
@@ -3237,7 +3343,7 @@ esac
 if [ $# -gt 1 ]; then
   for cmd in "$@"; do
     case "$cmd" in
-      leaf-issue|fetch-bundle|unpack-bundle|reset-cutover|cutover-clean|restore-keycloak|restore-openldap|start-openldap|start-keycloak|configure|check-reset-off|count-check|cutover-done|backup|restore-mirror|restore-mirror-accept-age|reset-mirror|mirror-check|rollback-stop|rollback-reset)
+      leaf-issue|fetch-bundle|unpack-bundle|reset-cutover|cutover-clean|restore-keycloak|restore-openldap|start-openldap|start-keycloak|configure|check-reset-off|check-mail-off|count-check|cutover-done|backup|restore-mirror|restore-mirror-accept-age|reset-mirror|mirror-check|rollback-stop|rollback-reset)
         echo "[ERROR] $cmd: refused: run it alone (it reads a value on stdin, takes ARGs or holds the cutover lock), not with: $*" >&2
         exit 3
         ;;
