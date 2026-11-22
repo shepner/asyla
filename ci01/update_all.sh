@@ -50,8 +50,8 @@ log_info "Step 1: Updating scripts from repository..."
 "$HOME_DIR/update_scripts.sh" || log_warn "Step 1: scripts not updated (no GitLab credential on stdin); continuing with the installed ones"
 
 # Step 1.5: Mount the SMB media share if this host declares one.
-# Unlike d01/d02, this host does not use /mnt/nas/data1/media (its storage is the two NFS
-# mounts under /mnt/nas), so this never runs setup/smb.sh. Doing so would install
+# Unlike d01/d02, this host does not use /mnt/nas/data1/media (ci01 has no NAS mounts at all:
+# no nfs.sh step), so this never runs setup/smb.sh. Doing so would install
 # cifs-utils, write a placeholder ~/.smbcredentials, and append a credential-less
 # cifs line to /etc/fstab that fails to mount and can stall the next boot.
 SMB_MOUNT="/mnt/nas/data1/media"

@@ -43,5 +43,5 @@ alpine:3.20`, `docker pull alpine:3.20`). Then either:
 The mirror is a setting of the daemon. A buildx builder with the `docker-container` driver runs its
 own BuildKit, which does not read the daemon's `registry-mirrors`, so its `FROM` pulls go to Docker
 Hub directly. Pointing those builders at the cache (a BuildKit config naming the mirror) is theOrg's,
-under #1238. The default `docker` driver builds in the daemon, so it should use the mirror
+under theOrg #1238. The default `docker` driver builds in the daemon, so it should use the mirror
 (inference, not yet seen on ci01).

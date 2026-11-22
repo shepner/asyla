@@ -3,7 +3,7 @@
 # whose Docker VM stalls when CI waves fill it (theOrg #1197), to ci01, which asyla builds; Colima
 # on the Mini was rejected ("no to Colima"). The daemon's address pool is theOrg #960's, the
 # pull-through cache theOrg #1195's (Docker Hub 429s). theOrg moves the heavy jobs to
-# `runs-on: [theorg, ci]` once ci01 is live (asyla #1238, theOrg's follow-up). Built as every
+# `runs-on: [theorg, ci]` once ci01 is live (theOrg #1238, theOrg's follow-up). Built as every
 # other Docker host (asyla hub decisions/host-layout.md, decision 6). ci01 is not disposable: a build
 # or a destroy needs --confirm ci01 and the operator's approval of the exact action.
 # ci01 is CI only. It holds no other system's keys (host-layout: no general job runner on a host
