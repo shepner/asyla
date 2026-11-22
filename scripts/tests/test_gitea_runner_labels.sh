@@ -69,7 +69,7 @@ case_ "test01 takes its spec's label" test01 $'[runner]\nenabled = true\nlabels 
 if grep -q '^\[replica\]' "$REPO/test01/host.toml"; then
   case_ "test01's hello spec (226904e)" test01 "$(git -C "$REPO" show 226904e:test01/host.toml)" "build-test:host"
 else
-  case_ "the repo's own test01 spec" test01 "$(cat "$REPO/test01/host.toml")" "build-test:host"
+  case_ "the repo's own test01 spec (docker mode, asyla #1237)" test01 "$(cat "$REPO/test01/host.toml")" "build-test:docker://docker.gitea.com/runner-images:ubuntu-latest"
 fi
 case_ "several labels, in order" d04 $'[runner]\nlabels = ["theorg", "prod", "d04"]' "theorg:host,prod:host,d04:host"
 case_ "mode = host said outright" d04 $'[runner]\nlabels = ["theorg"]\nmode = "host"' "theorg:host"
@@ -173,7 +173,9 @@ if git -C "$REPO" show origin/master:docker/gitea-runner/gitea-runner.sh > "$O/s
   host_ "$T" d03 ""; run_ "$T" d03 config > "$T/new.yaml"
   cmp -s "$T/old.yaml" "$T/new.yaml" && pass "d03's config.yaml file is byte-identical" || fail "d03's config.yaml bytes differ"
   for h in d01 d02 d03; do same_ "$h (fixed labels)" "$h" ""; done
-  for h in d04 d06 test01; do same_ "the repo's $h spec" "$h" "$(cat "$REPO/$h/host.toml")"; done
+  for h in d04 d06; do same_ "the repo's $h spec" "$h" "$(cat "$REPO/$h/host.toml")"; done
+  # test01 runs in docker mode since asyla #1237 (it proves ci01's path); its last host-mode spec:
+  same_ "test01's host-mode spec (origin/master da1176c)" test01 "$(git -C "$REPO" show da1176c:test01/host.toml)"
   same_ "test01's hello spec (226904e)" test01 "$(git -C "$REPO" show 226904e:test01/host.toml)"
   same_ "several labels" d05 $'[runner]\nlabels = ["theorg", "prod", "d05"]'
 else
