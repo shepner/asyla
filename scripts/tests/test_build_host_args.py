@@ -677,6 +677,156 @@ def phase_vm_dry(spec: dict, sums: dict[str, str | None]) -> tuple[str, list[str
     return err, asked, out
 
 
+CI_RUNNER = ('[runner]\nenabled = true\nlabels = ["theorg", "ci"]\nmode = "docker"\n'
+             'image = "docker.gitea.com/runner-images:ubuntu-latest"\n')
+BINFMT_OK = "enabled\ninterpreter /usr/libexec/qemu-binfmt/aarch64-binfmt-P\nflags: POCF\noffset 0\nmagic 7f454c46\n"
+
+
+def verify_lines(spec: dict, mounts: str = "", qm_conf: str = "", binfmt: Done | None = None,
+                 runner_cfg: Done | None = None) -> tuple[list[str], list[str]]:
+    """verify(spec) against stand-ins: ssh answers from the arguments (the first ssh is hostname,
+    uid and /mnt mounts; `qm config` gets QM_CONF; the binfmt entry BINFMT; RUNNER_CONFIG's label
+    lines RUNNER_CFG), and every helper that would reach GitLab, Gitea or a host's apps is a
+    no-op. Returns (the printed check lines, the ssh commands)."""
+    asked = []
+
+    def fake(t, c):
+        asked.append(c)
+        if c.startswith("hostname -s"):
+            return Done(0, f"{spec['host']}\n1003\n{mounts}")
+        if c.startswith("id -gn docker"):
+            return Done(0, "asyla\n1000\n")
+        if c.startswith("qm config"):
+            return Done(0, qm_conf)
+        if build_host.BINFMT_AARCH64 in c:
+            return binfmt or Done(1)
+        if build_host.RUNNER_CONFIG in c:
+            return runner_cfg or Done(1)
+        if "sudo test -e" in c:
+            return Done(1)   # no deploy token file
+        return Done(0, "")
+
+    names = ("find_vm", "scripts_drift", "runner_entries", "verify_apps", "verify_gitlab_runners",
+             "verify_host_maintenance", "verify_externals")
+    real = {n: getattr(build_host, n) for n in names}
+    labels = spec.get("runner", {}).get("labels", [])
+    stand = {"find_vm": lambda vmid: {"node": "vmh01", "vmid": vmid},
+             "scripts_drift": lambda s: ("0" * 40, []),
+             "runner_entries": lambda h: [{"id": 1, "status": "online", "labels": [{"name": l} for l in labels]}],
+             "verify_apps": lambda s, c: None, "verify_gitlab_runners": lambda s, c: None,
+             "verify_host_maintenance": lambda s, c: None, "verify_externals": lambda s, c: None}
+    for n in names:
+        setattr(build_host, n, stand[n])
+    try:
+        _, out = with_ssh(fake, lambda: build_host.verify(spec))
+    finally:
+        for n in names:
+            setattr(build_host, n, real[n])
+    return [l.strip() for l in out.splitlines() if l.strip().startswith("[")], asked
+
+
+def has(lines: list[str], start: str) -> bool:
+    return any(l.startswith(start) for l in lines)
+
+
+def ci01_cases() -> list[bool]:
+    """asyla #1237 (ci01): [vm].cpu, the NAS mounts only with nfs.sh, the binfmt check, and the
+    [runner] modes (check_runner_spec, runner_label_lines, the docker-mode config check)."""
+    out = []
+    load = lambda text: temp_specs({"x": text})("x")   # noqa: E731
+    # The temp repo has no build/setup/, so steps are set after load_spec (it checks they exist).
+    steps_ = lambda spec, steps: {**spec, "setup": {"steps": steps}}   # noqa: E731
+    # [vm].cpu
+    for cpu in ("host", "x86-64-v2-AES", "kvm64"):
+        out.append(check(f"[vm].cpu {cpu!r} is accepted", load(VM + f'cpu = "{cpu}"\n')["vm"]["cpu"] == cpu))
+    out.append(check("[vm].cpu absent: no cpu key", "cpu" not in load(VM)["vm"]))
+    for bad in ('"host,flags=+aes"', '"host; reboot"', '"-host"', '""', '5', '"x y"'):
+        out.append(fails(f"[vm].cpu {bad} is refused", "[vm].cpu must be a Proxmox CPU type", lambda b=bad: load(VM + f"cpu = {b}\n")))
+    err, _, printed = phase_vm_dry(load(VM + 'cpu = "host"\n'), {})
+    out.append(check("phase_vm dry, [vm].cpu host: qm create --cpu host", not err and " --cpu host" in printed, repr((err, printed))))
+    err, _, printed = phase_vm_dry(load(VM), {})
+    out.append(check("phase_vm dry, no [vm].cpu: no --cpu", not err and "--cpu" not in printed, repr((err, printed))))
+    # verify: CPU type
+    lines, _ = verify_lines(load(VM + 'cpu = "host"\n'), qm_conf="cpu: host\n")
+    out.append(check("verify: [vm].cpu matches qm config", has(lines, "[OK] VM CPU type is the spec's"), repr(lines)))
+    lines, _ = verify_lines(load(VM + 'cpu = "host"\n'), qm_conf="cpu: kvm64\n")
+    out.append(check("verify: [vm].cpu differs from qm config: FAIL", has(lines, "[FAIL] VM CPU type is the spec's: kvm64 vs host"), repr(lines)))
+    lines, _ = verify_lines(load(VM), qm_conf="cpu: kvm64\n")
+    out.append(check("verify: no [vm].cpu: no CPU line", not any("CPU type" in l for l in lines), repr(lines)))
+    # verify: NAS mounts only with nfs.sh
+    nas = " ".join(build_host.NAS_DOCKER_MOUNTS)
+    lines, _ = verify_lines(steps_(load(VM), ["docker.sh"]))
+    out.append(check("verify: no nfs.sh step: no NAS mount lines", not any("/mnt/nas" in l for l in lines), repr(lines)))
+    lines, _ = verify_lines(steps_(load(VM), ["nfs.sh", "docker.sh"]))
+    out.append(check("verify: nfs.sh step, shares absent: FAIL for each",
+                     all(has(lines, f"[FAIL] mount {m}") for m in build_host.NAS_DOCKER_MOUNTS), repr(lines)))
+    lines, _ = verify_lines(steps_(load(VM), ["nfs.sh"]), mounts=nas)
+    out.append(check("verify: nfs.sh step, shares mounted: OK for each",
+                     all(has(lines, f"[OK] mount {m}") for m in build_host.NAS_DOCKER_MOUNTS), repr(lines)))
+    # verify: binfmt.sh
+    bf = ["docker.sh", "binfmt.sh"]
+    label = "qemu-aarch64 binfmt enabled with flag F (binfmt.sh)"
+    lines, asked = verify_lines(steps_(load(VM), bf), binfmt=Done(0, BINFMT_OK))
+    out.append(check("verify: binfmt enabled with F: OK", has(lines, f"[OK] {label}"), repr(lines)))
+    lines, _ = verify_lines(steps_(load(VM), bf), binfmt=Done(0, BINFMT_OK.replace("POCF", "POC")))
+    out.append(check("verify: binfmt without F: FAIL", has(lines, f"[FAIL] {label}"), repr(lines)))
+    lines, _ = verify_lines(steps_(load(VM), bf), binfmt=Done(0, BINFMT_OK.replace("enabled", "disabled", 1)))
+    out.append(check("verify: binfmt disabled: FAIL", has(lines, f"[FAIL] {label}"), repr(lines)))
+    lines, _ = verify_lines(steps_(load(VM), bf), binfmt=Done(1))
+    out.append(check("verify: no binfmt entry: FAIL naming it", has(lines, f"[FAIL] {label}: no {build_host.BINFMT_AARCH64}"), repr(lines)))
+    lines, asked = verify_lines(steps_(load(VM), ["docker.sh"]))
+    out.append(check("verify: no binfmt.sh step: no binfmt line or read",
+                     not any("binfmt" in l for l in lines) and not any("binfmt" in c for c in asked), repr(lines)))
+    # check_runner_spec
+    r = load(VM + CI_RUNNER + 'capacity = 6\ncontainer_options = "--cpus=2 --memory=3g"\n')["runner"]
+    out.append(check("[runner] docker mode with image, capacity and options is accepted",
+                     (r["mode"], r["capacity"], r["container_options"]) == ("docker", 6, "--cpus=2 --memory=3g")))
+    out.append(check("[runner] docker mode without capacity or options is accepted", load(VM + CI_RUNNER)["runner"]["mode"] == "docker"))
+    out.append(check("[runner] host mode said outright is accepted",
+                     load(VM + '[runner]\nlabels = ["a"]\nmode = "host"\n')["runner"]["mode"] == "host"))
+    out.append(check("[runner] an image with a port, tag and digest is accepted",
+                     bool(load(VM + CI_RUNNER.replace("docker.gitea.com/runner-images:ubuntu-latest",
+                                                      "reg.example:5000/ci/img:1.2@sha256:" + "a" * 64)))))
+    for name, text, needle in (
+            ("an unknown key", VM + CI_RUNNER + 'tags = ["x"]\n', "unknown keys ['tags']"),
+            ("an unknown mode", VM + '[runner]\nlabels = ["a"]\nmode = "kube"\n', ".mode must be one of"),
+            ("labels not a list", VM + '[runner]\nlabels = "a"\n', ".labels must be a list of names"),
+            ("host mode with an image", VM + '[runner]\nlabels = ["a"]\nimage = "x"\n', 'for mode = "docker" only'),
+            ("host mode with capacity", VM + '[runner]\nlabels = ["a"]\nmode = "host"\ncapacity = 3\n', 'for mode = "docker" only'),
+            ("host mode with container options", VM + '[runner]\nlabels = ["a"]\ncontainer_options = "--cpus=1"\n', 'for mode = "docker" only'),
+            ("docker mode without an image", VM + '[runner]\nlabels = ["a"]\nmode = "docker"\n', 'needs image ='),
+            ("an image with a scheme", VM + CI_RUNNER.replace('image = "', 'image = "docker://'), 'needs image ='),
+            ("an image with a blank", VM + CI_RUNNER.replace(":ubuntu-latest", ":ubuntu latest"), 'needs image ='),
+            ("an image with a comma", VM + CI_RUNNER.replace(":ubuntu-latest", ":a,b"), 'needs image ='),
+            ("an image not a string", VM + CI_RUNNER.replace('"docker.gitea.com/runner-images:ubuntu-latest"', "5"), 'needs image ='),
+            ("capacity 0", VM + CI_RUNNER + "capacity = 0\n", ".capacity must be a whole number 1-99"),
+            ("capacity 100", VM + CI_RUNNER + "capacity = 100\n", ".capacity must be a whole number 1-99"),
+            ("capacity true", VM + CI_RUNNER + "capacity = true\n", ".capacity must be a whole number 1-99"),
+            ("capacity a string", VM + CI_RUNNER + 'capacity = "6"\n', ".capacity must be a whole number 1-99"),
+            ("options with a ;", VM + CI_RUNNER + 'container_options = "--cpus=2; reboot"\n', ".container_options must be docker run flags"),
+            ("options with a quote", VM + CI_RUNNER + 'container_options = "--label=\\"x\\""\n', ".container_options must be docker run flags"),
+            ("options not starting with -", VM + CI_RUNNER + 'container_options = "cpus=2"\n', ".container_options must be docker run flags"),
+            ("options not a string", VM + CI_RUNNER + 'container_options = ["--cpus=2"]\n', ".container_options must be docker run flags")):
+        out.append(fails(f"[runner] {name} is refused", needle, lambda t=text: load(t)))
+    ci = load(VM + CI_RUNNER)
+    out.append(check("runner_label_lines: docker mode is NAME:docker://IMAGE",
+                     build_host.runner_label_lines(ci) == [f'    - "{l}:docker://docker.gitea.com/runner-images:ubuntu-latest"'
+                                                           for l in ("theorg", "ci")]))
+    out.append(check("runner_label_lines: host mode is NAME:host",
+                     build_host.runner_label_lines(load(VM + '[runner]\nlabels = ["a"]\n')) == ['    - "a:host"']))
+    want_cfg = "\n".join(build_host.runner_label_lines(ci)) + "\n"
+    label = f"Gitea runner labels are docker://{ci['runner']['image']} ({build_host.RUNNER_CONFIG})"
+    lines, _ = verify_lines(ci, runner_cfg=Done(0, want_cfg))
+    out.append(check("verify: docker-mode labels in config.yaml match: OK", has(lines, f"[OK] {label}"), repr(lines)))
+    lines, _ = verify_lines(ci, runner_cfg=Done(0, want_cfg.replace("docker://", "")))
+    out.append(check("verify: docker-mode labels in config.yaml differ: FAIL", has(lines, f"[FAIL] {label}"), repr(lines)))
+    lines, asked = verify_lines(load(VM + '[runner]\nenabled = true\nlabels = ["a"]\n'))
+    out.append(check("verify: host mode: config.yaml is not read",
+                     not any(build_host.RUNNER_CONFIG in c for c in asked) and has(lines, "[OK] Gitea runner labels are the spec's"),
+                     repr(lines)))
+    return out
+
+
 def node_image_cases() -> list[bool]:
     """vmh03 (asyla hub backlog, d07): untagged vmbr0, and a local copy of IMAGE synced by sha256
     from vmh01 before qm create. Dry runs only: nothing runs, ssh is a stand-in."""
@@ -1092,6 +1242,7 @@ results = [
     ini_read_case(),
     replica_verify_apps_case(),
     *replica_app_verify_cases(),
+    *ci01_cases(),
     wrapper_case("wrapper: the command runs in the unpacked bundle", 'ls -R "$B"', 0, "x.sh"),
     wrapper_case("wrapper: a failing command's status comes back and the folder is removed", 'bash "$B/build/setup/x.sh"; exit 3', 3, "hi"),
     bundle_case(),
