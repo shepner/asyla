@@ -276,6 +276,7 @@ BINFMT_AARCH64 = "/proc/sys/fs/binfmt_misc/qemu-aarch64"
 RUNNER_KEYS = ("enabled", "labels", "mode", "image", "capacity", "container_options")
 RUNNER_MODES = ("host", "docker")
 RUNNER_DOCKER_KEYS = ("image", "capacity", "container_options")
+RUNNER_LABEL = re.compile(r"[a-z0-9][a-z0-9-]*")   # gitea-runner.sh's label pattern
 # An image reference without a scheme (the label adds docker://), no blank, quote or comma (the
 # label list is comma-separated at register).
 RUNNER_IMAGE = re.compile(r"[a-z0-9][a-z0-9._/-]*(:[0-9]+/[a-z0-9._/-]+)?(:[A-Za-z0-9_][A-Za-z0-9_.-]*)?(@sha256:[0-9a-f]{64})?")
@@ -763,6 +764,9 @@ def check_runner_spec(path: Path, spec: dict) -> None:
     labels = r.get("labels", [])
     if not isinstance(labels, list) or not all(isinstance(l, str) and l for l in labels):
         raise Fail(f"{where}.labels must be a list of names")
+    bad = [l for l in labels if not RUNNER_LABEL.fullmatch(l)]
+    if bad:
+        raise Fail(f"{where}.labels must be names {RUNNER_LABEL.pattern} (gitea-runner.sh's), not {bad}")
     mode = r.get("mode", "host")
     if mode not in RUNNER_MODES:
         raise Fail(f"{where}.mode must be one of {RUNNER_MODES}, not {mode!r}")

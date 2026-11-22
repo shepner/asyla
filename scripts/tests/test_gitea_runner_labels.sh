@@ -142,11 +142,12 @@ sh = (Path(sys.argv[1]) / "docker/gitea-runner/gitea-runner.sh").read_text()
 img = re.search(r'^IMAGE = r"(.*)"$', sh, re.M).group(1)
 opts = re.search(r'^OPTS = r"(.*)"$', sh, re.M).group(1)
 keys = re.search(r'^KEYS = (\(.*\))$', sh, re.M).group(1)
+label = f're.fullmatch("{build_host.RUNNER_LABEL.pattern}", l)' in sh
 print(img == build_host.RUNNER_IMAGE.pattern and opts == build_host.RUNNER_OPTS.pattern
-      and eval(keys) == build_host.RUNNER_KEYS)
+      and eval(keys) == build_host.RUNNER_KEYS and label)
 PY
 )
-[ "$got" = True ] && pass "image, options and key rules are build_host.py's" || fail "rules differ from build_host.py: $got"
+[ "$got" = True ] && pass "image, options, label and key rules are build_host.py's" || fail "rules differ from build_host.py: $got"
 
 # Host mode is unchanged: origin/master's script renders the same config and labels for the same
 # spec. Its copy has no `config` switch, so render_config is called from a copy cut before its
