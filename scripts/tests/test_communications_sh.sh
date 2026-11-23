@@ -435,16 +435,23 @@ else bad "the root pin agrees across the script, compose and the committed root"
 LOGF="$T/relay.log"
 W='2026-01-01 00:00:01 WARNING wrapped token spent: waiting for the token broker'
 L='2026-01-01 00:00:09 WARNING listening on 2587 (STARTTLS and AUTH required)'
-status_case() {  # expected-word label logs-lines... (env words in SC_ENV)
-  local want="$1" label="$2"; shift 2
+D='2026-01-01 00:00:05 WARNING token broker: wrapping token delivered and unwrapped'
+status_case() {  # expected-word label logs-lines... (env words in SC_ENV; exit code SC_RC, 0)
+  local want="$1" label="$2" rc=0; shift 2
   printf '%s\n' "$@" > "$LOGF"
   # shellcheck disable=SC2086  # the case's NAME=value words
-  if run_cs ${SC_ENV:-} STUB_RELAY_LOGS="$LOGF" -- relay-status && [ "$OUT" = "$want" ] && ! has "$LOG" "Config"; then
-    ok "relay-status: $label -> $want"
-  else bad "relay-status: $label -> $want" "$OUT"; fi
+  run_cs ${SC_ENV:-} STUB_RELAY_LOGS="$LOGF" -- relay-status || rc=$?
+  if [ "$rc" = "${SC_RC:-0}" ] && [ "$OUT" = "$want" ] && ! has "$LOG" "Config"; then
+    ok "relay-status: $label -> $want, exit $rc"
+  else bad "relay-status: $label -> $want, exit ${SC_RC:-0}" "$OUT (exit $rc)"; fi
 }
 SC_ENV="" status_case absent "no container"
 SC_ENV="STUB_RELAY_IDS=r1" status_case waiting "running, the wait logged" "$W"
+SC_ENV="STUB_RELAY_IDS=r1 STUB_RELAY_HEALTH=starting" SC_RC=3 status_case armed "the wait, then delivered, no leaf yet" "$W" "$D"
+SC_ENV="STUB_RELAY_IDS=r1 STUB_RELAY_HEALTH=unhealthy" SC_RC=3 status_case armed "delivered, unhealthy, not listening" "$W" "$D"
+SC_ENV="STUB_RELAY_IDS=r1 STUB_RELAY_HEALTH=healthy" status_case running "delivered and healthy" "$W" "$D"
+SC_ENV="STUB_RELAY_IDS=r1 STUB_RELAY_HEALTH=unhealthy" status_case waiting "a wait after the delivered line (a restart's)" "$W" "$D" "$W"
+SC_ENV="STUB_RELAY_IDS=r1 STUB_RELAY_HEALTH=unhealthy" status_case waiting "a delivered line before the wait" "$D" "$W"
 SC_ENV="STUB_RELAY_IDS=r1" status_case running "running, listening after the wait" "$W" "$L"
 SC_ENV="STUB_RELAY_IDS=r1" status_case running "running, no wait logged" "$L"
 SC_ENV="STUB_RELAY_IDS=r1 STUB_RELAY_STATE=restarting" status_case restarting "restarting" "$W"
@@ -500,6 +507,12 @@ VC_ENV="STUB_RELAY_IDS=r1 STUB_RELAY_HEALTH=healthy" verify_case "a healthy rela
 has "$LOG" "docker exec r1 python3 /app/smoke.py probe --tls-name mail-relay.asyla.org" || bad "verify: the probe names mail-relay.asyla.org" "$LOG"
 VC_ENV="STUB_RELAY_IDS=r1 STUB_RELAY_HEALTH=healthy STUB_PROBE_RC=1" verify_case "a failed probe is fatal" "[ERROR] mail-relay smoke.py probe" "$W" "$L"
 VC_ENV="STUB_RELAY_IDS=r1 STUB_RELAY_HEALTH=unhealthy" verify_case "running, unhealthy, not waiting is fatal" "[ERROR] mail-relay is running (unhealthy)" "$W" "$L"
+VC_ENV="STUB_RELAY_IDS=r1 STUB_RELAY_HEALTH=starting" verify_case "armed and not healthy is fatal, naming step-ca, the clock, the provisioner" "[ERROR] mail-relay is armed" "$W" "$D"
+if has "$OUT" "step-ca" && has "$OUT" "clock" && has "$OUT" "provisioner" && ! has "$OUT" "[WARN] mail-relay is running unarmed"; then
+  ok "verify: the armed error names step-ca, the clock and the provisioner, and does not warn waiting"
+else bad "verify: the armed error names step-ca, the clock and the provisioner" "$(grep -i relay <<< "$OUT")"; fi
+has "$LOG" "/app/smoke.py" && bad "verify: no probe of an armed, unhealthy relay" "$LOG"
+VC_ENV="STUB_RELAY_IDS=r1 STUB_RELAY_HEALTH=unhealthy" verify_case "a wait after the delivered line warns again" "[WARN] mail-relay is running unarmed" "$W" "$D" "$W"
 
 # R7. A bad root: up and restart stop before any compose call.
 cp "$T/app/theorg-v2-root.crt" "$T/root.good"

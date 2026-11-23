@@ -58,6 +58,8 @@ RELAY_TLS_NAME="mail-relay.asyla.org"
 # The relay's log lines (theOrg scripts/openbao.py BROKER_WAITING, mail-relay/relay.py:646).
 RELAY_WAITING_LINE="wrapped token spent: waiting for the token broker"
 RELAY_LISTENING_LINE="listening on 2587"
+# Logged once the heal's wrapping token reached it, before its leaf (mail-relay/token_role.py:156).
+RELAY_DELIVERED_LINE="token broker: wrapping token delivered and unwrapped"
 # arm.py's user: not the relay's own uid 10001, which arm.py refuses (DEPLOY.md, Mail relay on d06).
 RELAY_ARM_UID="10002"
 
@@ -340,12 +342,15 @@ relay_find() {
   esac
 }
 
-# Sets RELAY_STATE to one word: absent, waiting, running, stopped or restarting. waiting: running,
-# and its log since this start holds the token wait's line with no "listening on 2587" after it.
+# Sets RELAY_STATE to one word: absent, waiting, armed, running, stopped or restarting. waiting:
+# running, and its log since this start (docker logs --since its StartedAt, so a restart's wait
+# counts afresh) holds the token wait's line with neither "listening on 2587" nor the broker's
+# delivered line after it. armed: the delivered line follows the last wait, with no listening line
+# after the wait and the container not healthy (no leaf yet: step-ca, the clock, the provisioner).
 # Reads the container's State and that log only, never its Config (which holds its environment).
 RELAY_STATE=""
 relay_state() {
-  local rc=0 st started logs w l
+  local rc=0 st started logs w d l health
   RELAY_STATE=""
   relay_find || rc=$?
   if [ "$rc" = 1 ]; then RELAY_STATE="absent"; return 0; fi
@@ -366,17 +371,28 @@ relay_state() {
     return 1
   }
   w="$(grep -nF -- "$RELAY_WAITING_LINE" <<< "$logs" | tail -n 1 | cut -d: -f1)" || w=""
+  d="$(grep -nF -- "$RELAY_DELIVERED_LINE" <<< "$logs" | tail -n 1 | cut -d: -f1)" || d=""
   l="$(grep -nF -- "$RELAY_LISTENING_LINE" <<< "$logs" | tail -n 1 | cut -d: -f1)" || l=""
-  if [ -n "$w" ] && { [ -z "$l" ] || [ "$l" -lt "$w" ]; }; then
-    RELAY_STATE="waiting"
-  else
-    RELAY_STATE="running"
+  RELAY_STATE="running"
+  if [ -z "$w" ] || { [ -n "$l" ] && [ "$l" -gt "$w" ]; }; then
+    return 0
   fi
+  if [ -z "$d" ] || [ "$d" -lt "$w" ]; then
+    RELAY_STATE="waiting"
+    return 0
+  fi
+  # Armed since the wait, not yet listening: running once healthy, else armed.
+  health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$RELAY_CID" </dev/null 2>/dev/null)" || health=""
+  [ "$health" = healthy ] || RELAY_STATE="armed"
 }
 
+# Prints the word. Exit 0, except armed: exit RELAY_ARMED_RC, so the heal (which arms on waiting
+# only) neither judges nor re-arms a relay that already holds its token; 1 when it cannot be read.
+RELAY_ARMED_RC=3
 do_relay_status() {
   relay_state || return 1
   echo "$RELAY_STATE"
+  [ "$RELAY_STATE" != armed ] || return "$RELAY_ARMED_RC"
 }
 
 # host-maintenance's heal (runner/heal.py) runs this over ssh with one line on stdin: a single-use
@@ -400,7 +416,8 @@ COMMS_RELAY_WAIT_S="${COMMS_RELAY_WAIT_S:-60}"
 # verify's relay check. Waits up to COMMS_RELAY_WAIT_S for it to reach waiting (just started:
 # not yet logged) or healthy. absent and waiting warn: the heal arms it, so a build's verify right
 # after up passes. healthy: theOrg's STARTTLS probe, verified for mail-relay.asyla.org against
-# step-ca's root (fatal). Anything else (running but unhealthy, stopped, restarting) is fatal.
+# step-ca's root (fatal). Anything else (armed but still not healthy, running but unhealthy,
+# stopped, restarting) is fatal.
 check_relay() {
   local health deadline
   deadline=$(( $(date +%s) + COMMS_RELAY_WAIT_S ))
@@ -419,6 +436,9 @@ check_relay() {
       echo "[WARN] mail-relay is not deployed (no container in project communications)" >&2 ;;
     waiting:*)
       echo "[WARN] mail-relay is running unarmed, waiting to be armed; host-maintenance's hourly heal arms it (runner/heal.py; a TASK=heal pipeline arms it now)" >&2 ;;
+    armed:*)
+      echo "[ERROR] mail-relay is armed (its wrapping token delivered) but not healthy after ${COMMS_RELAY_WAIT_S} s: no leaf certificate yet; check step-ca's reach, this host's clock, and the relay's provisioner record (the heal does not re-arm it)" >&2
+      return 1 ;;
     running:healthy)
       if docker exec "$RELAY_CID" python3 /app/smoke.py probe --tls-name "$RELAY_TLS_NAME" </dev/null; then
         echo "[INFO] mail-relay healthy; smoke.py probe (STARTTLS, verified for $RELAY_TLS_NAME) OK"
@@ -468,7 +488,7 @@ do_up() {
   # No --wait: the relay stays unhealthy until host-maintenance's heal arms it (relay-arm).
   run_compose up -d "$RELAY_SERVICE" || return
   if relay_state; then
-    echo "[INFO] mail-relay started: $RELAY_STATE (unarmed until the heal; relay-status says waiting once it waits for its token)"
+    echo "[INFO] mail-relay container started (unarmed until the heal; relay-status says waiting once it waits for its token); now: $RELAY_STATE"
   else
     echo "[WARN] mail-relay started, but its state could not be read" >&2
   fi
@@ -839,7 +859,7 @@ run_cmd() {
       do_verify
       ;;
     relay-status)
-      do_relay_status || exit 1
+      do_relay_status || exit
       ;;
     *)
       return 1
@@ -871,9 +891,10 @@ usage() {
   echo "  restart  - Down then up (checks the environment first, as up)" >&2
   echo "  verify   - chat-api /health and chat_smoke.py, nats /healthz, anonymous refused on 4222 and 8080," >&2
   echo "             webhook-to-mq-vikunja /health (all fatal; waits up to COMMS_WAIT_S, 180 s, for chat-api);" >&2
-  echo "             mail-relay: absent or waiting warns, healthy runs smoke.py probe (fatal), else fatal" >&2
-  echo "             (waits up to COMMS_RELAY_WAIT_S, 60 s, for waiting or healthy)" >&2
-  echo "  relay-status - one word for the mail relay: absent, waiting, running, stopped or restarting" >&2
+  echo "             mail-relay: absent or waiting warns, healthy runs smoke.py probe (fatal), else fatal," >&2
+  echo "             armed but not healthy included (waits up to COMMS_RELAY_WAIT_S, 60 s, for waiting or healthy)" >&2
+  echo "  relay-status - one word for the mail relay: absent, waiting, armed, running, stopped or restarting;" >&2
+  echo "             exit 0, armed exit $RELAY_ARMED_RC (token delivered, no leaf yet: the heal must not re-arm), 1 unreadable" >&2
   echo "  relay-arm - alone: the wrapping token on stdin to arm.py in the relay as uid $RELAY_ARM_UID" >&2
   echo "             (host-maintenance's heal sends it over ssh's stdin); prints arm.py's ok or fail" >&2
   echo "  logs     - Follow logs (optionally for one service)" >&2
