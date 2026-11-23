@@ -1,8 +1,10 @@
 # observability (d06)
 
-theOrg's observability stack: Loki, its gateway (theOrg's option B, asyla #1268; On, off, below),
-Prometheus, the trends Prometheus, Alertmanager, alert-relay, emporia-collector, scrape-proxy, the
-pushgateway, Vector, docker-state-exporter and blackbox-exporter. asyla deploys it here from
+theOrg's observability stack: Loki, Prometheus, the trends Prometheus, Alertmanager, alert-relay,
+emporia-collector, scrape-proxy, the pushgateway, Vector, docker-state-exporter, blackbox-exporter
+and three gateways from theOrg's loki-gateway image (theOrg's option B and route modes, asyla
+#1268; On, off, below): loki-gateway, prometheus-write-gateway and pushgateway-gateway, with the
+ingest Prometheus behind them waiting on theOrg. asyla deploys it here from
 theOrg observability `DEPLOY.md`, last read at main `f7579118fdac5d90101a5ec6698200ae2c9d836f`
 (#327; design 4 since #311). The images follow theOrg's `latest` (operator 2026-11-03: "keep
 'latest' no matter what. Anything running older images will need to update"); the revision is read
@@ -19,13 +21,15 @@ the images disagree. It prints that revision and passes it to `verify`.
   `status`, `digests`, `alert-test`. It names the tag (`latest`), sets the settings, creates the
   data directories and keeps the start order. A replica (a host with `[replica] of = "d06"`) runs
   only the services with nothing to reach off the host: no alert-relay, emporia-collector,
-  scrape-proxy, loki-gateway or Vector.
-- `deploy_role.py`: the deploy (below): pulls, mints the four wrapped tokens, starts the stack.
-- `loki_accounts.py` and `loki-clients.toml`: asyla's own 13 Loki accounts for d06, which the
-  gateway checks (alert-relay's query account, the Mini's senders and readers, and the two check
-  accounts), created once in OpenBao and checked end to end (Secrets, below).
-- Tests, offline: `python3 scripts/tests/test_d06_deploy_role.py` and
-  `python3 scripts/tests/test_d06_loki_accounts.py`.
+  scrape-proxy, Vector or any of the three gateways.
+- `deploy_role.py`: the deploy (below): pulls, mints the six wrapped tokens, starts the stack.
+- `loki_accounts.py` and the three account registries, created once in OpenBao (Secrets, below):
+  `loki-clients.toml`, asyla's own 13 Loki accounts for d06, which loki-gateway checks
+  (alert-relay's query account, the Mini's senders and readers, and the two check accounts),
+  checked end to end; `prometheus-write-clients.toml` (1 account) for prometheus-write-gateway;
+  `pushgateway-clients.toml` (5 accounts) for pushgateway-gateway.
+- Tests, offline: `python3 scripts/tests/test_d06_deploy_role.py`,
+  `python3 scripts/tests/test_d06_loki_accounts.py` and `python3 scripts/tests/test_build_host_args.py`.
 - `docker-credential-observability-env`: the credential helper `observability.sh` points Docker at
   for the pulls (below).
 - Data: `/mnt/docker/Observability/{alertmanager-data,loki-data,prometheus-data,prometheus-trends-data}`
@@ -36,32 +40,45 @@ the images disagree. It prints that revision and passes it to `verify`.
   for the 64 GiB data disk). `compose.yml` takes `PROMETHEUS_RETENTION_TIME`,
   `PROMETHEUS_RETENTION_SIZE` and `TRENDS_RETENTION_SIZE` from the environment if one is ever set.
 - Ports: none on every address; each published port is on `127.0.0.1` only: Prometheus `9090`,
-  trends `9107` (container `9090`), Alertmanager `9093`, pushgateway `9091`, alert-relay `9111`,
-  Vector `9598`, docker-state-exporter `9099`. Loki (`3100`, plain HTTP, reached in the stack as
-  `loki:3100`), loki-gateway (`3100`, plain HTTP, reached by Caddy as `loki-gateway-edge:3100`
-  on `loki-edge`), alert-relay's health port, emporia-collector (`9108`), scrape-proxy (`9119`)
-  and blackbox-exporter are not published. Prometheus's remote-write receiver is off; it comes
-  back with theOrg's remote-write gateway (theorg #1275).
+  trends `9107` (container `9090`), Alertmanager `9093`, alert-relay `9111`, Vector `9598`,
+  docker-state-exporter `9099`. Loki (`3100`, plain HTTP, reached in the stack as `loki:3100`),
+  the three gateways (each `3100`, plain HTTP, reached by Caddy by its edge alias on `loki-edge`),
+  the pushgateway (`9091`, reached only on `push`), prometheus-ingest (`9090`, reached only on
+  `ingest`), alert-relay's health port, emporia-collector (`9108`), scrape-proxy (`9119`) and
+  blackbox-exporter are not published. The pushgateway's old `127.0.0.1:9091` publish is dropped:
+  a grep of asyla-hosts for `9091` found no d06 user of it (the other hits are d01's own apps and
+  communications' list of ports d06 had in use). The operations Prometheus's own remote-write receiver stays off; remote writes go to
+  prometheus-ingest (Gateways, below).
 - Names (`caddy-internal-d06`, LAN only): `prometheus.asyla.org`, `alertmanager.asyla.org`,
-  `prometheus-trends.asyla.org` and `loki.asyla.org`. The first three are the external URLs
-  Prometheus and Alertmanager put in links (`PROMETHEUS_EXTERNAL_URL`, `ALERTMANAGER_EXTERNAL_URL`
-  in `observability.sh`). For `loki.asyla.org`, d06's Caddy ends TLS with a Let's Encrypt
-  certificate, as it does for `nats.asyla.org`, and reaches `loki-gateway-edge:3100` in plain
-  HTTP. That hop carries each caller's Basic-auth password in plain text, so it is not on
-  `observability-net`, which the whole stack, `caddy-internal-d06` and communications' Vector
-  share (a container there with `NET_RAW` could ARP-spoof it). It is on `loki-edge`
-  (`observability-loki-edge`, `internal`, no egress), which only loki-gateway and
-  `caddy-internal-d06` join; the alias `loki-gateway-edge` is on that network alone, so the name
-  resolves to the gateway's `loki-edge` address. `loki-edge` is external in both stacks, so
-  compose never makes or removes it: `observability.sh` makes it before every `up`, with or
-  without the gateway's token, and internal-access makes it from `hosts/d06/networks.txt`
-  (`observability-loki-edge internal`), both with `--internal`, and both refuse one that exists
-  and is not internal (compose would use it as it is). Either stack may start first, and `down`
-  leaves the network, so the proxy's `up` never fails with "declared as external, but could not
-  be found". `prometheus.asyla.org` refuses the write
-  paths (`/api/v1/write`, `/api/v1/otlp`), the guard for when the receiver is turned on (asyla
-  #1268 item 3). The proxy entries belong to the asyla `internal-access` repo
-  (`hosts/d06/Caddyfile`).
+  `prometheus-trends.asyla.org`, `loki.asyla.org`, `prometheus-write.asyla.org` and
+  `pushgateway.asyla.org`. The first three are the external URLs Prometheus and Alertmanager put
+  in links (`PROMETHEUS_EXTERNAL_URL`, `ALERTMANAGER_EXTERNAL_URL` in `observability.sh`). For
+  the three gateway names, d06's Caddy ends TLS with a Let's Encrypt certificate, as it does for
+  `nats.asyla.org`, and reaches the gateway in plain HTTP by its edge alias:
+  `loki-gateway-edge:3100`, `prometheus-write-gateway-edge:3100` and
+  `pushgateway-gateway-edge:3100`. That hop carries each caller's Basic-auth password in plain
+  text, so it is not on `observability-net`, which the whole stack, `caddy-internal-d06` and
+  communications' Vector share (a container there with `NET_RAW` could ARP-spoof it). It is on
+  `loki-edge` (`observability-loki-edge`, `internal`, no egress), which only the three gateways
+  and `caddy-internal-d06` join; the name is historical (it was loki-gateway's alone) and the
+  network now carries all three gateways' hops. Each edge alias is on that network alone, so it
+  resolves to its gateway's `loki-edge` address. `prometheus.asyla.org` refuses the write paths
+  (`/api/v1/write`, `/api/v1/otlp`), so the operations Prometheus takes no write through Caddy.
+  The proxy entries belong to the asyla `internal-access` repo (`hosts/d06/Caddyfile`).
+- Networks: beside `observability-net`, three external networks, each `internal` (no egress):
+  `observability-loki-edge` (`loki-edge`, above); `observability-ingest` (`ingest`), where
+  prometheus-ingest's receiver takes writes, joined only by prometheus-write-gateway, the
+  operations Prometheus and prometheus-ingest; `observability-push` (`push`), where anything on it
+  can push to or wipe the pushgateway, joined only by pushgateway-gateway, the operations
+  Prometheus (which scrapes the pushgateway there) and the pushgateway, which is no longer on
+  `observability-net`. Being external, compose never makes or removes them: `observability.sh`
+  makes all three before every `up` (`ensure_networks`), with or without any gateway's token and
+  on a replica too (compose needs every external network a started service joins: the operations
+  Prometheus joins `ingest` and `push`), and refuses one that exists and is not internal (compose
+  would use it as it is). internal-access makes `observability-loki-edge` the same way from
+  `hosts/d06/networks.txt` (`observability-loki-edge internal`). Either stack may start first, and
+  `down` leaves the networks, so the proxy's `up` never fails with "declared as external, but
+  could not be found".
 
 ## Secrets
 
@@ -74,7 +91,8 @@ environment variables that the workstation sends at use over SSH stdin (build_ho
   `d06/host.toml`): the `theorg-registry` read:package token for the image pulls. The credential
   helper answers Docker from it under a throwaway `DOCKER_CONFIG`; nothing is stored.
 - `ALERT_RELAY_OPENBAO_WRAPPED_TOKEN`, `EMPORIA_OPENBAO_WRAPPED_TOKEN`,
-  `SCRAPE_PROXY_OPENBAO_WRAPPED_TOKEN`, `LOKI_GATEWAY_OPENBAO_WRAPPED_TOKEN`
+  `SCRAPE_PROXY_OPENBAO_WRAPPED_TOKEN`, `LOKI_GATEWAY_OPENBAO_WRAPPED_TOKEN`,
+  `PROMETHEUS_WRITE_GATEWAY_OPENBAO_WRAPPED_TOKEN`, `PUSHGATEWAY_GATEWAY_OPENBAO_WRAPPED_TOKEN`
   (`start_env_optional` in `d06/host.toml`): each a
   response-wrapped, single-use token that `deploy_role.py` mints from the `observability-d06` token
   role (theOrg `scripts/vault_identity.py` at the images' revision). The component unwraps it once
@@ -107,25 +125,49 @@ under `secret/hubs/asyla/` but alert-relay's Vikunja token:
   for pushes only and query accounts for queries only (theOrg `loki-gateway/gateway.go`).
   `deploy_role.py` names one record per `[clients.<name>]` of `loki-clients.toml`, and
   `observability.sh` lists the same accounts in `LOKI_GATEWAY_ACCOUNTS` (a test checks the two
-  agree). The deploy can mint this token only once the `observability-d06` token role has a
-  `loki-gateway` component that reads these records (theorg #1276). Until then `deploy_role.py`
-  stops at the mint, with nothing started.
+  agree). The `observability-d06` token role has had a `loki-gateway` component that reads these
+  records since theorg #1276.
+- prometheus-write-gateway (the same two settings, `PROMETHEUS_WRITE_GATEWAY_ACCOUNTS` in
+  `observability.sh`): every account of `prometheus-write-clients.toml`,
+  `secret/hubs/asyla/own/prometheus-write-clients/<name>` (1 record: `host-agent-ws02`, the Mini's
+  Prometheus agent, push). Push accounts only, on `POST /api/v1/write` (theOrg DEPLOY.md, "Route
+  modes").
+- pushgateway-gateway (the same two settings, `PUSHGATEWAY_GATEWAY_ACCOUNTS`): every account of
+  `pushgateway-clients.toml`, `secret/hubs/asyla/own/pushgateway-clients/<name>` (5 records:
+  `deploy-all`, `functionality-test`, `identity-platform-dex-client-validity`,
+  `memory-system-deploy-marker`, `staff-stack`, each push). Push accounts only, with `PUT`, `POST`
+  and `DELETE` on `/metrics/job/<job>[/<label>/<value>...]`; a path holding `%2F` is 404, so a
+  name with a slash goes in its `@base64` form.
 
-The Loki account records are asyla's own: `loki_accounts.py` makes them, once, before the first
-deploy that names them (a deploy without one stops at the mint), from the workstation:
+Each gateway has its own prefix, token and accounts, so no password is shared across gateways, and
+for each the same tests check that `deploy_role.py`'s records and `observability.sh`'s account list
+match its registry. The two newer gateways' records need the second vault apply: the
+`observability-d06` token role gets components `prometheus-write-gateway` and
+`pushgateway-gateway` (theOrg's to make). Until then the mint of their tokens fails and
+`deploy_role.py` stops there, with nothing started.
+
+The gateways' account records are asyla's own: `loki_accounts.py` makes them, once, before the
+first deploy that names them (a deploy without one stops at the mint), from the workstation:
 
 ```sh
-cd ~/local/asyla && python3 projects/asyla-hosts/d06/apps/observability/loki_accounts.py
+cd ~/local/asyla && python3 projects/asyla-hosts/d06/apps/observability/loki_accounts.py [--registry loki|prometheus-write|pushgateway|all]
 ```
 
 It runs theOrg's `scripts/loki_clients.py provision` (with `openbao.py`, at `deploy_role.py`'s
-`TOOL_REV`, from the local theOrg clone) on `loki-clients.toml` with asyla's hub token and
-`LOKI_CLIENTS_KV_PREFIX=secret/hubs/asyla/own/loki-clients`: for an account with no record it
-writes `username` and a generated `password` with `cas=0`, so it never overwrites; a second run
-changes nothing (`<name>: exists`). It prints no value. `--dry-run` prints the plan and contacts
-nothing.
+`TOOL_REV`, from the local theOrg clone) on each registry with asyla's hub token and its own
+`LOKI_CLIENTS_KV_PREFIX`: `loki` (`loki-clients.toml`, `secret/hubs/asyla/own/loki-clients`),
+`prometheus-write` (`prometheus-write-clients.toml`, `secret/hubs/asyla/own/prometheus-write-clients`)
+and `pushgateway` (`pushgateway-clients.toml`, `secret/hubs/asyla/own/pushgateway-clients`);
+`all`, the default, runs the three in that order with one sign-in, and the first that fails stops
+the rest. For an account with no record it writes `username` and a generated `password` with
+`cas=0`, so it never overwrites; a second run changes nothing (`<name>: exists`). It prints no
+value. `--dry-run` prints the plan and contacts nothing.
 
-Once the gateway is deployed and `loki.asyla.org` resolves, `loki_accounts.py verify` (same
+`verify` is Loki's alone (its default registry): theOrg's `loki_clients.py verify` signs in on
+Loki's routes only and has no check for the other two modes, so their anonymous refusals are
+`observability.sh verify`'s (Upgrade, below).
+
+Once loki-gateway is deployed and `loki.asyla.org` resolves, `loki_accounts.py verify` (same
 command line, `verify` after the script) checks it end to end: it runs theOrg's
 `scripts/loki_clients.py verify --url https://loki.asyla.org --ca-volume ''` with the same registry,
 prefix, revision and hub token. It checks `/ready` with no account (200), a push and a query with
@@ -150,7 +192,7 @@ d06 has; pushgateway, pinned by version, only when missing), then reads the theO
 images were built from (`observability.sh digests`, then the registry's provenance attestation of
 each digest, every answer hash-checked against its digest; each digest must name exactly one commit,
 the images must agree, every theOrg image and the provenance source must be on `REGISTRY`, and R must
-be on the theOrg clone's `origin/main`), then mints the four wrapped tokens with theOrg's tool at
+be on the theOrg clone's `origin/main`), then mints the six wrapped tokens with theOrg's tool at
 `TOOL_REV` (`deploy_role.py`; the tool runs with asyla's hub token, so it stays at a commit asyla
 reviewed while the images follow `latest`) and starts the stack (`build_host.py d06 build --only apps --app observability --apply`, which runs
 `observability.sh up`), then runs `OBSERVABILITY_REVISION=R observability.sh verify` on d06
@@ -273,6 +315,37 @@ Vector stay on `loki:3100` inside the stack. A replica runs no gateway: it would
 `loki-gateway-auth` on d06, from the first deploy, are unused; deleting them is the operator's
 decision.
 
+The two metrics gateways (theOrg's route modes, asyla #1268 items 3 and 4) are the same image
+with `LOKI_GATEWAY_MODE` set, each with its own token, accounts and prefix (Secrets, above), on
+`observability-net` (OpenBao), `loki-edge` (Caddy) and its own upstream's network:
+
+- prometheus-write-gateway (`remote-write`), `https://prometheus-write.asyla.org`: admits only
+  `POST /api/v1/write` with a push account and forwards it to prometheus-ingest on `ingest`;
+  `/ready` is open and forwarded to the upstream's `/-/ready`; every other path is 404,
+  Prometheus's query, admin and federate paths included. prometheus-ingest is the ingest
+  Prometheus (theOrg DEPLOY.md, "Where the writes go"): its receiver on, its only network
+  `ingest`, no port, 2 days or 2 GB kept, for the operations Prometheus to read by federation.
+- pushgateway-gateway (`pushgateway`), `https://pushgateway.asyla.org`: admits only `PUT`, `POST`
+  and `DELETE` on `/metrics/job/...` with a push account and forwards it to `pushgateway:9091` on
+  `push`. The pushgateway is on `push` alone (off `observability-net`, no published port), so
+  this gateway is the one way in; the operations Prometheus scrapes it there by service name
+  (theOrg's `prometheus/scrape-stack/pushgateway.yml`).
+
+Waiting on theOrg:
+
+- theorg #1285: an ingest piece (an image or switch with no scrape jobs and the receiver on) and
+  a federate switch in the operations image (none at 28b23389). asyla mounts no Prometheus config
+  of its own, and theOrg's trends image bakes in scrape jobs an ingest Prometheus must not run, so
+  until then prometheus-ingest is behind the compose profile `ingest`, which nothing enables
+  (`observability.sh` never passes `--profile`): it never starts. The remote-write gateway runs
+  with no upstream: a write with no account is 401, one with an account 502, and `/ready` 502 too.
+  So that gateway has no `depends_on` on prometheus-ingest and no healthcheck for now (theOrg's
+  `/loki-gateway healthcheck` is `GET /ready`, so it would never be healthy and `up --wait` would
+  fail); `observability.sh verify` checks the 401 and the 502. When theOrg ships both, set the
+  image or switch, drop the profile, and give the gateway back its `depends_on` and healthcheck.
+- the second vault apply: components `prometheus-write-gateway` and `pushgateway-gateway` in the
+  `observability-d06` token role (Secrets, above). Until then `deploy_role.py` stops at the mint.
+
 Off here and nowhere else:
 
 - chat-api: `CHAT_API_URL` is empty; theOrg's, not asyla's.
@@ -319,6 +392,17 @@ at least `SCRAPE_GRACE_S` (75 s, one scrape and some) for each:
   (theOrg `alert-relay/relay.py`). That it holds them, not that Gmail takes the login; that the
   token can read project 170 is `check_delivery`'s; that a `logql` query returns lines is
   `alert-test`'s.
+- the three gateways (`check_gateway`), each whose container exists, asked from inside the stack
+  (`vector-1`'s wget to `<gateway>:3100`): `/ready` with no account, and an anonymous request on
+  its one admitted route must be 401 (the account check comes before the upstream: theOrg
+  `loki-gateway/gateway.go`). loki-gateway: `/ready` 200, `GET /loki/api/v1/labels` 401;
+  prometheus-write-gateway: `POST /api/v1/write` 401, and `/ready` 200 once prometheus-ingest
+  runs, 502 while it does not (On, off, above); pushgateway-gateway: `/ready` 200,
+  `PUT /metrics/job/verify` 401. vector-1's wget is GNU Wget (theOrg's `Dockerfile.vector` installs
+  Debian's `wget` into `timberio/vector:0.56.0-debian`, which has no busybox; Wget 1.25.0 there
+  lists `--method` and `--body-data`, checked 2026-11-22), so a POST or PUT is
+  `--method=<M> --body-data=` (an empty body). That each account gets in with its own password is
+  `loki_accounts.py verify`'s for Loki; theOrg has no such check for the other two modes.
 
 With `ALERT_WATCHDOG_PING` on and alert-relay running, verify then checks the Watchdog's ping
 (`check_watchdog`): the running Alertmanager loaded the watchdog piece (its `/api/v2/status`
@@ -410,12 +494,14 @@ from d06).
   subnet; d03 and d07 are not changed here.
 - d06's `update_all.sh` reports this app as FAIL. It runs `backup`, which this app does not have,
   and `update`, which needs the pull token from the workstation. This matches ticketing's `update`.
-- The gateway fronts Loki only (theOrg `loki-gateway/gateway.go`: the push path and the query
-  paths). Remote writes to Prometheus and pushes to the pushgateway from off this host wait for
-  theOrg's route modes for it (theorg #1275); Prometheus's remote-write receiver is off until
-  then.
-- The deploy needs a `loki-gateway` component in the `observability-d06` token role (theorg #1276);
-  until it lands, `deploy_role.py` stops at the mint, with nothing started.
+- Remote writes from off this host get no further than prometheus-write-gateway (502 with an
+  account) until theOrg ships the ingest piece and the federate switch (theorg #1285; On, off,
+  above); the remote-write gateway has no healthcheck until then.
+- The deploy needs components `prometheus-write-gateway` and `pushgateway-gateway` in the
+  `observability-d06` token role (the second vault apply); until it lands, `deploy_role.py` stops
+  at the mint, with nothing started.
+- theOrg has no account check for the remote-write and pushgateway modes (`loki_clients.py
+  verify` is Loki's only), so `observability.sh verify` checks only their anonymous refusals.
 - `VECTOR_DOCKER_LOGS` also loads theOrg's `to_memory_system` sink: `CHRONICLE_EPISODE` lines to
   `CHRONICLE_VECTOR_ADDRESS` (10.0.0.150:6000, the Mini's memory-system). On d06 it forwards none (a
   2026-11-03 read: 0 in 2 h from all 11 containers; `docker_logs` reads only project
