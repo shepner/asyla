@@ -8,16 +8,19 @@ the commit the asyla hub backlog item "d06: deploy theOrg communications at beff
 theOrg's own deploy does not target d06.
 
 - `compose.yml`: theOrg's file with asyla's changes listed at its top: images only (no `build:`),
-  no mail-relay and no cloudflared, `container_name` dropped except vector's (theOrg's
-  `vector-http.toml` excludes `communications-vector-1` by name), the network named
-  `communications_net` (internal-access `hosts/d06` joins it), data in bind mounts instead of
-  named volumes, and only `127.0.0.1` ports.
+  no cloudflared, `container_name` dropped except vector's (theOrg's `vector-http.toml` excludes
+  `communications-vector-1` by name), the network named `communications_net` (internal-access
+  `hosts/d06` joins it), data in bind mounts instead of named volumes, and only `127.0.0.1` ports
+  but the mail relay's SMTP port, which is on d06's LAN address (below, Mail relay).
 - `communications.sh`: `up`, `down`, `restart`, `backup`, `restore`, `verify`, `update`, `pull`,
-  `images`, `logs`; switches combine (`backup update up verify`). `up` starts in DEPLOY.md's order:
-  nats, nats-exporter, comms-postgres, chat-api, webhook-to-mq-vikunja, vector. vector starts only
+  `images`, `logs`, `relay-status`; switches combine (`backup update up verify`). `up` starts in
+  DEPLOY.md's order: nats, nats-exporter, comms-postgres, chat-api, webhook-to-mq-vikunja, vector,
+  then the mail relay with no wait. vector starts only
   when observability's network (`observability_observability-net`) exists; otherwise `up` warns
   and the stack's logs and chronicle episodes are lost until it is started again. `import PATH`
-  stands alone (C4: another host's backup into the mirror; below, Import).
+  stands alone (C4: another host's backup into the mirror; below, Import), as does `relay-arm`
+  (the heal's wrapping token on stdin; below, Mail relay).
+- `theorg-v2-root.crt`: step-ca's public root, which `up` places for the mail relay.
 - `compose.no-ticketing.yml`: added by `up` only when ticketing's network is missing (below).
 - `import_from_host.sh`: runs on the workstation; the Mini's final backup into d06's mirror (Import).
 - `docker-credential-communications-env`: a read-only Docker credential helper (a copy of
@@ -37,7 +40,7 @@ theOrg's own deploy does not target d06.
   `!override`); start ticketing, then run `up` again to put it on both.
 - Published on `127.0.0.1` only: chat-api `9098`, nats monitoring `8222` (no auth: `verify` and the
   exporter), the exporter `7777`. Not published: nats `4222`, NATS over WebSocket `8080`,
-  webhook-to-mq `9092`. d06 already used 3456, 9090, 9091, 9093, 9099, 9107, 9111, 9598, 80 and
+  webhook-to-mq `9092`. The mail relay: `10.0.0.65:2587` and `127.0.0.1:9116` (below). d06 already used 3456, 9090, 9091, 9093, 9099, 9107, 9111, 9598, 80 and
   443 (`ss`, 2026-11-10); none of these collide.
 - Names (internal-access `hosts/d06`, later, each with the operator's approval):
   `theorg.asyla.org` -> `chat-api:9098`; `nats.asyla.org` -> `nats:8080` only after `verify`'s
@@ -203,6 +206,55 @@ The anonymous check is theOrg's `scripts/check_nats_refuses_anonymous.sh` and
 `NATS_CONTAINER=communications-nats-1` and the chat-api image at `COMMS_TAG` as the probe image,
 from inside `communications_net`. Update them only by copying a later theOrg commit's files whole.
 
+The mail relay's check (below) is the last one: absent or waiting for its token warns, so the
+build's `verify` right after `up` passes; healthy runs theOrg's probe, which is fatal; anything
+else is fatal.
+
+## Mail relay (asyla #657)
+
+theOrg's SMTP submission relay, `mail-relay.asyla.org:2587` (STARTTLS and AUTH required), for
+d05's Keycloak and later callers. Written from theOrg communications DEPLOY.md "Mail relay on d06"
+at `aa1af97a` (theOrg #1097, design v3).
+
+- **Image**: `gitea.asyla.org/theorg/communications-mail-relay` at `COMMS_RELAY_TAG`, the full
+  `aa1af97a` sha, separate from `COMMS_TAG` so the chat images stay on `beff7c55`. Pin another by
+  hand with `COMMS_RELAY_TAG_OVERRIDE`. The pull uses the same pull token.
+- **Ports**: `10.0.0.65:2587` (d06's LAN address only) and `127.0.0.1:9116` (`/metrics`,
+  `/healthz`). The token port `9117` is the relay's own loopback inside its container and is never
+  published. Its own bridge network `communications_mail_relay` (egress only: step-ca, OpenBao,
+  Gmail), off nats and the message store. The container is `communications-mail-relay-1`; the
+  scripts find it by its compose labels (project `communications`, service `mail-relay`).
+- **No secret here**: no token in the environment or compose, no TLS or key mount. Its environment
+  is DEPLOY.md's table (`MAIL_RELAY_TLS=stepca`, the OpenBao role name `communications-d06` in
+  `MAIL_RELAY_TOKEN_ROLE`, `OPENBAO_BROKER_PORT=9117`, the root pin, and theOrg's defaults spelled out). It makes its own
+  24 h leaf from step-ca with the key in memory, and reads its records with its own token.
+- **Root pin**: `theorg-v2-root.crt` is internal-access `hosts/d03/upstream-ca/theorg-v2-root.pem`
+  (1c4446c), byte-identical to d05's copy. `up` and `restart` check it against `CA_FINGERPRINT`
+  before anything is started or stopped, place it at `/mnt/docker/Communications/mail-relay-ca/root_ca.crt`
+  (0644, atomic) and check the placed copy; the relay mounts that one file read-only and checks it
+  again against `MAIL_RELAY_STEPCA_ROOT_SHA256` (the same SHA-256 in lower-case hex) before it takes
+  a token. A root rotation re-pins d05 and d06 together: the file, `CA_FINGERPRINT` and the
+  compose pin in one commit (the test asserts they agree), then `up`, which recreates the relay.
+- **`relay-status`** prints one word: `absent`, `waiting` (running, and its log since this start
+  holds `wrapped token spent: waiting for the token broker` with no `listening on 2587` after it),
+  `running`, `stopped` or `restarting`. It reads the container's State and that log only, never
+  its Config.
+- **`relay-arm`** stands alone and needs no start values. It runs
+  `docker exec -i -u 10002 <relay> python3 /app/arm.py`; the script reads nothing from stdin and
+  never traces, so ssh's stdin (one line, a single-use wrapping token) goes straight to arm.py,
+  and arm.py's `ok` or `fail` and its exit code come back. uid 10002, not the relay's 10001, which
+  could read the leaf's pipes (arm.py refuses 10001).
+- **The heal**: host-maintenance `runner/heal.py`, hourly after the monitor (or a `TASK=heal`
+  pipeline), sees the relay running, unhealthy and `relay-status` `waiting`, mints a wrapped token
+  at `auth/token/create/communications-d06` (wrap TTL 300 s at most) and sends the wrapping token
+  over ssh's stdin to `relay-arm`. Until then, after a deploy, `restart` or a d06 reboot, the relay
+  is unhealthy and mail is down (up to about an hour, accepted on #1097: "Hourly heal").
+- **Verify**: `docker exec communications-mail-relay-1 python3 /app/smoke.py probe --tls-name mail-relay.asyla.org`
+  (what `verify` runs when it is healthy), and `curl -s 127.0.0.1:9116/metrics | grep mail_relay_`.
+- **The Mini**: theOrg's Mini relay keeps running until theOrg retires it, after d05's Keycloak
+  sends through d06 (#1097 step 7). The `mail-relay.asyla.org` CNAME to d06 is set through the
+  Pi-hole pipeline.
+
 ## Lab
 
 `COMMS_REGISTRY_OVERRIDE` names locally built images under another prefix and
@@ -215,7 +267,8 @@ a lab maps `theorg.asyla.org` to its own address (`--add-host`).
   secrets-vault (`policies/hub-asyla-d06.hcl`, at c214d21) grants none of them. theOrg's item
   `backlog/open/2026-11-09-secrets-vault-secrets-vault-hub-asyla-reads-communications-four-records-an.md`
   (theOrg `f263c2bf`) asks for it. Until it lands nothing here is deployed.
-- No mail relay: theOrg's mail-relay service is not part of this hand-off.
+- The mail relay is written (above) but not yet deployed or armed on d06, the CNAME is not set,
+  and d05's Keycloak does not send through it (asyla #657, a later d05 change).
 - No mq-users: the Staff workers' NATS users (`COMMS_MQ_USER_<X>_USERNAME`/`_PASSWORD`, to be
   `start_env_optional`) wait for theOrg to name the principals (one exact vault path each).
 - The C4 cutover: the names (`theorg.asyla.org` and `nats.asyla.org` CNAMEs, the off-LAN tunnel

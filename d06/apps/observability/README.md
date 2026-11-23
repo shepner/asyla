@@ -292,11 +292,15 @@ when the host says one is required (`remote/maint_host.py:301-306`). What notice
   Alertmanager's Watchdog reaches it only through alert-relay: a relay looping on a spent token
   sends no ping, and the check goes down.
 
-The recovery is the deploy above (`deploy_role.py`), run by hand. theOrg's heal exists at f757911
-(`scripts/heal_spent_tokens.py` and `heal.yml`, #324 and #326; DEPLOY.md "Recovery after reboot or
-restart" names `--token-role observability-d06` for d06): it re-mints only the looping holders
-without a deploy. d06 does not run it yet: which credential a scheduled heal mints with is open
-with the operator.
+The recovery is asyla's own heal, host-maintenance `runner/heal.py` (at 506c735): the `heal` job
+(`.gitlab-ci.yml:124-141`) runs it hourly after the `monitor` schedule, or on a web run with
+`TASK=heal`. It re-mints only observability's tokened holders that loop on a spent token (alert-relay,
+emporia-collector, scrape-proxy) without a whole deploy, logging in as `asyla-redeploy-apps`
+(`runner/redeploy.py` `login()`), and it backs off after a failed heal (`heal-state.json`). It also
+arms communications' mail relay (asyla #657: its relay branch, once merged, sends a wrapping token
+over ssh's stdin to `d06/apps/communications/communications.sh relay-arm`; the communications
+README, Mail relay). The deploy above (`deploy_role.py`) remains the recovery by hand. theOrg's
+own heal (`scripts/heal_spent_tokens.py`, f757911) is the Mini's and does not run here.
 
 ## On, off, and what turns each on
 
