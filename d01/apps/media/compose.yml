@@ -219,7 +219,7 @@ services:
       - RADARR_CONFIG=/radarr-config/config.xml
       - RECONCILE_SEARCH=/movies/Movies
       - RECONCILE_START_MINUTES=5
-      - RECONCILE_APPLY=0
+      - RECONCILE_APPLY=1
     volumes:
       - ${MEDIA_SCRIPT_DIR:-/home/docker/scripts/d01/apps/media}:/app:ro
       - ${DOCKER_DL:-/mnt/docker}/radarr/config:/radarr-config:ro
