@@ -928,9 +928,15 @@ def phase_vm(spec: dict, apply: bool, recreate: bool, confirm: str | None) -> No
 
     d, img = vm["os_disk"], vm_image(node)
     q = f"qm set {vmid}"
+    # serial0 and rng0 (asyla #1290): the Debian image's kernel line ends console=ttyS0, and the PVE
+    # Cloud-Init wiki says many cloud images rely on a serial console. On 2026-11-22 a test01 first
+    # boot with no serial port and no rng stopped after the initramfs growroot (root never remounted
+    # rw, crng init at 438 s, no packet out); with serial0 its next boot ran cloud-init to the end.
+    # The serial line is also the full boot log, read on the node with: qm terminal VMID.
     cmds = [
         f"qm create {vmid} --name {host} --sockets {vm['sockets']} --cores {vm['cores']} "
         f"--memory {vm['memory_mb']} --ostype l26 --scsihw virtio-scsi-pci --vga std "
+        f"--serial0 socket --rng0 source=/dev/urandom "
         f"--net0 {net0_arg(vm)} --onboot 1 "
         f"--agent 1,fstrim_cloned_disks=1" + (f" --startup {vm['startup']}" if vm.get("startup") else ""),
         f"{q} --scsi0 {d['storage']}:0,import-from={img},discard=on,ssd=1",
@@ -969,7 +975,10 @@ def phase_vm(spec: dict, apply: bool, recreate: bool, confirm: str | None) -> No
     # A recreated VM has a new host key: drop the old one for its name and address only.
     for name in (host, ip_only(spec), f"{host}.{SEARCHDOMAIN}"):
         run(["ssh-keygen", "-R", name], check=False)
-    wait_ssh(host)
+    try:
+        wait_ssh(host)
+    except Fail as e:
+        raise Fail(f"{e}; its boot log is the serial console: ssh {root(node)} qm terminal {vmid} (Ctrl-O quits)") from None
     print("waiting for cloud-init")
     ssh(host, "cloud-init status --wait >/dev/null", timeout=1800, check=False)
     r = ssh(host, "cloud-init status; id docker; test -f /var/lib/cloud/instance/asyla-vendor-done", check=False)
