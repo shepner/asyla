@@ -26,6 +26,12 @@ scope = ["push"]
 [clients.functionality-test]
 scope = ["push"]
 
+# The Mini's host agent (theorg #1269): its push relay forwards the Mini's pushers here under this
+# one account (operator, 2026-11-23: the Mini reaches d06 "Through the Mini agent"; theOrg plan
+# hub f068127b). The five per-pusher accounts above and below stay until theOrg retires them.
+[clients.host-agent-ws02]
+scope = ["push"]
+
 # identity-platform's dex_client_validity.py.
 [clients.identity-platform-dex-client-validity]
 scope = ["push"]

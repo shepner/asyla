@@ -87,7 +87,7 @@ LOKI_GATEWAY_ACCOUNTS="alert-relay:query,grafana-reporting:query,host-agent-ws02
 # prometheus-write-gateway's (prometheus-write-clients.toml) and pushgateway-gateway's
 # (pushgateway-clients.toml). compose.yml passes each to its gateway as LOKI_GATEWAY_ACCOUNTS.
 PROMETHEUS_WRITE_GATEWAY_ACCOUNTS="host-agent-ws02:push"
-PUSHGATEWAY_GATEWAY_ACCOUNTS="deploy-all:push,functionality-test:push,identity-platform-dex-client-validity:push,memory-system-deploy-marker:push,staff-stack:push"
+PUSHGATEWAY_GATEWAY_ACCOUNTS="deploy-all:push,functionality-test:push,host-agent-ws02:push,identity-platform-dex-client-validity:push,memory-system-deploy-marker:push,staff-stack:push"
 
 # asyla's settings (asyla hub, the observability-on-d06 item).
 PROMETHEUS_EXTERNAL_URL="${PROMETHEUS_EXTERNAL_URL:-https://prometheus.asyla.org}"
