@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Offline test of d06/apps/observability/loki_accounts.py: the accounts it reads, the tool's
 environment and command line, the record path against compose.yml and deploy_role.py, and what
-main() runs. No vault, no git, no network: subprocess.run, deploy_role.git and
+main() runs. No vault and no network: subprocess.run, deploy_role.git and
 deploy_role.hub_sign_in are replaced so that any contact fails the test, or answer from stand-ins.
+The one exception is a local `git show` of openbao.py at TOOL_REV from the theOrg clone (no fetch),
+loaded to check the calls verify makes on it.
 
     python3 scripts/tests/test_d06_loki_accounts.py
 
@@ -12,6 +14,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import os
 import re
 import subprocess
 import sys
@@ -28,6 +31,7 @@ def _no_contact(*a, **kw):
     raise AssertionError(f"the test reached out: {a[:1]}")
 
 
+REAL_RUN, REAL_GIT = subprocess.run, dr.git   # for the one local `git show` of openbao.py
 subprocess.run = _no_contact
 dr.git = _no_contact
 dr.hub_sign_in = _no_contact
@@ -167,10 +171,29 @@ def main_cases() -> list[bool]:
     out.append(check("dry run --registry pushgateway: that registry's plan alone",
                      rc == 0 and "secret/hubs/asyla/own/pushgateway-clients/deploy-all" in text
                      and "loki-clients/" not in text and "prometheus-write-clients/" not in text, text))
-    for reg in ("pushgateway", "prometheus-write", "all"):
-        rc, text = quiet(lambda: la.main(["verify", "--registry", reg, "--dry-run"]))
-        out.append(check(f"verify --registry {reg}: stops, exit 1 (verify is loki only; any contact fails)",
-                         rc == 1 and "verify is loki only" in text, text))
+    rc, text = quiet(lambda: la.main(["verify", "--registry", "all", "--dry-run"]))
+    out.append(check("verify --registry all: stops, exit 1 (verify takes one gateway; any contact fails)",
+                     rc == 1 and "verify takes one gateway" in text, text))
+    rc, text = quiet(lambda: la.main(["verify", "--registry", "pushgateway", "--dry-run"]))
+    out.append(check("verify --registry pushgateway dry run: exit 0, the url, deploy-all's record, every "
+                     "check with its method, path and status, curl with the account on stdin; nothing "
+                     "fetched, signed in or curled (any contact fails)",
+                     rc == 0 and "DRY RUN" in text and "https://pushgateway.asyla.org" in text
+                     and "secret/hubs/asyla/own/pushgateway-clients/deploy-all" in text
+                     and "curlimages/curl" in text and "stdin" in text and "no --cacert" in text
+                     and "GET /ready, want 200" in text
+                     and "PUT /metrics/job/asyla_verify, want 401" in text
+                     and "PUT /metrics/job/asyla_verify, want 200 or 202" in text
+                     and "DELETE /metrics/job/asyla_verify, want 202" in text
+                     and "GET /metrics, want 404" in text and "loki_clients.py verify" not in text, text))
+    rc, text = quiet(lambda: la.main(["verify", "--registry", "prometheus-write", "--dry-run"]))
+    out.append(check("verify --registry prometheus-write dry run: exit 0, host-agent-ws02's record, 401 "
+                     "refusals, and 502 for the write and /ready while the ingest Prometheus is not deployed",
+                     rc == 0 and "https://prometheus-write.asyla.org" in text
+                     and "secret/hubs/asyla/own/prometheus-write-clients/host-agent-ws02" in text
+                     and "POST /api/v1/write, want 401" in text
+                     and "POST /api/v1/write, want 502 or 400 or 204" in text
+                     and "GET /ready, want 502 or 200" in text and "not deployed" in text, text))
     rc, text = quiet(lambda: la.main(["verify", "--dry-run"]))
     out.append(check("verify dry run: exit 0, the plan (url, no --cacert, both check accounts, curl), "
                      "nothing fetched, signed in or curled (any contact fails)",
@@ -257,7 +280,253 @@ def main_cases() -> list[bool]:
     return out
 
 
+ACCOUNT_STAND_IN = "stand-in-account-" + "a" * 32
+
+
+class BaoError(Exception):
+    def __init__(self, category: str):
+        super().__init__(f"stand-in: {category}")
+        self.category = category
+
+
+class StandInBao:
+    """openbao.py's kv_read and OpenBaoError, answering from records (or raising one category)."""
+    OpenBaoError = BaoError
+
+    def __init__(self, records: dict | None = None, fail: str = ""):
+        self.records, self.fail, self.reads = records or {}, fail, []
+
+    def kv_read(self, record, *, token):
+        self.reads.append((record, token))
+        if self.fail:
+            raise BaoError(self.fail)
+        if record not in self.records:
+            raise BaoError("absent")
+        return self.records[record]
+
+
+def gateway(answers: dict, calls: list):
+    """A stand-in subprocess.run for curl containers: the status for (method, path, who), who from
+    the config on stdin (None, "wrong" or "account")."""
+    def run(argv, input=None, env=None, **kw):
+        if argv[:2] != ["docker", "run"]:
+            raise AssertionError(f"not a curl container: {argv[:2]}")
+        method = argv[argv.index("-X") + 1]
+        path = "/" + argv[-1].split("/", 3)[3]
+        who = None
+        if input:
+            who = "account" if input.endswith(f':{ACCOUNT_STAND_IN}"\n') else "wrong"
+        calls.append((argv, input, env, method, path, who))
+        return Done(0, str(answers.get((method, path, who), 0)).zfill(3))
+    return run
+
+
+def ran(text: str) -> str:
+    """The output after the plan (the check lines and the summary)."""
+    return text.split("\ntoken:", 1)[-1].split("\n", 1)[-1]
+
+
+PUSH_ANSWERS = {("GET", "/ready", None): 200, ("PUT", la.PUSH_JOB, None): 401,
+                ("PUT", la.PUSH_JOB, "wrong"): 401, ("PUT", la.PUSH_JOB, "account"): 200,
+                ("DELETE", la.PUSH_JOB, "account"): 202, ("GET", "/metrics", "account"): 404}
+WRITE_ANSWERS = {("POST", "/api/v1/write", None): 401, ("POST", "/api/v1/write", "wrong"): 401,
+                 ("POST", "/api/v1/write", "account"): 502, ("GET", "/ready", None): 502}
+
+
+def metrics_cases() -> list[bool]:
+    out = []
+    argv = la.curl_argv("https://pushgateway.asyla.org/metrics/job/asyla_verify", "PUT", la.PUSH_BODY,
+                        la.TEXT_FORMAT)
+    out.append(check("curl argv: the image pinned by digest, config from stdin (-K -), no --cacert, "
+                     "never -k/--insecure, no account",
+                     argv[:3] == ["docker", "run", "--rm"] and la.CURL_IMAGE in argv
+                     and re.fullmatch(r"curlimages/curl:[0-9.]+@sha256:[0-9a-f]{64}", la.CURL_IMAGE)
+                     and argv[argv.index("-K") + 1] == "-" and "--cacert" not in argv
+                     and "-k" not in argv and "--insecure" not in argv and "-u" not in argv
+                     and "--user" not in argv and argv[-1].endswith(la.PUSH_JOB)
+                     and argv[argv.index("--data-binary") + 1] == "asyla_verify_push 1\n", repr(argv)))
+    w = la.curl_argv("https://prometheus-write.asyla.org/api/v1/write", "POST", "", la.REMOTE_WRITE)
+    out.append(check("curl argv: remote write sends an empty body with the remote-write headers",
+                     w[w.index("--data-binary") + 1] == ""
+                     and all(h in w for h in ("Content-Type: application/x-protobuf", "Content-Encoding: snappy",
+                                              "X-Prometheus-Remote-Write-Version: 0.1.0")), repr(w)))
+
+    # read_password(): the record at the registry's prefix, read with the hub token; Stop never shows it.
+    rec = "secret/hubs/asyla/own/pushgateway-clients/deploy-all"
+    bao = StandInBao({rec: {"username": "deploy-all", "password": ACCOUNT_STAND_IN}})
+    got = la.read_password(bao, HUB_STAND_IN, "pushgateway")
+    out.append(check("read_password() reads deploy-all's record under pushgateway-clients, with the hub token",
+                     got == ACCOUNT_STAND_IN and bao.reads == [(rec, HUB_STAND_IN)], repr(bao.reads)))
+    short = ACCOUNT_STAND_IN[:20]
+    for name, b, needle in (
+            ("no record stops, naming provision", StandInBao(), "absent; run loki_accounts.py --registry pushgateway"),
+            ("a refused read stops", StandInBao(fail="refused"), "refused"),
+            ("another username stops", StandInBao({rec: {"username": "other", "password": ACCOUNT_STAND_IN}}),
+             "username is not deploy-all"),
+            ("a short value stops, not shown", StandInBao({rec: {"username": "deploy-all", "password": short}}),
+             "not a secrets.token_urlsafe(32) value"),
+            ("a quote in the value stops", StandInBao({rec: {"username": "deploy-all",
+                                                              "password": ACCOUNT_STAND_IN + '"'}}),
+             "not a secrets.token_urlsafe(32) value")):
+        try:
+            la.read_password(b, HUB_STAND_IN, "pushgateway")
+            out.append(check(f"read_password() - {name}", False, "no Stop"))
+        except dr.Stop as e:
+            out.append(check(f"read_password() - {name}", needle in str(e) and short not in str(e), str(e)))
+
+    saved = (dr.git, dr.hub_sign_in, subprocess.run, la.load_openbao)
+    records = {rec: {"username": "deploy-all", "password": ACCOUNT_STAND_IN},
+               "secret/hubs/asyla/own/prometheus-write-clients/host-agent-ws02":
+                   {"username": "host-agent-ws02", "password": ACCOUNT_STAND_IN}}
+    dirs = []
+
+    def stand_in_load(tool_dir):
+        dirs.append(tool_dir)
+        return StandInBao(records)
+
+    try:
+        dr.git = lambda *a, check=True: Done(0, "# stand-in code\n")
+        dr.hub_sign_in = lambda: HUB_STAND_IN
+        la.load_openbao = stand_in_load
+        calls = []
+        subprocess.run = gateway(PUSH_ANSWERS, calls)
+        caller = {k: os.environ.get(k) for k in DROPPED}
+        os.environ.update({k: OTHER_STAND_IN for k in DROPPED})
+        try:
+            rc, text = quiet(lambda: la.main(["verify", "--registry", "pushgateway"]))
+        finally:
+            for k, v in caller.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        seen = [(m, p, who) for _, _, _, m, p, who in calls]
+        out += [
+            check("verify pushgateway: exit 0, six ok lines, every check passed",
+                  rc == 0 and text.count("\nok ") + text.startswith("ok ") == 6 and "FAIL" not in text
+                  and "pushgateway gateway: every check passed at https://pushgateway.asyla.org" in text, text),
+            check("verify pushgateway: the checks in order (ready, anonymous, wrong, push, delete, /metrics)",
+                  seen == [("GET", "/ready", None), ("PUT", la.PUSH_JOB, None), ("PUT", la.PUSH_JOB, "wrong"),
+                           ("PUT", la.PUSH_JOB, "account"), ("DELETE", la.PUSH_JOB, "account"),
+                           ("GET", "/metrics", "account")], repr(seen)),
+            check("verify pushgateway: the password only in curl's stdin config, never on argv or in "
+                  "the environment, and never printed; the token neither",
+                  all(ACCOUNT_STAND_IN not in " ".join(a) and HUB_STAND_IN not in " ".join(a)
+                      and isinstance(e, dict) and ACCOUNT_STAND_IN not in e.values()
+                      and HUB_STAND_IN not in e.values() for a, _, e, *_ in calls)
+                  and all(i == "" if who is None else i.startswith('user = "deploy-all:')
+                          for _, i, _, _, _, who in calls)
+                  and ACCOUNT_STAND_IN not in text and HUB_STAND_IN not in text, text),
+            check("verify pushgateway: no caller vault token or LOKI_CLIENTS_* setting reaches docker",
+                  bool(calls) and all(not any(k in e for k in DROPPED) and OTHER_STAND_IN not in e.values()
+                                      and "PATH" in e for _, _, e, *_ in calls),
+                  repr(sorted(calls[0][2]) if calls else [])),
+            check("verify pushgateway: the wrong password is not derived from the account's",
+                  [len(i) for _, i, _, _, _, who in calls if who == "wrong"] == [len('user = "deploy-all:"\n') + 43]
+                  and all(ACCOUNT_STAND_IN[17:] not in i for _, i, _, _, _, who in calls if who == "wrong"),
+                  repr([who for *_, who in calls])),
+            check("verify pushgateway: the openbao.py temp dir is gone after",
+                  len(dirs) == 1 and not dirs[0].exists(), repr(dirs)),
+        ]
+
+        calls.clear()
+        subprocess.run = gateway({**PUSH_ANSWERS, ("PUT", la.PUSH_JOB, None): 200}, calls)
+        rc, text = quiet(lambda: la.main(["verify", "--registry", "pushgateway"]))
+        out.append(check("verify pushgateway: an anonymous push let through is a FAIL line and exit 1; "
+                         "the rest still run (the delete cleans up)",
+                         rc == 1 and "FAIL push, no account" in text and "stopped:" in text
+                         and len(calls) == 6, text))
+
+        calls.clear()
+        answer = gateway(PUSH_ANSWERS, calls)
+
+        def broken_push(argv, input=None, env=None, **kw):
+            if argv[argv.index("-X") + 1] == "PUT" and input and input.endswith(f':{ACCOUNT_STAND_IN}"\n'):
+                raise RuntimeError("stand-in failure")
+            return answer(argv, input=input, env=env, **kw)
+
+        subprocess.run = broken_push
+        try:
+            quiet(lambda: la.main(["verify", "--registry", "pushgateway"]))
+            raised = False
+        except RuntimeError:
+            raised = True
+        out.append(check("verify pushgateway: the DELETE cleanup still runs when a check raises",
+                         raised and [(m, p) for _, _, _, m, p, _ in calls][-1] == ("DELETE", la.PUSH_JOB),
+                         repr([(m, p, w) for _, _, _, m, p, w in calls])))
+
+        calls.clear()
+        subprocess.run = gateway({**PUSH_ANSWERS, ("PUT", la.PUSH_JOB, "account"): 202}, calls)
+        rc, _ = quiet(lambda: la.main(["verify", "--registry", "pushgateway"]))
+        out.append(check("verify pushgateway: a push answered 202 passes too", rc == 0))
+
+        calls.clear()
+        subprocess.run = gateway(WRITE_ANSWERS, calls)
+        rc, text = quiet(lambda: la.main(["verify", "--registry", "prometheus-write"]))
+        seen = [(m, p, who) for _, _, _, m, p, who in calls]
+        out.append(check("verify prometheus-write: exit 0 with 502s, saying the ingest Prometheus is not "
+                         "deployed; host-agent-ws02 signs in; headers and empty body sent",
+                         rc == 0 and ran(text).count("not deployed") == 2
+                         and "every check passed at https://prometheus-write.asyla.org" in text
+                         and seen == [("POST", "/api/v1/write", None), ("POST", "/api/v1/write", "wrong"),
+                                      ("POST", "/api/v1/write", "account"), ("GET", "/ready", None)]
+                         and all(i.startswith('user = "host-agent-ws02:') for _, i, _, _, _, w in calls if w)
+                         and all("Content-Encoding: snappy" in a for a, *_ in calls[:3])
+                         and ACCOUNT_STAND_IN not in text, text))
+
+        calls.clear()
+        subprocess.run = gateway({**WRITE_ANSWERS, ("POST", "/api/v1/write", "account"): 204,
+                                  ("GET", "/ready", None): 200}, calls)
+        rc, text = quiet(lambda: la.main(["verify", "--registry", "prometheus-write"]))
+        out.append(check("verify prometheus-write: 204 and a ready 200 pass, noting the upstream answered",
+                         rc == 0 and ran(text).count("the upstream answered") == 2
+                         and "not deployed" not in ran(text), text))
+
+        calls.clear()
+        subprocess.run = gateway({**WRITE_ANSWERS, ("POST", "/api/v1/write", "wrong"): 502}, calls)
+        rc, text = quiet(lambda: la.main(["verify", "--registry", "prometheus-write"]))
+        out.append(check("verify prometheus-write: a wrong password let through to the upstream is a FAIL",
+                         rc == 1 and "FAIL write, wrong password" in text, text))
+
+        calls.clear()
+        subprocess.run = gateway(PUSH_ANSWERS, calls)
+        records.clear()
+        rc, text = quiet(lambda: la.main(["verify", "--registry", "pushgateway"]))
+        out.append(check("verify pushgateway: no record stops before any curl, exit 1",
+                         rc == 1 and "stopped:" in text and "absent" in text and not calls, text))
+    finally:
+        dr.git, dr.hub_sign_in, subprocess.run, la.load_openbao = saved
+    return out
+
+
+def real_openbao_cases() -> list[bool]:
+    """openbao.py at TOOL_REV, shown from the local theOrg clone (no fetch) and loaded as
+    loki_accounts.py loads it: the kv_read and OpenBaoError.category verify relies on."""
+    import inspect
+    saved = (dr.git, subprocess.run)
+    try:
+        dr.git, subprocess.run = REAL_GIT, REAL_RUN
+        shown = dr.git("show", f"{dr.TOOL_REV}:scripts/openbao.py", check=False)
+    finally:
+        dr.git, subprocess.run = saved
+    if shown.returncode != 0:
+        return [check(f"real openbao.py: TOOL_REV {dr.TOOL_REV[:12]} not in {dr.THEORG_CLONE}", False)]
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "openbao.py").write_text(shown.stdout)
+        bao = la.load_openbao(Path(d))
+    params = list(inspect.signature(bao.kv_read).parameters.values()) if hasattr(bao, "kv_read") else []
+    kinds = [(p.name, p.kind) for p in params[:2]]
+    return [
+        check("real openbao.py: kv_read(path, *, token, ...)",
+              kinds == [("path", inspect.Parameter.POSITIONAL_OR_KEYWORD),
+                        ("token", inspect.Parameter.KEYWORD_ONLY)], repr(params)),
+        check("real openbao.py: OpenBaoError.category is a property; ABSENT reads 'absent'",
+              isinstance(getattr(bao.OpenBaoError, "category", None), property)
+              and bao.OpenBaoError("stand-in", bao.ABSENT).category == "absent"),
+    ]
+
+
 results = [*registry_cases(), *env_cases(), *path_cases(), *gateway_accounts_cases(), *argv_cases(),
-           *main_cases()]
+           *main_cases(), *metrics_cases(), *real_openbao_cases()]
 print("all cases passed" if all(results) else f"{results.count(False)} case(s) failed")
 sys.exit(0 if all(results) else 1)

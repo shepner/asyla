@@ -179,6 +179,17 @@ no account or a wrong password (401), the push account's push (204) and the quer
 Encrypt's roots. It runs `docker run curlimages/curl` on the workstation and needs both check
 accounts. `verify --dry-run` prints its plan and contacts nothing.
 
+`loki_accounts.py verify --registry pushgateway` and `verify --registry prometheus-write` (asyla
+#1268) check the two metrics gateways the same way, in the script itself: the account's password
+(`deploy-all`, `host-agent-ws02`) is read with the hub token through the tool's `openbao.py`, and
+each check is a `docker run curlimages/curl` with verified TLS and the account in curl's config on
+stdin. pushgateway.asyla.org: `/ready` 200; `PUT /metrics/job/asyla_verify` with no account or a
+wrong password 401, with `deploy-all` 200 or 202; its `DELETE` 202 (cleanup); `GET /metrics` 404
+(not an admitted path; theOrg `loki-gateway/gateway.go` at `28b23389`). prometheus-write.asyla.org:
+`POST /api/v1/write` with no account or a wrong password 401; with `host-agent-ws02` and an empty
+body 502 while the ingest Prometheus is not deployed (400 or 204 once it answers), and `/ready` 502
+(200 once it answers).
+
 ## Deploy
 
 From the workstation, on the LAN:
@@ -402,7 +413,7 @@ at least `SCRAPE_GRACE_S` (75 s, one scrape and some) for each:
   Debian's `wget` into `timberio/vector:0.56.0-debian`, which has no busybox; Wget 1.25.0 there
   lists `--method` and `--body-data`, checked 2026-11-22), so a POST or PUT is
   `--method=<M> --body-data=` (an empty body). That each account gets in with its own password is
-  `loki_accounts.py verify`'s for Loki; theOrg has no such check for the other two modes.
+  `loki_accounts.py verify`'s, with `--registry` for each gateway.
 
 With `ALERT_WATCHDOG_PING` on and alert-relay running, verify then checks the Watchdog's ping
 (`check_watchdog`): the running Alertmanager loaded the watchdog piece (its `/api/v2/status`

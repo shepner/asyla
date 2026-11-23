@@ -9,9 +9,8 @@ Run on the workstation, from ~/local/asyla (asyla's hub token is the hub of the 
 secret/hubs/asyla/own/ (REGISTRIES), so no password is shared across gateways: loki
 (loki-clients.toml), prometheus-write (prometheus-write-clients.toml, asyla #1268 item 3),
 pushgateway (pushgateway-clients.toml, item 4), or all (provision's default: the three in that
-order, one tool and one sign-in; the first that fails stops the rest). verify is loki only (its
-default): theOrg's `loki_clients.py verify` signs in on Loki's routes alone, so the other two
-gateways' refusals are observability.sh verify's.
+order, one tool and one sign-in; the first that fails stops the rest). verify takes one of loki
+(its default), pushgateway or prometheus-write; see "verify" below.
 
 1. the tool: theOrg observability's scripts/loki_clients.py and openbao.py at deploy_role.py's
    TOOL_REV, `git show` from the local theOrg clone (deploy_role.THEORG_CLONE) into a private temp
@@ -40,6 +39,20 @@ curl's config on stdin. `''` means no --cacert: curl trusts its image's own stor
 loki.asyla.org's Let's Encrypt certificate (loki_clients.py curl() at TOOL_REV f757911: no
 --cacert and no volume when the CA volume is empty). Writes nothing to OpenBao.
 
+`verify --registry pushgateway` and `verify --registry prometheus-write` (asyla #1268) check the
+two metrics gateways here, not with loki_clients.py (its verify knows Loki's routes alone): one
+account each (METRICS: deploy-all at https://pushgateway.asyla.org, host-agent-ws02 at
+https://prometheus-write.asyla.org), its record read from the registry's prefix with the hub token
+through the tool's openbao.py (kv_read, TLS verified), in this process. Each check (METRIC_CHECKS,
+from theOrg loki-gateway gateway.go at 28b23389, ServeHTTP: /ready needs no account; pushgateway
+mode admits PUT, POST and DELETE on /metrics/job/... only, remote-write mode POST /api/v1/write
+only, and any other path is 404 before an account is asked) is a `docker run curlimages/curl` on
+the workstation with verified TLS on the image's own trust store (no --cacert, never -k), the
+account in curl's config on stdin (`-K -`): never on argv, in the environment or in a file. The
+pushgateway's pushed group is deleted again. Until the ingest Prometheus behind prometheus-write
+is deployed, its account's write and its /ready are 502 (said in the output); 400 or 204 for the
+write, 200 for /ready, mean the upstream answered. Writes nothing to OpenBao.
+
 Never prints, logs or writes a password or the token: the tool prints `<name>: created` or
 `<name>: exists` (verify: one `ok` or `FAIL` line per check), and an error by its category
 (absent, refused, unreachable); its output is passed on with the token masked all the same.
@@ -51,7 +64,9 @@ Exit: 0 every account exists or was created (verify: every check passed); 1 othe
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
+import secrets
 import shutil
 import subprocess
 import sys
@@ -80,6 +95,49 @@ CHECK_ACCOUNTS = ("observability-check-push", "observability-check-query")   # t
 # LOKI_CLIENTS_* setting of the caller's (the tool reads LOKI_CLIENTS_REGISTRY and _KV_PREFIX).
 DROP = set(dr.CALLER_TOKENS) | {"BAO_TOKEN", dr.VAULT_TOKEN_ENV, "OPENBAO_TOKEN_FILE"}
 DROP_PREFIX = "LOKI_CLIENTS_"
+
+# The metrics gateways verify checks here (asyla #1268): its d06 Caddy URL and the one account it
+# signs in with, read from the registry's prefix (REGISTRIES).
+METRICS = {
+    "pushgateway": ("https://pushgateway.asyla.org", "deploy-all"),
+    "prometheus-write": ("https://prometheus-write.asyla.org", "host-agent-ws02"),
+}
+PUSH_JOB = "/metrics/job/asyla_verify"
+PUSH_BODY = "asyla_verify_push 1\n"
+TEXT_FORMAT = ("Content-Type: text/plain; version=0.0.4",)
+REMOTE_WRITE = ("Content-Type: application/x-protobuf", "Content-Encoding: snappy",
+                "X-Prometheus-Remote-Write-Version: 0.1.0")
+DOWN = "the ingest Prometheus is not deployed yet, so the gateway has no upstream"
+UP = "the upstream answered"
+MIN_PASSWORD_LEN = 32   # theOrg loki_clients.py check_value at f757911
+CURL_TIMEOUT = 60       # s per curl container (curl itself stops at 20 s)
+# curlimages/curl 8.23.0, pinned by its index digest (docker buildx imagetools inspect
+# curlimages/curl:8.23.0, 2026-11-22; the same as :latest that day).
+CURL_IMAGE = ("curlimages/curl:8.23.0"
+              "@sha256:3fb7e13e5d179a845c97d78204f3f1064d1907037f26a3ebf91710571151fd93")
+# Per gateway, in order: (label, method, path, who, body, headers, {wanted status: note}); who is
+# None (no account), "wrong" (the account with a wrong password) or "account". gateway.go at
+# 28b23389: /ready is open; an admitted path asks for an account (401); GET /metrics is not an
+# admitted path in pushgateway mode, so 404 comes before the account is asked.
+METRIC_CHECKS = {
+    "pushgateway": [
+        ("/ready, no account", "GET", "/ready", None, None, (), {200: ""}),
+        ("push, no account", "PUT", PUSH_JOB, None, PUSH_BODY, TEXT_FORMAT, {401: ""}),
+        ("push, wrong password", "PUT", PUSH_JOB, "wrong", PUSH_BODY, TEXT_FORMAT, {401: ""}),
+        ("push, {account}", "PUT", PUSH_JOB, "account", PUSH_BODY, TEXT_FORMAT, {200: "", 202: ""}),
+        ("delete, {account} (cleanup)", "DELETE", PUSH_JOB, "account", None, (), {202: ""}),
+        ("/metrics, {account} (not an admitted path)", "GET", "/metrics", "account", None, (), {404: ""}),
+    ],
+    # 502 is accepted while the ingest Prometheus is not deployed; tighten the account's write
+    # (to 400 or 204) and /ready (to 200) when it ships (theorg #1285).
+    "prometheus-write": [
+        ("write, no account", "POST", "/api/v1/write", None, "", REMOTE_WRITE, {401: ""}),
+        ("write, wrong password", "POST", "/api/v1/write", "wrong", "", REMOTE_WRITE, {401: ""}),
+        ("write, {account}, empty body", "POST", "/api/v1/write", "account", "", REMOTE_WRITE,
+         {502: DOWN, 400: UP, 204: UP}),
+        ("/ready, no account", "GET", "/ready", None, None, (), {502: DOWN, 200: UP}),
+    ],
+}
 
 
 def accounts(registry: Path = REGISTRY) -> list[str]:
@@ -124,13 +182,12 @@ def child_env(base: dict, token: str, prefix: str = KV_PREFIX) -> dict:
 
 
 def chosen(registry: str | None, mode: str) -> list[str]:
-    """The registries to run, by name: provision takes one or all (the default); verify loki only."""
+    """The registries to run, by name: provision takes one or all (the default); verify one
+    gateway (loki by default)."""
     if mode == "verify":
-        if registry not in (None, "loki"):
-            raise dr.Stop(f"verify is loki only (theOrg's loki_clients.py verify signs in on Loki's "
-                          f"routes alone), not {registry}; observability.sh verify checks the "
-                          "other gateways' refusals")
-        return ["loki"]
+        if registry == "all":
+            raise dr.Stop("verify takes one gateway: --registry loki, pushgateway or prometheus-write")
+        return [registry or "loki"]
     return list(REGISTRIES) if registry in (None, "all") else [registry]
 
 
@@ -141,10 +198,111 @@ def tool_argv(tool_dir: Path, registry: Path = REGISTRY, mode: str = "provision"
     return argv
 
 
+def curl_argv(url: str, method: str = "GET", body: str | None = None, headers: tuple = ()) -> list[str]:
+    """A curl container's command line: no account and no password on it (curl reads its config,
+    the account, from stdin: -K -); TLS verified on the image's own trust store (no --cacert)."""
+    argv = ["docker", "run", "--rm", "-i", "--cpus", "0.5", "--memory", "64m", CURL_IMAGE,
+            "-sS", "--max-time", "20", "-K", "-", "-X", method, "-w", "%{http_code}", "-o", "/dev/null"]
+    for h in headers:
+        argv += ["-H", h]
+    if body is not None:
+        argv += ["--data-binary", body]
+    return [*argv, url]
+
+
+def curl_env(base: dict) -> dict:
+    """The docker CLI's environment: the caller's without any vault token (DROP, and the tool's
+    BAO_ROOT_TOKEN) or LOKI_CLIENTS_* setting."""
+    return {k: v for k, v in base.items()
+            if k not in DROP and k != "BAO_ROOT_TOKEN" and not k.startswith(DROP_PREFIX)}
+
+
+def curl(url: str, user: tuple[str, str] | None = None, method: str = "GET", body: str | None = None,
+         headers: tuple = ()) -> int:
+    """The HTTP status (0 when curl got none), the account in curl's config on stdin."""
+    config = f'user = "{user[0]}:{user[1]}"\n' if user else ""
+    try:
+        proc = subprocess.run(curl_argv(url, method, body, headers), input=config, capture_output=True,
+                              text=True, timeout=CURL_TIMEOUT, env=curl_env(os.environ))
+    except (subprocess.TimeoutExpired, OSError):
+        return 0
+    try:
+        return int(proc.stdout.strip())
+    except ValueError:
+        return 0
+
+
+def load_openbao(tool_dir: Path):
+    """The tool's openbao.py, unpacked in tool_dir, as a module of this process."""
+    spec = importlib.util.spec_from_file_location("openbao", tool_dir / "openbao.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def read_password(bao, token: str, registry: str) -> str:
+    """The metrics gateway's verify account's password, read with the hub token; Stop naming the
+    record and what is wrong (never the value)."""
+    name = METRICS[registry][1]
+    record = f"{REGISTRIES[registry][1]}/{name}"
+    try:
+        data = bao.kv_read(record, token=token)
+    except bao.OpenBaoError as e:
+        hint = "; run loki_accounts.py --registry " + registry if e.category == "absent" else ""
+        raise dr.Stop(f"{record}: {e.category}{hint}") from None
+    pw = data.get("password")
+    if data.get("username") != name or not isinstance(pw, str) or not pw:
+        raise dr.Stop(f"{record}: the record has no password, or its username is not {name}")
+    if (len(pw) < MIN_PASSWORD_LEN or '"' in pw or "\\" in pw
+            or any(ord(ch) < 32 or ord(ch) == 127 for ch in pw)):
+        raise dr.Stop(f"{record}: the password is not a secrets.token_urlsafe(32) value (not shown)")
+    return pw
+
+
+def verify_metrics(registry: str, password: str) -> bool:
+    """Every METRIC_CHECKS line of the gateway, one `ok` or `FAIL` line each; True when all pass."""
+    base, name = METRICS[registry]
+    # The wrong password is a fresh random value, nothing derived from the account's.
+    users = {None: None, "wrong": (name, secrets.token_urlsafe(32)), "account": (name, password)}
+    checks = METRIC_CHECKS[registry]
+    ran: set[int] = set()
+    ok = True
+
+    def run(i: int) -> bool:
+        label, method, path, who, body, headers, want = checks[i]
+        ran.add(i)
+        got = curl(base + path, users[who], method, body, headers)
+        good = got in want
+        note = want[got] if good else ""
+        print(f"{'ok' if good else 'FAIL':4} {label.format(account=name)}: {method} {path} HTTP {got} "
+              f"(want {' or '.join(map(str, want))})" + (f"; {note}" if note else ""))
+        return good
+
+    try:
+        for i in range(len(checks)):
+            ok &= run(i)
+    finally:   # the pushed group is deleted again whatever happened before its turn
+        for i, c in enumerate(checks):
+            if c[1] == "DELETE" and i not in ran:
+                ok &= run(i)
+    return ok
+
+
 def show_plan(names: list[str], mode: str = "provision", registry: str = "loki") -> None:
     path, prefix = REGISTRIES[registry]
     print(f"{registry} accounts: {', '.join(names)} ({path.name})")
-    if mode == "verify":
+    if mode == "verify" and registry in METRICS:
+        base, name = METRICS[registry]
+        if name not in names:
+            raise dr.Stop(f"verify needs the account {name}; missing from {path.name}")
+        print(f"verify: {base} with {name}, its password read from {prefix}/{name}; each check a "
+              "`docker run curlimages/curl` on this workstation, TLS verified on curl's own trust "
+              "store (no --cacert), the account in curl's config on stdin")
+        for label, method, url_path, _, _, _, want in METRIC_CHECKS[registry]:
+            notes = "; ".join(f"{c}: {n}" for c, n in want.items() if n)
+            print(f"  {label.format(account=name)}: {method} {url_path}, want {' or '.join(map(str, want))}"
+                  + (f" ({notes})" if notes else ""))
+    elif mode == "verify":
         missing = [n for n in CHECK_ACCOUNTS if n not in names]
         if missing:
             raise dr.Stop(f"verify needs the accounts {' and '.join(CHECK_ACCOUNTS)}; "
@@ -157,20 +315,23 @@ def show_plan(names: list[str], mode: str = "provision", registry: str = "loki")
             print(f"  {prefix}/{n}  (username {n}; password generated by the tool, never overwritten)")
 
 
-def show_tool() -> None:
-    print(f"tool: theOrg observability scripts/{' and '.join(TOOL)} at TOOL_REV {dr.TOOL_REV[:12]} "
+def show_tool(metrics: bool = False) -> None:
+    used = "openbao.py (kv_read, in this process)" if metrics else " and ".join(TOOL)
+    print(f"tool: theOrg observability scripts/{used} at TOOL_REV {dr.TOOL_REV[:12]} "
           f"from {dr.THEORG_CLONE}")
-    print("token: asyla's hub token (the working directory's hub), as the tool's BAO_ROOT_TOKEN")
+    print("token: asyla's hub token (the working directory's hub), "
+          + ("held in this process, given only to kv_read" if metrics else "as the tool's BAO_ROOT_TOKEN"))
 
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("mode", nargs="?", choices=("provision", "verify"), default="provision",
-                   help="provision (the default): create missing records; verify: check d06's "
-                        f"gateway at {GATEWAY_URL} with the two check accounts")
+                   help="provision (the default): create missing records; verify: check one of "
+                        "d06's gateways (loki by default) with its check account(s)")
     p.add_argument("--registry", choices=(*REGISTRIES, "all"), default=None,
                    help="the gateway whose accounts to provision (default all, in the order "
-                        f"{', '.join(REGISTRIES)}); verify takes loki only")
+                        f"{', '.join(REGISTRIES)}); verify takes one: loki (default), "
+                        "pushgateway or prometheus-write")
     p.add_argument("--dry-run", action="store_true", help="print the plan; no fetch, no vault, no curl")
     args = p.parse_args(argv)
     mode = args.mode
@@ -180,7 +341,8 @@ def main(argv: list[str] | None = None) -> int:
         names = {r: accounts(REGISTRIES[r][0]) for r in regs}
         for r in regs:
             show_plan(names[r], mode, r)
-        show_tool()
+        metrics = mode == "verify" and regs[0] in METRICS
+        show_tool(metrics)
         if args.dry_run:
             print("DRY RUN: nothing fetched, nothing written" + (", no curl" if mode == "verify" else ""))
             return 0
@@ -188,6 +350,17 @@ def main(argv: list[str] | None = None) -> int:
         try:
             unpack(tool_dir)
             token = dr.hub_sign_in()
+            if metrics:
+                reg = regs[0]
+                try:
+                    bao = load_openbao(tool_dir)
+                except Exception as e:   # the reviewed openbao.py at TOOL_REV; any failure stops
+                    raise dr.Stop(f"cannot load openbao.py: {type(e).__name__}; nothing checked") from None
+                if not verify_metrics(reg, read_password(bao, token, reg)):
+                    print(f"stopped: {reg} gateway: a check failed at {METRICS[reg][0]} (its FAIL line is above)")
+                    return 1
+                print(f"{reg} gateway: every check passed at {METRICS[reg][0]}")
+                return 0
             for r in regs:
                 path, prefix = REGISTRIES[r]
                 try:
