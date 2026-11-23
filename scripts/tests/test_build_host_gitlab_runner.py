@@ -58,17 +58,15 @@ def load(text: str, host: str = "d09") -> dict:
         build_host.REPO = real
 
 
+HELLO_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "test01-hello"
+
+
 def test01_spec() -> dict:
-    """test01's spec. While test01 rehearses a production host ([replica], e.g. gap G1), the hello
-    spec as committed at 226904e instead, so these cases keep a spec with the tables they test."""
-    t = build_host.load_spec("test01")
-    if not t.get("replica"):
-        return t
-    text = REAL_RUN(["git", "-C", str(build_host.REPO), "show", "226904e:test01/host.toml"],
-                    capture_output=True, text=True, check=True).stdout
+    """test01's hello spec, frozen in fixtures/test01-hello/host.toml (test01/host.toml at c1cccf9),
+    never the live test01/host.toml: test01 is disposable and often a replica of a production host
+    (asyla #1101), which has none of the tables these cases test."""
     d = Path(tempfile.mkdtemp(prefix="build-host-test01-"))
-    (d / "test01").mkdir()
-    (d / "test01" / "host.toml").write_text(text)
+    (d / "test01").symlink_to(HELLO_FIXTURE)
     (d / "build").symlink_to(build_host.REPO / "build")
     real, build_host.REPO = build_host.REPO, d
     try:
