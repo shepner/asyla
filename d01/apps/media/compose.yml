@@ -1,4 +1,4 @@
-# Media stack on d01: Sonarr, Radarr, Overseerr, Jackett, Transmission, where-to-stream
+# Media stack on d01: Sonarr, Radarr, Overseerr, Jackett, Transmission, where-to-stream, radarr-reconcile
 # Working dirs under /mnt/docker (sonarr, radarr, overseerr, jackett, transmission, where-to-stream).
 # where-to-stream (personal project, gitea personal/where-to-stream): stock python image running the
 # source that push-where-to-stream.sh ships to /mnt/docker/where-to-stream/src; reads the Radarr,
@@ -184,3 +184,46 @@ services:
     networks:
       - media_net
     # Port 8080, not published: cloudflared-d01 and caddy-internal-d01 reach it on media_net.
+
+  # Points Radarr at wanted movies that are already filed in the library (Movies/HD|SD/<Letter>/),
+  # where Radarr's own rescan never looks; see README "radarr-reconcile". No image is built: the
+  # script is in this directory (MEDIA_SCRIPT_DIR, set by media.sh), mounted read-only. The library
+  # is read-only at Radarr's own /movies path. Radarr's config dir is read-only: the script reads
+  # Radarr's API key from its config.xml at use (asyla decision radarr-reconcile-reads-radarrs-own-key).
+  # RECONCILE_APPLY=0 reports what it would change; 1 changes Radarr (paths only; files never move).
+  radarr-reconcile:
+    image: python:3.13-alpine
+    container_name: radarr-reconcile
+    restart: unless-stopped
+    command: ["python3", "/app/radarr_reconcile.py", "--every", "24"]
+    user: "${DOCKER_UID:-1003}:${DOCKER_GID:-1000}"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      # The file is written after a pass that worked and removed after one that failed.
+      test: ["CMD", "test", "-f", "/tmp/radarr-reconcile.ok"]
+      interval: 5m
+      timeout: 10s
+      retries: 1
+      start_period: 15m
+    depends_on:
+      - radarr
+    environment:
+      - TZ=${LOCAL_TZ:-America/Chicago}
+      - RADARR_URL=http://radarr:7878
+      - RADARR_CONFIG=/radarr-config/config.xml
+      - RECONCILE_SEARCH=/movies/Movies
+      - RECONCILE_START_MINUTES=5
+      - RECONCILE_APPLY=0
+    volumes:
+      - ${MEDIA_SCRIPT_DIR:-/home/docker/scripts/d01/apps/media}:/app:ro
+      - ${DOCKER_DL:-/mnt/docker}/radarr/config:/radarr-config:ro
+      - ${DATA1:-/mnt/nas/data1}/media/Videos:/movies:ro
+    networks:
+      - media_net
+    # No port: it only calls Radarr on media_net. Logs: one line per change and one summary per pass.

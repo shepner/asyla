@@ -1,6 +1,8 @@
 #!/bin/bash
-# Media stack on d01: Sonarr, Radarr, Overseerr, Jackett, Transmission, where-to-stream.
+# Media stack on d01: Sonarr, Radarr, Overseerr, Jackett, Transmission, where-to-stream,
+# radarr-reconcile.
 # Usage: media.sh [switch ...] e.g. backup|up|down|logs|refresh|update|restart
+#        media.sh reconcile [--apply]   one radarr-reconcile pass now (dry run unless --apply)
 # Switches can be combined (e.g. down backup up). Run from anywhere; loads ~/scripts/docker/common.env.
 # Backups: per-service rsync snapshots with hardlinks, under ${DOCKER_D1}/media-<service>/<stamp>/.
 
@@ -25,6 +27,8 @@ APP_ROOT="$DOCKER_DL"
 
 export DOCKER_DL
 export DOCKER_D1
+# compose.yml mounts radarr_reconcile.py from this directory into radarr-reconcile.
+export MEDIA_SCRIPT_DIR="$SCRIPT_DIR"
 export DATA1
 export LOCAL_TZ
 
@@ -154,6 +158,23 @@ do_reset_auth() {
   echo "[OK] $service: login removed (copy at $cfg.$stamp.bak); open its page and set a new login"
 }
 
+# One radarr-reconcile pass in a throwaway container, whatever RECONCILE_APPLY the service has:
+# a dry run unless --apply. The output is the pass's log (no credential is ever printed).
+do_reconcile() {
+  local apply="${1:-}"
+  case "$apply" in
+    ""|--apply) ;;
+    *) echo "[ERROR] reconcile takes only --apply, not '$apply'" >&2; return 1 ;;
+  esac
+  if [ "$apply" = "--apply" ]; then
+    run_compose run --rm --no-deps -e RECONCILE_APPLY=1 radarr-reconcile \
+      python3 /app/radarr_reconcile.py --once --apply
+  else
+    run_compose run --rm --no-deps -e RECONCILE_APPLY=0 radarr-reconcile \
+      python3 /app/radarr_reconcile.py --once
+  fi
+}
+
 do_update() {
   echo "[INFO] Pulling latest images (not starting app; use up or restart to start)"
   run_compose pull
@@ -208,6 +229,7 @@ if [ $# -eq 0 ]; then
   echo "  restart  - Down then up" >&2
   echo "  logs     - Follow logs (optionally for one service)" >&2
   echo "  reset-auth sonarr|radarr [--apply] - forgotten login: delete it so the UI asks for a new one" >&2
+  echo "  reconcile [--apply] - one radarr-reconcile pass now (dry run unless --apply)" >&2
   exit 1
 fi
 
@@ -219,6 +241,11 @@ fi
 if [ "$1" = "reset-auth" ]; then
   do_reset_auth "${2:-}" "${3:-}"
   exit 0
+fi
+
+if [ "$1" = "reconcile" ]; then
+  do_reconcile "${2:-}"
+  exit $?
 fi
 
 for cmd in "$@"; do

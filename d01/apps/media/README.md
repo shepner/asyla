@@ -1,6 +1,6 @@
 # Media stack (d01)
 
-Combined Sonarr, Radarr, Overseerr, Jackett, Transmission and where-to-stream on d01. All share `media_net`; access via **cloudflared** (public) or **internal proxy** (split DNS).
+Combined Sonarr, Radarr, Overseerr, Jackett, Transmission, where-to-stream and radarr-reconcile on d01. All share `media_net`; access via **cloudflared** (public) or **internal proxy** (split DNS).
 
 ## Prerequisites
 
@@ -56,6 +56,33 @@ ssh d01 docker exec where-to-stream cat /app/.git-sha                        # t
 After a restart it serves the last page from `/data` at once and refreshes in the background
 (`docker logs where-to-stream`: one line per refresh).
 
+## radarr-reconcile
+
+Movies reach the library outside Radarr (AnyStream, then filed by hand into
+`Movies/HD|SD/<Letter>/Title (Year)/`), while Radarr keeps each wanted movie's path at an empty folder under
+`AnyStream/` or `radarr/`. Radarr's own daily rescan only looks in that folder and never adds a folder it does
+not know (root folders are not watched; "Unmapped Folders" stay unmapped until a manual Library Import), so the
+movie stays "missing" in Radarr and on where-to-stream. Found 2026-11-22: 13 of 69 wanted movies were on disk.
+
+`radarr_reconcile.py` (container `radarr-reconcile`, once a day, first pass 5 minutes after start) finds, for
+each monitored movie with no file, the folder under `/movies/Movies` that holds a video and either names the
+movie's TMDB/IMDb id in its `.nfo`, or has the movie's folder name or "Title (Year)" (ignoring case and
+punctuation) and no `.nfo` naming another movie. Exactly one such folder, not already another movie's path, or
+it skips and says why. Then it sets the movie's path to that folder (`moveFiles=false`: nothing moves) and runs
+Radarr's `RescanMovie` for it. Logs (`docker logs radarr-reconcile`): one line per change or skip, one summary
+per pass. Unhealthy while the last pass failed (a failed pass retries within the hour).
+
+- **Dry run or apply:** `RECONCILE_APPLY` in `compose.yml` (0 reports only; 1 changes Radarr). After changing
+  it, `media.sh up` recreates the container.
+- **One pass now:** `media.sh reconcile` (dry run) or `media.sh reconcile --apply`, whatever the service's
+  setting.
+- **Credential:** none stored. It reads Radarr's API key from Radarr's own `config.xml` (config dir mounted
+  read-only) each pass and never prints it; asyla decision `radarr-reconcile-reads-radarrs-own-key`. A new key
+  in Radarr is picked up on the next pass.
+- **Not covered:** empty folders Radarr left behind (it no longer makes them: "Create empty movie folders" off,
+  2026-11-22); movies not in Radarr at all; Overseerr, which learns availability from Plex.
+- **Tests:** `python3 scripts/tests/test_radarr_reconcile.py` (stand-in Radarr API, temporary library).
+
 ## Commands
 
 - `media.sh up` — create dirs and start stack
@@ -64,6 +91,7 @@ After a restart it serves the last page from `/data` at once and refreshes in th
 - `media.sh logs [service]` — follow logs
 - `media.sh refresh` — pull latest images and start
 - `media.sh update` — pull latest images and start (same as refresh)
+- `media.sh reconcile [--apply]` — one radarr-reconcile pass now (dry run unless `--apply`)
 - `media.sh reset-auth sonarr|radarr [--apply]` — forgotten login (no default exists; v4 requires one):
   stops the app, deletes `AuthenticationMethod` from its `config.xml` (copy kept as `config.xml.<stamp>.bak`),
   starts it; its page then asks for a new login. Dry without `--apply`. Servarr FAQ, "Help I have locked myself out".
