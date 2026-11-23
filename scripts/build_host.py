@@ -1478,7 +1478,9 @@ def replica_images(spec: dict, apply: bool) -> list[str]:
 def egress_checks(spec: dict, images: list[str] = (), containers: list[str] = ()) -> list[tuple[str, bool, str]]:
     """(label, ok, detail) for the replica's egress block: the table and its unit, then no probe
     URL from the host, from a container of each image, or from inside each running container.
-    A probe that cannot run (no curl, wget or python3: 99; docker's own errors: 125 to 127) is no proof."""
+    An image with no shell (127) or no probe tool (no curl, wget or python3: 99) is proved by another
+    image's blocked probe on the same default bridge, else fails; docker's own errors (125, 126) and a
+    reached URL (0) fail."""
     host, out = spec["host"], []
     r = ssh(host, f"sudo nft list table {REPLICA_EGRESS_TABLE} >/dev/null && systemctl is-enabled {REPLICA_EGRESS_UNIT}",
             check=False)
@@ -1488,22 +1490,23 @@ def egress_checks(spec: dict, images: list[str] = (), containers: list[str] = ()
         r = ssh(host, f"curl -s -o /dev/null -m 5 {url}", check=False)
         out.append((f"{host} cannot reach {url}", r.returncode not in (0, 127), f"curl exit {r.returncode}"))
     probe = shlex.quote(EGRESS_PROBE_SH)
-    proved, no_shell = None, []   # proved: an image whose probe ran and was blocked on the default bridge
+    proved, no_probe = None, []   # proved: an image whose probe ran and was blocked on the default bridge
     for img in images:
         r = ssh(host, f"docker run --rm --entrypoint sh {shlex.quote(img)} -c {probe} {EGRESS_PROBES[0]}", check=False)
-        if r.returncode == NO_SHELL:
-            no_shell.append(img)
+        if r.returncode in (NO_SHELL, 99):
+            no_probe.append((img, "no shell in the image" if r.returncode == NO_SHELL
+                             else "no curl, wget or python3 in the image"))
             continue
-        ok = r.returncode not in (0, 99, 125, 126, 127)
+        ok = r.returncode not in (0, 125, 126)
         proved = proved or (img if ok else None)
         out.append((f"a container of {img} cannot reach {EGRESS_PROBES[0]}", ok, f"exit {r.returncode}"))
-    # An image with no shell (vikunja's) cannot run the probe. `docker run --rm IMG` puts every
-    # image on the same default bridge, so another image's blocked probe is that path's proof; with
-    # none, there is no proof. Its running containers are probed from the host at verify (below).
-    for img in no_shell:
+    # An image with no shell (vikunja's, 127) or no probe tool (postgres's, 99) cannot run the probe.
+    # `docker run --rm IMG` puts every image on the same default bridge, so another image's blocked
+    # probe is that path's proof; with none, there is no proof. Running containers are probed below.
+    for img, why in no_probe:
         out.append((f"a container of {img} cannot reach {EGRESS_PROBES[0]}", proved is not None,
-                    f"no shell in the image; the default bridge proved by {proved}" if proved
-                    else "no shell in the image and no other image proves the default bridge"))
+                    f"{why}; the default bridge proved by {proved}" if proved
+                    else f"{why} and no other image proves the default bridge"))
     for c in containers:
         r = ssh(host, f"docker exec {shlex.quote(c)} sh -c {probe} {EGRESS_PROBES[1]}", check=False)
         how = ""

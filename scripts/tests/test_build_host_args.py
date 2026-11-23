@@ -206,6 +206,34 @@ def egress_no_shell_case() -> bool:
                  good and good2 and good3 and not res4[-1][1] and not res5[-1][1], str((res, res2, res3, res4, res5)))
 
 
+def egress_no_probe_tool_case() -> bool:
+    """An image with a shell but no curl, wget or python3 (postgres's, exit 99) is handled as a
+    no-shell image: it passes beside an image whose probe was blocked, alone fails; docker's own
+    error (125) still fails."""
+    spec = temp_specs({"d07": VM + GITEA_APP, "x": VM + REP_GITEA})("x")
+
+    def fake(rcs):
+        def f(t, c):
+            for needle, rc in rcs:
+                if needle in c:
+                    return Done(rc)
+            return Done(28)
+        return f
+    base = [("nft list", 0)]
+    res, _ = with_ssh(fake(base + [("docker run --rm --entrypoint sh pg", 99), ("docker run", 28)]),
+                      lambda: build_host.egress_checks(spec, ["pg:16", "kc:1"]))
+    good = ([ok for _, ok, _ in res] == [True, True, True, True, True] and "pg:16" in res[-1][0]
+            and res[-1][2] == "no curl, wget or python3 in the image; the default bridge proved by kc:1")
+    res2, _ = with_ssh(fake(base + [("docker run", 99)]), lambda: build_host.egress_checks(spec, ["pg:16", "pg2:1"]))
+    good2 = ([ok for _, ok, _ in res2] == [True, True, True, False, False] and res2[-1][2]
+             == "no curl, wget or python3 in the image and no other image proves the default bridge")
+    res3, _ = with_ssh(fake(base + [("docker run --rm --entrypoint sh pg", 99), ("docker run", 125)]),
+                       lambda: build_host.egress_checks(spec, ["kc:1", "pg:16"]))
+    good3 = [ok for _, ok, _ in res3] == [True, True, True, False, False] and res3[3][2] == "exit 125"
+    return check("egress, no probe tool (99): an image passes beside a proving one, alone fails; 125 still fails",
+                 good and good2 and good3, str((res, res2, res3)))
+
+
 def replica_images_own_case() -> bool:
     """An app whose script has an `images` switch lists its own images (its env, login and replica
     overlay); one without keeps the bare compose listing."""
@@ -1093,6 +1121,7 @@ results = [
     replica_guard_dry(),
     egress_case(),
     egress_no_shell_case(),
+    egress_no_probe_tool_case(),
     replica_images_own_case(),
     replica_start_drops_pull_case(),
     *app_env_cases(),
