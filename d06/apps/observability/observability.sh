@@ -137,6 +137,16 @@ STACK_JOBS="prometheus:prometheus alert-relay:alert-relay alertmanager:alertmana
   prometheus-trends:prometheus-trends pushgateway:pushgateway scrape-proxy:scrape-proxy vector:vector
   blackbox-exporter:blackbox-exporter blackbox-selftest:blackbox-exporter
   docker-state-exporter:docker-state-exporter ingest-federate:prometheus-ingest"
+# Jobs MONITOR_THEORG adds whose service is another stack's (compose.yml: communications' remote
+# set at theOrg 04f31709, prometheus/scrape-communications/remote/chat-api.yml, d06's chat-api by
+# theorg.asyla.org:443). Each must have a target, so verify fails if the switch stops taking
+# effect, but its health is not judged here: it needs communications and internal-access, which
+# d06's build starts after this stack (host.toml), and a replica has neither. theOrg's
+# ChatApiUnavailable alerts on it.
+OTHER_STACK_JOBS="chat-api"
+# A rule group from theOrg's alerts/theorg/ (MONITOR_THEORG), which theOrg's deploy.yml also
+# requires at 04f31709: loaded from /etc/prometheus/alerts-enabled/ (check_theorg_rules).
+THEORG_RULE_GROUP="chat-api"
 
 VERIFY_WAIT_S="${OBSERVABILITY_VERIFY_WAIT_S:-300}"
 # The least each tokened service's check waits after the shared VERIFY_WAIT_S: one 60 s scrape and
@@ -548,7 +558,8 @@ check_self_probes() {
 # exit 1. health is that scrape's outcome, which Prometheus also writes as up (1 when up). S: the
 # later .State.StartedAt of prometheus-1 and the job's service (STACK_JOBS; prometheus-1 alone for
 # a job not listed there). A listed job whose service is not expected here (a replica's, or a
-# tokened service never deployed: expected_services) is left out: its target cannot be up.
+# tokened service never deployed: expected_services) is left out: its target cannot be up. Each job
+# of OTHER_STACK_JOBS must have a target too, but its health is another stack's: not judged.
 stack_targets() {
   local entry job svc since base expected
   local -a args=()
@@ -560,6 +571,7 @@ stack_targets() {
     since="$(started_at prometheus-1 "$svc-1")" || return 1
     args+=("$job=$since")
   done
+  for job in $OTHER_STACK_JOBS; do args+=("$job=~"); done
   curl -sf --max-time 10 'http://127.0.0.1:9090/api/v1/targets?state=active' | python3 -c '
 import calendar, json, re, sys, time
 def epoch(s):
@@ -570,17 +582,20 @@ def epoch(s):
     if m[3] != "Z":
         t -= (1 if m[3][0] == "+" else -1) * (int(m[3][1:3]) * 3600 + int(m[3][4:6]) * 60)
     return t
-base, since, skip = float(sys.argv[1]), {}, set()
+base, since, skip, other = float(sys.argv[1]), {}, set(), set()
 for a in sys.argv[2:]:
     job, s = a.split("=", 1)
     if s == "-":
         skip.add(job)
+    elif s == "~":
+        other.add(job)
     else:
         since[job] = float(s)
 targets = [t for t in json.load(sys.stdin)["data"]["activeTargets"] if t["labels"].get("job") not in skip]
 jobs = {t["labels"].get("job") for t in targets}
-bad = ["%s: no target" % j for j in sorted(set(since) - jobs)]
-for t in targets:
+bad = ["%s: no target" % j for j in sorted((set(since) | other) - jobs)]
+judged = [t for t in targets if t["labels"].get("job") not in other]
+for t in judged:
     job = t["labels"].get("job")
     fresh = epoch(t.get("lastScrape")) > since.get(job, base)
     if t.get("health") != "up" or not fresh:
@@ -590,7 +605,8 @@ for t in targets:
 if bad:
     print("not up: " + "; ".join(bad))
     sys.exit(1)
-print("%d targets up in %d jobs" % (len(targets), len(jobs)))' "$base" "${args[@]}"
+print("%d targets up in %d jobs, each scraped after it started%s" % (len(judged), len({t["labels"].get("job") for t in judged}),
+      "".join("; %s has a target (another stack, health not judged)" % j for j in sorted(other))))' "$base" "${args[@]}"
 }
 
 # Every target of the operations Prometheus up after the restart (stack_targets). Not the trends
@@ -603,14 +619,37 @@ check_stack_targets() {
   deadline=$(( $(date +%s) + SCRAPE_GRACE_S ))
   while :; do
     if got="$(stack_targets 2>/dev/null)"; then
-      info "prometheus: $got, each scraped after it started"
+      info "prometheus: $got"
       return 0
     fi
     [ "$(date +%s)" -lt "$deadline" ] || break
     sleep 5
   done
   echo "[ERROR] prometheus targets: ${got:-no reading (a start time, or 127.0.0.1:9090/api/v1/targets)}" >&2
-  echo "[ERROR] a job that reads \"no target\": compare STACK_JOBS in $0 with theOrg observability prometheus/ (scrape-stack/, scrape-optional/, base_config.py) at revision ${OBSERVABILITY_REVISION:-R (not given: deploy_role.py prints it)}" >&2
+  echo "[ERROR] a job that reads \"no target\": compare STACK_JOBS and OTHER_STACK_JOBS in $0 with theOrg observability prometheus/ (scrape-stack/, scrape-optional/, base_config.py, scrape-communications/) at revision ${OBSERVABILITY_REVISION:-R (not given: deploy_role.py prints it)}" >&2
+  return 1
+}
+
+# theOrg's rules are loaded (MONITOR_THEORG, compose.yml): the operations Prometheus's rule groups
+# (127.0.0.1:9090/api/v1/rules) hold THEORG_RULE_GROUP from a file under
+# /etc/prometheus/alerts-enabled/, where theOrg's entrypoint copies alerts-theorg/. Read once, after
+# check_stack_targets: Prometheus loads the rule files with the configuration, before any scrape
+# that check waited for. theOrg's deploy.yml at 04f31709 checks the same group.
+check_theorg_rules() {
+  local got
+  if got="$(curl -sf --max-time 10 http://127.0.0.1:9090/api/v1/rules | python3 -c '
+import json, sys
+want = sys.argv[1]
+groups = json.load(sys.stdin)["data"]["groups"]
+theorg = [g["name"] for g in groups if g.get("file", "").startswith("/etc/prometheus/alerts-enabled/")]
+if want not in theorg:
+    print("no %s group from alerts-enabled/ (%d theOrg groups loaded)" % (want, len(theorg)))
+    sys.exit(1)
+print("%d theOrg rule groups loaded (%s among them)" % (len(theorg), want))' "$THEORG_RULE_GROUP")"; then
+    info "prometheus: $got"
+    return 0
+  fi
+  echo "[ERROR] prometheus theOrg rules: ${got:-no reading (127.0.0.1:9090/api/v1/rules)}; MONITOR_THEORG in compose.yml" >&2
   return 1
 }
 
@@ -945,7 +984,8 @@ check_gateway() {
 
 # What runs: the services, Prometheus and its Alertmanager, prometheus-ingest on ingest,
 # docker-state-exporter, the trends retention, the blackbox self-probes, every operations
-# Prometheus target up (ingest-federate too), Vector's container logs in Loki (not on a replica: no
+# Prometheus target up (ingest-federate too; OTHER_STACK_JOBS only present), theOrg's rules
+# loaded (check_theorg_rules), Vector's container logs in Loki (not on a replica: no
 # Vector), the tokened services' secrets (check_tokened), each gateway's open /ready and its
 # refusal of a request with no account (check_gateway), the
 # Watchdog's ping (check_watchdog) and alert-relay's Vikunja self-test and delivery ping
@@ -1000,6 +1040,7 @@ do_verify() {
 
   check_self_probes || rc=1
   check_stack_targets || rc=1
+  check_theorg_rules || rc=1
   if ! is_replica; then check_vector_logs || rc=1; fi
   check_tokened || rc=1
   check_gateway || rc=1
@@ -1261,7 +1302,8 @@ usage() {
   echo "  restart  - images ready, then down, then up; on $SERVING_HOST only with every wrapped token" >&2
   echo "  verify   - Services running and healthy, Prometheus and its one Alertmanager, the ingest" >&2
   echo "             Prometheus on ingest, docker-state-exporter, trends retention, the blackbox" >&2
-  echo "             self-probes, every operations Prometheus target up (ingest-federate too)," >&2
+  echo "             self-probes, every operations Prometheus target up (ingest-federate too; chat-api" >&2
+  echo "             only present), theOrg's chat-api rule group loaded," >&2
   echo "             Vector's container logs in Loki, the tokened services' secrets, each" >&2
   echo "             gateway's /ready 200 and its 401 with no account, the Watchdog's" >&2
   echo "             healthchecks.io ping, and" >&2

@@ -15,8 +15,8 @@ the images disagree. It prints that revision and passes it to `verify`.
 
 - `compose.yml`: theOrg's `docker-compose.yml` with `compose.docker-socket.yml` and
   `compose.blackbox.yml` folded in (the Docker-socket and blackbox pieces are on). `MONITOR_THEORG`
-  is on ("theOrg's rules" below), with `THEORG_SCRAPE=false`, so the other stacks'
-  scrape jobs are not here; credential-probe and the Ollama log are theOrg's, not here. Project,
+  is on ("theOrg's rules" below), with `THEORG_SCRAPE=false`, so theOrg's `scrape-theorg/`
+  jobs are not here (communications' `chat-api` is); credential-probe and the Ollama log are theOrg's, not here. Project,
   container, volume and network names are theOrg's. No build sections.
 - `observability.sh`: `up`, `down`, `restart`, `verify`, `update`, `pull`, `images`, `logs`,
   `status`, `digests`, `alert-test`. It names the tag (`latest`), sets the settings, creates the
@@ -412,8 +412,15 @@ with `LOKI_GATEWAY_MODE` set, each with its own token, accounts and prefix (Secr
   communications scrape set: `COMMUNICATIONS_REMOTE=true` (theOrg's communications-placement is
   d06) picks `remote/`, the one job `chat-api` at `theorg.asyla.org:443` over verified https, so
   `ChatApiUnavailable` watches d06's chat-api; `local/`'s four `host.docker.internal` jobs would
-  read down here (chat-api and the NATS exporter are published on 127.0.0.1 only). verify's
-  every-target-up check covers `chat-api` with the rest. Six of theOrg's rules use `absent()` on a
+  read down here (chat-api and the NATS exporter are published on 127.0.0.1 only). From d06's
+  `observability-net`, blackbox-exporter's `http_2xx` probe of `https://theorg.asyla.org/metrics`
+  read success, 200, TLS (2026-11-23). verify wants a `chat-api` target (`OTHER_STACK_JOBS`) but
+  does not judge its health: that needs communications and internal-access, which d06's build
+  starts after this stack, and a replica has neither; `ChatApiUnavailable` alerts on it. verify
+  also wants theOrg's `chat-api` rule group loaded from `alerts-enabled/` (`check_theorg_rules`, as
+  theOrg's `deploy.yml` does). The Mini's own operations Prometheus still loads the same rules
+  (theOrg `deploy.yml` at 04f31709 names `compose.theorg.yml`), so until theOrg drops them there a
+  theOrg alert can be raised on both hosts. Six of theOrg's rules use `absent()` on a
   series only the Mini's agent writes (theOrg `DEPLOY.md` at 04f31709, "theOrg's rules without its
   jobs"), so an outage of that agent fires them here. Before the switch each of the six read
   present in the operations Prometheus, and no federated `up{host="ws02"}` read 0 (2026-11-23).
@@ -421,7 +428,7 @@ with `LOKI_GATEWAY_MODE` set, each with its own token, accounts and prefix (Secr
 Off here and nowhere else:
 
 - chat-api delivery: `CHAT_API_URL` is empty (alert-relay posts no chat message); theOrg's, not
-  asyla's. chat-api is scraped (theOrg's rules, above).
+  asyla's. chat-api itself is scraped ("theOrg's rules", above).
 
 ## Upgrade
 

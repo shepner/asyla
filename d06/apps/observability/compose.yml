@@ -8,8 +8,8 @@
 # - the Docker-socket and blackbox pieces are folded in; credential-probe and the Ollama log are
 #   not here. MONITOR_THEORG is on (theOrg's rules, on the Mini's series federated from
 #   prometheus-ingest, since theorg #1269's agent pushes them, 2026-11-23), with THEORG_SCRAPE=false
-#   (none of theOrg's other stacks' jobs scraped here) and COMMUNICATIONS_REMOTE=true (chat-api on
-#   d06 by its LAN name);
+#   (no scrape-theorg/ job here) and COMMUNICATIONS_REMOTE=true (communications' one job, chat-api,
+#   scraped on d06 by its LAN name);
 # - three gateways from theOrg's loki-gateway image with d06's own settings (theOrg's option B and
 #   route modes, asyla #1268): loki-gateway (mode loki), prometheus-write-gateway (remote-write, in
 #   front of prometheus-ingest) and pushgateway-gateway (pushgateway). Each is plain HTTP
@@ -59,7 +59,7 @@
 # gateway (pushes and queries from off this host, each with its own account, as loki.asyla.org),
 # and the remote-write and pushgateway gateways (writes from off this host, each with its own
 # account; remote writes land in prometheus-ingest, federated by the operations Prometheus).
-# Off (README.md says what turns each on): chat-api (CHAT_API_URL empty).
+# Off (README.md says what turns each on): alert-relay's chat-api delivery (CHAT_API_URL empty).
 #
 # Run with observability.sh: it sets OBSERVABILITY_TAG, OBSERVABILITY_ROOT and the settings below
 # and keeps the start order.
