@@ -98,7 +98,8 @@ ALERTMANAGER_EXTERNAL_URL="${ALERTMANAGER_EXTERNAL_URL:-https://alertmanager.asy
 # (case-insensitive) files there, any other in the default, and one in a project Vikunja refuses
 # falls back to the default with a Routing note (theOrg alert-relay). User svc-alert-relay-d06 gets
 # write on 169 from theOrg ticketing 8c1cc236 (theorg #1277), live after d06's next ticketing
-# redeploy; theOrg's rules carry alert_repo once theorg #1278 ships. alert-test with
+# redeploy; theOrg's rules (MONITOR_THEORG, compose.yml) carry alert_repo: theOrg at 04f31709
+# (theorg #1278). alert-test with
 # ALERT_TEST_PROJECT=theOrg proves the 169 path.
 ALERT_PROJECTS="asyla=170 theOrg=169"
 # memory-system's Vector on the Mini (theOrg lead, 2026-11-03).

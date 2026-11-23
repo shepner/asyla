@@ -5,8 +5,11 @@
 # f7579118fdac5d90101a5ec6698200ae2c9d836f (#327; design 4 since #311; DEPLOY.md at that sha).
 # The images follow theOrg's `latest`; the revision is read from the images' provenance at deploy.
 # Project, container names, volume names and the network are theOrg's. asyla's choices:
-# - the Docker-socket and blackbox pieces are folded in; credential-probe, the Ollama log and
-#   MONITOR_THEORG (theOrg's other stacks' jobs and rules) are not here;
+# - the Docker-socket and blackbox pieces are folded in; credential-probe and the Ollama log are
+#   not here. MONITOR_THEORG is on (theOrg's rules, on the Mini's series federated from
+#   prometheus-ingest, since theorg #1269's agent pushes them, 2026-11-23), with THEORG_SCRAPE=false
+#   (none of theOrg's other stacks' jobs scraped here) and COMMUNICATIONS_REMOTE=true (chat-api on
+#   d06 by its LAN name);
 # - three gateways from theOrg's loki-gateway image with d06's own settings (theOrg's option B and
 #   route modes, asyla #1268): loki-gateway (mode loki), prometheus-write-gateway (remote-write, in
 #   front of prometheus-ingest) and pushgateway-gateway (pushgateway). Each is plain HTTP
@@ -328,20 +331,27 @@ services:
     ports:
       - "127.0.0.1:9090:9090"
     # prometheus-entrypoint.sh enables the two pieces' scrape jobs (folded in from theOrg's
-    # compose.docker-socket.yml and compose.blackbox.yml). MONITOR_THEORG stays unset (theorg
-    # #1269), so no job here reads a token and theOrg's rules are not loaded.
-    # theOrg's compose.ingest.yml at 04f31709 sets the four below. FEDERATE_INGEST=true works with
-    # MONITOR_THEORG off: the entrypoint writes ingest-federate (/federate on
+    # compose.docker-socket.yml and compose.blackbox.yml).
+    # theOrg's compose.ingest.yml at 04f31709 sets FEDERATE_INGEST, THEORG_SCRAPE and the two
+    # FEDERATE_INGEST_ settings below: the entrypoint writes ingest-federate (/federate on
     # FEDERATE_INGEST_HOST:FEDERATE_INGEST_PORT, one match[] per job name in its scrape-theorg/,
-    # honor_labels, track_timestamps_staleness) whatever MONITOR_THEORG says, so the Mini's series
-    # are here, with no rule on them until #1269. THEORG_SCRAPE=false changes nothing while
-    # MONITOR_THEORG is off (it is read only inside that switch), and is set now because with
-    # MONITOR_THEORG on and FEDERATE_INGEST on the entrypoint exits 2 unless it is false.
+    # honor_labels, track_timestamps_staleness), so the Mini's series are here.
+    # MONITOR_THEORG is on since theorg #1269's agent pushes them (2026-11-23; asyla #1268), as
+    # theOrg's compose.theorg.yml sets it: the entrypoint copies alerts-theorg/ into the rules
+    # Prometheus reads, so theOrg's rules run on the federated series, and one communications
+    # scrape set. With MONITOR_THEORG and FEDERATE_INGEST on it exits 2 unless THEORG_SCRAPE is
+    # false, which leaves out scrape-theorg/ (those jobs scrape host.docker.internal, here d06, not
+    # the Mini). COMMUNICATIONS_REMOTE=true is communications-placement d06 (theOrg DEPLOY.md,
+    # "Communications on d06"): the set is chat-api alone, theorg.asyla.org:443 over verified https
+    # (d06's Caddy), not local/'s four host.docker.internal jobs, which d06 does not publish to this
+    # container (127.0.0.1 or not at all). No job here reads a token.
     environment:
       SCRAPE_DOCKER_STATE_EXPORTER: "true"
       SCRAPE_BLACKBOX_EXPORTER: "true"
       FEDERATE_INGEST: "true"
+      MONITOR_THEORG: "true"
       THEORG_SCRAPE: "false"
+      COMMUNICATIONS_REMOTE: "true"
       FEDERATE_INGEST_HOST: "prometheus-ingest"
       FEDERATE_INGEST_PORT: "9090"
     command:

@@ -1085,8 +1085,15 @@ def gateways_cases() -> list[bool]:
               "FEDERATE_INGEST_HOST/_PORT)",
               'FEDERATE_INGEST: "true"' in prom and 'THEORG_SCRAPE: "false"' in prom
               and 'FEDERATE_INGEST_HOST: "prometheus-ingest"' in prom
-              and 'FEDERATE_INGEST_PORT: "9090"' in prom
-              and not any("MONITOR_THEORG" in ln for ln in prom), repr(prom)),
+              and 'FEDERATE_INGEST_PORT: "9090"' in prom, repr(prom)),
+        # theOrg's entrypoint at 04f31709 exits 2 with MONITOR_THEORG and FEDERATE_INGEST on unless
+        # THEORG_SCRAPE is false; COMMUNICATIONS_REMOTE=true is communications-placement d06.
+        check("ingest: prometheus runs theOrg's rules (MONITOR_THEORG=true, once, beside "
+              "THEORG_SCRAPE=false) with communications' remote set (COMMUNICATIONS_REMOTE=true)",
+              [ln for ln in prom if ln.startswith("MONITOR_THEORG:")] == ['MONITOR_THEORG: "true"']
+              and [ln for ln in prom if ln.startswith("THEORG_SCRAPE:")] == ['THEORG_SCRAPE: "false"']
+              and [ln for ln in prom if ln.startswith("COMMUNICATIONS_REMOTE:")]
+              == ['COMMUNICATIONS_REMOTE: "true"'], repr(prom)),
         check("ingest: prometheus-write-gateway has loki-gateway's healthcheck and depends_on "
               "prometheus-ingest healthy",
               'test: ["CMD", "/loki-gateway", "healthcheck"]' in pwg and "disable: true" not in pwg
