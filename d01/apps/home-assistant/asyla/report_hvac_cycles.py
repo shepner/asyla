@@ -33,7 +33,9 @@ A run is a stretch of consecutive minutes in one class; a missing minute ends it
 of at most 2 minutes that starts the minute an outdoor-unit run ends (the blower running on after
 the compressor stops, seen 2026-10-22 and 10-27) or ends the minute one starts (the blower starting
 first, seen 2026-11-01 and 11-06) belongs to the heat pump: it is counted as an overrun or a lead,
-not as an air-handler run. Findings, in this order:
+not as an air-handler run. A blower-alone stretch of at most 2 minutes between two heat pump minutes
+is a compressor dip inside one call (the outdoor unit's minute mean under 500 W while the Ecobee
+kept calling, seen 2026-11-17 and 11-23) and stays in the heat pump run. Findings, in this order:
 
 - House heat: the coldest outdoor temperature (sensor.mke_temperature, the last reading at most
   30 min before the start) at a heat pump start, and the gas furnace runs that started colder.
@@ -91,6 +93,7 @@ HA_OUTDOOR = 'last_over_time(homeassistant_sensor_temperature_celsius{entity="se
 AIR_HANDLER_W, OUTDOOR_W, BOILER_W = 40.0, 500.0, 40.0
 SHORT_MIN = 5
 OVERRUN_MAX = 2
+DIP_MAX = 2             # min: an outdoor-unit dip this short, blower on, inside a heat pump run is that run
 OUTDOOR_LOOKBACK = 30   # min: the outdoor reading at a run's start is the last one this far back
 MODE_CARRY = 90         # min: a Home Assistant gap this long keeps the last thermostat mode
 OFF_MIN = 60            # min: a thermostat off this long is a finding
@@ -150,19 +153,45 @@ def query_range(base: str, expr: str, start: int, end: int, get=http_get, step: 
     return list(out.values())
 
 
-def classify(minutes: list[int], power: dict[str, dict[int, float]]) -> dict[str, list[int | None]]:
-    """Per class, the minute timestamps in that class; None marks a minute with no data (a run break)."""
+def fill_dips(house: list[str | None]) -> tuple[list[str | None], int]:
+    """Blower-alone stretches of at most DIP_MAX minutes between two heat pump minutes become heat pump.
+
+    The outdoor unit's minute mean falls under OUTDOOR_W for a minute inside one heat call while the
+    blower runs on and the Ecobee keeps calling (seen 2026-11-17 05:21 at 381 W and 2026-11-23 00:38
+    at 253 W): one run, not two. Returns the labels and how many dips were filled."""
+    out, dips, i = list(house), 0, 0
+    while i < len(out):
+        if out[i] != "air_handler":
+            i += 1
+            continue
+        j = i
+        while j < len(out) and out[j] == "air_handler":
+            j += 1
+        if j - i <= DIP_MAX and i > 0 and j < len(out) and out[i - 1] == out[j] == "heat_pump":
+            out[i:j] = ["heat_pump"] * (j - i)
+            dips += 1
+        i = j
+    return out, dips
+
+
+def classify(minutes: list[int], power: dict[str, dict[int, float]]) -> tuple[dict[str, list[int | None]], int]:
+    """Per class, the minute timestamps in that class; None marks a minute with no data (a run break).
+    Also the number of compressor dips filled into heat pump runs (fill_dips)."""
     ah, ou, bo = power.get("7", {}), power.get("98", {}), power.get("14", {})
-    marks: dict[str, list] = {c: [] for c in CLASSES}
+    house: list[str | None] = []
     for m in minutes:
-        house = None
+        h = None
         if m in ah and m in ou:
             on_ah, on_ou = ah[m] > AIR_HANDLER_W, ou[m] > OUTDOOR_W
-            house = "heat_pump" if on_ah and on_ou else "outdoor" if on_ou else "air_handler" if on_ah else ""
+            h = "heat_pump" if on_ah and on_ou else "outdoor" if on_ou else "air_handler" if on_ah else ""
+        house.append(h)
+    house, dips = fill_dips(house)
+    marks: dict[str, list] = {c: [] for c in CLASSES}
+    for m, h in zip(minutes, house):
         for c in ("heat_pump", "outdoor", "air_handler"):
-            marks[c].append(None if house is None else (m if house == c else 0))
+            marks[c].append(None if h is None else (m if h == c else 0))
         marks["boiler"].append(None if m not in bo else (m if bo[m] > BOILER_W else 0))
-    return marks
+    return marks, dips
 
 
 def runs(marks: list[int | None]) -> list[tuple[int, int]]:
@@ -285,9 +314,9 @@ def report(start: int, end: int, base: str = PROM, get=http_get) -> dict:
     for s in query_range(base, HA_OUTDOOR, start, end, get):
         temps_c.update(s["values"])
 
-    marks = classify(minutes, power)
+    marks, dips = classify(minutes, power)
     days = sorted({day_of(m) for m in minutes})
-    out = {"start": start, "end": end, "minutes": len(minutes),
+    out = {"start": start, "end": end, "minutes": len(minutes), "compressor_dips": dips,
            "data_minutes": {ch: len(power.get(ch, {})) for ch in ("7", "98", "14")},
            "outdoor_minutes": len(temps_c), "days": {d: {} for d in days}, "total": {}}
     found = {c: runs(marks[c]) for c in CLASSES}
@@ -525,6 +554,8 @@ def print_report(r: dict) -> None:
     print("- Gas furnace: the indoor blower ran alone, unless the thermostat showed fan only.")
     print(f"- A blower run of 1-2 minutes just before or after a heat pump run is part of that run "
           f"({r['blower_lead'] + r['blower_overrun']} this time).")
+    print(f"- A dip of 1-2 minutes in the outdoor unit's power inside a heat pump run, with the blower still "
+          f"running, is part of that run ({r['compressor_dips']} this time).")
     print("- Garage boiler: it heats both the garage slab and the water heater.")
     print(f"- Data: Emporia {min(r['data_minutes'].values())} of {r['minutes']} minutes, "
           f"outdoor temperature {r['outdoor_minutes']}. Every number is in --json.")
@@ -608,6 +639,8 @@ def selftest() -> int:
         "- Thu 10-22 from 08:00 to 10:59, 33.8 to 47.3 °F: heat pump 1 run, 10 min; gas furnace 2 runs, 6 min; "
         "fan only 1 run, 4 min; garage boiler 7 starts, 33 min, 6 under 5 min; garage thermostat calling 15 min",
         "- A blower run of 1-2 minutes just before or after a heat pump run is part of that run (2 this time).",
+        "- A dip of 1-2 minutes in the outdoor unit's power inside a heat pump run, with the blower still running, "
+        "is part of that run (0 this time).",
         "- Data: Emporia 179 of 180 minutes, outdoor temperature 180. Every number is in --json.",
     ]
     checks = [
@@ -633,6 +666,21 @@ def selftest() -> int:
         ("no space-aligned columns", not any("   " in ln.strip() for ln in lines)),
         ("°F on output", (fahrenheit(6.5), fahrenheit(8.5), fahrenheit(-20), fahrenheit(0)) == (43.7, 47.3, -4.0, 32.0)),
         ("missing minute splits a run", runs([1, 2, None, 4]) == [(1, 2), (4, 1)]),
+    ]
+    # Compressor dips (2026-11-17 05:17-05:25: outdoor 2722, 381, 768 W with the blower at 188 W).
+    hp_, ah_ = "heat_pump", "air_handler"
+    dip_mins = [t0 + i * STEP for i in range(9)]
+    dip_marks, dip_n = classify(dip_mins, {"7": {m: 188.0 for m in dip_mins},
+                                           "98": {m: (381.0 if m == t0 + 4 * STEP else 2500.0) for m in dip_mins}})
+    checks += [
+        ("a 1-minute compressor dip stays in the run", fill_dips(["", hp_, ah_, hp_, ""]) == (["", hp_, hp_, hp_, ""], 1)),
+        ("a 2-minute dip stays in the run", fill_dips([hp_, ah_, ah_, hp_]) == ([hp_] * 4, 1)),
+        ("a 3-minute blower-alone stretch is not a dip", fill_dips([hp_, ah_, ah_, ah_, hp_])[1] == 0),
+        ("an overrun after the last heat pump minute is not a dip", fill_dips([hp_, ah_, ""])[1] == 0),
+        ("a missing minute is not a dip", fill_dips([hp_, None, hp_])[1] == 0),
+        ("one 9-minute heat pump run across the dip, no air-handler run",
+         dip_n == 1 and runs(dip_marks["heat_pump"]) == [(t0, 9)] and runs(dip_marks["air_handler"]) == []),
+        ("no dips in the stub window", r["compressor_dips"] == 0),
     ]
     checks += [(f"line: {w[:60]}", w in lines) for w in want_lines]
     # The other house-heat rules, on stand-in runs.
