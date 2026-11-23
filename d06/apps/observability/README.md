@@ -15,8 +15,9 @@ the images disagree. It prints that revision and passes it to `verify`.
 
 - `compose.yml`: theOrg's `docker-compose.yml` with `compose.docker-socket.yml` and
   `compose.blackbox.yml` folded in (the Docker-socket and blackbox pieces are on). `MONITOR_THEORG`
-  is off: credential-probe, the Ollama log and the other stacks' jobs and rules are theOrg's, not
-  here. Project, container, volume and network names are theOrg's. No build sections.
+  is on ("theOrg's rules" below), with `THEORG_SCRAPE=false`, so theOrg's `scrape-theorg/`
+  jobs are not here (communications' `chat-api` is); credential-probe and the Ollama log are theOrg's, not here. Project,
+  container, volume and network names are theOrg's. No build sections.
 - `observability.sh`: `up`, `down`, `restart`, `verify`, `update`, `pull`, `images`, `logs`,
   `status`, `digests`, `alert-test`. It names the tag (`latest`), sets the settings, creates the
   data directories and keeps the start order. A replica (a host with `[replica] of = "d06"`) runs
@@ -306,8 +307,8 @@ first entry, and 169 is theOrg's child, for an alert whose `alert_repo` label's 
 theOrg, case-insensitive; any other alert files in 170, and one in a project Vikunja refuses falls
 back to 170 with a Routing note; theOrg alert-relay, and theOrg `DEPLOY.md` at b5bd228,
 "alert-relay on d06 (asyla)". User `svc-alert-relay-d06` gets write on 169 from theOrg ticketing
-8c1cc236 (theorg #1277), live after d06's next ticketing redeploy; theOrg's rules carry
-`alert_repo` once theorg #1278 ships; `ALERT_TEST_PROJECT=theOrg alert-test`, below, proves it), critical
+8c1cc236 (theorg #1277), live after d06's next ticketing redeploy; every rule in theOrg's
+`alerts/theorg/` carries `alert_repo: theOrg` at 04f31709 (theorg #1278); `ALERT_TEST_PROJECT=theOrg alert-test`, below, proves it), critical
 alerts by email (Alertmanager's email piece posts them to alert-relay, which sends them to
 `ALERT_EMAIL_TO` through `smtp.gmail.com:587` with the SMTP login), the delivery ping (alert-relay
 pings its healthchecks.io check with `observability-delivery-ping-url` after each delivery and
@@ -389,8 +390,8 @@ with `LOKI_GATEWAY_MODE` set, each with its own token, accounts and prefix (Secr
   `FEDERATE_INGEST_HOST=prometheus-ingest` and `FEDERATE_INGEST_PORT=9090` makes theOrg's
   entrypoint write the job `ingest-federate` (`/federate` with one `match[]` per job name in its
   `scrape-theorg/`, `honor_labels`), whatever `MONITOR_THEORG` says; its own receiver stays off.
-  `THEORG_SCRAPE=false` changes nothing while `MONITOR_THEORG` is off, and is set now because with
-  both on the entrypoint refuses to start unless it is false. So the remote-write path end to end:
+  With `MONITOR_THEORG` on too the entrypoint refuses to start unless `THEORG_SCRAPE=false`, which
+  d06 sets (theOrg's rules, below). So the remote-write path end to end:
   the Mini's agent writes to `https://prometheus-write.asyla.org` with its account, Caddy hands it
   to prometheus-write-gateway on `loki-edge`, the gateway checks the account (its record read from OpenBao at start) and
   forwards to `prometheus-ingest:9090` on `ingest`, and the operations Prometheus reads it from
@@ -403,15 +404,31 @@ with `LOKI_GATEWAY_MODE` set, each with its own token, accounts and prefix (Secr
   `push`. The pushgateway is on `push` alone (off `observability-net`, no published port), so
   this gateway is the one way in; the operations Prometheus scrapes it there by service name
   (theOrg's `prometheus/scrape-stack/pushgateway.yml`).
+- theOrg's rules: `MONITOR_THEORG=true` (on since the Mini's agent, theorg #1269, pushes, 2026-11-23;
+  asyla #1268) makes theOrg's entrypoint copy its `alerts-theorg/` into the rules the operations
+  Prometheus reads, so they run on the federated series. Every one carries `alert_repo: theOrg`,
+  so alert-relay files it in 169. `THEORG_SCRAPE=false` leaves out `scrape-theorg/` (those jobs
+  scrape `host.docker.internal`, which here is d06, not the Mini). `MONITOR_THEORG` also copies one
+  communications scrape set: `COMMUNICATIONS_REMOTE=true` (theOrg's communications-placement is
+  d06) picks `remote/`, the one job `chat-api` at `theorg.asyla.org:443` over verified https, so
+  `ChatApiUnavailable` watches d06's chat-api; `local/`'s four `host.docker.internal` jobs would
+  read down here (chat-api and the NATS exporter are published on 127.0.0.1 only). From d06's
+  `observability-net`, blackbox-exporter's `http_2xx` probe of `https://theorg.asyla.org/metrics`
+  read success, 200, TLS (2026-11-23). verify wants a `chat-api` target at `theorg.asyla.org:443`
+  (`OTHER_STACK_JOBS`; one at `local/`'s address fails it) but does not judge its health: that needs communications and internal-access, which d06's build
+  starts after this stack, and a replica has neither; `ChatApiUnavailable` alerts on it. verify
+  also wants theOrg's `chat-api` rule group loaded from `alerts-enabled/` (`check_theorg_rules`, as
+  theOrg's `deploy.yml` does). The Mini's own operations Prometheus still loads the same rules
+  (theOrg `deploy.yml` at 04f31709 names `compose.theorg.yml`), so until theOrg drops them there a
+  theOrg alert can be raised on both hosts. Six of theOrg's rules use `absent()` on a
+  series only the Mini's agent writes (theOrg `DEPLOY.md` at 04f31709, "theOrg's rules without its
+  jobs"), so an outage of that agent fires them here. Before the switch each of the six read
+  present in the operations Prometheus, and no federated `up{host="ws02"}` read 0 (2026-11-23).
 
 Off here and nowhere else:
 
-- chat-api: `CHAT_API_URL` is empty; theOrg's, not asyla's.
-- `MONITOR_THEORG` stays unset, though theOrg's alerts now file in 169. theorg #1278 adds
-  `THEORG_SCRAPE`, and d06 sets `MONITOR_THEORG=true` with `THEORG_SCRAPE=false` only once the
-  Mini's agent (theorg #1269) pushes: before that, the six `absent()` rules for theOrg's stacks
-  would fire. Until then the federated series are in the operations Prometheus with no rule on
-  them.
+- chat-api delivery: `CHAT_API_URL` is empty (alert-relay posts no chat message); theOrg's, not
+  asyla's. chat-api itself is scraped ("theOrg's rules", above).
 
 ## Upgrade
 
