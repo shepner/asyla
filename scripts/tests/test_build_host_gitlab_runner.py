@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Offline test of the GitLab runners of a host spec (gap G9): [gitlab_runner] in load_spec(),
 the API calls of the runner phase, destroy and verify (GitLab and the host replaced by fakes), and
-build/gitlab-runner/gitlab-runner.sh's register and finish run by local bash against a throwaway
-config file and a fake gitlab-runner.
+build/gitlab-runner/gitlab-runner.sh's register, finish and user run by local bash against a
+throwaway config file, drop-in dir and home, and a fake gitlab-runner, systemctl and chown.
 
     python3 scripts/tests/test_build_host_gitlab_runner.py
 
@@ -105,7 +105,15 @@ check("no [gitlab_runner]: no runners", build_host.gitlab_runners(load("")) == [
 spec_ok("a project runner with volumes and a pull policy",
         RUNNER.format(name="maint", scope="project:asyla/host-maintenance", tags='["d09", "maint"]')
         + 'volumes = ["/home/docker/.config/x:/x:ro"]\npull_policy = "always"\n')
-spec_ok("a shell runner", '[[gitlab_runner.runners]]\nname = "sh"\nscope = "group:asyla"\ntags = ["t"]\nexecutor = "shell"\n')
+SHELL = '[[gitlab_runner.runners]]\nname = "sh"\nscope = "group:asyla"\ntags = ["t"]\nexecutor = "shell"\n'
+s = spec_ok("a shell runner with a job user", '[gitlab_runner]\nuser = "docker"\n\n' + SHELL)
+check("the job user is the spec's", s is not None and build_host.gitlab_runner_user(s) == "docker")
+check("no job user: None (the package's gitlab-runner)", build_host.gitlab_runner_user(load(one)) is None)
+spec_ok("a docker runner with a job user", '[gitlab_runner]\nuser = "_maint-1"\n\n' + one)
+spec_refused("a shell runner without a job user", SHELL, "a shell runner needs [gitlab_runner] user")
+for bad in ('"Docker"', '"do cker"', '"docker;id"', '"1docker"', '""', "7"):
+    spec_refused(f"a bad job user {bad}", f'[gitlab_runner]\nuser = {bad}\n\n' + SHELL, "user must be an account name")
+spec_refused("a job user without runners", '[gitlab_runner]\nuser = "docker"\n', "must hold only runners")
 spec_refused("a name with a space", RUNNER.format(name="a b", scope="group:asyla", tags='["t"]'), "runner name must be")
 spec_refused("two runners with one name", one + one, "named twice")
 spec_refused("a scope without a kind", RUNNER.format(name="a", scope="asyla", tags='["t"]'), "scope must be")
@@ -121,14 +129,17 @@ spec_refused("a docker runner without an image",
 spec_refused("a bad pull policy", one + 'pull_policy = "sometimes"\n', "pull_policy must be")
 spec_refused("a volume with a space", one + 'volumes = ["/a b:/c"]\n', "volumes must be")
 spec_refused("an unknown key", one + 'run_untagged = true\n', "unknown keys")
-spec_refused("an image on a shell runner",
-             '[[gitlab_runner.runners]]\nname = "sh"\nscope = "group:asyla"\ntags = ["t"]\nexecutor = "shell"\nimage = "x"\n',
-             "unknown keys")
+spec_refused("an image on a shell runner", '[gitlab_runner]\nuser = "docker"\n\n' + SHELL + 'image = "x"\n', "unknown keys")
 spec_refused("another key in the table", '[gitlab_runner]\nconcurrent = 2\n' + one, "only runners")
 t = test01_spec()
-check("test01: one group runner on asyla, tag build-test only",
-      [(r["description"], r["scope"], r["tags"]) for r in build_host.gitlab_runners(t)]
-      == [("test01-build", "group:asyla", ["build-test"])])
+check("test01: a group runner on asyla (tag build-test only) and a host-maintenance shell runner (tag hm-test01)",
+      [(r["description"], r["scope"], r["tags"], r["executor"]) for r in build_host.gitlab_runners(t)]
+      == [("test01-build", "group:asyla", ["build-test"], "docker"),
+          ("test01-hm", "project:asyla/host-maintenance", ["hm-test01"], "shell")])
+check("test01: jobs run as docker (asyla #605)", build_host.gitlab_runner_user(t) == "docker")
+check("register options: a shell runner, one job at a time",
+      build_host.gl_register_args(build_host.gitlab_runners(t)[1])
+      == ["--url", "https://gitlab.com", "--executor", "shell", "--limit", "1"])
 check("no legacy spec has a GitLab runner (each needs approval first)",
       not any(build_host.gitlab_runners(build_host.load_spec(h)) for h in ("d01", "d02")
               if (build_host.REPO / h / "host.toml").is_file()))
@@ -233,6 +244,10 @@ res, runs, out = with_fakes(gl, lambda: build_host.phase_gitlab_runner(t, False)
 check("dry run: names the stale entry, changes nothing, reaches no host",
       "delete GitLab runner test01-build (id 80" in out and not runs
       and all(m == "GET" for m, _, _ in gl.calls) and set(gl.runners) == set(stale), out)
+check("dry run: prints the job user step", "jobs run as docker: gitlab-runner.sh user docker" in out, out)
+nouser = load(one)
+res, runs, out = with_fakes(FakeGitLab(others()), lambda: build_host.phase_gitlab_runner(nouser, False))
+check("dry run without a job user: prints user -", "gitlab-runner.sh user -" in out and not runs, out)
 
 # Apply: the stale entry goes, a new one is made and registered with the token on stdin only.
 gl = FakeGitLab(dict(stale))
@@ -243,25 +258,36 @@ check("apply: completes", res is None, str(res))
 check("apply: only the stale entry with the same description is deleted", deletes == ["/runners/80"], str(deletes))
 check("apply: the production runners and a look-alike are untouched",
       all(i in gl.runners for i in (53360564, 56843179, 70)))
-check("apply: POST /user/runners as a group runner, tag build-test, untagged off, ref_protected",
+check("apply: POST /user/runners: a group runner (tag build-test) and a project runner (tag hm-test01), untagged off, "
+      "ref_protected",
       posts == [{"runner_type": "group_type", "group_id": 11, "description": "test01-build",
-                 "tag_list": "build-test", "run_untagged": False, "access_level": "ref_protected"}], str(posts))
-check("apply: the new runner is ref_protected in GitLab",
-      [r["access_level"] for r in gl.runners.values() if r["description"] == "test01-build"] == ["ref_protected"])
+                 "tag_list": "build-test", "run_untagged": False, "access_level": "ref_protected"},
+                {"runner_type": "project_type", "project_id": 22, "description": "test01-hm",
+                 "tag_list": "hm-test01", "run_untagged": False, "access_level": "ref_protected"}], str(posts))
+check("apply: the new runners are ref_protected in GitLab",
+      [r["access_level"] for r in gl.runners.values() if r["description"] in ("test01-build", "test01-hm")]
+      == ["ref_protected", "ref_protected"])
 check("apply: every listing is type-filtered",
       all("?type=" in p for m, p, _ in gl.calls if m == "GET" and "/runners?" in p)
       and any("/runners?" in p for _, p, _ in gl.calls))
-check("apply: install, register, finish on the host, as root, from build/gitlab-runner only",
-      [c.split('gitlab-runner.sh" ')[1].split()[0] for _, _, c, _, _ in runs] == ["install", "register", "finish"]
+check("apply: install, user, register x2, finish on the host, as root, from build/gitlab-runner only",
+      [c.split('gitlab-runner.sh" ')[1].split()[0] for _, _, c, _, _ in runs]
+      == ["install", "user", "register", "register", "finish"]
       and all(r[3] and r[1] == ["build/gitlab-runner"] and r[0] == "test01" for r in runs), str(runs))
-reg = runs[1]
-check("apply: the token goes on stdin, never in the command", reg[4] == FAKE_TOKEN + "\n" and FAKE_TOKEN not in reg[2]
-      and all(FAKE_TOKEN not in r[2] for r in runs) and not any(r[4] for r in runs if r is not reg))
-check("apply: register names the runner by its description",
-      "register test01-build --url https://gitlab.com --executor docker" in reg[2], reg[2])
-check("apply: finish keeps the spec's runners", runs[2][2].endswith("finish test01-build"), runs[2][2])
+check("apply: user names the spec's job user", runs[1][2].endswith("gitlab-runner.sh\" user docker"), runs[1][2])
+regs = runs[2:4]
+check("apply: the token goes on stdin, never in the command",
+      all(r[4] == FAKE_TOKEN + "\n" for r in regs) and all(FAKE_TOKEN not in r[2] for r in runs)
+      and not any(r[4] for r in runs if r not in regs))
+check("apply: register names each runner by its description",
+      "register test01-build --url https://gitlab.com --executor docker" in regs[0][2]
+      and "register test01-hm --url https://gitlab.com --executor shell --limit 1" in regs[1][2], str(regs))
+check("apply: finish keeps the spec's runners", runs[4][2].endswith("finish test01-build test01-hm"), runs[4][2])
 check("apply: the token is never printed", FAKE_TOKEN not in out)
-check("apply: waits until the new runner is online", "GitLab runners online: test01-build" in out, out)
+check("apply: waits until the new runners are online", "GitLab runners online: test01-build, test01-hm" in out, out)
+res, runs, out = with_fakes(FakeGitLab(others()), lambda: build_host.phase_gitlab_runner(nouser, True))
+check("apply without a job user: user - right after install",
+      [c.split('gitlab-runner.sh" ')[1] for _, _, c, _, _ in runs][:2] == ["install", "user -"], str(runs))
 
 # A runner that never comes online fails the phase.
 gl = FakeGitLab(others())
@@ -303,7 +329,7 @@ check("destroy: the host's runner entry is deleted, the others stay",
       80 not in gl.runners and all(i in gl.runners for i in (53360564, 56843179, 70)))
 
 # Verify: online, tags and run_untagged from GitLab; names and concurrent from the host.
-good_host = 'active\nconcurrent = 1\n  name = "test01-build"\n'
+good_host = 'active\nconcurrent = 2\n  name = "test01-build"\n  name = "test01-hm"\n--user docker\n'
 
 
 def verify_lines(runners: dict[int, dict], host_out: str = good_host) -> list[str]:
@@ -320,10 +346,44 @@ def fails_on(lines: list[str], needle: str) -> bool:
 
 
 ok_runner = {81: {"description": "test01-build", "scope": "group:asyla", "status": "online",
-                  "tag_list": ["build-test"], "run_untagged": False, "access_level": "ref_protected"}}
+                  "tag_list": ["build-test"], "run_untagged": False, "access_level": "ref_protected"},
+             91: {"description": "test01-hm", "scope": "project:asyla/host-maintenance", "status": "online",
+                  "tag_list": ["hm-test01"], "run_untagged": False, "access_level": "ref_protected"}}
 lines = verify_lines({**others(), **ok_runner})
-check("verify: online with the spec's tags, ref_protected, host config right: four OK lines",
-      len(lines) == 4 and all(l.startswith("[OK]") for l in lines), str(lines))
+check("verify: two runners online with the spec's tags, ref_protected, host config and job user right: eight OK lines",
+      len(lines) == 8 and all(l.startswith("[OK]") for l in lines), str(lines))
+check("verify: the job user line names docker",
+      any(l.startswith("[OK] gitlab-runner runs shell jobs as docker") for l in lines), str(lines))
+check("verify: the package unit's user (gitlab-runner) fails for a docker spec",
+      fails_on(verify_lines({**others(), **ok_runner}, good_host.replace("--user docker", "--user gitlab-runner")),
+               "runs shell jobs as docker"))
+check("verify: no --user in the unit fails",
+      fails_on(verify_lines({**others(), **ok_runner}, good_host.replace("--user docker\n", "")), "runs shell jobs as docker"))
+check("verify: two ExecStart users fail",
+      fails_on(verify_lines({**others(), **ok_runner}, good_host + "--user gitlab-runner\n"), "runs shell jobs as docker"))
+
+
+def verify_nouser(host_out: str) -> list[str]:
+    lines: list[str] = []
+    runners = {**others(), 83: {"description": "d09-build", "scope": "group:asyla", "status": "online",
+                                "tag_list": ["build-test"], "run_untagged": False, "access_level": "ref_protected"}}
+    with_fakes(FakeGitLab(runners), lambda: build_host.verify_gitlab_runners(
+        nouser, lambda label, ok, detail="": lines.append(f"[{'OK' if ok else 'FAIL'}] {label}: {detail}")), host_out)
+    return lines
+
+
+check("verify: without a job user the unit's --user gitlab-runner passes",
+      any(l.startswith("[OK] gitlab-runner runs shell jobs as gitlab-runner") for l in verify_nouser(
+          'active\nconcurrent = 1\n  name = "d09-build"\n--user gitlab-runner\n')))
+check("verify: without a job user a leftover drop-in (--user docker) fails",
+      fails_on(verify_nouser('active\nconcurrent = 1\n  name = "d09-build"\n--user docker\n'), "as gitlab-runner"))
+ssh_cmds: list[str] = []
+with_fakes(FakeGitLab({**others(), **ok_runner}), lambda: (
+    setattr(build_host, "ssh", lambda target, command, **kw: (ssh_cmds.append(command), type("R", (), {"stdout": good_host})())[1]),
+    build_host.verify_gitlab_runners(t, lambda *a: None)))
+check("verify: the user comes from the unit's ExecStart, config.toml read for names and concurrent only",
+      len(ssh_cmds) == 1 and "systemctl show -p ExecStart --value gitlab-runner | grep -oE -- '--user [^ ;]+'" in ssh_cmds[0]
+      and "grep -E '^concurrent = |^  name = '" in ssh_cmds[0] and "token" not in ssh_cmds[0], str(ssh_cmds))
 check("verify: an extra tag fails",
       fails_on(verify_lines({**others(), 81: {**ok_runner[81], "tag_list": ["build-test", "d03"]}}), "tags are the spec's"))
 check("verify: untagged jobs on fails",
@@ -340,7 +400,7 @@ check("verify: two entries fail", fails_on(verify_lines({**others(), **ok_runner
 check("verify: a stale local entry fails",
       fails_on(verify_lines({**others(), **ok_runner}, good_host + '  name = "test01-old"\n'), "spec's runners only"))
 check("verify: concurrent other than the number of runners fails",
-      fails_on(verify_lines({**others(), **ok_runner}, good_host.replace("concurrent = 1", "concurrent = 4")), "concurrent"))
+      fails_on(verify_lines({**others(), **ok_runner}, good_host.replace("concurrent = 2", "concurrent = 4")), "concurrent"))
 check("verify: the unit not active fails",
       fails_on(verify_lines({**others(), **ok_runner}, good_host.replace("active", "inactive")), "gitlab-runner active"))
 check("verify: no spec runner, no line", verify_lines(others()) and not [
@@ -428,6 +488,58 @@ rc, out, err, d = host_script(["finish"], "")
 check("script finish: no names is refused", rc == 1)
 rc, out, err, d = host_script(["nothing"], "")
 check("script: an unknown command shows the usage", rc == 2 and "gitlab-runner.sh install" in err)
+check("script: the usage is the whole header (install, user, register, finish)",
+      all(f"gitlab-runner.sh {c}" in err for c in ("install", "user", "register", "finish"))
+      and "number of names" in err and "set -euo" not in err and "Usage" in err, err)
+
+# user NAME|-: the drop-in under a throwaway dir and home; a fake systemctl and chown record any call.
+PACKAGE_EXECSTART = ('/usr/bin/gitlab-runner "run" "--config" "/etc/gitlab-runner/config.toml" "--working-directory" '
+                     '"/home/gitlab-runner" "--service" "gitlab-runner" "--user" "gitlab-runner"')   # test01, 2026-11-22
+ud = Path(tempfile.mkdtemp(prefix="glr-user-"))
+(ud / "bin").mkdir()
+(ud / "home" / "docker").mkdir(parents=True)
+for tool in ("systemctl", "chown"):
+    (ud / "bin" / tool).write_text(f'#!/bin/bash\necho "{tool} $*" >> "{ud}/called"\n')
+    (ud / "bin" / tool).chmod(0o755)
+(ud / "config.toml").write_text(CONFIG)
+DROPIN = ud / "dropin" / "asyla-user.conf"
+
+
+def user_script(arg: str) -> tuple[int, str, str]:
+    env = {**os.environ, "PATH": f"{ud / 'bin'}:{os.environ['PATH']}", "GITLAB_RUNNER_CONFIG": str(ud / "config.toml"),
+           "GITLAB_RUNNER_DROPIN_DIR": str(ud / "dropin"), "GITLAB_RUNNER_USER_HOME": str(ud / "home" / "docker")}
+    r = REAL_RUN(["bash", str(SCRIPT), "user", arg], capture_output=True, text=True, env=env, timeout=60)
+    return r.returncode, r.stdout, r.stderr
+
+
+rc, out, err = user_script("-")
+check("script user -: no drop-in, unchanged", rc == 0 and "unchanged" in out and not DROPIN.exists(), out + err)
+rc, out, err = user_script("docker")
+text = DROPIN.read_text() if DROPIN.exists() else ""
+home = ud / "home" / "docker"
+want_exec = PACKAGE_EXECSTART.replace('"/home/gitlab-runner"', f'"{home}/.gitlab-runner"').replace(
+    '"--user" "gitlab-runner"', '"--user" "docker"')
+check("script user docker: writes the drop-in, one line out", rc == 0 and "written" in out and len(out.splitlines()) == 1,
+      out + err)
+check("script user docker: [Service], ExecStart reset, then the package's ExecStart with docker's home and user",
+      text.splitlines()[1:] == ["[Service]", "ExecStart=", f"ExecStart={want_exec}"], text)
+check("script user docker: the verify grep reads --user docker from it",
+      REAL_RUN(["grep", "-oE", "--", "--user [^ ;]+"], input=text.replace('"', ""), capture_output=True,
+               text=True).stdout.splitlines() == ["--user docker"])
+check("script user docker: ~docker/.gitlab-runner exists", (home / ".gitlab-runner").is_dir())
+first = text
+rc, out, err = user_script("docker")
+check("script user docker again: unchanged, the drop-in the same",
+      rc == 0 and "unchanged" in out and DROPIN.read_text() == first, out + err)
+rc, out, err = user_script("Bad;name")
+check("script user: a bad name is refused, the drop-in kept", rc == 2 and DROPIN.read_text() == first, err)
+rc, out, err = user_script("-")
+check("script user -: removes the drop-in", rc == 0 and "removed" in out and not DROPIN.exists(), out + err)
+rc, out, err = user_script("-")
+check("script user - again: unchanged", rc == 0 and "unchanged" in out, out + err)
+check("script user: no systemctl or chown in the test mode", not (ud / "called").exists())
+rc, out, err, d = host_script(["user"], "")
+check("script user: no argument is refused", rc == 2 and "user needs NAME or -" in err, err)
 check("the build sends the script from build/gitlab-runner/, outside what the updaters install (HOST/, docker/)",
       SCRIPT.is_file() and not build_host.BUILD_GITLAB_RUNNER.startswith(("docker/", "d0", "test01/")))
 
