@@ -1419,6 +1419,49 @@ do_restore_openldap() {
   restore_done "$sw" restored-openldap "$RESTORE_MANIFESTS" "$rc"
 }
 
+# dhparam.pem in openldap-tls, for start-openldap (asyla #654). The restored cn=config names
+# olcTLSDHParamFile /container/service/slapd/assets/certs/dhparam.pem (openldap-tls), and osixia
+# writes that file only at a first start, which a restored start is not: "with an empty TLS volume
+# the restored slapd does not start" (theOrg DEPLOY.md at d706369c). Each step is a one-off of the
+# pinned openldap image (compose.yml's openldap image) as root, no network, openldap-tls at /certs,
+# as openldap-leaf.sh's step_run runs step-cli: a dhparam.pem that parses (openssl dhparam -noout)
+# is kept; else a stale dhparam.pem.tmp is removed, 2048-bit parameters go to dhparam.pem.tmp, which
+# gets 911:911 and 0600 (as issue's ldap.key) and is renamed over dhparam.pem. 0 when present or
+# written; 1 (logged) on a missing openldap-tls or any failed step.
+dh_run() {   # dh_run ENTRYPOINT ARG...: the pinned openldap image as root, no network, openldap-tls at /certs
+  local ep="$1"; shift
+  docker run --rm --network none --user 0 -v "$LEAF_DIR:/certs" --entrypoint "$ep" \
+    "$REGISTRY/theorg/identity-platform-openldap:$IDENTITY_PLATFORM_TAG" "$@" </dev/null
+}
+dhparam_ensure() {   # dhparam_ensure SWITCH
+  local sw="$1" rc=0
+  if [ -L "$LEAF_DIR" ] || [ ! -d "$LEAF_DIR" ]; then
+    echo "[ERROR] $sw: $LEAF_DIR is not a directory (run leaf-issue first)" >&2
+    return 1
+  fi
+  if dh_run openssl dhparam -in /certs/dhparam.pem -noout >/dev/null 2>&1; then
+    echo "[INFO] $sw: dhparam.pem present"
+    return 0
+  fi
+  dh_run rm -f /certs/dhparam.pem.tmp >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "[ERROR] $sw: could not remove a stale $LEAF_DIR/dhparam.pem.tmp (exit $rc)" >&2
+    return 1
+  fi
+  dh_run openssl dhparam -out /certs/dhparam.pem.tmp 2048 >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "[ERROR] $sw: openssl dhparam 2048 in the openldap image failed (exit $rc)" >&2
+    return 1
+  fi
+  dh_run sh -c 'chown 911:911 /certs/dhparam.pem.tmp && chmod 0600 /certs/dhparam.pem.tmp && mv -f /certs/dhparam.pem.tmp /certs/dhparam.pem' \
+    >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "[ERROR] $sw: could not set 911:911 0600 on dhparam.pem.tmp or rename it to dhparam.pem (exit $rc)" >&2
+    return 1
+  fi
+  echo "[INFO] $sw: dhparam.pem written (2048-bit, 911:911 0600)"
+}
+
 # start-openldap and start-keycloak (DEPLOY.md "Production on d05", cutover steps 5-6, at theOrg
 # bb456ee): `--profile restored up -d --no-deps --wait SERVICE` over the restored data, with
 # --wait-timeout START_WAIT_S (IDENTITY_PLATFORM_START_WAIT_S, default 300; asyla's, as up's). The
@@ -1436,6 +1479,8 @@ do_restore_openldap() {
 # or invalid marker (cutover_gate; start-keycloak needs started-openldap too), its own started-*
 # marker or cutover-done present, keycloak-db not running and healthy (start-keycloak), a terminal
 # on stdin or an empty read. Exit 2 for an ARG; 1 when the service does not become healthy.
+# start-openldap, after those refusals and before the up, ensures dhparam.pem (dhparam_ensure): a
+# failure there exits 1 with no up and no marker.
 do_start() {   # do_start SWITCH VALUE_NAME SERVICE MARKER [ARG...]
   local sw="$1" name="$2" svc="$3" marker="$4" h id rc=0 in_env=false
   shift 4
@@ -1484,6 +1529,11 @@ do_start() {   # do_start SWITCH VALUE_NAME SERVICE MARKER [ARG...]
   if [[ -z $pw ]]; then
     echo "[ERROR] $sw: refused: no value read on stdin; nothing changed" >&2
     return 3
+  fi
+  if [ "$svc" = openldap ] && ! dhparam_ensure "$sw"; then
+    unset -v pw
+    echo "[ERROR] $sw: refused: dhparam.pem could not be checked or written in $LEAF_DIR; openldap not started; no $marker marker" >&2
+    return 1
   fi
   echo "[INFO] $sw: starting $svc (--profile restored, --no-deps; healthy within ${START_WAIT_S}s)"
   # run_compose's argv, with `builtin exec docker` in its own subshell: the docker program, never a

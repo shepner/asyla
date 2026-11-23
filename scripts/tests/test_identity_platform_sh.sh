@@ -84,7 +84,7 @@ unset IDP_KEYCLOAK_DB_PASSWORD IDP_LDAP_ADMIN_PASSWORD IDP_DEPLOY_DEX_CLIENT_SEC
   STUB_RESTORE_RC STUB_RESTORE_PW_FILE STUB_DB_HEALTH OPENLDAP_BACKUP_CONFIG_MOUNT \
   STUB_ENV_NAMES STUB_UP_ENV STUB_UP_RC STUB_BIND_FILE STUB_BIND_RC STUB_NO_OL IDENTITY_PLATFORM_START_WAIT_S \
   STUB_KC_RUNNING STUB_KC_HEALTH STUB_CONF_IN STUB_APPLY_RC STUB_RECONCILE_RC CONF_STDIN STUB_OL_HEALTH \
-  STUB_DATA_RC STUB_RESETOFF_RC
+  STUB_DATA_RC STUB_RESETOFF_RC STUB_DHPARAM_PRESENT STUB_DHPARAM_FAIL
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SRC="$REPO/d05/apps/identity-platform"
@@ -169,6 +169,10 @@ if [ "$1 $2" = "network create" ]; then
   echo "$drv $internal $subnet $gw $range" > "$STUB_NET/$1"; echo "netid-$1"; exit 0
 fi
 case "$*" in
+  # start-openldap's dhparam one-offs: the check parses only with STUB_DHPARAM_PRESENT; the
+  # generate exits STUB_DHPARAM_FAIL (default 0); the stale .tmp rm and the chown/chmod/rename pass.
+  "run "*"--entrypoint openssl "*"dhparam -in "*) [ -n "${STUB_DHPARAM_PRESENT:-}" ]; exit ;;
+  "run "*"--entrypoint openssl "*"dhparam -out "*) exit "${STUB_DHPARAM_FAIL:-0}" ;;
   # The post-cutover data check: lists the mounted host dir here as the image's sh would (lost+found
   # aside); STUB_DATA_RC exits that instead (a docker failure).
   "run "*":/d:ro "*)
@@ -1683,6 +1687,7 @@ start_setup() {   # what the restores leave (start-keycloak: started-openldap to
   printf 'date 2026-11-16T00:00:00Z\nmanifests-sha256 %s\n' "$UNP_M" > "$ROOT/cutover-state/restored-openldap"
   printf 'date 2026-11-16T00:00:00Z\nmanifests-sha256 %s\n' "$UNP_M" > "$ROOT/cutover-state/restored-keycloak"
   [ "${1:-}" != keycloak ] || printf 'date 2026-11-16T00:00:00Z\nadmin-bind ok\n' > "$ROOT/cutover-state/started-openldap"
+  mkdir -p "$ROOT/openldap-tls"
 }
 # start_run SWITCH...: leaf_run with the stub's env names, up env and bind stdin kept; keycloak-db
 # running and healthy unless START_EXTRA (more NAME=value words) is set, which replaces STUB_DB_RUNNING=1.
@@ -1695,8 +1700,9 @@ up_env_ok() {   # up_env_ok NAME...: the value in the up call's environment unde
   [ "$(grep -cF -- "$LEAF_VAL" "$T/upenv" 2>/dev/null)" -eq "$#" ] || return 1
   for n in "$@"; do grep -qxF -- "$n=$LEAF_VAL" "$T/upenv" || return 1; done
 }
+ol_docker() { grep '^docker ' "$T/log" | grep -vF dhparam; }   # the docker calls but dhparam's
 ol_start_ok() {   # the exact up, ps and bind; the names in up's env alone; the bind's stdin the value, no newline
-  [ "$(grep -c '^docker ' "$T/log")" -eq 3 ] && [ "$(sed -n 1p "$T/log")" = "$OL_UP" ] \
+  [ "$(ol_docker | grep -c .)" -eq 3 ] && [ "$(ol_docker | sed -n 1p)" = "$OL_UP" ] \
     && grep -qxF "$OL_PS" "$T/log" && grep -qxF "$OL_BIND" "$T/log" \
     && [ "$(grep -c '^ENVNAMES ' "$T/log")" -eq 1 ] && grep -qx 'ENVNAMES LDAP_ADMIN_PASSWORD LDAP_CONFIG_PASSWORD' "$T/log" \
     && up_env_ok LDAP_ADMIN_PASSWORD LDAP_CONFIG_PASSWORD \
@@ -1738,13 +1744,13 @@ start_run start-keycloak; rc=$?
 start_refused 3 start-keycloak "a second time (its own marker)" 'started-keycloak exists (already started'
 start_setup
 IDENTITY_PLATFORM_START_WAIT_S=42 START_EXTRA="" start_run start-openldap; rc=$?
-[ "$rc" -eq 0 ] && [ "$(sed -n 1p "$T/log")" = "${OL_UP/--wait-timeout 300/--wait-timeout 42}" ] \
+[ "$rc" -eq 0 ] && [ "$(ol_docker | sed -n 1p)" = "${OL_UP/--wait-timeout 300/--wait-timeout 42}" ] \
   && ok "start-openldap: IDENTITY_PLATFORM_START_WAIT_S sets --wait-timeout" || bad "start wait timeout" "rc=$rc; $(cat "$T/log")"
 
 # A failed admin bind: openldap left running (no stop, down or rm), no marker, exit 1.
 start_setup
 START_EXTRA="STUB_BIND_RC=49" start_run start-openldap; rc=$?
-[ "$rc" -eq 1 ] && grep -qxF "$OL_BIND" "$T/log" && ! grep -qE ' (stop|down|rm|kill)( |$)' "$T/log" \
+[ "$rc" -eq 1 ] && grep -qxF "$OL_BIND" "$T/log" && [ -z "$(grep -vF dhparam "$T/log" | grep -E ' (stop|down|rm|kill)( |$)')" ] \
   && [ ! -e "$ROOT/cutover-state/started-openldap" ] && echo "$OUT" | grep -q 'admin bind as cn=admin,dc=theorg,dc=local failed (ldapwhoami exited 49' \
   && echo "$OUT" | grep -q 'openldap left running' && no_value \
   && ok "start-openldap with a failed admin bind (49): openldap left running, no marker, exit 1" || bad "start-openldap bind failure" "rc=$rc; $OUT; $(cat "$T/log")"
@@ -1754,6 +1760,53 @@ START_EXTRA="STUB_NO_OL=1" start_run start-openldap; rc=$?
 [ "$rc" -eq 1 ] && ! grep -q 'exec -i' "$T/log" && [ ! -e "$ROOT/cutover-state/started-openldap" ] \
   && echo "$OUT" | grep -q "openldap's container not found" && no_value \
   && ok "start-openldap with no container after the start: no bind, no marker, exit 1" || bad "start-openldap no container" "rc=$rc; $OUT"
+
+# dhparam.pem (asyla #654): every step a one-off of the pinned openldap image as root, no network,
+# openldap-tls at /certs; then the up.
+OL_IMG="gitea.asyla.org/theorg/identity-platform-openldap:d706369c435a092948f4e86fad36f1a8a74cac51"
+DH_PRE="docker run --rm --network none --user 0 -v $ROOT/openldap-tls:/certs --entrypoint"
+DH_CHECK="$DH_PRE openssl $OL_IMG dhparam -in /certs/dhparam.pem -noout"
+DH_RM="$DH_PRE rm $OL_IMG -f /certs/dhparam.pem.tmp"
+DH_GEN="$DH_PRE openssl $OL_IMG dhparam -out /certs/dhparam.pem.tmp 2048"
+DH_FIN="$DH_PRE sh $OL_IMG -c chown 911:911 /certs/dhparam.pem.tmp && chmod 0600 /certs/dhparam.pem.tmp && mv -f /certs/dhparam.pem.tmp /certs/dhparam.pem"
+# (a) Missing (the check does not parse): check, stale .tmp removed, generate, owner/mode/rename, then the up.
+start_setup
+START_EXTRA="" start_run start-openldap; rc=$?
+dh_calls="$(grep '^docker ' "$T/log" | sed -n 1,5p)"
+[ "$rc" -eq 0 ] && [ "$dh_calls" = "$(printf '%s\n' "$DH_CHECK" "$DH_RM" "$DH_GEN" "$DH_FIN" "$OL_UP")" ] \
+  && echo "$OUT" | grep -qxF '[INFO] start-openldap: dhparam.pem written (2048-bit, 911:911 0600)' \
+  && ! echo "$OUT" | grep -q 'dhparam.pem present' && ol_start_ok && started_ok started-openldap "admin-bind ok" && no_value \
+  && ok "start-openldap with no dhparam.pem: openssl dhparam 2048 in the pinned openldap image (--network none, root), chown 911:911, chmod 0600, rename, then the up; started-openldap" \
+  || bad "start-openldap dhparam missing" "rc=$rc; $OUT; $(cat "$T/log")"
+# (d) The stale dhparam.pem.tmp is removed before the generate writes a new one.
+rm_n="$(grep -nxF "$DH_RM" "$T/log" | cut -d: -f1)" gen_n="$(grep -nxF "$DH_GEN" "$T/log" | cut -d: -f1)"
+[ -n "$rm_n" ] && [ -n "$gen_n" ] && [ "$rm_n" -lt "$gen_n" ] \
+  && ok "start-openldap: a stale dhparam.pem.tmp is removed (rm -f in the image) before the generate" \
+  || bad "start-openldap stale dhparam tmp" "$(cat "$T/log")"
+# (b) Present and parsing: no generate, rm or rename; the up still runs.
+start_setup
+START_EXTRA="STUB_DHPARAM_PRESENT=1" start_run start-openldap; rc=$?
+[ "$rc" -eq 0 ] && [ "$(grep '^docker ' "$T/log" | grep -cF dhparam)" -eq 1 ] && grep -qxF "$DH_CHECK" "$T/log" \
+  && echo "$OUT" | grep -qxF '[INFO] start-openldap: dhparam.pem present' && ! echo "$OUT" | grep -q 'dhparam.pem written' \
+  && ol_start_ok && started_ok started-openldap "admin-bind ok" && no_value \
+  && ok "start-openldap with a dhparam.pem that parses: kept (no generate, rm or rename), the up runs; started-openldap" \
+  || bad "start-openldap dhparam present" "rc=$rc; $OUT; $(cat "$T/log")"
+# (c) The generate fails: exit 1, no rename, no up, no bind, no marker.
+start_setup
+START_EXTRA="STUB_DHPARAM_FAIL=1" start_run start-openldap; rc=$?
+[ "$rc" -eq 1 ] && grep -qxF "$DH_GEN" "$T/log" && ! grep -qxF "$DH_FIN" "$T/log" && ! grep -qE ' up |exec -i' "$T/log" \
+  && [ ! -e "$ROOT/cutover-state/started-openldap" ] && [ ! -e "$T/upenv" ] \
+  && echo "$OUT" | grep -qF 'start-openldap: openssl dhparam 2048 in the openldap image failed (exit 1)' \
+  && echo "$OUT" | grep -qF 'openldap not started; no started-openldap marker' && no_value \
+  && ok "start-openldap with the dhparam generate failing: exit 1, no rename, no up, no started-openldap marker" \
+  || bad "start-openldap dhparam failure" "rc=$rc; $OUT; $(cat "$T/log")"
+# No openldap-tls directory: exit 1 before any dhparam call (docker would create it root-owned).
+start_setup; mv "$ROOT/openldap-tls" "$ROOT/openldap-tls.aside"
+START_EXTRA="" start_run start-openldap; rc=$?
+mv "$ROOT/openldap-tls.aside" "$ROOT/openldap-tls"
+[ "$rc" -eq 1 ] && ! grep -qF dhparam "$T/log" && ! grep -qE ' up |exec -i' "$T/log" && [ ! -e "$ROOT/cutover-state/started-openldap" ] \
+  && echo "$OUT" | grep -qF "openldap-tls is not a directory (run leaf-issue first)" \
+  && ok "start-openldap with no openldap-tls: exit 1, no dhparam call, no up, no marker" || bad "start-openldap no tls dir" "rc=$rc; $OUT; $(cat "$T/log")"
 # The up fails (not healthy in time): no bind, no marker, exit 1.
 for sw in start-openldap start-keycloak; do
   start_setup "${sw#start-}"
