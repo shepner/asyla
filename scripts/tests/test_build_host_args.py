@@ -192,18 +192,23 @@ def egress_no_shell_case() -> bool:
     good2 = [ok for _, ok, _ in res2] == [True, True, True, False]
     seen = []
 
-    def ns(rc):
+    def ns(rc, exec_rc=127):
         def f(t, c):
             seen.append(c)
-            return Done(0 if "nft list" in c else 127 if "docker exec" in c else rc if "nsenter" in c else 28)
+            return Done(0 if "nft list" in c else exec_rc if "docker exec" in c else rc if "nsenter" in c else 28)
         return f
     res3, _ = with_ssh(ns(7), lambda: build_host.egress_checks(spec, containers=["ticketing-vikunja-1"]))
     good3 = res3[-1][1] and "network namespace" in res3[-1][0] and any("nsenter" in c for c in seen)
     res4, _ = with_ssh(ns(99), lambda: build_host.egress_checks(spec, containers=["ticketing-vikunja-1"]))
     res5, _ = with_ssh(ns(0), lambda: build_host.egress_checks(spec, containers=["ticketing-vikunja-1"]))
+    seen.clear()   # a running container with a shell but no probe tool (postgres's, 99) also goes through nsenter
+    res6, _ = with_ssh(ns(28, exec_rc=99), lambda: build_host.egress_checks(spec, containers=["identity-platform-keycloak-db-1"]))
+    good6 = res6[-1][1] and "no probe tool" in res6[-1][0] and any("nsenter" in c for c in seen)
+    res7, _ = with_ssh(ns(0, exec_rc=99), lambda: build_host.egress_checks(spec, containers=["identity-platform-keycloak-db-1"]))
     return check("egress, no shell: an image passes beside a proving one, alone fails; a container goes "
-                 "through nsenter, blocked passes, reached or no tooling fails",
-                 good and good2 and good3 and not res4[-1][1] and not res5[-1][1], str((res, res2, res3, res4, res5)))
+                 "through nsenter, blocked passes, reached or no tooling fails; a no-probe-tool container (99) too",
+                 good and good2 and good3 and not res4[-1][1] and not res5[-1][1] and good6 and not res7[-1][1],
+                 str((res, res2, res3, res4, res5, res6, res7)))
 
 
 def egress_no_probe_tool_case() -> bool:
