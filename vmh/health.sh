@@ -1,7 +1,9 @@
 #!/bin/sh
 # Read-only health of one Proxmox VE node (vmh01, vmh02, vmh03). Installed by vmh/setup.sh (part
 # health) as /usr/local/sbin/asyla-vmh-health; host-maintenance's monitor runs it over SSH with a
-# forced-command key. Changes nothing. One line per check, tab-separated:
+# forced-command key. Changes nothing on the node; its only writes are its own state in
+# /var/lib/asyla-vmh-health (a journal cursor, held kernel findings, SMART counters by serial).
+# One line per check, tab-separated:
 #   STATUS<TAB>KEY<TAB>DETAIL      STATUS is ok, warn or crit
 # Exit 0 always (the caller reads the lines); 2 if this is not a Proxmox node.
 set -u
@@ -35,6 +37,265 @@ apt_verdict() {
     else r warn apt "$n upgradable, $s from security, still pending after the $when unattended-upgrades run"; fi
 }
 
+# ---- kernel log patterns and SMART by serial (asyla #610 step 2)
+# py MODE STATE_DIR NOW_EPOCH ARGS...: the kernel and SMART checks, in python3 for smartctl's JSON and
+# for the same regex engine as the asyla hub's tools/export_nas_smart.py (#610 step 1, proved on
+# nas01's 2026-10-20 kern.log), whose KERN_PATTERNS, KERN_DEVICE and severities PATTERNS and DEVICE
+# copy: keep the two lists the same. "urgent" there prints crit here; the monitor sends crit as urgent.
+#   py kern STATE NOW LINES [NOTE]   LINES: journal lines (short-iso, UTC) since the last run. Each
+#                                    match is held in STATE/kern-held.json, keyed by kind and device,
+#                                    for 24 h after its last line, so a run every 15 min keeps it open.
+#   py smart STATE NOW JSON...       one `smartctl --json -a` per disk, the file named DEV.json. Keys
+#                                    by serial (device names move between boots); counters per serial
+#                                    in STATE/smart.json, so a rise warns for 7 days.
+py() {
+    python3 -I - "$@" <<'PY'
+import datetime, json, os, re, sys
+
+HOLD_H = 24
+RISE_WINDOW_H = 7 * 24
+SAMPLE = 160
+NVME_WEAR_WARN = 80       # percent used, as nas01
+WEAR_LEFT_WARN = 10       # ATA wear indicator, normalised value
+TEMP_WARN_C = {"ssd": 70, "hdd": 55}  # when the drive reports no operating limit of its own
+
+PATTERNS = [(k, s, l, re.compile(p)) for k, s, l, p in (
+    ("nic-removed", "urgent", "NIC or PCIe adapter removed", r"Adapter removed|pciehp\b.*Card not present"),
+    ("nvme-removed", "urgent", "NVMe controller removed",
+     r"\bnvme\d*\S*: .*(Removing after probe failure|Disabling device after reset failure)"),
+    ("pool-suspended", "urgent", "ZFS pool suspended",
+     r"has encountered an uncorrectable I/O failure and has been suspended"),
+    ("nic-ecc", "warn", "NIC internal ECC error", r"Received ECC Err"),
+    ("nic-reset", "warn", "NIC adapter reset or hang",
+     r"Reset adapter|RXDCTL\.ENABLE .*not cleared|Detected Tx Unit Hang|NETDEV WATCHDOG|transmit queue \d+ timed out"),
+    ("nic-firmware", "warn", "NIC firmware error", r"firmware error detected"),
+    ("pcie-aer", "warn", "PCIe AER error", r"\bAER: .*error received|PCIe Bus Error"),
+    ("hw-error", "warn", "machine check or hardware error",
+     r"\[Hardware Error\]|Machine check events logged|\bEDAC \S+: .*\b[CU]E\b"),
+    ("ata-scsi", "warn", "ATA or SCSI error or reset",
+     r"\bata\d+(\.\d+)?: (hard resetting link|SError|exception Emask|failed command|COMRESET failed"
+     r"|link is slow to respond)|\bsd \d+:\d+:\d+:\d+: .*(FAILED Result|timing out command|abort)"
+     r"|\bmpt[23]sas_cm\d+: .*fault_state|\btask abort\b"),
+    ("nvme-timeout", "warn", "NVMe timeout or controller reset",
+     r"\bnvme\d*\S*: .*(I/O \d+ (\(\S+\) )?QID \d+ timeout|controller is down|resetting controller)"),
+    ("io-error", "warn", "block I/O error",
+     r"I/O error, dev |Buffer I/O error|critical medium error|Medium Error|Unrecovered read error"),
+    ("zio-error", "warn", "ZFS I/O error", r"\bzio pool="),
+    ("fs-error", "warn", "filesystem error",
+     r"EXT4-fs error|XFS \(\S+\): .*(Corruption|metadata I/O error|Internal error)|BTRFS (error|critical)"),
+    ("nfsd-error", "warn", "NFS server error",
+     r"\bnfsd: .*(error|failed|too many)|\bNFSD: .*(failed|error)|rpc-srv/\w+: nfsd: (got error|sent \d+ when)"
+     r"|\blockd: .*(failed|cannot)"),
+    ("oom", "warn", "out of memory kill", r"Out of memory: Kill|oom-kill:|invoked oom-killer"),
+    ("kernel-fault", "warn", "kernel oops, lockup or hung task",
+     r"kernel BUG at|general protection fault|\bOops: |soft lockup|hard LOCKUP|blocked for more than \d+ seconds"
+     r"|rcu\S*: .*detected stalls?|Kernel panic"),
+)]
+DEVICE = [re.compile(p) for p in (
+    r"\b([0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7])\b", r"\bdev (\w+)", r"\[(sd[a-z]+|nvme\d+n\d+)\]",
+    r"\b(nvme\d+)(?:n\d+)?\b", r"\b(ata\d+)(?:\.\d+)?:", r"\bsd (\d+:\d+:\d+:\d+)", r"\bzio pool=(\S+)",
+    r"Pool '([^']+)'", r"\b(mpt[23]sas_cm\d+)")]
+# ATA attribute id -> counter. A rise in any counter warns for RISE_WINDOW_H; pending above 0 warns.
+ATA_COUNTERS = {5: "reallocated_sectors", 197: "pending_sectors", 198: "offline_uncorrectable",
+                187: "reported_uncorrect", 199: "crc_errors"}
+RISE = ("reallocated_sectors", "offline_uncorrectable", "reported_uncorrect", "crc_errors", "nvme_media_errors")
+WEAR_NAMES = re.compile(r"Wear_Leveling_Count|Media_Wearout_Indicator|Percent_Lifetime_Remain")
+
+
+def out(status, key, detail):
+    """One STATUS<TAB>KEY<TAB>DETAIL line; a tab or newline in DETAIL (a kernel line) becomes a space."""
+    detail = re.sub(r"\s+", " ", str(detail)).strip()
+    print(f"{status}\t{key}\t{detail}")
+
+
+def keypart(s):
+    return re.sub(r"[^A-Za-z0-9_.:-]", "_", str(s))
+
+
+def when(t):
+    return datetime.datetime.fromtimestamp(t, datetime.timezone.utc).strftime("%Y-%m-%d %H:%MZ")
+
+
+def load(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save(path, data):
+    with open(path + ".new", "w") as f:
+        json.dump(data, f, sort_keys=True)
+    os.replace(path + ".new", path)
+
+
+def match(line):
+    """(kind, severity, label, device) for the first PATTERNS entry LINE matches, else None."""
+    for kind, sev, label, rx in PATTERNS:
+        if rx.search(line):
+            for d in DEVICE:
+                m = d.search(line)
+                if m:
+                    return kind, sev, label, m.group(1)
+            return kind, sev, label, "-"
+    return None
+
+
+def kern(state, now, lines_path, note=""):
+    path = os.path.join(state, "kern-held.json")
+    held, new, hits = load(path), 0, 0
+    with open(lines_path, errors="replace") as f:
+        for line in f:
+            if line.startswith("-- cursor: ") or not line.strip():
+                continue
+            new += 1
+            m = match(line)
+            if not m:
+                continue
+            kind, sev, label, dev = m
+            hits += 1
+            s = re.match(r"^\d{4}-(\d\d-\d\d)T(\d\d:\d\d:\d\d)", line)
+            stamp = f"{s.group(1)} {s.group(2)}Z" if s else "?"
+            key = f"kern.{kind}" + (f".{keypart(dev)}" if dev != "-" else "")
+            h = held.setdefault(key, {"severity": sev, "label": label, "device": dev, "count": 0, "first": stamp})
+            h.update(count=h["count"] + 1, last=stamp, seen=now, sample=line.strip()[:SAMPLE])
+    for k in [k for k, h in held.items() if now - h.get("seen", 0) > HOLD_H * 3600]:
+        del held[k]
+    save(path, held)
+    out("ok", "kern", note or f"{new} new kernel line(s), {hits} matched, {len(held)} held for {HOLD_H} h")
+    for k in sorted(held):
+        h = held[k]
+        out("crit" if h["severity"] == "urgent" else "warn", k,
+            f"{h['label']} on {h['device']}: {h['count']} line(s), {h['first']} to {h['last']}: {h['sample']}")
+
+
+def raw_count(a):
+    """An ATA counter's raw: the leading number of its string (vendors pack more into the value)."""
+    m = re.match(r"\s*(\d+)", str(a.get("raw", {}).get("string", "")))
+    return int(m.group(1)) if m else a.get("raw", {}).get("value")
+
+
+def smart(state, now, files):
+    path = os.path.join(state, "smart.json")
+    st = load(path)
+    for fp in files:
+        dev = os.path.basename(fp)[:-len(".json")]
+        try:
+            with open(fp) as f:
+                d = json.load(f)
+        except (OSError, ValueError):
+            out("warn", f"disk.{keypart(dev)}", f"/dev/{dev}: smartctl gave no JSON")
+            continue
+        rc = d.get("smartctl", {}).get("exit_status", 1)
+        serial = str(d.get("serial_number", "")).strip()
+        if rc & 0b11 or not serial or "device" not in d:
+            msgs = " ".join(m.get("string", "") for m in d.get("smartctl", {}).get("messages", []))
+            out("warn", f"disk.{keypart(dev)}", f"/dev/{dev}: SMART not read: smartctl exit {rc} {msgs}")
+            continue
+        key, who = "disk." + keypart(serial), f"{d.get('model_name', '?')} /dev/{dev}"
+        proto, v, used, wear, cw = d["device"].get("protocol"), {}, None, None, 0
+        if proto == "ATA":
+            for a in d.get("ata_smart_attributes", {}).get("table", []):
+                if a.get("id") in ATA_COUNTERS:
+                    v[ATA_COUNTERS[a["id"]]] = raw_count(a)
+                elif wear is None and WEAR_NAMES.search(a.get("name", "")):
+                    wear = a.get("value")
+        elif proto == "NVMe":
+            log = d.get("nvme_smart_health_information_log", {})
+            used, cw = log.get("percentage_used"), log.get("critical_warning", 0)
+            v["nvme_media_errors"] = log.get("media_errors")
+        elif "scsi_grown_defect_list" in d:
+            v["reallocated_sectors"] = d["scsi_grown_defect_list"]
+        t = d.get("temperature", {})
+        temp = t.get("current")
+        limit = (t.get("op_limit_max") or d.get("nvme_composite_temperature_threshold", {}).get("warning")
+                 or TEMP_WARN_C["ssd" if proto == "NVMe" or d.get("rotation_rate") == 0 else "hdd"])
+        passed = d.get("smart_status", {}).get("passed")
+        detail = (f"{'PASSED' if passed else 'FAILED' if passed is False else 'n/a'} {who}"
+                  + (f" used={used}%" if used is not None else "") + (f" wear={wear}" if wear is not None else "")
+                  + (f" {round(temp * 9 / 5 + 32)}F" if temp is not None else ""))
+        if passed is False:
+            out("crit", key, detail)
+        elif (used is not None and used >= NVME_WEAR_WARN) or (wear is not None and wear <= WEAR_LEFT_WARN):
+            out("warn", key, detail)
+        else:
+            out("ok", key, detail)
+        if cw:
+            out("crit", key + ".nvme-critical", f"{who}: NVMe critical warning 0x{cw:02x}")
+        if (v.get("pending_sectors") or 0) > 0:
+            out("warn", key + ".pending", f"{who}: {v['pending_sectors']} pending sector(s)")
+        if temp is not None and temp >= limit:
+            out("warn", key + ".temp", f"{who}: {round(temp * 9 / 5 + 32)}F, at or over its {round(limit * 9 / 5 + 32)}F limit")
+        s = st.setdefault(serial, {})
+        s["seen"] = now
+        for k in RISE:
+            val = v.get(k)
+            if val is None:
+                continue
+            prev = s.get(k)
+            rose = prev.get("rose_at") if prev else None
+            if prev is not None and val > prev["value"]:
+                rose = now
+            s[k] = {"value": val, "rose_at": rose}
+            if rose is not None and now - rose < RISE_WINDOW_H * 3600:
+                out("warn", f"{key}.{k.replace('_', '-')}", f"{who}: {k.replace('_', ' ')} rose to {val} at {when(rose)}")
+    for k in [k for k, s in st.items() if now - s.get("seen", 0) > 30 * 86400]:
+        del st[k]
+    save(path, st)
+
+
+mode, state, now = sys.argv[1], sys.argv[2], int(sys.argv[3])
+os.makedirs(state, mode=0o700, exist_ok=True)
+if mode == "kern":
+    kern(state, now, *sys.argv[4:6])
+elif mode == "smart":
+    smart(state, now, sys.argv[4:])
+else:
+    sys.exit(f"py: unknown mode {mode}")
+PY
+}
+
+# kern_check STATE NOW: the kernel journal (_TRANSPORT=kernel, the lines -k shows, but across boots, so
+# lines just before a crash or reboot are read after it) since the cursor in STATE/kern.cursor. The
+# vmh nodes keep no kern.log (vmh01/vmh02 stopped writing theirs on 2026-10-24; vmh03 has none). The
+# first run only sets the cursor. The cursor moves only after py has held the lines' matches.
+kern_check() {
+    local state="$1" now="$2" cf="$1/kern.cursor" lines="$1/kern.lines" c
+    has python3 || { r warn kern "python3 not found: kernel patterns not checked"; return; }
+    mkdir -p "$state" && chmod 700 "$state" || { r warn kern "state directory $state not writable"; return; }
+    if ! [ -s "$cf" ]; then
+        c=$(journalctl -k -n 0 --show-cursor --no-pager -q 2>/dev/null | sed -n 's/^-- cursor: //p' | tail -n1)
+        [ -n "$c" ] || { r warn kern "journal not read: no cursor from journalctl -k"; return; }
+        : >"$lines"
+        py kern "$state" "$now" "$lines" "first run: cursor set at the end of the journal; later runs read from here" \
+            && printf '%s\n' "$c" >"$cf"
+        return
+    fi
+    if ! journalctl _TRANSPORT=kernel --after-cursor="$(cat "$cf")" --show-cursor -o short-iso --utc --no-pager -q \
+        >"$lines" 2>"$lines.err"; then
+        r warn kern "journal not read after the saved cursor: $(one <"$lines.err" | cut -c1-160) (remove $cf to restart from now)"
+        return
+    fi
+    c=$(sed -n 's/^-- cursor: //p' "$lines" | tail -n1)
+    py kern "$state" "$now" "$lines" && [ -n "$c" ] && printf '%s\n' "$c" >"$cf.new" && mv "$cf.new" "$cf"
+}
+
+# disk_check STATE NOW: one `smartctl --json -a` per whole disk (not zvols, rbd, nbd or loop), then py smart.
+disk_check() {
+    local state="$1" now="$2" dir="$1/smart" d
+    has smartctl || return 0
+    has python3 || { r warn smart "python3 not found: SMART not checked"; return; }
+    mkdir -p "$dir" && chmod 700 "$state" || { r warn smart "state directory $state not writable"; return; }
+    rm -f "$dir"/*.json
+    for d in $(lsblk -dno NAME,TYPE | awk '$2 == "disk" && $1 !~ /^(zd|rbd|nbd|loop)/ { print $1 }'); do
+        smartctl --json -a "/dev/$d" >"$dir/$d.json" 2>/dev/null
+    done
+    set -- "$dir"/*.json
+    [ -e "$1" ] || return 0
+    py smart "$state" "$now" "$@"
+}
+
 # Tests source this file for the functions above only (scripts/tests/test_vmh_health_sh.sh).
 [ "${ASYLA_VMH_HEALTH_FUNCTIONS_ONLY:-}" = 1 ] && return 0
 
@@ -55,17 +316,17 @@ if has zpool; then
     s=$(zpool status -x 2>&1 | one)
     case "$s" in "all pools are healthy"|"no pools available") r ok zfs "$s" ;; *) r crit zfs "$s" ;; esac
 fi
-for d in $(lsblk -dno NAME,TYPE | awk '$2 == "disk" && $1 !~ /^(zd|rbd|nbd|loop)/ { print $1 }'); do
-    has smartctl || break
-    h=$(smartctl -H "/dev/$d" 2>/dev/null | grep -E -m1 'overall-health|SMART Health Status' | sed 's/.*: *//')
-    used=$(smartctl -A "/dev/$d" 2>/dev/null | awk '/Percentage Used:/ { gsub("%", "", $3); print $3; exit }')
-    wear=$(smartctl -A "/dev/$d" 2>/dev/null | awk '/Wear_Leveling_Count|Media_Wearout_Indicator|Percent_Lifetime_Remain/ { print $4 + 0; exit }')
-    detail="${h:-n/a}${used:+ used=$used%}${wear:+ wear=$wear}"
-    if [ -n "$h" ] && [ "$h" != PASSED ] && [ "$h" != OK ]; then r crit "disk.$d" "$detail"
-    elif [ -n "$used" ] && [ "$used" -ge 90 ]; then r warn "disk.$d" "$detail"
-    elif [ -n "$wear" ] && [ "$wear" -le 10 ]; then r warn "disk.$d" "$detail"
-    else r ok "disk.$d" "$detail"; fi
-done
+# The only state health keeps (#610): the kernel journal cursor, kernel findings held for 24 h, and
+# each disk serial's counters. One run at a time holds it (the monitor every 15 min, apply.sh health).
+STATE=/var/lib/asyla-vmh-health
+now=$(date +%s)
+mkdir -p "$STATE" && chmod 700 "$STATE"
+if exec 9>"$STATE/lock" && { ! has flock || flock -w 60 9; }; then
+    disk_check "$STATE" "$now"
+    kern_check "$STATE" "$now"
+else
+    r warn kern "another health run held $STATE/lock for 60 s: kernel and SMART not checked"
+fi
 p=$(df -P / | awk 'NR == 2 { sub("%", "", $5); print $5 }')
 if [ "$p" -ge 93 ]; then r crit fs.root "$p% used"; elif [ "$p" -ge 85 ]; then r warn fs.root "$p% used"; else r ok fs.root "$p% used"; fi
 for v in $(lvs --noheadings -o vg_name,lv_name,lv_attr,data_percent 2>/dev/null | awk '$3 ~ /^t/ { printf "%s/%s=%d\n", $1, $2, $4 }'); do
@@ -130,8 +391,7 @@ dumps=$(find /var/crash -mindepth 1 -maxdepth 1 -type d -newermt '-30 days' 2>/d
 pstore=$(find /var/lib/systemd/pstore -mindepth 2 -maxdepth 2 -type f ! -name dmesg.txt -newermt '-30 days' \
     -printf '%h\n' 2>/dev/null | sort -u | wc -l)
 [ "$pstore" -gt 0 ] && r warn crash.pstore "$pstore pstore record(s) in the last 30 days"
-ht=$(journalctl -k --since -24h --no-pager -q 2>/dev/null | grep -c 'blocked for more than')
-[ "$ht" -gt 0 ] && r warn hung-task "$ht hung-task warning(s) in 24h"
+# Hung tasks are kern.kernel-fault now (kern_check, above).
 if [ -n "$nc_to" ]; then
     d=/sys/kernel/config/netconsole/asyla
     if [ "$(cat "$d/enabled" 2>/dev/null)" = 1 ]; then r ok netconsole "-> $(cat "$d/remote_ip"):$(cat "$d/remote_port")"
