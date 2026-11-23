@@ -769,6 +769,10 @@ def registry_cases() -> list[bool]:
     out.append(check("registry: 10 theOrg images, one provenance revision each, all R: R (no config label read)",
                      rev == REV and f"revision {REV}" in printed and "10 pulled theOrg images" in printed,
                      repr((rev, printed))))
+    shared = reg.pulled() + reg.pulled()[:1] * 2
+    rev2, _ = read(StandInRegistry(good), pulled=shared)
+    out.append(check("registry: an image `images` lists once per service (the three gateways' one image) "
+                     "still matches `digests`, which lists it once", rev2 == REV, repr(rev2)))
     out.append(check("registry: the pull token (Basic) goes only to the token realm on the registry's host, "
                      "over https; the bearer only to that host",
                      basic_to and all(u.startswith(f"https://{REG}/v2/token?") for u in basic_to)

@@ -531,7 +531,9 @@ def stack_revision(spec: dict, tag: str, registry: str, pulled: list[str]) -> st
     each digest's provenance must name exactly one commit, the same for all. A pinned TAG must be
     that commit."""
     digests = image_digests(spec, registry)
-    if sorted(digests) != sorted(pulled):
+    # As sets: `images` names an image once per service (the three gateways share one image),
+    # `digests` once per image.
+    if sorted(digests) != sorted(set(pulled)):
         raise Stop(f"`{APP}.sh digests` on {spec['host']} lists other theOrg images than `images` pulled "
                    f"({len(digests)} vs {len(pulled)}); nothing minted")
     secret = build_host.from_env(app_of(spec)["pull_token_env"], f"[[app]] {APP} pull_token_env")
