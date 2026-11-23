@@ -40,6 +40,9 @@ steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "container_dns.sh", "bashrc.s
 # ASY-TRD), as d07: port 9100 from the LAN only. theOrg adds a scrape job asyla-d05-node (a hand-off).
 [node_exporter]
 allow = ["10.0.0.0/24"]    # a subnet, not a host (operator, 2026-10-25): the trends Prometheus can move
+textfile_sources = [
+  "/home/docker/maint/guest-health.prom",   # asyla_hw_*, written by host-maintenance's monitor every 15 min (asyla #610 step 5)
+]
 
 # No [[secret]]: d05 keeps no secret on disk, like d06 and d07. Every credential is a start_env or
 # [[external]] env value, resolved from OpenBao on the workstation and sent over SSH stdin at use.

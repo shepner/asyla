@@ -27,6 +27,9 @@ steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "container_dns.sh", "bashrc.s
 # `build_host.py d04 build --only setup --step node_exporter.sh --apply` (the operator's run).
 [node_exporter]
 allow = ["10.0.0.0/24"]    # a subnet, not a host (operator, 2026-10-25): the trends Prometheus can move
+textfile_sources = [
+  "/home/docker/maint/guest-health.prom",   # asyla_hw_*, written by host-maintenance's monitor every 15 min (asyla #610 step 5)
+]
 
 # The proxy's and the tunnel's, as d03's. Gitea's own secrets are inside its restored data (app.ini).
 [[secret]]

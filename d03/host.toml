@@ -27,6 +27,7 @@ steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "container_dns.sh", "bashrc.s
 allow = ["10.0.0.0/24"]    # the LAN, so the trends Prometheus can move (d06 since 2026-11-03); a subnet, not a host (operator, 2026-10-25)
 textfile_sources = [
   "/mnt/nas/data1/docker/nas01-smart/smart.prom",   # nas01 SMART, written every 6 h by nas01's cron job
+  "/home/docker/maint/guest-health.prom",   # asyla_hw_*, written by host-maintenance's monitor every 15 min (asyla #610 step 5)
 ]   # the unifi, att and openevse .prom files moved to d07 with their monitors (asyla backlog, d07 on vmh03)
 
 # Port proxies (build/setup/port_proxy.sh): none since switch-snmp (9116) moved to d07 with

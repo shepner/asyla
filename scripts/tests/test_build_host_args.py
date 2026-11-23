@@ -863,10 +863,14 @@ results = [
     check("d03 no longer carries the network monitors (moved to d07)",
           not {"unifi-monitor", "unifi-backup", "switch-monitor", "att-monitor", "openevse-monitor"}
           & {a["name"] for a in build_host.load_spec("d03")["app"]}),
-    check("d03: no port proxy, and only nas01's SMART textfile",
+    check("d03: no port proxy, and only nas01's SMART and its own guest-health textfiles",
           "port_proxy" not in build_host.load_spec("d03")
           and build_host.load_spec("d03")["node_exporter"]["textfile_sources"]
-          == ["/mnt/nas/data1/docker/nas01-smart/smart.prom"]),
+          == ["/mnt/nas/data1/docker/nas01-smart/smart.prom", "/home/docker/maint/guest-health.prom"]),
+    # asyla #610 step 5: every guest serves host-maintenance's asyla_hw_* textfile to d06's asyla-hw job.
+    check("d01-d07 each copy /home/docker/maint/guest-health.prom",
+          all("/home/docker/maint/guest-health.prom" in build_host.load_spec(h)["node_exporter"].get("textfile_sources", [])
+              for h in ("d01", "d02", "d03", "d04", "d05", "d06", "d07"))),
     spec_case("test01 defaults to its spec's node", "test01", None, "vmh01"),
     spec_case("test01 on the other node", "test01", "vmh02", "vmh02"),
     spec_case("a production host keeps its node", "d03", "vmh02", "is not disposable", refused=True),
