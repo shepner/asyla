@@ -34,6 +34,13 @@ with conditions: asyla `decisions/home-assistant-integration-logins.md`.
 ~/scripts/d01/apps/home-assistant/home-assistant.sh backup   # mirror to the NAS, without .storage
 ```
 
+`up` always removes the container first (`remove_stale_container`), so every `up` restarts Home
+Assistant, also for a change to `asyla/` or `packages/` only (seen twice on 2026-11-23). The
+scripts in `asyla/` are read fresh at each run, so a script-only change needs `up` only to copy it
+into `config/asyla/`. To bring `~/scripts` up to date, run the host-maintenance scripts task from the
+asyla hub, `python3 tools/host_maintenance_run.py --task scripts --hosts d01`, not `update_scripts.sh`
+by hand: that reads a GitLab credential on stdin and lives at `~/update_scripts.sh`.
+
 ## First-time setup
 
 Order per ASY-HST-2: push, `./update_scripts.sh` on d01, then:
