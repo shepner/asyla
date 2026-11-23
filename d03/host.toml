@@ -122,7 +122,13 @@ name = "breeding-research"
 # Runs gitea.asyla.org/personal/breeding-research:latest from Gitea's registry on d04 (gap G7); up
 # pulls it only when it is not on the host, and host-maintenance's weekly apps run updates it
 # (breeding-research.sh refresh); a build leaves a running app on the image it has.
+# Its Postgres password (breeding-research-postgres; phase 1 of the personal breeding-research plan
+# central-breed-db) is resolved from OpenBao on the workstation and sent over SSH stdin, never a file:
+#   cd ~/local/asyla && python3 core/tools/credentials.py exec BREEDING_RESEARCH_PG_PASSWORD -- python3 projects/asyla-hosts/scripts/build_host.py d03 build --only apps --app breeding-research --apply
+# host-maintenance's weekly refresh and rollback get none: breeding-research.sh takes the running
+# container's own (pg_password), so they need no OpenBao. A replica gets none either, so its up refuses.
 start = ["up"]
+start_env = ["BREEDING_RESEARCH_PG_PASSWORD"]
 verify = ["verify"]
 # tc-datalogger's Event Targets step reads the FFScouter key from TC_API_KEY_FFSCOUTER in
 # tc-user-events-pipeline. It is resolved from OpenBao on the workstation and sent over SSH stdin
