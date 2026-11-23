@@ -1,0 +1,39 @@
+# asyla's own pushgateway accounts for d06, in theOrg observability's loki-clients.toml format:
+# theOrg's scripts/loki_clients.py reads this file, run by `loki_accounts.py --registry pushgateway`
+# beside it. Each account's record is secret/hubs/asyla/own/pushgateway-clients/<name> (fields
+# username and password), created once and never overwritten: a prefix of its own, so no password
+# is shared with another gateway's accounts (loki-clients.toml, prometheus-write-clients.toml).
+#
+# d06's pushgateway-gateway (compose.yml; theOrg's loki-gateway in LOKI_GATEWAY_MODE pushgateway,
+# asyla #1268 item 4) checks these accounts: it reads each record at start with its own token
+# (deploy_role.py IDENTITIES, derived from this file) and takes PUSHGATEWAY_GATEWAY_ACCOUNTS from
+# observability.sh, which lists them in this file's order (a test checks they agree). In this mode
+# only push accounts are admitted, with PUT, POST and DELETE on /metrics/job/<job>[/<label>/<value>
+# ...]; a path holding %2F is 404, so a name with a slash goes in its @base64 form (theOrg
+# DEPLOY.md, "Route modes"). Callers reach it as https://pushgateway.asyla.org (internal-access
+# hosts/d06).
+#
+# One account per pusher: the five theOrg names in its observability-off-the-mini plan, which today
+# push to the Mini's pushgateway. No check accounts: theOrg's `loki_clients.py verify` signs in on
+# Loki's routes only; observability.sh verify and `loki_accounts.py verify --registry pushgateway`
+# check the anonymous refusals instead. No `container` keys: no pusher runs on d06.
+
+# theOrg's deploy-all.
+[clients.deploy-all]
+scope = ["push"]
+
+# theOrg's functionality-test.
+[clients.functionality-test]
+scope = ["push"]
+
+# identity-platform's dex_client_validity.py.
+[clients.identity-platform-dex-client-validity]
+scope = ["push"]
+
+# memory-system's deploy-marker.sh.
+[clients.memory-system-deploy-marker]
+scope = ["push"]
+
+# Staff's staff-stack.
+[clients.staff-stack]
+scope = ["push"]

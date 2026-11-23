@@ -1,0 +1,22 @@
+# asyla's own remote-write accounts for d06, in theOrg observability's loki-clients.toml format:
+# theOrg's scripts/loki_clients.py reads this file, run by `loki_accounts.py --registry
+# prometheus-write` beside it. Each account's record is
+# secret/hubs/asyla/own/prometheus-write-clients/<name> (fields username and password), created once
+# and never overwritten: a prefix of its own, so no password is shared with another gateway's
+# accounts (loki-clients.toml, pushgateway-clients.toml).
+#
+# d06's prometheus-write-gateway (compose.yml; theOrg's loki-gateway in LOKI_GATEWAY_MODE
+# remote-write, asyla #1268 item 3) checks these accounts: it reads each record at start with its
+# own token (deploy_role.py IDENTITIES, derived from this file) and takes PROMETHEUS_WRITE_GATEWAY_ACCOUNTS
+# from observability.sh, which lists them in this file's order (a test checks they agree). In this
+# mode only push accounts are admitted, on POST /api/v1/write (theOrg DEPLOY.md, "Route modes").
+# Callers reach it as https://prometheus-write.asyla.org (internal-access hosts/d06).
+#
+# No check accounts: theOrg's `loki_clients.py verify` signs in on Loki's routes only, so it has no
+# check for this mode; observability.sh verify and `loki_accounts.py verify --registry
+# prometheus-write` check the anonymous refusals instead. No `container` keys: no sender runs on d06.
+
+# theOrg's host agent on ws02, the Mini: its Prometheus in agent mode remote-writes the Mini's
+# theOrg jobs here (theorg #1269, T2).
+[clients.host-agent-ws02]
+scope = ["push"]
