@@ -1859,9 +1859,12 @@ def phase_gitea_runner(spec: dict, apply: bool, gitea_host: str = GITEA_TOKEN_HO
 def verify_gitlab_runners(spec: dict, check) -> None:
     """verify's GitLab runner lines: each spec runner has one entry, online, with exactly the
     spec's tags, untagged jobs off and access level GL_ACCESS_LEVEL; the host's gitlab-runner is active with the spec's
-    runners only and concurrent = their number, and its unit runs jobs as [gitlab_runner] user (else gitlab-runner)."""
+    runners only and concurrent = their number, and its unit runs jobs as [gitlab_runner] user (else gitlab-runner).
+    With a shell runner, that user's login shell under set -eo pipefail exits 0 with no TTY (as a
+    shell job's does; a clear_console in ~/.bash_logout fails it: gitlab-runner.sh logout_aside)."""
     host = spec["host"]
     gl = gitlab_runners(spec)
+    shell_user = gitlab_runner_user(spec) if any(r["executor"] == "shell" for r in gl) else None
     for r in gl:
         entries = gl_runner_entries(r["scope"], r["description"])
         check(f"GitLab runner {r['description']} online in {r['scope']}",
@@ -1878,9 +1881,17 @@ def verify_gitlab_runners(spec: dict, check) -> None:
     if gl:
         # The names and concurrent only: config.toml's token lines are never read here. The job
         # user from the unit's ExecStart (the drop-in's, when there is one).
+        # With a shell runner, the job user's login shell as a shell job starts it (test01,
+        # 2026-11-23), its output dropped: only its exit status is printed.
+        probe = ""
+        if shell_user:
+            probe = ("; printf 'set -eo pipefail\\necho x\\nexit 0\\n' | sudo env -i PATH=/usr/bin:/bin "
+                     f"su -s /bin/bash {shlex.quote(shell_user)} -c 'bash --login' >/dev/null 2>&1; "
+                     "echo \"login-shell-exit $?\"")
         r = ssh(host, "systemctl is-active gitlab-runner; sudo grep -E '^concurrent = |^  name = ' "
                       "/etc/gitlab-runner/config.toml; "
-                      "systemctl show -p ExecStart --value gitlab-runner | grep -oE -- '--user [^ ;]+'", check=False)
+                      "systemctl show -p ExecStart --value gitlab-runner | grep -oE -- '--user [^ ;]+'" + probe,
+                check=False)
         lines = r.stdout.splitlines()
         names = sorted(l.split("=", 1)[1].strip().strip('"') for l in lines if l.startswith("  name = "))
         conc = next((l.split("=", 1)[1].strip() for l in lines if l.startswith("concurrent = ")), "none")
@@ -1891,6 +1902,12 @@ def verify_gitlab_runners(spec: dict, check) -> None:
         user = gitlab_runner_user(spec) or "gitlab-runner"
         users = [l.split(None, 1)[1] for l in lines if l.startswith("--user ")]
         check(f"gitlab-runner runs shell jobs as {user}", users == [user], f"unit ExecStart --user {users or 'none'}")
+        if shell_user:
+            exits = [l.split()[1] for l in lines if l.startswith("login-shell-exit ") and len(l.split()) == 2]
+            check(f"{shell_user}'s login shell exits 0 with no TTY (shell jobs pass prepare environment)",
+                  exits == ["0"], f"exit {exits[0] if exits else 'not read'}"
+                  + ("; ~/.bash_logout running clear_console? gitlab-runner.sh user moves it aside"
+                     if exits and exits != ["0"] else ""))
 
 
 def verify_host_maintenance(spec: dict, check) -> None:
