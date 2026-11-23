@@ -924,6 +924,16 @@ def ci01_cases() -> list[bool]:
     out.append(check("verify: host mode: config.yaml is not read",
                      not any(build_host.RUNNER_CONFIG in c for c in asked) and has(lines, "[OK] Gitea runner labels are the spec's"),
                      repr(lines)))
+    # The repo's own ci01 spec carries every one of these paths (test01 does only during a proof).
+    try:
+        c1, why = build_host.load_spec("ci01"), ""
+    except build_host.Fail as e:
+        c1, why = {}, str(e)
+    out.append(check("the repo's ci01 spec loads: cpu host, binfmt.sh, no nfs.sh, [docker] roots, docker-mode runner",
+                     not why and c1["vm"].get("cpu") == "host" and c1["setup"]["steps"][-1] == "binfmt.sh"
+                     and "nfs.sh" not in c1["setup"]["steps"] and c1["runner"].get("mode") == "docker"
+                     and c1.get("docker", {}).get("data_root") == "/mnt/docker/engine"
+                     and c1.get("docker", {}).get("containerd_root") == "/mnt/docker/containerd", why or repr(c1.get("vm"))))
     return out
 
 
