@@ -13,8 +13,8 @@
 # Callers reach it as https://prometheus-write.asyla.org (internal-access hosts/d06).
 #
 # No check accounts: theOrg's `loki_clients.py verify` signs in on Loki's routes only, so it has no
-# check for this mode; observability.sh verify and `loki_accounts.py verify --registry
-# prometheus-write` check the anonymous refusals instead. No `container` keys: no sender runs on d06.
+# check for this mode, and `loki_accounts.py verify` is Loki's alone; observability.sh verify
+# checks this gateway's anonymous refusal instead. No `container` keys: no sender runs on d06.
 
 # theOrg's host agent on ws02, the Mini: its Prometheus in agent mode remote-writes the Mini's
 # theOrg jobs here (theorg #1269, T2).

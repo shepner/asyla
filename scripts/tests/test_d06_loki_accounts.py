@@ -107,24 +107,38 @@ def path_cases() -> list[bool]:
     ]
 
 
+# Each registry, the observability.sh variable that lists its accounts, and the scopes its
+# gateway's mode admits (theOrg DEPLOY.md, "Route modes": remote-write and pushgateway push only).
+ACCOUNTS_VARS = {"loki": ("LOKI_GATEWAY_ACCOUNTS", (["push"], ["query"])),
+                 "prometheus-write": ("PROMETHEUS_WRITE_GATEWAY_ACCOUNTS", (["push"],)),
+                 "pushgateway": ("PUSHGATEWAY_GATEWAY_ACCOUNTS", (["push"],))}
+
+
 def gateway_accounts_cases() -> list[bool]:
-    """observability.sh LOKI_GATEWAY_ACCOUNTS is what loki-clients.toml yields: name:scope per
+    """Each observability.sh <GATEWAY>_ACCOUNTS is what its registry yields: name:scope per
     account, comma-joined, in name order (theOrg loki_clients.py gateway-accounts)."""
     import tomllib
-    clients = tomllib.loads(la.REGISTRY.read_text())["clients"]
-    want = ",".join(f"{n}:{clients[n]['scope'][0]}" for n in sorted(clients))
     sh = (dr.HERE / "observability.sh").read_text()
-    lines = [ln for ln in sh.splitlines() if ln.startswith("LOKI_GATEWAY_ACCOUNTS=")]
-    got = lines[0].split("=", 1)[1].strip('"') if len(lines) == 1 else ""
-    return [
-        check("gateway: every account has exactly one scope, push or query",
-              all(c.get("scope") in (["push"], ["query"]) for c in clients.values()), repr(clients)),
-        check("gateway: observability.sh LOKI_GATEWAY_ACCOUNTS = loki-clients.toml's name:scope, in name order",
-              got == want, f"{got!r} != {want!r}"),
-        check("gateway: observability.sh exports LOKI_GATEWAY_ACCOUNTS",
-              any("LOKI_GATEWAY_ACCOUNTS" in m.group(0).split()
-                  for m in re.finditer(r"^export (?:[^\n]*\\\n)*[^\n]*", sh, re.M))),
-    ]
+    exported = {w for m in re.finditer(r"^export (?:[^\n]*\\\n)*[^\n]*", sh, re.M) for w in m.group(0).split()}
+    out = [check("registries: loki, prometheus-write and pushgateway, each its own file and prefix",
+                 list(la.REGISTRIES) == ["loki", "prometheus-write", "pushgateway"]
+                 and len({p for p, _ in la.REGISTRIES.values()}) == 3
+                 and len({k for _, k in la.REGISTRIES.values()}) == 3
+                 and all(k == f"secret/hubs/asyla/own/{p.stem}" for p, k in la.REGISTRIES.values()),
+                 repr(la.REGISTRIES))]
+    for reg, (var, scopes) in ACCOUNTS_VARS.items():
+        clients = tomllib.loads(la.REGISTRIES[reg][0].read_text())["clients"]
+        want = ",".join(f"{n}:{clients[n]['scope'][0]}" for n in sorted(clients))
+        lines = [ln for ln in sh.splitlines() if ln.startswith(f"{var}=")]
+        got = lines[0].split("=", 1)[1].strip('"') if len(lines) == 1 else ""
+        out += [
+            check(f"gateway {reg}: every account has exactly one scope its mode admits ({scopes})",
+                  all(c.get("scope") in scopes for c in clients.values()), repr(clients)),
+            check(f"gateway {reg}: observability.sh {var} = {la.REGISTRIES[reg][0].name}'s name:scope, in name order",
+                  got == want, f"{got!r} != {want!r}"),
+            check(f"gateway {reg}: observability.sh exports {var}", var in exported),
+        ]
+    return out
 
 
 def argv_cases() -> list[bool]:
@@ -143,9 +157,20 @@ def argv_cases() -> list[bool]:
 def main_cases() -> list[bool]:
     out = []
     rc, text = quiet(lambda: la.main(["--dry-run"]))
-    out.append(check("dry run: exit 0, the plan, nothing fetched or signed in (any contact fails)",
+    out.append(check("dry run: exit 0, every registry's plan (default all), nothing fetched or signed in "
+                     "(any contact fails)",
                      rc == 0 and "secret/hubs/asyla/own/loki-clients/alert-relay" in text
+                     and "secret/hubs/asyla/own/prometheus-write-clients/host-agent-ws02" in text
+                     and "secret/hubs/asyla/own/pushgateway-clients/staff-stack" in text
                      and "DRY RUN" in text, text))
+    rc, text = quiet(lambda: la.main(["--registry", "pushgateway", "--dry-run"]))
+    out.append(check("dry run --registry pushgateway: that registry's plan alone",
+                     rc == 0 and "secret/hubs/asyla/own/pushgateway-clients/deploy-all" in text
+                     and "loki-clients/" not in text and "prometheus-write-clients/" not in text, text))
+    for reg in ("pushgateway", "prometheus-write", "all"):
+        rc, text = quiet(lambda: la.main(["verify", "--registry", reg, "--dry-run"]))
+        out.append(check(f"verify --registry {reg}: stops, exit 1 (verify is loki only; any contact fails)",
+                         rc == 1 and "verify is loki only" in text, text))
     rc, text = quiet(lambda: la.main(["verify", "--dry-run"]))
     out.append(check("verify dry run: exit 0, the plan (url, no --cacert, both check accounts, curl), "
                      "nothing fetched, signed in or curled (any contact fails)",
@@ -166,12 +191,20 @@ def main_cases() -> list[bool]:
 
     try:
         dr.git, dr.hub_sign_in, subprocess.run = stand_in_git, lambda: HUB_STAND_IN, stand_in_run
+        signs = []
+        dr.hub_sign_in = lambda: signs.append(1) or HUB_STAND_IN
         rc, text = quiet(la.main)
         argv, env, files = runs[0] if runs else ([], {}, [])
+        want = [(la.tool_argv(Path(argv[2]).parent, p)[1:], k) for p, k in la.REGISTRIES.values()] if runs else []
         out += [
-            check("run: the tool runs once, with loki_clients.py and openbao.py unpacked beside it",
-                  len(runs) == 1 and argv[1:] == la.tool_argv(Path(argv[2]).parent)[1:]
-                  and files == ["loki_clients.py", "openbao.py"], repr(runs)),
+            check("run: the tool runs once per registry, in order, each with its own toml and prefix, "
+                  "after one sign-in",
+                  [(a[1:], e.get("LOKI_CLIENTS_KV_PREFIX")) for a, e, _ in runs] == want and len(signs) == 1,
+                  repr(runs)),
+            check("run: loki_clients.py and openbao.py unpacked beside it",
+                  files == ["loki_clients.py", "openbao.py"], repr(files)),
+            check("run: the code is unpacked once for every registry",
+                  sum(1 for c in git_calls if c[0] == "show") == 2, repr(git_calls)),
             check("run: the code is shown from TOOL_REV after a fetch, and TOOL_REV is checked on origin/main",
                   ("fetch", "--quiet", "origin") in git_calls
                   and ("merge-base", "--is-ancestor", dr.TOOL_REV, dr.MAIN) in git_calls
@@ -197,8 +230,20 @@ def main_cases() -> list[bool]:
         runs.clear()
         subprocess.run = lambda argv, env=None, **kw: Done(1, "", "::error::stand-in refused\n")
         rc, text = quiet(la.main)
-        out.append(check("run: a tool failure exits 1 with its line and a stopped: line",
-                         rc == 1 and "::error::stand-in refused" in text and "stopped:" in text, text))
+        out.append(check("run: a tool failure exits 1 with its line and a stopped: line naming the "
+                         "registries not run",
+                         rc == 1 and "::error::stand-in refused" in text and "stopped:" in text
+                         and "not run: prometheus-write, pushgateway" in text, text))
+
+        runs.clear()
+        subprocess.run = stand_in_run
+        rc, text = quiet(lambda: la.main(["--registry", "prometheus-write"]))
+        argv, env, files = runs[0] if runs else ([], {}, [])
+        out.append(check("run --registry prometheus-write: the tool runs once, with that toml and prefix",
+                         rc == 0 and len(runs) == 1
+                         and argv[-1] == str(dr.HERE / "prometheus-write-clients.toml")
+                         and env.get("LOKI_CLIENTS_KV_PREFIX") == "secret/hubs/asyla/own/prometheus-write-clients"
+                         and "prometheus-write accounts: 1 stored" in text, text))
 
         signed = []
         dr.hub_sign_in = lambda: signed.append(1) or HUB_STAND_IN

@@ -7,20 +7,35 @@
 # Project, container names, volume names and the network are theOrg's. asyla's choices:
 # - the Docker-socket and blackbox pieces are folded in; credential-probe, the Ollama log and
 #   MONITOR_THEORG (theOrg's other stacks' jobs and rules) are not here;
-# - loki-gateway with d06's own settings (theOrg's option B, asyla #1268): plain HTTP
+# - three gateways from theOrg's loki-gateway image with d06's own settings (theOrg's option B and
+#   route modes, asyla #1268): loki-gateway (mode loki), prometheus-write-gateway (remote-write, in
+#   front of prometheus-ingest) and pushgateway-gateway (pushgateway). Each is plain HTTP
 #   (LOKI_GATEWAY_TLS off), so no step-ca, provisioner or loki-ca volume; TLS ends at d06's Caddy
-#   as loki.asyla.org (internal-access hosts/d06). Caddy forwards each caller's Basic auth in
-#   plain text, so that hop is on its own internal network, loki-edge (observability-loki-edge),
-#   which only loki-gateway and caddy-internal-d06 join. It checks asyla's own accounts
-#   (loki-clients.toml), read from OpenBao under secret/hubs/asyla/own/loki-clients;
+#   as loki.asyla.org, prometheus-write.asyla.org and pushgateway.asyla.org (internal-access
+#   hosts/d06). Caddy forwards each caller's Basic auth in plain text, so that hop is on its own
+#   internal network, loki-edge (observability-loki-edge; the name is historical: it carries all
+#   three gateways' hops), which only the three gateways and caddy-internal-d06 join. Each checks its own accounts (loki-clients.toml,
+#   prometheus-write-clients.toml, pushgateway-clients.toml), read from OpenBao under its own
+#   prefix in secret/hubs/asyla/own/; observability.sh passes each its accounts
+#   (LOKI_GATEWAY_ACCOUNTS, PROMETHEUS_WRITE_GATEWAY_ACCOUNTS, PUSHGATEWAY_GATEWAY_ACCOUNTS) as its
+#   LOKI_GATEWAY_ACCOUNTS;
+# - remote writes go to prometheus-ingest (receiver on), on its own internal network, ingest
+#   (observability-ingest), with only prometheus-write-gateway and the operations Prometheus; the
+#   pushgateway is on its own, push (observability-push), with only pushgateway-gateway and the
+#   operations Prometheus, which scrapes it there (theOrg DEPLOY.md, "Where the writes go");
+# - waiting on theOrg: an ingest image or switch with no scrape jobs and the receiver on, and a
+#   federate switch in the operations image (asyla #1268). Until then prometheus-ingest is behind
+#   the compose profile ingest, which nothing enables, so it never starts: the remote-write
+#   gateway runs and refuses a write with no account (401), and one with an account gets 502;
+#   the pushgateway's 127.0.0.1:9091 publish is dropped (nothing on d06 used it);
 # - no build sections: theOrg's published images of OBSERVABILITY_TAG (observability.sh: latest);
-# - no port on every address: every port on 127.0.0.1 only (Alertmanager on 9093, the
-#   pushgateway on 9091, docker-state-exporter on 9099);
+# - no port on every address: every port on 127.0.0.1 only (Alertmanager on 9093,
+#   docker-state-exporter on 9099); the pushgateway has none (nothing on d06 pushes to it);
 # - Loki, both Prometheus and Alertmanager keep their data on d06's local data disk, as named
 #   volumes bound to OBSERVABILITY_ROOT (theOrg decision asyla-network-monitoring §8: never NFS);
 # - no secret is in any file, volume or container environment (asyla SEC-5 and SEC-7; the
 #   operator, 2026-11-03: secrets live only in OpenBao). alert-relay, emporia-collector,
-#   scrape-proxy and loki-gateway each read theirs from OpenBao in-process with their own token:
+#   scrape-proxy and the three gateways each read theirs from OpenBao in-process with their own token:
 #   deploy_role.py (beside this file) mints it from the observability-d06 token role and passes it
 #   response-wrapped, single use, in <NAME>_OPENBAO_WRAPPED_TOKEN. Each container spends it at
 #   start, so what Docker keeps is a spent wrapping token. The *_KV settings name asyla's records
@@ -37,8 +52,10 @@
 # the trends Home Assistant job (through scrape-proxy), emporia-collector, Vector's
 # container-log pipeline (VECTOR_DOCKER_LOGS: this stack's own logs to Loki, plain HTTP inside
 # observability-net), and alert-relay's log lines (an alert's logql annotation run against
-# loki:3100 inside observability-net, the lines put in its task; README.md, On, off), and the Loki
-# gateway (pushes and queries from off this host, each with its own account, as loki.asyla.org).
+# loki:3100 inside observability-net, the lines put in its task; README.md, On, off), the Loki
+# gateway (pushes and queries from off this host, each with its own account, as loki.asyla.org),
+# and the remote-write and pushgateway gateways (writes from off this host, each with its own
+# account; remote writes stop at 502 while prometheus-ingest waits on theOrg, above).
 # Off (README.md says what turns each on): chat-api (CHAT_API_URL empty).
 #
 # Run with observability.sh: it sets OBSERVABILITY_TAG, OBSERVABILITY_ROOT and the settings below
@@ -46,14 +63,18 @@
 name: observability
 
 services:
+  # Anything that reaches the pushgateway can push or wipe, with no account. So it is on push
+  # (observability-push) alone, an internal network that only pushgateway-gateway (the one way in,
+  # with an account) and its scraper, the operations Prometheus, join (theOrg DEPLOY.md, "Where the
+  # writes go"). theOrg's job (prometheus/scrape-stack/pushgateway.yml) scrapes pushgateway:9091 by
+  # service name, which resolves on push. No port: nothing on d06 pushes to it (asyla #1268: no
+  # 9091 in asyla-hosts but this file and the README, nor any pushgateway caller).
   pushgateway:
     image: prom/pushgateway:v1.11.1
     container_name: pushgateway-1
-    ports:
-      - "127.0.0.1:9091:9091"
     restart: unless-stopped
     networks:
-      - observability-net
+      - push
 
   # Alertmanager holds no secret. Every alert goes to alert-relay (the base configuration). Its
   # email piece is on with ALERT_EMAIL_TO (a webhook to alert-relay's /email); its watchdog piece
@@ -173,12 +194,14 @@ services:
   # returns before them). Behind TLS, Caddy sends every caller's Basic-auth password to the gateway
   # in plain text. observability-net is shared by the whole stack, and caddy-internal-d06 and
   # communications' vector join it too, so any container there with NET_RAW could ARP-spoof that
-  # hop. So Caddy reaches the gateway only on loki-edge, an internal network that only the two of
-  # them join, by the alias loki-gateway-edge: the alias is on loki-edge alone, so the name
-  # resolves to the gateway's loki-edge address and never to its observability-net one. The
-  # gateway stays on observability-net for loki:3100 and OpenBao (loki-edge has no egress).
-  # alert-relay and Vector stay on loki:3100 inside the stack. Not on a replica: it reads
-  # production's OpenBao.
+  # hop. So Caddy reaches the gateway only on loki-edge (observability-loki-edge; historical name,
+  # it carries all three gateways' hops), an internal network that only Caddy and the three
+  # gateways join, by the alias loki-gateway-edge: the alias is on loki-edge alone, so the name
+  # resolves to the gateway's loki-edge address and never to its observability-net one. Every
+  # gateway there is scratch, read_only and cap_drop ALL (no NET_RAW), so none can spoof another's
+  # hop. The gateway stays on observability-net for loki:3100 and OpenBao (loki-edge has no
+  # egress). alert-relay and Vector stay on loki:3100 inside the stack. Not on a replica: it
+  # reads production's OpenBao.
   loki-gateway:
     image: gitea.asyla.org/theorg/observability-loki-gateway:${OBSERVABILITY_TAG:?}
     container_name: loki-gateway-1
@@ -211,6 +234,91 @@ services:
         aliases:
           - loki-gateway-edge
 
+  # theOrg's loki-gateway image in LOKI_GATEWAY_MODE remote-write (theOrg DEPLOY.md, "Route
+  # modes"; asyla #1268 item 3): POST /api/v1/write with a push account of
+  # prometheus-write-clients.toml, forwarded to prometheus-ingest; /ready (forwarded to its
+  # /-/ready) open; every other path 404, Prometheus's query, admin and federate paths included.
+  # Settings as loki-gateway's, with its own token, accounts and prefix, so no password is shared
+  # across modes. Caddy reaches it on loki-edge as prometheus-write-gateway-edge
+  # (prometheus-write.asyla.org); it reaches prometheus-ingest on ingest, and OpenBao on
+  # observability-net. Not on a replica: it reads production's OpenBao.
+  # Waiting on theOrg: an ingest image or switch with no scrape jobs and the receiver on, and a
+  # federate switch in the operations image (asyla #1268). Until then prometheus-ingest is behind
+  # the profile ingest (below) and never starts, so this gateway runs with no upstream: a write
+  # with no account is 401 (the account check comes first: theOrg loki-gateway/gateway.go), one
+  # with an account 502, and its /ready, forwarded to the upstream's /-/ready, 502 too. So no
+  # depends_on on prometheus-ingest (a service no profile here enables) and no healthcheck (theOrg's
+  # `/loki-gateway healthcheck` is GET /ready, so it would never be healthy and `up --wait` would
+  # fail); observability.sh verify checks the 401 and the 502. Put both back with the profile's end.
+  prometheus-write-gateway:
+    image: gitea.asyla.org/theorg/observability-loki-gateway:${OBSERVABILITY_TAG:?}
+    container_name: prometheus-write-gateway-1
+    environment:
+      OPENBAO_ADDR: ${OPENBAO_ADDR:?}
+      OPENBAO_WRAPPED_TOKEN: ${PROMETHEUS_WRITE_GATEWAY_OPENBAO_WRAPPED_TOKEN:-}
+      # name:scope,... in prometheus-write-clients.toml's order (observability.sh; a test checks).
+      LOKI_GATEWAY_ACCOUNTS: ${PROMETHEUS_WRITE_GATEWAY_ACCOUNTS:?}
+      LOKI_CLIENTS_KV_PREFIX: "secret/hubs/asyla/own/prometheus-write-clients"
+      LOKI_GATEWAY_MODE: "remote-write"
+      LOKI_GATEWAY_TLS: "off"
+      LOKI_UPSTREAM: "http://prometheus-ingest:9090"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    healthcheck:
+      disable: true
+    networks:
+      observability-net: {}
+      ingest: {}
+      loki-edge:
+        aliases:
+          - prometheus-write-gateway-edge
+
+  # theOrg's loki-gateway image in LOKI_GATEWAY_MODE pushgateway (theOrg DEPLOY.md, "Route modes";
+  # asyla #1268 item 4): PUT, POST and DELETE on /metrics/job/<job>[/<label>/<value> ...] with a
+  # push account of pushgateway-clients.toml, forwarded to pushgateway:9091; a path holding %2F is
+  # 404 (send a slash in the @base64 form); /ready open; every other path 404, the pushgateway's
+  # /metrics and its /api/v1 status and wipe paths included. Settings as loki-gateway's, with its
+  # own token, accounts and prefix. Caddy reaches it on loki-edge as pushgateway-gateway-edge
+  # (pushgateway.asyla.org); it reaches the pushgateway on push, and OpenBao on observability-net.
+  # Not on a replica: it reads production's OpenBao.
+  pushgateway-gateway:
+    image: gitea.asyla.org/theorg/observability-loki-gateway:${OBSERVABILITY_TAG:?}
+    container_name: pushgateway-gateway-1
+    environment:
+      OPENBAO_ADDR: ${OPENBAO_ADDR:?}
+      OPENBAO_WRAPPED_TOKEN: ${PUSHGATEWAY_GATEWAY_OPENBAO_WRAPPED_TOKEN:-}
+      # name:scope,... in pushgateway-clients.toml's order (observability.sh; a test checks).
+      LOKI_GATEWAY_ACCOUNTS: ${PUSHGATEWAY_GATEWAY_ACCOUNTS:?}
+      LOKI_CLIENTS_KV_PREFIX: "secret/hubs/asyla/own/pushgateway-clients"
+      LOKI_GATEWAY_MODE: "pushgateway"
+      LOKI_GATEWAY_TLS: "off"
+      LOKI_UPSTREAM: "http://pushgateway:9091"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      pushgateway:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/loki-gateway", "healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      observability-net: {}
+      push: {}
+      loki-edge:
+        aliases:
+          - pushgateway-gateway-edge
+
   prometheus:
     image: gitea.asyla.org/theorg/observability-prometheus:${OBSERVABILITY_TAG:?}
     container_name: prometheus-1
@@ -239,8 +347,13 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+    # Its own receiver stays off. It joins ingest to read prometheus-ingest by federation once
+    # theOrg's image has a federate switch (none at 28b23389: README.md, On, off), and push to scrape
+    # the pushgateway (theOrg's pushgateway job, by service name).
     networks:
       - observability-net
+      - ingest
+      - push
 
   # Long-term capacity and trend data; size retention only (24 GiB, sized for this 64 GiB disk).
   # Its baked-in jobs include asyla's Home Assistant (through scrape-proxy:9119, no token file)
@@ -268,6 +381,45 @@ services:
       start_period: 10s
     networks:
       - observability-net
+
+  # The ingest Prometheus (theOrg DEPLOY.md, "Where the writes go"; asyla #1268 item 3): the
+  # remote-write receiver behind prometheus-write-gateway. Prometheus serves writes and queries on
+  # one listener, so with the receiver on anything that reaches it can write: its only network is
+  # ingest, joined by the gateway and the operations Prometheus alone; no port, not on
+  # observability-net.
+  # Waiting on theOrg: an ingest image or switch with no scrape jobs and the receiver on, and a
+  # federate switch in the operations image (asyla #1268). asyla mounts no Prometheus config of its
+  # own, and theOrg's trends image (below, a stand-in) bakes in scrape jobs an ingest Prometheus
+  # must not run. So this service is behind the profile ingest, which nothing enables:
+  # observability.sh never passes --profile, so `up` never starts it and `config --services` does
+  # not list it. When theOrg ships both, set its image or switch here, drop the profile, and give
+  # prometheus-write-gateway back its depends_on and healthcheck. Retention 2 days, at most 2 GB:
+  # federation reads only each series' newest sample, so what it keeps past that is for a look by
+  # hand across a night or a weekend's first day, not history (the operations Prometheus keeps
+  # that).
+  prometheus-ingest:
+    profiles: ["ingest"]
+    image: gitea.asyla.org/theorg/observability-prometheus-trends:${OBSERVABILITY_TAG:?}
+    container_name: prometheus-ingest-1
+    environment:
+      SCRAPE_EMPORIA: "false"
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${INGEST_RETENTION_TIME:-2d}
+      - --storage.tsdb.retention.size=${INGEST_RETENTION_SIZE:-2GB}
+      - --web.enable-remote-write-receiver
+    volumes:
+      - prometheus-ingest-data:/prometheus
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - ingest
 
   # Emporia Vue minute data into prometheus-trends by remote write, backfilling what Emporia still
   # holds (emporia-collector/collector.py). Its own /metrics (9108) is not published. The Emporia
@@ -419,18 +571,35 @@ volumes:
   prometheus-trends-data:
     driver: local
     driver_opts: { type: none, o: bind, device: "${OBSERVABILITY_ROOT:?}/prometheus-trends-data" }
+  prometheus-ingest-data:
+    driver: local
+    driver_opts: { type: none, o: bind, device: "${OBSERVABILITY_ROOT:?}/prometheus-ingest-data" }
   vector-disk-buffer:
     name: observability-vector-disk-buffer
 
 networks:
   observability-net:
     driver: bridge
-  # Caddy to loki-gateway only (loki-gateway, above): Caddy forwards callers' passwords in plain
-  # text on it. External here as in internal-access hosts/d06, so compose neither makes nor removes
-  # it: observability.sh (ensure_edge_network) creates it before every `up`, with or without the
-  # gateway's token, as an internal bridge (no egress), and refuses one that is not internal;
-  # internal-access's networks.txt makes it the same way, so either stack may start first. `down`
-  # leaves it. A network made outside compose is used as it is, so internal is checked there.
+  # The three networks below are external, so compose neither makes nor removes them:
+  # observability.sh (ensure_networks) creates each before every `up`, with or without any
+  # gateway's token and on a replica too, as an internal bridge (no egress), and refuses one that
+  # is not internal. `down` leaves them. A network made outside compose is used as it is, so
+  # internal is checked there.
+  # Caddy to the three gateways only (loki-gateway, above): Caddy forwards callers' passwords in
+  # plain text on it. External as in internal-access hosts/d06, whose networks.txt makes it the
+  # same way, so either stack may start first. The name is historical (it was loki-gateway's alone,
+  # asyla #1268 items 1-2): it carries all three gateways' hops, and is kept so the deployed
+  # network and internal-access's need no rename.
   loki-edge:
     name: observability-loki-edge
+    external: true
+  # prometheus-write-gateway and the operations Prometheus to prometheus-ingest, whose receiver
+  # takes a write from anything here.
+  ingest:
+    name: observability-ingest
+    external: true
+  # pushgateway-gateway and the operations Prometheus to the pushgateway, which takes a push from
+  # anything here.
+  push:
+    name: observability-push
     external: true

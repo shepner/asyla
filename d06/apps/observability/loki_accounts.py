@@ -1,9 +1,17 @@
 #!/usr/bin/env python3
-"""Create asyla's own Loki accounts for d06 in OpenBao, once (loki-clients.toml beside this file).
+"""Create asyla's own gateway accounts for d06 in OpenBao, once (the registries beside this file).
 
 Run on the workstation, from ~/local/asyla (asyla's hub token is the hub of the working directory):
 
-    cd ~/local/asyla && python3 projects/asyla-hosts/d06/apps/observability/loki_accounts.py [verify] [--dry-run]
+    cd ~/local/asyla && python3 projects/asyla-hosts/d06/apps/observability/loki_accounts.py [verify] [--registry R] [--dry-run]
+
+--registry names the gateway's registry, each with its own file and its own prefix under
+secret/hubs/asyla/own/ (REGISTRIES), so no password is shared across gateways: loki
+(loki-clients.toml), prometheus-write (prometheus-write-clients.toml, asyla #1268 item 3),
+pushgateway (pushgateway-clients.toml, item 4), or all (provision's default: the three in that
+order, one tool and one sign-in; the first that fails stops the rest). verify is loki only (its
+default): theOrg's `loki_clients.py verify` signs in on Loki's routes alone, so the other two
+gateways' refusals are observability.sh verify's.
 
 1. the tool: theOrg observability's scripts/loki_clients.py and openbao.py at deploy_role.py's
    TOOL_REV, `git show` from the local theOrg clone (deploy_role.THEORG_CLONE) into a private temp
@@ -17,8 +25,8 @@ Run on the workstation, from ~/local/asyla (asyla's hub token is the hub of the 
    may create and read under secret/hubs/asyla/own/ only: secrets-vault
    policies/hubs/hubs-asyla.hcl). OPENBAO_TOKEN, VAULT_TOKEN, BAO_TOKEN and any other copy are
    removed from it.
-3. `loki_clients.py provision --registry loki-clients.toml` with LOKI_CLIENTS_KV_PREFIX
-   secret/hubs/asyla/own/loki-clients: for each account with no record it writes one at
+3. per registry, `loki_clients.py provision --registry <its toml>` with LOKI_CLIENTS_KV_PREFIX its
+   prefix (loki: secret/hubs/asyla/own/loki-clients): for each account with no record it writes one at
    <prefix>/<name>, username <name> and a password of secrets.token_urlsafe(32) made in that
    process, with KV v2 cas=0, so it never overwrites; an account that has one is left as it is.
    A second run changes nothing.
@@ -55,8 +63,14 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import deploy_role as dr  # noqa: E402
 
-REGISTRY = HERE / "loki-clients.toml"
-KV_PREFIX = f"{dr.KV}/own/loki-clients"     # secret/hubs/asyla/own/loki-clients
+# Each gateway's registry and the prefix its records go under (compose.yml LOKI_CLIENTS_KV_PREFIX
+# of that gateway; deploy_role.py IDENTITIES reads the same files), in provision order.
+REGISTRIES = {
+    "loki": (HERE / "loki-clients.toml", f"{dr.KV}/own/loki-clients"),
+    "prometheus-write": (HERE / "prometheus-write-clients.toml", f"{dr.KV}/own/prometheus-write-clients"),
+    "pushgateway": (HERE / "pushgateway-clients.toml", f"{dr.KV}/own/pushgateway-clients"),
+}
+REGISTRY, KV_PREFIX = REGISTRIES["loki"]     # Loki's: secret/hubs/asyla/own/loki-clients
 TOOL = ("loki_clients.py", "openbao.py")
 TOOL_TIMEOUT = 120   # s: one read and at most one write per account
 VERIFY_TIMEOUT = 900   # s: 11 curl containers (each up to 120 s in the tool), then up to 10 read-backs
@@ -100,13 +114,24 @@ def unpack(into: Path) -> None:
         (into / f).write_text(dr.git("show", f"{dr.TOOL_REV}:scripts/{f}").stdout)
 
 
-def child_env(base: dict, token: str) -> dict:
+def child_env(base: dict, token: str, prefix: str = KV_PREFIX) -> dict:
     """The tool's environment: the caller's without any vault token or tool setting, with the hub
-    token as BAO_ROOT_TOKEN and asyla's prefix."""
+    token as BAO_ROOT_TOKEN and the registry's prefix (Loki's by default)."""
     env = {k: v for k, v in base.items() if k not in DROP and not k.startswith(DROP_PREFIX)}
     env["BAO_ROOT_TOKEN"] = token
-    env["LOKI_CLIENTS_KV_PREFIX"] = KV_PREFIX
+    env["LOKI_CLIENTS_KV_PREFIX"] = prefix
     return env
+
+
+def chosen(registry: str | None, mode: str) -> list[str]:
+    """The registries to run, by name: provision takes one or all (the default); verify loki only."""
+    if mode == "verify":
+        if registry not in (None, "loki"):
+            raise dr.Stop(f"verify is loki only (theOrg's loki_clients.py verify signs in on Loki's "
+                          f"routes alone), not {registry}; observability.sh verify checks the "
+                          "other gateways' refusals")
+        return ["loki"]
+    return list(REGISTRIES) if registry in (None, "all") else [registry]
 
 
 def tool_argv(tool_dir: Path, registry: Path = REGISTRY, mode: str = "provision") -> list[str]:
@@ -116,8 +141,9 @@ def tool_argv(tool_dir: Path, registry: Path = REGISTRY, mode: str = "provision"
     return argv
 
 
-def show_plan(names: list[str], mode: str = "provision") -> None:
-    print(f"loki accounts: {', '.join(names)} ({REGISTRY.name})")
+def show_plan(names: list[str], mode: str = "provision", registry: str = "loki") -> None:
+    path, prefix = REGISTRIES[registry]
+    print(f"{registry} accounts: {', '.join(names)} ({path.name})")
     if mode == "verify":
         missing = [n for n in CHECK_ACCOUNTS if n not in names]
         if missing:
@@ -128,7 +154,10 @@ def show_plan(names: list[str], mode: str = "provision") -> None:
               "each check a `docker run curlimages/curl` on this workstation")
     else:
         for n in names:
-            print(f"  {KV_PREFIX}/{n}  (username {n}; password generated by the tool, never overwritten)")
+            print(f"  {prefix}/{n}  (username {n}; password generated by the tool, never overwritten)")
+
+
+def show_tool() -> None:
     print(f"tool: theOrg observability scripts/{' and '.join(TOOL)} at TOOL_REV {dr.TOOL_REV[:12]} "
           f"from {dr.THEORG_CLONE}")
     print("token: asyla's hub token (the working directory's hub), as the tool's BAO_ROOT_TOKEN")
@@ -139,13 +168,19 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("mode", nargs="?", choices=("provision", "verify"), default="provision",
                    help="provision (the default): create missing records; verify: check d06's "
                         f"gateway at {GATEWAY_URL} with the two check accounts")
+    p.add_argument("--registry", choices=(*REGISTRIES, "all"), default=None,
+                   help="the gateway whose accounts to provision (default all, in the order "
+                        f"{', '.join(REGISTRIES)}); verify takes loki only")
     p.add_argument("--dry-run", action="store_true", help="print the plan; no fetch, no vault, no curl")
     args = p.parse_args(argv)
     mode = args.mode
     timeout = VERIFY_TIMEOUT if mode == "verify" else TOOL_TIMEOUT
     try:
-        names = accounts()
-        show_plan(names, mode)
+        regs = chosen(args.registry, mode)
+        names = {r: accounts(REGISTRIES[r][0]) for r in regs}
+        for r in regs:
+            show_plan(names[r], mode, r)
+        show_tool()
         if args.dry_run:
             print("DRY RUN: nothing fetched, nothing written" + (", no curl" if mode == "verify" else ""))
             return 0
@@ -153,25 +188,29 @@ def main(argv: list[str] | None = None) -> int:
         try:
             unpack(tool_dir)
             token = dr.hub_sign_in()
-            try:
-                proc = subprocess.run(tool_argv(tool_dir, mode=mode), env=child_env(os.environ, token),
-                                      capture_output=True, text=True, timeout=timeout)
-            except subprocess.TimeoutExpired:
-                raise dr.Stop(f"loki_clients.py {mode}: no end in {timeout} s") from None
-            except OSError as e:
-                raise dr.Stop(f"cannot run loki_clients.py: {type(e).__name__}; nothing written") from None
+            for r in regs:
+                path, prefix = REGISTRIES[r]
+                try:
+                    proc = subprocess.run(tool_argv(tool_dir, path, mode), env=child_env(os.environ, token, prefix),
+                                          capture_output=True, text=True, timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    raise dr.Stop(f"loki_clients.py {mode} --registry {path.name}: no end in {timeout} s") from None
+                except OSError as e:
+                    raise dr.Stop(f"cannot run loki_clients.py: {type(e).__name__}; nothing written") from None
+                out = dr.redact(proc.stdout + proc.stderr, [token]).rstrip()
+                if out:
+                    print(out)
+                if proc.returncode != 0:
+                    rest = regs[regs.index(r) + 1:]
+                    print(f"stopped: loki_clients.py {mode} --registry {path.name} exit {proc.returncode} "
+                          f"(its lines are above)" + (f"; not run: {', '.join(rest)}" if rest else ""))
+                    return 1
+                if mode == "verify":
+                    print(f"loki gateway: every check passed at {GATEWAY_URL}")
+                else:
+                    print(f"{r} accounts: {len(names[r])} stored under {prefix}")
         finally:
             shutil.rmtree(tool_dir, ignore_errors=True)
-        out = dr.redact(proc.stdout + proc.stderr, [token]).rstrip()
-        if out:
-            print(out)
-        if proc.returncode != 0:
-            print(f"stopped: loki_clients.py {mode} exit {proc.returncode} (its lines are above)")
-            return 1
-        if mode == "verify":
-            print(f"loki gateway: every check passed at {GATEWAY_URL}")
-        else:
-            print(f"loki accounts: {len(names)} stored under {KV_PREFIX}")
         return 0
     except dr.Stop as e:
         print(f"stopped: {e}")

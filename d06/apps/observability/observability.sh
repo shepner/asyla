@@ -12,16 +12,17 @@
 # sends at use over SSH stdin (build_host.py, d06/host.toml):
 # - OBSERVABILITY_REGISTRY_PULL_TOKEN (pull_token_env), for the image pulls, answered by the
 #   credential helper beside this script under a throwaway DOCKER_CONFIG;
-# - ALERT_RELAY_, EMPORIA_, SCRAPE_PROXY_ and LOKI_GATEWAY_OPENBAO_WRAPPED_TOKEN
-#   (start_env_optional): each a
+# - ALERT_RELAY_, EMPORIA_, SCRAPE_PROXY_, LOKI_GATEWAY_, PROMETHEUS_WRITE_GATEWAY_ and
+#   PUSHGATEWAY_GATEWAY_OPENBAO_WRAPPED_TOKEN (start_env_optional): each a
 #   single-use wrapping token that deploy_role.py mints from the observability-d06 token role.
 #   Its container unwraps it once at start and holds the real token in memory, so what Docker
 #   keeps in the container's config is spent. A wrapping token lapses 300 s after it is minted, so
 #   `up` never pulls while one is here (the deploy runs `images` first).
 # A tokened service starts only when its token is here; without it, it is left as it is (VAULT_READERS).
-# Every `up` (and restart's) first makes the external network observability-loki-edge, internal,
-# with or without loki-gateway's token and on a replica too, and refuses one that is not internal
-# (ensure_edge_network); `down` never removes it, so d06's proxy can always start.
+# Every `up` (and restart's, before its down) first makes the external networks
+# observability-loki-edge, observability-ingest and observability-push, each internal, with or without any gateway's token
+# and on a replica too, and refuses one that is not internal (ensure_networks); `down` never
+# removes them, so d06's proxy can always start.
 # compose.yml's header says what is on and off, README.md what turns each on.
 # Data under /mnt/docker/Observability (d06's local data disk; never NFS).
 
@@ -62,7 +63,7 @@ LOKI_IMAGE="$REGISTRY/theorg/observability-loki:$OBSERVABILITY_TAG"
 
 # The host this folder belongs to. On any other host (test01 as a replica of d06) the stack runs
 # the services below only: no alert-relay (it files tasks in Vikunja), no emporia-collector or
-# scrape-proxy or loki-gateway (they read production's OpenBao records) and no Vector (its chronicle
+# scrape-proxy or the three gateways (they read production's OpenBao records) and no Vector (its chronicle
 # episodes would reach production's memory-system).
 SERVING_HOST="d06"
 REPLICA_SERVICES="loki prometheus prometheus-trends alertmanager pushgateway docker-state-exporter blackbox-exporter"
@@ -72,7 +73,7 @@ REPLICA_SERVICES="loki prometheus prometheus-trends alertmanager pushgateway doc
 # emporia-collector exits and the others serve nothing (loki-gateway would have no account), so
 # `up --wait` would fail or the service would sit idle. Without its token a service is left as it
 # is, running or not.
-VAULT_READERS="alert-relay emporia-collector scrape-proxy loki-gateway"
+VAULT_READERS="alert-relay emporia-collector scrape-proxy loki-gateway prometheus-write-gateway pushgateway-gateway"
 
 # loki-gateway's accounts (theOrg's LOKI_GATEWAY_ACCOUNTS format: name:push or name:query,
 # comma-separated), in loki-clients.toml's order (name order, as theOrg's `loki_clients.py
@@ -80,6 +81,12 @@ VAULT_READERS="alert-relay emporia-collector scrape-proxy loki-gateway"
 # each one's record, secret/hubs/asyla/own/loki-clients/<name>, at start (deploy_role.py
 # IDENTITIES), so every record exists first (loki_accounts.py).
 LOKI_GATEWAY_ACCOUNTS="alert-relay:query,grafana-reporting:query,host-agent-ws02:push,observability-check-push:push,observability-check-query:query,staff-alert-triage:query,vector-certificate-management:push,vector-identity-platform:push,vector-memory-system:push,vector-reporting:push,vector-secrets-vault:push,vector-staff:push,vector-workforce-management:push"
+# The same for the two push-only gateways (asyla #1268 items 3 and 4), each from its own registry
+# in the same order (test_d06_loki_accounts.py checks them too), its records under its own prefix:
+# prometheus-write-gateway's (prometheus-write-clients.toml) and pushgateway-gateway's
+# (pushgateway-clients.toml). compose.yml passes each to its gateway as LOKI_GATEWAY_ACCOUNTS.
+PROMETHEUS_WRITE_GATEWAY_ACCOUNTS="host-agent-ws02:push"
+PUSHGATEWAY_GATEWAY_ACCOUNTS="deploy-all:push,functionality-test:push,identity-platform-dex-client-validity:push,memory-system-deploy-marker:push,staff-stack:push"
 
 # asyla's settings (asyla hub, the observability-on-d06 item).
 PROMETHEUS_EXTERNAL_URL="${PROMETHEUS_EXTERNAL_URL:-https://prometheus.asyla.org}"
@@ -149,7 +156,8 @@ DELIVERY_WAIT_S="${OBSERVABILITY_DELIVERY_WAIT_S:-180}"
 
 export DOCKER_DL OBSERVABILITY_ROOT OBSERVABILITY_TAG PROMETHEUS_EXTERNAL_URL ALERTMANAGER_EXTERNAL_URL \
   ALERT_PROJECTS CHRONICLE_VECTOR_ADDRESS COMPOSE_PROJECT_NAME \
-  OPENBAO_ADDR ALERT_EMAIL_TO ALERT_WATCHDOG_PING HOME_ASSISTANT_URL LOKI_GATEWAY_ACCOUNTS
+  OPENBAO_ADDR ALERT_EMAIL_TO ALERT_WATCHDOG_PING HOME_ASSISTANT_URL LOKI_GATEWAY_ACCOUNTS \
+  PROMETHEUS_WRITE_GATEWAY_ACCOUNTS PUSHGATEWAY_GATEWAY_ACCOUNTS
 
 info() { echo "[INFO] $*"; }
 warn() { echo "[WARN] $*" >&2; }
@@ -170,6 +178,8 @@ token_var() {
     emporia-collector) echo EMPORIA_OPENBAO_WRAPPED_TOKEN ;;
     scrape-proxy) echo SCRAPE_PROXY_OPENBAO_WRAPPED_TOKEN ;;
     loki-gateway) echo LOKI_GATEWAY_OPENBAO_WRAPPED_TOKEN ;;
+    prometheus-write-gateway) echo PROMETHEUS_WRITE_GATEWAY_OPENBAO_WRAPPED_TOKEN ;;
+    pushgateway-gateway) echo PUSHGATEWAY_GATEWAY_OPENBAO_WRAPPED_TOKEN ;;
     *) return 1 ;;
   esac
 }
@@ -348,28 +358,35 @@ own_dirs() {
 # `up -d --wait --remove-orphans <one service>` and another running service kept, while a service
 # kept in the file under an inactive `profiles:` was not removed (so the gateway is dropped, not
 # profiled out).
-# The network Caddy reaches loki-gateway on (compose.yml loki-edge): external, so compose never
-# makes or removes it, and it is here whether or not the gateway starts (its token may be absent),
-# so d06's proxy, which joins it as external, can always start. Made internal (no egress); one that
-# exists but is not internal is refused, as compose would use it as it is. internal-access
-# hosts/d06/networks.txt makes it the same way.
-EDGE_NETWORK="observability-loki-edge"
-ensure_edge_network() {
-  local got
-  if ! docker network inspect "$EDGE_NETWORK" >/dev/null 2>&1; then
-    info "network $EDGE_NETWORK: creating (internal bridge)"
-    docker network create --internal --driver bridge "$EDGE_NETWORK" >/dev/null \
-      || die "cannot create network $EDGE_NETWORK"
-  fi
-  got="$(docker network inspect -f '{{.Internal}}' "$EDGE_NETWORK")" \
-    || die "cannot read network $EDGE_NETWORK"
-  [ "$got" = "true" ] || die "network $EDGE_NETWORK exists but is not internal (Internal=$got); not using it. Stop its containers and remove it (docker network rm $EDGE_NETWORK), then run up again"
-  info "network $EDGE_NETWORK: internal"
+# The external networks of compose.yml (its networks: loki-edge, ingest, push), so compose never
+# makes or removes them: observability-loki-edge, where Caddy reaches the three gateways and
+# forwards callers' passwords in plain text (the name is historical: it was loki-gateway's alone,
+# and now carries all three gateways' hops); observability-ingest, where anything can write to prometheus-ingest's
+# receiver; observability-push, where anything can push to or wipe the pushgateway. Each is here
+# whether or not a gateway starts (its token may be absent), so d06's proxy, which joins
+# observability-loki-edge as external, can always start, and so is each on a replica (compose needs
+# every external network a started service joins: prometheus joins ingest and push). Each is made
+# internal (no egress); one that exists but is not internal is refused, as compose would use it as
+# it is. internal-access hosts/d06/networks.txt makes observability-loki-edge the same way.
+NETWORKS="observability-loki-edge observability-ingest observability-push"
+ensure_networks() {
+  local net got
+  for net in $NETWORKS; do
+    if ! docker network inspect "$net" >/dev/null 2>&1; then
+      info "network $net: creating (internal bridge)"
+      docker network create --internal --driver bridge "$net" >/dev/null \
+        || die "cannot create network $net"
+    fi
+    got="$(docker network inspect -f '{{.Internal}}' "$net")" \
+      || die "cannot read network $net"
+    [ "$got" = "true" ] || die "network $net exists but is not internal (Internal=$got); not using it. Stop its containers and remove it (docker network rm $net), then run up again"
+    info "network $net: internal"
+  done
 }
 
 do_up() {
   local all svc services="" left=""
-  ensure_edge_network
+  ensure_networks
   ensure_dirs || return
   images_ready || return
   own_dirs || die "cannot set the data directories' owners under $OBSERVABILITY_ROOT"
@@ -855,35 +872,66 @@ check_vector_logs() {
   return 1
 }
 
-# The HTTP status loki-gateway answers for path $1 with no account, asked from inside
-# observability-net: vector-1's own wget (GNU wget: Dockerfile.vector installs Debian's) to
-# loki-gateway:3100, the address Caddy proxies loki.asyla.org to. -S prints each response's status
-# line; the last one is the answer. Empty when nothing answered. wget exits non-zero on a 401, so
-# its status is not the pipeline's.
+# The HTTP status gateway $1 answers for method $2 on path $3 with no account, asked from inside
+# observability-net, which every gateway joins: vector-1's own wget (GNU wget: Dockerfile.vector
+# installs Debian's into timberio/vector:0.56.0-debian, which has no busybox; GNU Wget 1.25.0
+# there lists --method and --body-data, checked 2026-11-22) to <gateway>:3100 (Caddy proxies to
+# the same port by the gateway's edge alias). A method other than GET (POST, PUT) is sent with
+# --method and an empty body. -S prints each
+# response's status line; the last one is the answer. Empty when nothing answered. wget exits
+# non-zero on a 401, so its status is not the pipeline's.
 gateway_status() {
-  { docker exec vector-1 wget -S -O /dev/null -T 10 -t 1 "http://loki-gateway:3100$1" < /dev/null 2>&1 || true; } \
+  local gw="$1" method="$2" p="$3" how=()
+  [ "$method" = GET ] || how=(--method="$method" --body-data=)
+  { docker exec vector-1 wget -S -O /dev/null -T 10 -t 1 "${how[@]}" "http://$gw:3100$p" < /dev/null 2>&1 || true; } \
     | awk '$1 ~ /^HTTP\// {code = $2} END {print code}'
 }
 
-# loki-gateway, where its container exists: /ready answers 200 with no account, and an anonymous
-# query (GET /loki/api/v1/labels) 401, so the gateway is up and refuses a caller with no account
-# (theOrg loki-gateway/gateway.go). That each account gets in with its own password, for its own
-# scope only, and a pushed line reads back is theOrg's `loki_clients.py verify`, which
-# loki_accounts.py verify runs through https://loki.asyla.org from the workstation (README.md).
-check_gateway() {
-  local rc=0 got
-  [ "$(service_state loki-gateway)" != missing ] || return 0
-  got="$(gateway_status /ready)"
-  if [ "$got" = 200 ]; then
-    info "loki-gateway: /ready 200 with no account (from vector-1 at loki-gateway:3100)"
+# One gateway's anonymous answers: $1 the gateway, $2 what /ready must answer, $3 the method and
+# $4 the path a caller with no account must get 401 on.
+check_one_gateway() {
+  local gw="$1" ready="$2" method="$3" p="$4" rc=0 got
+  got="$(gateway_status "$gw" GET /ready)"
+  if [ "$got" = "$ready" ]; then
+    info "$gw: /ready $got with no account (from vector-1 at $gw:3100)"
   else
-    echo "[ERROR] loki-gateway: /ready answers '${got:-nothing}', not 200 (from vector-1 at loki-gateway:3100)" >&2; rc=1
+    echo "[ERROR] $gw: /ready answers '${got:-nothing}', not $ready (from vector-1 at $gw:3100)" >&2; rc=1
   fi
-  got="$(gateway_status /loki/api/v1/labels)"
+  got="$(gateway_status "$gw" "$method" "$p")"
   if [ "$got" = 401 ]; then
-    info "loki-gateway: a query with no account 401 (GET /loki/api/v1/labels)"
+    info "$gw: $method $p with no account 401"
   else
-    echo "[ERROR] loki-gateway: a query with no account answers '${got:-nothing}', not 401 (GET /loki/api/v1/labels from vector-1)" >&2; rc=1
+    echo "[ERROR] $gw: $method $p with no account answers '${got:-nothing}', not 401 (from vector-1)" >&2; rc=1
+  fi
+  return "$rc"
+}
+
+# The three gateways, each where its container exists: /ready answers 200 with no account (it is
+# forwarded to the upstream's readiness), and an anonymous request on its one admitted route 401,
+# so the gateway is up and refuses a caller with no account (theOrg loki-gateway/gateway.go: the
+# account check comes before the upstream). loki-gateway: a query (GET /loki/api/v1/labels);
+# prometheus-write-gateway: a write (POST /api/v1/write); pushgateway-gateway: a push
+# (PUT /metrics/job/verify). prometheus-write-gateway's upstream, prometheus-ingest, is behind the
+# compose profile ingest until theOrg ships its pieces (compose.yml), so while it has no container
+# that gateway's /ready is 502 (its bad gateway) and is checked as such; a write with an account
+# would be 502 too. That each Loki account gets in with its own password, for its own scope only,
+# and a pushed line reads back is theOrg's `loki_clients.py verify`, which loki_accounts.py verify
+# runs through https://loki.asyla.org from the workstation (README.md); theOrg has no such check
+# for the other two modes.
+check_gateway() {
+  local rc=0 ready=200
+  if [ "$(service_state loki-gateway)" != missing ]; then
+    check_one_gateway loki-gateway 200 GET /loki/api/v1/labels || rc=1
+  fi
+  if [ "$(service_state prometheus-write-gateway)" != missing ]; then
+    if [ "$(service_state prometheus-ingest)" = missing ]; then
+      ready=502
+      info "prometheus-write-gateway: prometheus-ingest not started (waiting on theOrg, asyla #1268): /ready must be 502"
+    fi
+    check_one_gateway prometheus-write-gateway "$ready" POST /api/v1/write || rc=1
+  fi
+  if [ "$(service_state pushgateway-gateway)" != missing ]; then
+    check_one_gateway pushgateway-gateway 200 PUT /metrics/job/verify || rc=1
   fi
   return "$rc"
 }
@@ -1166,8 +1214,8 @@ run_cmd() {
         echo "[ERROR] restart takes down $VAULT_READERS, and no wrapped token is here for: $(tokens_absent). Deploy instead (README.md, Deploy)" >&2
         return 1
       fi
-      # The edge network first: a refused one stops restart while the old stack still runs.
-      images_ready && ensure_edge_network && run_compose down --remove-orphans && do_up
+      # The networks first: a refused one stops restart while the old stack still runs.
+      images_ready && ensure_networks && run_compose down --remove-orphans && do_up
       ;;
     verify)
       do_verify

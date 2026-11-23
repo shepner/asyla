@@ -31,9 +31,11 @@ Run on the workstation, from ~/local/asyla (asyla's hub token is the hub of the 
    OPENBAO_TOKEN, VAULT_TOKEN and BAO_ROOT_TOKEN are removed from it. With
    OBSERVABILITY_DEPLOY_VAULT_TOKEN set (below), that token instead: no hub sign-in.
 5. `vault_identity.py --token-role observability-d06` with one --identity per IDENTITIES line
-   (one wrapped token for each of the four components scrape-proxy, emporia-collector,
-   alert-relay and loki-gateway; the gateway's records are every account of loki-clients.toml,
-   and the role grants them since theorg #1276), which then runs `build_host.py d06 build --only apps --app observability --apply`: build_host
+   (one wrapped token for each of the six components scrape-proxy, emporia-collector,
+   alert-relay, loki-gateway, prometheus-write-gateway and pushgateway-gateway; each gateway's
+   records are every account of its registry, loki-clients.toml, prometheus-write-clients.toml
+   and pushgateway-clients.toml; the role grants loki-gateway's since theorg #1276, and until it
+   has the other two components the mint stops here with nothing started), which then runs `build_host.py d06 build --only apps --app observability --apply`: build_host
    sends each wrapping token to `observability.sh up` over SSH stdin, as a start_env_optional
    name of d06/host.toml. A mint that fails (a missing record, a policy that does not take) exits
    1 before anything starts, and so does this script. A start that fails may leave the stack
@@ -136,9 +138,10 @@ VERIFY_TIMEOUT = 1800   # s: verify waits up to VERIFY_WAIT_S (300 s) per wait, 
 
 # (component, the variable observability.sh up receives its wrapping token in, KV records): a
 # record is a name under KV, or a full mount-first path when it starts with "secret/" (kv_path).
-# Plain paths: vault_identity.py kv= takes no #field. One line per component: four wrapped tokens.
+# Plain paths: vault_identity.py kv= takes no #field. One line per component: six wrapped tokens.
 def loki_client_names(registry: Path) -> list[str]:
-    """The account names of loki-clients.toml (its [clients.<name>] tables), in the file's order."""
+    """The account names of a gateway registry in loki-clients.toml's format (its [clients.<name>]
+    tables), in the file's order."""
     return list(tomllib.loads(registry.read_text()).get("clients", {}))
 
 
@@ -161,6 +164,15 @@ IDENTITIES = [
     # component reading them (theorg #1276), else the mint stops the deploy before the stack.
     ("loki-gateway", "LOKI_GATEWAY_OPENBAO_WRAPPED_TOKEN",
      [f"own/loki-clients/{name}" for name in loki_client_names(HERE / "loki-clients.toml")]),
+    # The same gateway in its two push-only modes (asyla #1268 items 3 and 4), each with its own
+    # registry and prefix, so no password is shared across modes: remote write's accounts
+    # (prometheus-write-clients.toml) and the pushgateway's (pushgateway-clients.toml). Each needs
+    # its own component in the token role, as loki-gateway does, else the mint stops the deploy.
+    ("prometheus-write-gateway", "PROMETHEUS_WRITE_GATEWAY_OPENBAO_WRAPPED_TOKEN",
+     [f"own/prometheus-write-clients/{name}"
+      for name in loki_client_names(HERE / "prometheus-write-clients.toml")]),
+    ("pushgateway-gateway", "PUSHGATEWAY_GATEWAY_OPENBAO_WRAPPED_TOKEN",
+     [f"own/pushgateway-clients/{name}" for name in loki_client_names(HERE / "pushgateway-clients.toml")]),
 ]
 
 

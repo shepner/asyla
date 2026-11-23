@@ -15,8 +15,8 @@
 #
 # One account per pusher: the five theOrg names in its observability-off-the-mini plan, which today
 # push to the Mini's pushgateway. No check accounts: theOrg's `loki_clients.py verify` signs in on
-# Loki's routes only; observability.sh verify and `loki_accounts.py verify --registry pushgateway`
-# check the anonymous refusals instead. No `container` keys: no pusher runs on d06.
+# Loki's routes only, so `loki_accounts.py verify` is Loki's alone; observability.sh verify checks
+# this gateway's anonymous refusal instead. No `container` keys: no pusher runs on d06.
 
 # theOrg's deploy-all.
 [clients.deploy-all]

@@ -41,7 +41,8 @@ dr.http_get = _no_contact
 TAG = "f7579118fdac5d90101a5ec6698200ae2c9d836f"
 REV = "a" * 40   # a stand-in revision
 OBS_TOKENS = ["SCRAPE_PROXY_OPENBAO_WRAPPED_TOKEN", "EMPORIA_OPENBAO_WRAPPED_TOKEN", "ALERT_RELAY_OPENBAO_WRAPPED_TOKEN",
-              "LOKI_GATEWAY_OPENBAO_WRAPPED_TOKEN"]
+              "LOKI_GATEWAY_OPENBAO_WRAPPED_TOKEN", "PROMETHEUS_WRITE_GATEWAY_OPENBAO_WRAPPED_TOKEN",
+              "PUSHGATEWAY_GATEWAY_OPENBAO_WRAPPED_TOKEN"]
 PULL = "stand-in-pull"
 HUB_STAND_IN = "stand-in-hub"
 OTHER_STAND_IN = "stand-in-other"
@@ -401,7 +402,7 @@ def main_cases() -> list[bool]:
                          repr((rc, sorted(env), printed))))
         out.append(check("run: vault_identity.py --token-role observability-d06, one --identity per component, then the app start",
                          argv[1:2] == ["-I"] and argv[2].endswith("vault_identity.py")
-                         and argv[3:5] == ["--token-role", "observability-d06"] and argv.count("--identity") == 4
+                         and argv[3:5] == ["--token-role", "observability-d06"] and argv.count("--identity") == 6
                          and argv[argv.index("--") + 1:][1:] == [str(REPO / "scripts/build_host.py"), "d06", "build", "--only",
                                                                  "apps", "--app", "observability", "--apply"],
                          repr(argv)))
@@ -918,10 +919,178 @@ def compose_networks(compose: str) -> dict[str, dict]:
     return {**services, "": top}
 
 
+# The three gateways (asyla #1268: option B, items 3 and 4): component, its registry, its
+# observability.sh accounts variable, LOKI_GATEWAY_MODE and LOKI_UPSTREAM.
+GATEWAYS = [
+    ("loki-gateway", "loki-clients.toml", "LOKI_GATEWAY_ACCOUNTS", None, "http://loki:3100"),
+    ("prometheus-write-gateway", "prometheus-write-clients.toml", "PROMETHEUS_WRITE_GATEWAY_ACCOUNTS",
+     "remote-write", "http://prometheus-ingest:9090"),
+    ("pushgateway-gateway", "pushgateway-clients.toml", "PUSHGATEWAY_GATEWAY_ACCOUNTS", "pushgateway",
+     "http://pushgateway:9091"),
+]
+# Every service that joins more than observability-net, or not it, with its aliases; every other
+# service is on observability-net alone.
+WANT_NETS = {
+    "loki-gateway": {"observability-net": [], "loki-edge": ["loki-gateway-edge"]},
+    "prometheus-write-gateway": {"observability-net": [], "ingest": [], "loki-edge": ["prometheus-write-gateway-edge"]},
+    "pushgateway-gateway": {"observability-net": [], "push": [], "loki-edge": ["pushgateway-gateway-edge"]},
+    "prometheus": {"observability-net": [], "ingest": [], "push": []},
+    "prometheus-ingest": {"ingest": []},
+    "pushgateway": {"push": []},
+}
+# The external networks: compose key, Docker name, who joins it.
+WANT_EXTERNAL = {
+    # Historical name (loki-gateway's alone in items 1-2): it carries all three gateways' hops.
+    "loki-edge": ("observability-loki-edge", ["loki-gateway", "prometheus-write-gateway", "pushgateway-gateway"]),
+    "ingest": ("observability-ingest", ["prometheus", "prometheus-ingest", "prometheus-write-gateway"]),
+    "push": ("observability-push", ["prometheus", "pushgateway", "pushgateway-gateway"]),
+}
+
+
+def gateways_cases() -> list[bool]:
+    """The three gateways: each registry matches its IDENTITIES line, its accounts literal and its
+    compose block; the networks, who joins each, internal and external; the ingest receiver behind
+    its profile; the pushgateway with no port; none on a replica; restart's network check."""
+    import re
+    import tomllib
+    compose = (dr.HERE / "compose.yml").read_text()
+    sh = (dr.HERE / "observability.sh").read_text()
+    ids = {c: (e, rs) for c, e, rs in dr.IDENTITIES}
+    nets = compose_networks(compose)
+    top = nets[""]
+    services = {s: n for s, n in nets.items() if s}
+    readers, replica, tvars = shell_words(sh, "VAULT_READERS"), shell_words(sh, "REPLICA_SERVICES"), token_vars(sh)
+    app = [a for a in bh.load_spec("d06").get("app", []) if a.get("name") == "observability"]
+    out = []
+    for comp, toml, var, mode, upstream in GATEWAYS:
+        clients = tomllib.loads((dr.HERE / toml).read_text())["clients"]
+        names = list(clients)
+        stem = toml.removesuffix(".toml")
+        env, records = ids.get(comp, ("", []))
+        m = re.search(rf'^{var}="([^"]*)"$', sh, re.M)
+        block = service_block(compose, comp)
+        out += [
+            check(f"gateways {comp}: IDENTITIES records are every account of {toml}, under own/{stem}/, in its order",
+                  env == tvars.get(comp) and env.endswith("_OPENBAO_WRAPPED_TOKEN")
+                  and records == [f"own/{stem}/{n}" for n in names] and names == sorted(names) and bool(names),
+                  repr((env, records))),
+            check(f"gateways {comp}: observability.sh {var} = {toml}'s name:scope, in name order",
+                  bool(m) and m.group(1) == ",".join(f"{n}:{clients[n]['scope'][0]}" for n in names),
+                  repr(m.group(1) if m else None)),
+            check(f"gateways {comp}: compose passes {var} as its LOKI_GATEWAY_ACCOUNTS, its own token and prefix, "
+                  "TLS off, its mode and upstream, read_only, cap_drop ALL, no ports",
+                  f"LOKI_GATEWAY_ACCOUNTS: ${{{var}:?}}" in block
+                  and f"OPENBAO_WRAPPED_TOKEN: ${{{env}:-}}" in block
+                  and f'LOKI_CLIENTS_KV_PREFIX: "secret/hubs/asyla/own/{stem}"' in block
+                  and 'LOKI_GATEWAY_TLS: "off"' in block and f'LOKI_UPSTREAM: "{upstream}"' in block
+                  and (f'LOKI_GATEWAY_MODE: "{mode}"' in block if mode else not any("LOKI_GATEWAY_MODE" in ln for ln in block))
+                  and "read_only: true" in block and "- ALL" in block
+                  and not any(ln.startswith(("ports:", "extra_hosts:")) for ln in block), repr(block)),
+            check(f"gateways {comp}: a vault reader, not a replica service (it reads production's OpenBao)",
+                  comp in readers and comp not in replica, repr((readers, replica))),
+        ]
+    prefixes = [f"own/{t.removesuffix('.toml')}/" for _, t, *_ in GATEWAYS]
+    out.append(check("gateways: no two gateways share a record prefix, and none reads another's",
+                     all(sum(r.startswith(p) for p in prefixes) == 1 and r.startswith(prefixes[i])
+                         for i, (c, *_) in enumerate(GATEWAYS) for r in ids[c][1]), repr(prefixes)))
+
+    # Networks: who joins each, internal and external, the aliases.
+    out.append(check("networks: each service's networks and aliases are as named; every other is on "
+                     "observability-net alone",
+                     all(services.get(s) == n for s, n in WANT_NETS.items())
+                     and all(n == {"observability-net": []} for s, n in services.items() if s not in WANT_NETS),
+                     repr({s: n for s, n in services.items() if n != {"observability-net": []}})))
+    out.append(check("networks: observability-net is the stack's own bridge; the other three are external",
+                     sorted(top) == sorted(["observability-net", *WANT_EXTERNAL])
+                     and top["observability-net"] == ["driver: bridge"], repr(top)))
+    for key, (name, joiners) in WANT_EXTERNAL.items():
+        out.append(check(f"networks: {key} is the external {name} (no driver or internal in compose), "
+                         f"joined by {', '.join(joiners)} only",
+                         sorted(top.get(key, [])) == sorted([f"name: {name}", "external: true"])
+                         and sorted(s for s, n in services.items() if key in n) == joiners,
+                         repr((top.get(key), sorted(s for s, n in services.items() if key in n)))))
+    live = [ln for ln in compose.splitlines() if not ln.lstrip().startswith("#")]
+    aliases = [a for n in services.values() for al in n.values() for a in al]
+    out.append(check("networks: three aliases, each on edge alone and in one place",
+                     sorted(aliases) == sorted(f"{c}-edge" for c, *_ in GATEWAYS)
+                     and all(sum(f"{c}-edge" in ln for ln in live) == 1 for c, *_ in GATEWAYS)
+                     and all(not al for s, n in services.items() for k, al in n.items() if k != "loki-edge"),
+                     repr(aliases)))
+    nw = shell_words(sh, "NETWORKS")
+    fn = shell_function(sh, "ensure_networks")
+    up_fn = shell_function(sh, "do_up")
+    up_body = [ln.strip() for ln in up_fn.splitlines()[1:] if ln.strip() and not ln.strip().startswith(("local ", "#"))]
+    restart_arm = sh.split("\n    restart)", 1)[1].split(";;", 1)[0] if "\n    restart)" in sh else ""
+    out += [
+        check("networks: observability.sh NETWORKS are compose.yml's three external names",
+              sorted(nw) == sorted(n for n, _ in WANT_EXTERNAL.values()), repr(nw)),
+        check("networks: ensure_networks makes each missing one --internal and refuses one that is not internal",
+              'for net in $NETWORKS; do' in fn and 'docker network inspect "$net" >/dev/null' in fn
+              and 'docker network create --internal --driver bridge "$net"' in fn
+              and "docker network inspect -f '{{.Internal}}' \"$net\"" in fn
+              and '[ "$got" = "true" ] || die "network $net exists but is not internal' in fn, fn),
+        check("networks: do_up calls ensure_networks before anything else, so before every up "
+              "(restart's too), replica or not, token or not",
+              bool(up_body) and up_body[0] == "ensure_networks"
+              and sh.count("run_compose up ") == up_fn.count("run_compose up ") == 2
+              and "&& do_up" in restart_arm, repr(up_body[:3])),
+        check("networks: restart calls ensure_networks before it takes the stack down",
+              "images_ready && ensure_networks && run_compose down --remove-orphans && do_up" in restart_arm,
+              repr(restart_arm[-200:])),
+        check("networks: no ensure_edge_network is left, and the edge network is not renamed",
+              "ensure_edge_network" not in sh + compose and "observability-edge" not in sh + compose),
+        check("networks: nothing in observability.sh removes a network (down leaves them)",
+              "network rm" not in "\n".join(ln for ln in sh.splitlines() if "die " not in ln)
+              and "down --remove-orphans -v" not in sh),
+    ]
+
+    # The ingest receiver, behind its profile; the pushgateway with no port.
+    receivers = sorted(s for s in services if any("--web.enable-remote-write-receiver" in ln
+                                                   for ln in service_block(compose, s)))
+    profiled = {s: [ln for ln in service_block(compose, s) if ln.startswith("profiles:")] for s in services}
+    pwg = service_block(compose, "prometheus-write-gateway")
+    out += [
+        check("ingest: only prometheus-ingest (and prometheus-trends, emporia-collector's, on "
+              "observability-net) has the remote-write receiver flag",
+              receivers == ["prometheus-ingest", "prometheus-trends"],
+              repr(receivers)),
+        check("ingest: prometheus-ingest is behind the profile ingest, and no other service has a profile",
+              profiled.pop("prometheus-ingest", None) == ['profiles: ["ingest"]'] and not any(profiled.values()),
+              repr(profiled)),
+        check("ingest: observability.sh never enables a profile (no --profile, no COMPOSE_PROFILES)",
+              "--profile" not in sh and "COMPOSE_PROFILES" not in sh),
+        check("ingest: prometheus-write-gateway has no depends_on (its upstream never starts) and no "
+              "healthcheck (its /ready is 502 until then)",
+              not any(ln.startswith("depends_on:") for ln in pwg) and "disable: true" in pwg
+              and not any("/loki-gateway" in ln for ln in pwg), repr(pwg)),
+        check("ingest: verify expects prometheus-write-gateway's /ready 502 while prometheus-ingest has no container",
+              'if [ "$(service_state prometheus-ingest)" = missing ]; then' in shell_function(sh, "check_gateway")
+              and "ready=502" in shell_function(sh, "check_gateway")),
+        check("push: the pushgateway has no ports",
+              bool(service_block(compose, "pushgateway"))
+              and not any(ln.startswith("ports:") for ln in service_block(compose, "pushgateway")),
+              repr(service_block(compose, "pushgateway"))),
+        check("push: STACK_JOBS keeps the pushgateway job (prometheus scrapes it on push)",
+              "pushgateway:pushgateway" in sh.split('STACK_JOBS="', 1)[1].split('"', 1)[0]),
+        check("verify: each gateway's anonymous route: loki a query, remote-write a POST, the pushgateway a PUT",
+              "check_one_gateway loki-gateway 200 GET /loki/api/v1/labels" in sh
+              and 'check_one_gateway prometheus-write-gateway "$ready" POST /api/v1/write' in sh
+              and "check_one_gateway pushgateway-gateway 200 PUT /metrics/job/verify" in sh),
+        check("replica: no gateway and no prometheus-ingest on a replica; prometheus and the pushgateway are",
+              not {c for c, *_ in GATEWAYS} & set(replica) and "prometheus-ingest" not in replica
+              and {"prometheus", "pushgateway"} <= set(replica), repr(replica)),
+        check("tokens: token_var, IDENTITIES and d06/host.toml start_env_optional name the same variables",
+              tvars == {c: e for c, e, _ in dr.IDENTITIES}
+              and len(app) == 1 and sorted(tvars.values()) == sorted(app[0].get("start_env_optional", []))
+              and sorted(tvars) == sorted(readers), repr((tvars, app[:1]))),
+    ]
+    return out
+
+
 def gateway_cases() -> list[bool]:
     """loki-gateway (option B, asyla #1268): its token reads every account of loki-clients.toml,
     d06/host.toml sends its variable, and compose.yml runs it plain HTTP with no port and asyla's
-    prefix, reached by Caddy only on loki-edge; prometheus has no remote-write receiver."""
+    prefix, reached by Caddy only on edge; the operations prometheus has no remote-write receiver."""
     import tomllib
     names = list(tomllib.loads((dr.HERE / "loki-clients.toml").read_text())["clients"])
     ids = {c: (e, rs) for c, e, rs in dr.IDENTITIES}
@@ -932,13 +1101,6 @@ def gateway_cases() -> list[bool]:
     prom = service_block(compose, "prometheus")
     sh = (dr.HERE / "observability.sh").read_text()
     readers, replica, tvars = shell_words(sh, "VAULT_READERS"), shell_words(sh, "REPLICA_SERVICES"), token_vars(sh)
-    nets = compose_networks(compose)
-    edge = nets[""].get("loki-edge", [])
-    on_edge = sorted(s for s, n in nets.items() if s and "loki-edge" in n)
-    edge_fn = sh.split("\nensure_edge_network() {", 1)[1].split("\n}", 1)[0] if "\nensure_edge_network() {" in sh else ""
-    up_fn = sh.split("\ndo_up() {", 1)[1].split("\n}", 1)[0] if "\ndo_up() {" in sh else ""
-    up_body = [ln.strip() for ln in up_fn.splitlines() if ln.strip() and not ln.strip().startswith(("local ", "#"))]
-    restart_arm = sh.split("\n    restart)", 1)[1].split(";;", 1)[0] if "\n    restart)" in sh else ""
     return [
         check("gateway: loki-gateway is a vault reader and not a replica service (it reads production's OpenBao)",
               "loki-gateway" in readers and "loki-gateway" not in replica and bool(replica), repr((readers, replica))),
@@ -949,36 +1111,6 @@ def gateway_cases() -> list[bool]:
         check("gateway: token_var's variables are d06/host.toml observability start_env_optional",
               len(app) == 1 and sorted(tvars.values()) == sorted(app[0].get("start_env_optional", [])),
               repr((tvars, app[:1]))),
-        check("gateway: compose.yml loki-gateway is on observability-net and on loki-edge as loki-gateway-edge",
-              nets.get("loki-gateway") == {"observability-net": [], "loki-edge": ["loki-gateway-edge"]},
-              repr(nets.get("loki-gateway"))),
-        check("gateway: loki-edge is the external network observability-loki-edge (no driver or internal in compose)",
-              sorted(edge) == sorted(["name: observability-loki-edge", "external: true"]), repr(edge)),
-        check("gateway: observability.sh's EDGE_NETWORK is compose.yml's loki-edge name",
-              'EDGE_NETWORK="observability-loki-edge"' in sh),
-        check("gateway: do_up calls ensure_edge_network before anything else, so before every up "
-              "(restart's too), replica or not, token or not",
-              bool(up_body) and up_body[0] == "ensure_edge_network"
-              and sh.count("run_compose up ") == up_fn.count("run_compose up ") == 2
-              and "&& do_up" in restart_arm, repr(up_body[:3])),
-        check("gateway: restart checks the edge network before it takes the stack down",
-              "ensure_edge_network && run_compose down" in restart_arm, repr(restart_arm[-200:])),
-        check("gateway: ensure_edge_network creates the network with --internal when it is missing",
-              bool(edge_fn) and 'docker network inspect "$EDGE_NETWORK" >/dev/null' in edge_fn
-              and 'docker network create --internal --driver bridge "$EDGE_NETWORK"' in edge_fn, edge_fn),
-        check("gateway: ensure_edge_network refuses an existing network that is not internal",
-              "docker network inspect -f '{{.Internal}}' \"$EDGE_NETWORK\"" in edge_fn
-              and '[ "$got" = "true" ] || die "network $EDGE_NETWORK exists but is not internal' in edge_fn, edge_fn),
-        check("gateway: nothing in observability.sh removes the edge network (down leaves it)",
-              "network rm" not in "\n".join(ln for ln in sh.splitlines() if "die " not in ln)
-              and "down --remove-orphans -v" not in sh),
-        check("gateway: no other service joins loki-edge, and no other has the alias",
-              on_edge == ["loki-gateway"]
-              and sum("loki-gateway-edge" in ln for ln in compose.splitlines() if not ln.lstrip().startswith("#")) == 1,
-              repr(on_edge)),
-        check("gateway: every other service is on observability-net alone",
-              all(n == {"observability-net": []} for s, n in nets.items() if s and s != "loki-gateway"),
-              repr({s: n for s, n in nets.items() if s})),
         check("gateway: compose.yml prometheus has no remote-write receiver flag",
               bool(prom) and not any("remote-write" in ln for ln in prom), repr(prom)),
         check("gateway: loki-clients.toml has the 13 accounts, in name order",
@@ -1150,10 +1282,13 @@ results = [
           == ["--identity", "component=a,env=A_T,kv=secret/hubs/asyla/r1,kv=secret/v2/x/y"]),
     stops("identities: one with no record stops (take its line out instead)", "no KV record",
           lambda: dr.identity_args([("a", "A_T", [])])),
-    check("identities: the list is scrape-proxy, emporia-collector, alert-relay, loki-gateway",
-          [(c, e) for c, e, _ in dr.IDENTITIES] == [("scrape-proxy", OBS_TOKENS[0]), ("emporia-collector", OBS_TOKENS[1]),
-                                                    ("alert-relay", OBS_TOKENS[2]), ("loki-gateway", OBS_TOKENS[3])]),
+    check("identities: the list is scrape-proxy, emporia-collector, alert-relay, loki-gateway, "
+          "prometheus-write-gateway, pushgateway-gateway",
+          [(c, e) for c, e, _ in dr.IDENTITIES] == list(zip(
+              ["scrape-proxy", "emporia-collector", "alert-relay", "loki-gateway", "prometheus-write-gateway",
+               "pushgateway-gateway"], OBS_TOKENS, strict=True))),
     *gateway_cases(),
+    *gateways_cases(),
     check("identities: every record is a plain name or an own/ path under the hub's KV, or a full secret/ "
           "path, none with #",
           all(r and "#" not in r and ("/" not in r or r.startswith(("secret/", "own/")))

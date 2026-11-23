@@ -259,7 +259,8 @@ ENV_NAMES = ["PULL_X", "START_A", "START_B", "OPT_C"]
 ENV_OPT_APP = ENV_APP + 'start_env_optional = ["OPT_C"]\n'
 # d06 observability's wrapped vault tokens (deploy_role.py mints them; a plain build lacks them).
 D06_OBS_TOKENS = ["ALERT_RELAY_OPENBAO_WRAPPED_TOKEN", "EMPORIA_OPENBAO_WRAPPED_TOKEN",
-                  "LOKI_GATEWAY_OPENBAO_WRAPPED_TOKEN", "SCRAPE_PROXY_OPENBAO_WRAPPED_TOKEN"]
+                  "LOKI_GATEWAY_OPENBAO_WRAPPED_TOKEN", "PROMETHEUS_WRITE_GATEWAY_OPENBAO_WRAPPED_TOKEN",
+                  "PUSHGATEWAY_GATEWAY_OPENBAO_WRAPPED_TOKEN", "SCRAPE_PROXY_OPENBAO_WRAPPED_TOKEN"]
 # The Staff workers' NATS users (theOrg secrets-vault #55): optional until identity-platform provisions them.
 D06_COMMS_MQ = sorted(f"COMMS_MQ_USER_{p}_{f}" for p in ("STAFF_WORKER_1", "STAFF_ALERT_TRIAGE_1",
                       "STAFF_DELIVERY_MANAGER_1", "STAFF_QA_1") for f in ("USERNAME", "PASSWORD"))
