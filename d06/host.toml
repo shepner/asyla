@@ -37,7 +37,12 @@ steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "container_dns.sh", "bashrc.s
 # asyla-d06-node (a hand-off; asyla ticket #626). On this running host the step is installed by
 # `build_host.py d06 build --only setup --step node_exporter.sh --apply` (the operator's run).
 [node_exporter]
-allow = ["10.0.0.0/24"]    # a subnet, not a host (operator, 2026-10-25): the trends Prometheus can move
+# 172.16.0.0/12: d06's own operations Prometheus (a container) scrapes this host's 9100 for the asyla-hw
+# job, and its packets come from its Docker network (observability_observability-net, 172.19.0.0/16 on
+# 2026-11-23), not from 10.0.0.0/24, so systemd's IPAddressAllow dropped them (asyla #610 step 5).
+# The whole Docker range, not 172.19/16: a recreated network can take another subnet (as the vmh
+# health key allows 172.16.0.0/12). Containers on d06 can read node metrics; nothing else is opened.
+allow = ["10.0.0.0/24", "172.16.0.0/12"]    # a subnet, not a host (operator, 2026-10-25): the trends Prometheus can move
 textfile_sources = [
   "/home/docker/maint/guest-health.prom",   # asyla_hw_*, written by host-maintenance's monitor every 15 min (asyla #610 step 5)
 ]
