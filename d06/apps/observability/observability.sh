@@ -448,10 +448,17 @@ not_deployed() {
   echo "${out# }"
 }
 
-# "running healthy", "running none" (no healthcheck), ... or "missing".
+# "running healthy", "running none" (no healthcheck), ... or exactly "missing". For a container
+# that does not exist, docker inspect prints an empty line to stdout and then exits 1 (measured on
+# d06, Docker 29, asyla #1268), so its output is captured and dropped unless it exited 0 with text.
 service_state() {
-  docker inspect -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$1-1" 2>/dev/null \
-    || echo missing
+  local out
+  if out="$(docker inspect -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$1-1" 2>/dev/null)" \
+    && [ -n "$out" ]; then
+    echo "$out"
+  else
+    echo missing
+  fi
 }
 
 wait_ready() {

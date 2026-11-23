@@ -1350,6 +1350,60 @@ def gateway_check_cases() -> list[bool]:
     return out
 
 
+# FAKE_DOCKER with docker inspect answered as Docker 29 does on d06 (asyla #1268): a container
+# named in $STUB_RUNNING (without its -1) is "running healthy"; any other prints an empty line to
+# stdout, an error to stderr, and exits 1. Inspect calls are not recorded.
+FAKE_DOCKER_INSPECT = r'''#!/bin/sh
+if [ "$1" = inspect ]; then
+  for a; do name="$a"; done
+  case " $STUB_RUNNING " in *" ${name%-1} "*) echo "running healthy"; exit 0 ;; esac
+  echo
+  echo "Error: No such object: $name" >&2
+  exit 1
+fi
+''' + FAKE_DOCKER.split("\n", 1)[1]
+
+
+def service_state_cases() -> list[bool]:
+    """observability.sh's own service_state, run offline with docker a fake on PATH: a missing
+    container (an empty line on stdout, then exit 1) is exactly "missing", a running one is its
+    state; and check_gateway with the real service_state lets prometheus-write-gateway's /ready
+    502 pass while prometheus-ingest has no container (verify failed on d06 when "missing" came
+    out as "\\nmissing")."""
+    sh = (dr.HERE / "observability.sh").read_text()
+    funcs = "\n".join(shell_function(sh, n)
+                      for n in ("service_state", "gateway_status", "check_one_gateway", "check_gateway"))
+
+    def run(call: str, running: str, ready: str = "200", write: str = "401") -> tuple[int, str, str, list[str]]:
+        with tempfile.TemporaryDirectory() as stub:
+            fake = Path(stub, "bin", "docker")
+            fake.parent.mkdir()
+            fake.write_text(FAKE_DOCKER_INSPECT)
+            fake.chmod(0o755)
+            env = {"PATH": f"{fake.parent}:{os.environ['PATH']}", "STUB": stub, "STUB_RUNNING": running,
+                   "STUB_READY": ready, "STUB_WRITE": write}
+            p = REAL_RUN(["bash", "-c", f"set -euo pipefail\n{funcs}\ninfo() {{ echo \"[INFO] $*\"; }}\n{call}"],
+                         env=env, capture_output=True, text=True, timeout=60)
+            calls = Path(stub, "docker").read_text().splitlines() if Path(stub, "docker").exists() else []
+        return p.returncode, p.stdout, p.stderr, calls
+
+    gw = "prometheus-write-gateway"
+    wget = "exec vector-1 wget -S -O /dev/null -T 10 -t 1"
+    want = [f"{wget} http://{gw}:3100/ready", f"{wget} --method=POST --body-data= http://{gw}:3100/api/v1/write"]
+    out = []
+    rc, so, se, _ = run("service_state prometheus-ingest", gw)
+    out.append(check("service_state: a missing container (empty line, then exit 1) is exactly missing",
+                     rc == 0 and so == "missing\n", f"rc={rc} out={so!r} err={se!r}"))
+    rc, so, se, _ = run(f"service_state {gw}", gw)
+    out.append(check("service_state: a running container is its state, running healthy",
+                     rc == 0 and so == "running healthy\n", f"rc={rc} out={so!r} err={se!r}"))
+    rc, so, se, calls = run("check_gateway", gw, "502")
+    out.append(check("service_state: check_gateway with prometheus-ingest missing wants /ready 502 and passes",
+                     rc == 0 and "prometheus-ingest not started" in so and f"{gw}: /ready 502 with no account" in so
+                     and calls == want, f"rc={rc} out={so!r} err={se!r} calls={calls}"))
+    return out
+
+
 with tempfile.TemporaryDirectory() as d:
     sh = Path(d) / "observability.sh"
     sh.write_text(f'x=1\nOBSERVABILITY_TAG="${{OBSERVABILITY_TAG_OVERRIDE:-{TAG}}}"\n')
@@ -1399,6 +1453,7 @@ results = [
     *alert_test_cases(),
     *data_dirs_cases(),
     *gateway_check_cases(),
+    *service_state_cases(),
     check("start: --only apps, or late for an after_external app",
           dr.start_argv(SPEC)[4:6] == ["--only", "apps"]
           and dr.start_argv({**SPEC, "app": [{**SPEC["app"][0], "after_external": True}]})[4:6] == ["--only", "late"]),
