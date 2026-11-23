@@ -2,7 +2,8 @@
 # Read-only health of one Proxmox VE node (vmh01, vmh02, vmh03). Installed by vmh/setup.sh (part
 # health) as /usr/local/sbin/asyla-vmh-health; host-maintenance's monitor runs it over SSH with a
 # forced-command key. Changes nothing on the node; its only writes are its own state in
-# /var/lib/asyla-vmh-health (a journal cursor, held kernel findings, SMART counters by serial).
+# /var/lib/asyla-vmh-health (a journal cursor, held kernel findings, SMART counters by serial, BMC
+# SEL hashes and held SEL findings).
 # One line per check, tab-separated:
 #   STATUS<TAB>KEY<TAB>DETAIL      STATUS is ok, warn or crit
 # Exit 0 always (the caller reads the lines); 2 if this is not a Proxmox node.
@@ -48,9 +49,16 @@ apt_verdict() {
 #   py smart STATE NOW JSON...       one `smartctl --json -a` per disk, the file named DEV.json. Keys
 #                                    by serial (device names move between boots); counters per serial
 #                                    in STATE/smart.json, so a rise warns for 7 days.
+#   py bmc-need STATE INFO           exit 0 when `sel elist` is needed (INFO: `sel info` output)
+#   py bmc STATE NOW INFO ELIST SDR  the BMC's SEL and sensors (#610 step 3, as the hub's bmc_health);
+#                                    SEL hashes and held findings in STATE/bmc.json. A file is "-" when
+#                                    not read. A new SEL entry that is critical or non-recoverable is
+#                                    crit, any other warns, held 24 h; the first read only remembers the
+#                                    SEL. A sensor at cr/nr/lcr/ucr/lnr/unr is crit, nc/lnc/unc warns
+#                                    (live, not held); ns is not judged.
 py() {
     python3 -I - "$@" <<'PY'
-import datetime, json, os, re, sys
+import datetime, hashlib, json, os, re, sys
 
 HOLD_H = 24
 RISE_WINDOW_H = 7 * 24
@@ -100,6 +108,16 @@ ATA_COUNTERS = {5: "reallocated_sectors", 197: "pending_sectors", 198: "offline_
                 187: "reported_uncorrect", 199: "crc_errors"}
 RISE = ("reallocated_sectors", "offline_uncorrectable", "reported_uncorrect", "crc_errors", "nvme_media_errors")
 WEAR_NAMES = re.compile(r"Wear_Leveling_Count|Media_Wearout_Indicator|Percent_Lifetime_Remain")
+# BMC (#610 step 3), copied from the hub's tools/export_nas_smart.py (SEL_CRIT, SDR_STATUS, SDR_*_STATE):
+# keep the two the same. SEL event text that is critical or non-recoverable; any other new entry warns.
+SEL_CRIT = re.compile(r"Uncorrectable|Non-recoverable|\b(?:Lower|Upper) Critical going|Failure detected|AC lost"
+                      r"|Redundancy Lost|Critical Interrupt|Bus Fatal|\bIERR\b|Thermal Trip|\bFRB[123]\b", re.I)
+# `sdr elist` status column; ns (no reading) is not judged.
+SDR_STATUS = {"nr": "urgent", "lnr": "urgent", "unr": "urgent", "cr": "urgent", "lcr": "urgent", "ucr": "urgent",
+              "nc": "warn", "lnc": "warn", "unc": "warn"}
+SDR_CRIT_STATE = re.compile(r"Failure detected|AC lost|Redundancy Lost|Uncorrectable|Non-recoverable", re.I)
+SDR_WARN_STATE = re.compile(r"Predictive Failure|Drive Fault|Redundancy Degraded", re.I)
+SEL_FP = ("Entries", "Last Add Time", "Last Del Time")
 
 
 def out(status, key, detail):
@@ -245,12 +263,111 @@ def smart(state, now, files):
     save(path, st)
 
 
-mode, state, now = sys.argv[1], sys.argv[2], int(sys.argv[3])
+def bkey(s):
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", s).strip("_") or "-"
+
+
+def read(p):
+    with open(p, errors="replace") as f:
+        return f.read()
+
+
+def sel_info(text):
+    """`ipmitool sel info`: {label: value} for its "Label : value" lines."""
+    return {m.group(1).strip(): m.group(2).strip() for m in re.finditer(r"^([A-Za-z][\w ]*?)\s*: (.*)$", text, re.M)}
+
+
+def sel_fp(si):
+    return "|".join(si.get(k, "") for k in SEL_FP)
+
+
+def sel_entries(text):
+    """`ipmitool sel elist`: "%4x | date | time | sensor | event | Asserted[ | Reading ...]"; a pre-init
+    stamp prints "Pre-Init" and the raw stamp. vmh01/vmh02 (2026-11-22): two-digit years, the sensor
+    field is the type only, the event can be empty or "()"."""
+    out_ = []
+    for line in text.splitlines():
+        f = [p.strip() for p in line.split("|")]
+        if len(f) < 5 or not re.fullmatch(r"[0-9a-fA-F]+", f[0]):
+            continue
+        out_.append({"when": f"{f[1]} {f[2]}", "sensor": f[3], "event": f[4], "dir": f[5] if len(f) > 5 else "",
+                     "line": " | ".join(f), "hash": hashlib.sha256("|".join(f[:6]).encode()).hexdigest()[:16]})
+    return out_
+
+
+def bmc_need(state, info_path):
+    """Exit 0 when `sel elist` is needed: no SEL remembered yet, or sel info's count or times changed."""
+    st, si = load(os.path.join(state, "bmc.json")), sel_info(read(info_path))
+    sys.exit(0 if "seen" not in st or not si.get("Entries") or sel_fp(si) != st.get("info") else 1)
+
+
+def bmc(state, now, info_path, elist_path, sdr_path):
+    """INFO, ELIST, SDR: ipmitool output files, or "-" when not read (bmc_check printed why). The first
+    SEL read only remembers its entries (by hash); a later new entry is held HOLD_H by sensor and event."""
+    path = os.path.join(state, "bmc.json")
+    st = load(path)
+    held = st.setdefault("held", {})
+    n_sel, n_new = "?", 0
+    if info_path != "-":
+        si = sel_info(read(info_path))
+        n_sel = si.get("Entries", "?")
+        if si.get("Overflow") == "true":
+            out("warn", "bmc.sel-full", f"BMC SEL is full ({si.get('Percent Used', '?')} used): new events are dropped")
+        if elist_path != "-":
+            entries = sel_entries(read(elist_path))
+            new = [e for e in entries if e["hash"] not in set(st["seen"])] if "seen" in st else []
+            st["seen"], st["info"], n_new = sorted({e["hash"] for e in entries}), sel_fp(si), len(new)
+            for e in new:
+                sev = "warn" if e["dir"] == "Deasserted" or not SEL_CRIT.search(e["event"]) else "urgent"
+                h = held.setdefault(f"bmc.sel.{bkey(e['sensor'])}.{bkey(e['event'])}",
+                                    {"severity": sev, "sensor": e["sensor"], "event": e["event"], "count": 0,
+                                     "first": e["when"]})
+                if sev == "urgent":
+                    h["severity"] = "urgent"
+                h.update(count=h["count"] + 1, last=e["when"], seen=now, sample=e["line"][:SAMPLE])
+    for k in [k for k, h in held.items() if now - h.get("seen", 0) > HOLD_H * 3600]:
+        del held[k]
+    save(path, st)
+    sensors, probs = 0, []
+    if sdr_path != "-":
+        for line in read(sdr_path).splitlines():
+            f = [p.strip() for p in line.split("|")]
+            if len(f) < 5 or not re.fullmatch(r"[0-9A-Fa-f]{2}h", f[1]):
+                continue
+            sensors += 1
+            name, status, reading = f[0], f[2].lower(), " | ".join(f[4:])
+            if status == "ns":
+                continue
+            sev = SDR_STATUS.get(status)
+            if SDR_CRIT_STATE.search(reading):
+                sev = "urgent"
+            elif sev is None and SDR_WARN_STATE.search(reading):
+                sev = "warn"
+            if sev:
+                probs.append(("crit" if sev == "urgent" else "warn", f"bmc.sensor.{bkey(name)}",
+                              f"BMC sensor {name}: status {f[2]}, {reading}"))
+    out("ok", "bmc", f"SEL {n_sel} entries, {n_new} new, {len(held)} held for {HOLD_H} h"
+        + (f"; {sensors} sensors, {len(probs)} out of range" if sdr_path != "-" else ""))
+    for k in sorted(held):
+        h = held[k]
+        out("crit" if h["severity"] == "urgent" else "warn", k,
+            f"BMC SEL: {h['sensor']}: {h['event'] or '-'}: {h['count']} new entr(ies), {h['first']} to {h['last']} "
+            f"(BMC clock, UTC); last: {h['sample']}")
+    for p in probs:
+        out(*p)
+
+
+mode, state = sys.argv[1], sys.argv[2]
 os.makedirs(state, mode=0o700, exist_ok=True)
+if mode == "bmc-need":
+    bmc_need(state, sys.argv[3])
+now = int(sys.argv[3])
 if mode == "kern":
     kern(state, now, *sys.argv[4:6])
 elif mode == "smart":
     smart(state, now, sys.argv[4:])
+elif mode == "bmc":
+    bmc(state, now, *sys.argv[4:7])
 else:
     sys.exit(f"py: unknown mode {mode}")
 PY
@@ -296,6 +413,43 @@ disk_check() {
     py smart "$state" "$now" "$@"
 }
 
+# ipmi SECONDS ARGS...: one read-only ipmitool call, under a fixed locale and zone (its dates go through
+# strftime, and a SEL entry's text is hashed) and a timeout. Only sel info, sel elist and sdr elist.
+ipmi() {
+    local t="$1"; shift
+    case "$*" in "sel info"|"sel elist"|"sdr elist") ;; *) echo "ipmi: refusing ipmitool $*" >&2; return 2 ;; esac
+    LC_ALL=C TZ=UTC timeout -k 2 "$t" ipmitool "$@"
+}
+
+# bmc_check STATE NOW: the BMC's SEL and sensors through /dev/ipmi* (KCS: vmh01, vmh02; vmh03 has none).
+# `sel info`, then `sel elist` only when py bmc-need says the SEL changed, then `sdr elist`; never
+# anything that writes to the BMC. Timeouts 10 + 20 + 10 s keep a hung BMC inside the monitor's 90 s
+# (2026-11-22: sel info 0.07 s, a 194-entry elist 3.8 s, sdr elist 0.9 s).
+bmc_check() {
+    local state="$1" now="$2" d="$1/bmc" dev info=- elist=- sdr=- rc
+    for dev in "${ASYLA_VMH_DEV:-/dev}"/ipmi*; do [ -e "$dev" ] && break; dev=; done
+    [ -n "$dev" ] || { r ok bmc none; return; }
+    has ipmitool || { r warn bmc "$dev present but ipmitool not found: BMC not checked"; return; }
+    has python3 || { r warn bmc "python3 not found: BMC not checked"; return; }
+    mkdir -p "$d" && chmod 700 "$state" || { r warn bmc "state directory $state not writable"; return; }
+    rm -f "$d"/*.txt
+    ipmi 10 sel info >"$d/info.txt" 2>"$d/err.txt"; rc=$?
+    if [ "$rc" -eq 0 ]; then
+        info="$d/info.txt"
+        if py bmc-need "$state" "$info"; then
+            ipmi 20 sel elist >"$d/elist.txt" 2>"$d/err.txt"; rc=$?
+            if [ "$rc" -eq 0 ]; then elist="$d/elist.txt"
+            else r warn bmc.sel "BMC SEL entries not read: sel elist exit $rc $(one <"$d/err.txt" | cut -c1-160)"; fi
+        fi
+    else
+        r warn bmc.sel "BMC SEL not read: sel info exit $rc $(one <"$d/err.txt" | cut -c1-160)"
+    fi
+    ipmi 10 sdr elist >"$d/sdr.txt" 2>"$d/err.txt"; rc=$?
+    if [ "$rc" -eq 0 ]; then sdr="$d/sdr.txt"
+    else r warn bmc.sdr "BMC sensors not read: sdr elist exit $rc $(one <"$d/err.txt" | cut -c1-160)"; fi
+    py bmc "$state" "$now" "$info" "$elist" "$sdr"
+}
+
 # Tests source this file for the functions above only (scripts/tests/test_vmh_health_sh.sh).
 [ "${ASYLA_VMH_HEALTH_FUNCTIONS_ONLY:-}" = 1 ] && return 0
 
@@ -316,16 +470,17 @@ if has zpool; then
     s=$(zpool status -x 2>&1 | one)
     case "$s" in "all pools are healthy"|"no pools available") r ok zfs "$s" ;; *) r crit zfs "$s" ;; esac
 fi
-# The only state health keeps (#610): the kernel journal cursor, kernel findings held for 24 h, and
-# each disk serial's counters. One run at a time holds it (the monitor every 15 min, apply.sh health).
+# The only state health keeps (#610): the kernel journal cursor, kernel findings held for 24 h,
+# each disk serial's counters, and the BMC's SEL hashes and held SEL findings. One run at a time holds it (the monitor every 15 min, apply.sh health).
 STATE=/var/lib/asyla-vmh-health
 now=$(date +%s)
 mkdir -p "$STATE" && chmod 700 "$STATE"
 if exec 9>"$STATE/lock" && { ! has flock || flock -w 60 9; }; then
     disk_check "$STATE" "$now"
     kern_check "$STATE" "$now"
+    bmc_check "$STATE" "$now"
 else
-    r warn kern "another health run held $STATE/lock for 60 s: kernel and SMART not checked"
+    r warn kern "another health run held $STATE/lock for 60 s: kernel, SMART and BMC not checked"
 fi
 p=$(df -P / | awk 'NR == 2 { sub("%", "", $5); print $5 }')
 if [ "$p" -ge 93 ]; then r crit fs.root "$p% used"; elif [ "$p" -ge 85 ]; then r warn fs.root "$p% used"; else r ok fs.root "$p% used"; fi
