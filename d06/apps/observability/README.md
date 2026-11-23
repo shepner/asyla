@@ -414,8 +414,8 @@ with `LOKI_GATEWAY_MODE` set, each with its own token, accounts and prefix (Secr
   `ChatApiUnavailable` watches d06's chat-api; `local/`'s four `host.docker.internal` jobs would
   read down here (chat-api and the NATS exporter are published on 127.0.0.1 only). From d06's
   `observability-net`, blackbox-exporter's `http_2xx` probe of `https://theorg.asyla.org/metrics`
-  read success, 200, TLS (2026-11-23). verify wants a `chat-api` target (`OTHER_STACK_JOBS`) but
-  does not judge its health: that needs communications and internal-access, which d06's build
+  read success, 200, TLS (2026-11-23). verify wants a `chat-api` target at `theorg.asyla.org:443`
+  (`OTHER_STACK_JOBS`; one at `local/`'s address fails it) but does not judge its health: that needs communications and internal-access, which d06's build
   starts after this stack, and a replica has neither; `ChatApiUnavailable` alerts on it. verify
   also wants theOrg's `chat-api` rule group loaded from `alerts-enabled/` (`check_theorg_rules`, as
   theOrg's `deploy.yml` does). The Mini's own operations Prometheus still loads the same rules

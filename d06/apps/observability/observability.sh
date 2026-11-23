@@ -142,8 +142,10 @@ STACK_JOBS="prometheus:prometheus alert-relay:alert-relay alertmanager:alertmana
 # theorg.asyla.org:443). Each must have a target, so verify fails if the switch stops taking
 # effect, but its health is not judged here: it needs communications and internal-access, which
 # d06's build starts after this stack (host.toml), and a replica has neither. theOrg's
-# ChatApiUnavailable alerts on it.
-OTHER_STACK_JOBS="chat-api"
+# ChatApiUnavailable alerts on it. Each entry is job:instance, the instance remote/ scrapes: a
+# target at any other instance (local/'s host.docker.internal:9098 if COMMUNICATIONS_REMOTE were
+# lost) fails, as theOrg's deploy.yml checks chat-api's scheme at 04f31709.
+OTHER_STACK_JOBS="chat-api:theorg.asyla.org:443"
 # A rule group from theOrg's alerts/theorg/ (MONITOR_THEORG), which theOrg's deploy.yml also
 # requires at 04f31709: loaded from /etc/prometheus/alerts-enabled/ (check_theorg_rules).
 THEORG_RULE_GROUP="chat-api"
@@ -553,13 +555,15 @@ check_self_probes() {
 }
 
 # The operations Prometheus's active targets (127.0.0.1:9090/api/v1/targets) in one line: "N
-# targets up in M jobs" when each reads health up at a scrape (lastScrape) after S and each job of
-# STACK_JOBS has a target; else "not up: ..." naming each other target with Prometheus's error, and
+# targets up in M jobs, each scraped after it started; J has a target ..." when each judged target
+# reads health up at a scrape (lastScrape) after S and each job of STACK_JOBS has a target; else
+# "not up: ..." naming each other target with Prometheus's error, and
 # exit 1. health is that scrape's outcome, which Prometheus also writes as up (1 when up). S: the
 # later .State.StartedAt of prometheus-1 and the job's service (STACK_JOBS; prometheus-1 alone for
 # a job not listed there). A listed job whose service is not expected here (a replica's, or a
 # tokened service never deployed: expected_services) is left out: its target cannot be up. Each job
-# of OTHER_STACK_JOBS must have a target too, but its health is another stack's: not judged.
+# of OTHER_STACK_JOBS must have a target too, each at its entry's instance, but its health is
+# another stack's: not judged.
 stack_targets() {
   local entry job svc since base expected
   local -a args=()
@@ -571,7 +575,7 @@ stack_targets() {
     since="$(started_at prometheus-1 "$svc-1")" || return 1
     args+=("$job=$since")
   done
-  for job in $OTHER_STACK_JOBS; do args+=("$job=~"); done
+  for entry in $OTHER_STACK_JOBS; do args+=("${entry%%:*}=~${entry#*:}"); done
   curl -sf --max-time 10 'http://127.0.0.1:9090/api/v1/targets?state=active' | python3 -c '
 import calendar, json, re, sys, time
 def epoch(s):
@@ -582,18 +586,21 @@ def epoch(s):
     if m[3] != "Z":
         t -= (1 if m[3][0] == "+" else -1) * (int(m[3][1:3]) * 3600 + int(m[3][4:6]) * 60)
     return t
-base, since, skip, other = float(sys.argv[1]), {}, set(), set()
+base, since, skip, other = float(sys.argv[1]), {}, set(), {}
 for a in sys.argv[2:]:
     job, s = a.split("=", 1)
     if s == "-":
         skip.add(job)
-    elif s == "~":
-        other.add(job)
+    elif s.startswith("~"):
+        other[job] = s[1:]
     else:
         since[job] = float(s)
 targets = [t for t in json.load(sys.stdin)["data"]["activeTargets"] if t["labels"].get("job") not in skip]
 jobs = {t["labels"].get("job") for t in targets}
-bad = ["%s: no target" % j for j in sorted((set(since) | other) - jobs)]
+bad = ["%s: no target" % j for j in sorted((set(since) | set(other)) - jobs)]
+bad += ["%s %s: not at %s" % (t["labels"]["job"], t["labels"].get("instance", "?"), other[t["labels"]["job"]])
+        for t in targets if t["labels"].get("job") in other
+        and t["labels"].get("instance") != other[t["labels"]["job"]]]
 judged = [t for t in targets if t["labels"].get("job") not in other]
 for t in judged:
     job = t["labels"].get("job")
@@ -606,7 +613,7 @@ if bad:
     print("not up: " + "; ".join(bad))
     sys.exit(1)
 print("%d targets up in %d jobs, each scraped after it started%s" % (len(judged), len({t["labels"].get("job") for t in judged}),
-      "".join("; %s has a target (another stack, health not judged)" % j for j in sorted(other))))' "$base" "${args[@]}"
+      "".join("; %s has a target at %s (another stack, health not judged)" % (j, other[j]) for j in sorted(other))))' "$base" "${args[@]}"
 }
 
 # Every target of the operations Prometheus up after the restart (stack_targets). Not the trends
@@ -645,7 +652,7 @@ theorg = [g["name"] for g in groups if g.get("file", "").startswith("/etc/promet
 if want not in theorg:
     print("no %s group from alerts-enabled/ (%d theOrg groups loaded)" % (want, len(theorg)))
     sys.exit(1)
-print("%d theOrg rule groups loaded (%s among them)" % (len(theorg), want))' "$THEORG_RULE_GROUP")"; then
+print("%d theOrg rule groups loaded (%s among them)" % (len(theorg), want))' "$THEORG_RULE_GROUP" 2>/dev/null)"; then
     info "prometheus: $got"
     return 0
   fi
