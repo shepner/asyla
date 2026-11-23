@@ -38,7 +38,7 @@ Requires:
     → `~/scripts/d01/apps/cloudflared/cloudflared.sh restart`
   - `/mnt/docker/internal-proxy/.env` (`CF_API_TOKEN`, `BREEDING_PROGRAM_LAN_SECRET`)
     → `~/scripts/d01/apps/internal-access/internal-access.sh restart`
-- `apps/media/` – Media stack: Sonarr, Radarr, Overseerr, Jackett, Transmission (media.sh); access via cloudflared/internal proxy.
+- `apps/media/` – Media stack: Sonarr, Radarr, Seerr, Jackett, Transmission (media.sh); access via cloudflared/internal proxy.
 - `update_scripts.sh`, `update.sh`, `update_all.sh` – Script update and OS maintenance. `update_scripts.sh` (test01's
   new-host updater: it keeps no `setup/`, `host.toml` or `docker/setup/` on the host) mirrors the
   repo into `~/scripts/d01/` and `~/scripts/docker/`: files the repo no longer has are **deleted** on the host unless a

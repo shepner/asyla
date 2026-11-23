@@ -1,8 +1,9 @@
-# Media stack on d01: Sonarr, Radarr, Overseerr, Jackett, Transmission, where-to-stream, radarr-reconcile
-# Working dirs under /mnt/docker (sonarr, radarr, overseerr, jackett, transmission, where-to-stream).
+# Media stack on d01: Sonarr, Radarr, Seerr, Jackett, Transmission, where-to-stream, radarr-reconcile
+# Working dirs under /mnt/docker (sonarr, radarr, seerr, jackett, transmission, where-to-stream).
+# /mnt/docker/overseerr is Overseerr's config as it was at the move to Seerr (rollback only).
 # where-to-stream (personal project, gitea personal/where-to-stream): stock python image running the
 # source that push-where-to-stream.sh ships to /mnt/docker/where-to-stream/src; reads the Radarr,
-# Sonarr and Overseerr databases read-only and serves a page of where the wishlist streams.
+# Sonarr and Seerr databases read-only and serves a page of where the wishlist streams.
 # Run: ~/scripts/d01/apps/media/media.sh up
 # Access via cloudflared tunnel or internal proxy (no published ports except Transmission peer port).
 # Requires: DOCKER_DL (/mnt/docker), DOCKER_UID, DOCKER_GID, LOCAL_TZ; /mnt/nas/data1/media for library.
@@ -71,12 +72,24 @@ services:
     networks:
       - media_net
 
-  overseerr:
-    image: lscr.io/linuxserver/overseerr:latest
-    container_name: overseerr
+  # Seerr, the successor of Overseerr (https://docs.seerr.dev/migration-guide/). Its config dir is a
+  # copy of Overseerr's, made once by `media.sh migrate-seerr` (Seerr migrates the copy on its first
+  # start); /mnt/docker/overseerr is left as it was, for rollback. The image runs as `node` (UID 1000,
+  # no account on d01); it runs here as the docker user like the rest of the stack, through the
+  # --user override the Docker page allows. init: true is required: the image has no init process.
+  seerr:
+    image: ghcr.io/seerr-team/seerr:v3
+    container_name: seerr
     restart: unless-stopped
+    init: true
+    user: "${DOCKER_UID:-1003}:${DOCKER_GID:-1000}"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:5055/api/v1/status"]
+      # The Docker page's own check (https://docs.seerr.dev/getting-started/docker/).
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:5055/api/v1/settings/public"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -85,14 +98,16 @@ services:
       - sonarr
       - radarr
     environment:
-      - PUID=${DOCKER_UID:-1003}
-      - PGID=${DOCKER_GID:-1000}
       - TZ=${LOCAL_TZ:-America/Chicago}
     volumes:
-      - ${DOCKER_DL:-/mnt/docker}/overseerr/config:/config
+      - ${DOCKER_DL:-/mnt/docker}/seerr/config:/app/config
     networks:
-      - media_net
-    # Plex is on d02:32400; use http://d02:32400 in Overseerr settings (resolved via host DNS / asyla.org)
+      media_net:
+        # overseerr.asyla.org (cloudflared-d01 and caddy-internal-d01) still proxies to overseerr:5055.
+        # Remove the alias once both point at seerr:5055.
+        aliases:
+          - overseerr
+    # Plex is on d02:32400; use http://d02:32400 in Seerr settings (resolved via host DNS / asyla.org)
 
   jackett:
     image: lscr.io/linuxserver/jackett:latest
@@ -172,14 +187,15 @@ services:
     depends_on:
       - radarr
       - sonarr
-      - overseerr
+      - seerr
     environment:
       - TZ=${LOCAL_TZ:-America/Chicago}
     volumes:
       - ${DOCKER_DL:-/mnt/docker}/where-to-stream/src:/app:ro
       - ${DOCKER_DL:-/mnt/docker}/radarr/config:/dbs/radarr:ro
       - ${DOCKER_DL:-/mnt/docker}/sonarr/config:/dbs/sonarr:ro
-      - ${DOCKER_DL:-/mnt/docker}/overseerr/config/db:/dbs/overseerr:ro
+      # Seerr's database, still mounted at where-to-stream's default /dbs/overseerr path.
+      - ${DOCKER_DL:-/mnt/docker}/seerr/config/db:/dbs/overseerr:ro
       - ${DOCKER_DL:-/mnt/docker}/where-to-stream/data:/data
     networks:
       - media_net
