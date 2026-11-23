@@ -194,7 +194,11 @@ size_mb="$(du -sm "$REAL" | cut -f1)"
 mkdir "$COPY_D1" "$D/home" || exit 2
 sudo -n mount -t tmpfs -o "size=$((size_mb * 2 + 256))m,mode=0755,uid=$(id -u),gid=$(id -g)" idp-mirror-copy "$COPY_D1" \
   || refuse "could not mount a tmpfs at $COPY_D1"
-mkdir -p "$COPY" && cp -pR "$REAL/openldap" "$REAL/keycloak" "$COPY/" || refuse "could not copy $REAL"
+# Contents and times only: the NAS mirror dirs carry NFS ACLs, which tmpfs cannot hold (`cp -p`
+# refused, "preserving permissions ... Operation not supported", 2026-11-23). The manifest check
+# below proves the contents; the copy is then made private, as production identity data.
+mkdir -p "$COPY" && cp -R --preserve=timestamps "$REAL/openldap" "$REAL/keycloak" "$COPY/" \
+  && chmod -R u=rwX,go= "$COPY" || refuse "could not copy $REAL"
 for n in openldap keycloak; do
   (cd "$COPY/$n" && sha256sum --quiet -c manifest.sha256) || refuse "the copy of $n does not match its manifest"
   printf 'stand-in: no manifest names this file, so the restore must leave it out\n' > "$COPY/$n/$STANDIN" \
