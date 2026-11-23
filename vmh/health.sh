@@ -3,7 +3,8 @@
 # health) as /usr/local/sbin/asyla-vmh-health; host-maintenance's monitor runs it over SSH with a
 # forced-command key. Changes nothing on the node; its only writes are its own state in
 # /var/lib/asyla-vmh-health (a journal cursor, held kernel findings, SMART counters by serial, BMC
-# SEL hashes and held SEL findings).
+# SEL hashes and held SEL findings) and the asyla_hw_* textfile
+# /var/lib/prometheus/node-exporter/asyla-vmh-health.prom (#610 step 5, hw_textfile below).
 # One line per check, tab-separated:
 #   STATUS<TAB>KEY<TAB>DETAIL      STATUS is ok, warn or crit
 # Exit 0 always (the caller reads the lines); 2 if this is not a Proxmox node.
@@ -450,6 +451,41 @@ bmc_check() {
     py bmc "$state" "$now" "$info" "$elist" "$sdr"
 }
 
+# ---- asyla_hw_* textfile (asyla #610 step 5)
+# The hardware-problem contract the asyla checkers share, as the hub's tools/export_nas_smart.py
+# (render_hw_prom) writes it; d06's operations Prometheus scrapes it through this node's
+# node_exporter (vmh/setup.sh part node_exporter) and alerts on it (asyla-hosts
+# d06/apps/observability/prometheus/rules/asyla-hw.yml):
+#   asyla_hw_problem{host,key,severity} 1     one series per open hardware problem; crit is
+#                                             "urgent", warn is "warning", never "critical"
+#   asyla_hw_check_last_run_timestamp_seconds{host,checker="vmh-health"}
+# Only the hardware checks (#610 steps 2-3, plus ZFS pool health) are problems here: kern*, disk*,
+# smart*, bmc*, zfs. The rest (apt, reboot, cluster, ...) stay with the host-maintenance monitor.
+# hw_textfile DIR HOST NOW < health lines: writes DIR/asyla-vmh-health.prom through a temp file and a
+# rename, so node_exporter never reads half a file. One series per key; crit wins over warn.
+HW_PROM_NAME=asyla-vmh-health.prom
+hw_textfile() {
+    local dir="$1" host="$2" now="$3" tmp
+    mkdir -p "$dir" 2>/dev/null || return 1
+    tmp="$dir/.$HW_PROM_NAME.$$"
+    awk -F'\t' -v host="$host" -v now="$now" '
+        function esc(v) { gsub(/[\\"\n]/, "_", v); return v }
+        $1 != "crit" && $1 != "warn" { next }
+        $2 !~ /^(kern|disk|smart|bmc|zfs)([.].*)?$/ { next }
+        { sev = ($1 == "crit") ? "urgent" : "warning"
+          if (!($2 in s) || sev == "urgent") s[$2] = sev
+          if (!($2 in seen)) { seen[$2] = 1; order[++n] = $2 } }
+        END {
+            print "# HELP asyla_hw_problem An open hardware problem (asyla #610): 1 while the checker reports it."
+            print "# TYPE asyla_hw_problem gauge"
+            for (i = 1; i <= n; i++)
+                printf "asyla_hw_problem{host=\"%s\",key=\"%s\",severity=\"%s\"} 1\n", esc(host), esc(order[i]), s[order[i]]
+            print "# HELP asyla_hw_check_last_run_timestamp_seconds When the hardware checker last ran."
+            print "# TYPE asyla_hw_check_last_run_timestamp_seconds gauge"
+            printf "asyla_hw_check_last_run_timestamp_seconds{host=\"%s\",checker=\"vmh-health\"} %d\n", esc(host), now
+        }' >"$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$dir/$HW_PROM_NAME" || { rm -f "$tmp"; return 1; }
+}
+
 # Tests source this file for the functions above only (scripts/tests/test_vmh_health_sh.sh).
 [ "${ASYLA_VMH_HEALTH_FUNCTIONS_ONLY:-}" = 1 ] && return 0
 
@@ -463,6 +499,11 @@ case "$node" in
     *) role=unknown; nc_to= ;;
 esac
 
+# Every check's line goes to stdout as before and to HW_LINES, from which hw_textfile writes the
+# asyla_hw_* textfile once the checks are done (#610 step 5).
+HW_DIR=/var/lib/prometheus/node-exporter
+HW_LINES=$(mktemp) || { echo "asyla-vmh-health: mktemp failed" >&2; exit 2; }
+{
 r ok node "$node $role pve $(pveversion | sed 's#^pve-manager/##; s#/.*##') up $(awk '{ printf "%d", $1 / 86400 }' /proc/uptime)d"
 
 # ---- storage
@@ -584,4 +625,8 @@ apt_verdict "$role" "$n" "$s" "$([ "$lists" -gt 0 ] && echo 1 || echo 0)" "$run"
 
 # ---- clock
 [ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" = yes ] && r ok time "NTP synchronized" || r warn time "clock not NTP-synchronized"
+} | tee "$HW_LINES"
+hw_textfile "$HW_DIR" "$node" "$(date +%s)" <"$HW_LINES" \
+    || r warn hw.textfile "$HW_DIR/$HW_PROM_NAME not written: d06 sees no asyla_hw_* series from this node"
+rm -f "$HW_LINES"
 exit 0

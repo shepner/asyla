@@ -30,7 +30,13 @@ It also reads, for asyla #610 (same tests):
   reported-uncorrect, CRC or NVMe media-error counts that rose in the last 7 days, on NVMe 80% used or
   ATA wear 10 or less, and on a temperature at the drive's own limit (else 158 °F for an SSD, 131 °F for
   a disk).
-Its only writes are this state, in `/var/lib/asyla-vmh-health`.
+Its only writes are this state, in `/var/lib/asyla-vmh-health`, and (#610 step 5) the textfile
+`/var/lib/prometheus/node-exporter/asyla-vmh-health.prom`, written through a temp file and a rename:
+`asyla_hw_problem{host,key,severity} 1` for each `crit` (`urgent`) or `warn` (`warning`) line whose key
+is `kern*`, `disk*`, `smart*`, `bmc*` or `zfs`, and
+`asyla_hw_check_last_run_timestamp_seconds{host,checker="vmh-health"}`. The node's node_exporter
+(part `node_exporter`) serves it, and d06's operations Prometheus alerts on it
+(`d06/apps/observability/prometheus/rules/asyla-hw.yml`).
 
 ## Commands (from the repo root)
 
