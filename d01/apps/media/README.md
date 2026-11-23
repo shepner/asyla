@@ -72,8 +72,8 @@ it skips and says why. Then it sets the movie's path to that folder (`moveFiles=
 Radarr's `RescanMovie` for it. Logs (`docker logs radarr-reconcile`): one line per change or skip, one summary
 per pass. Unhealthy while the last pass failed (a failed pass retries within the hour).
 
-- **Dry run or apply:** `RECONCILE_APPLY` in `compose.yml` (0 reports only; 1 changes Radarr). After changing
-  it, `media.sh up` recreates the container.
+- **Dry run or apply:** `RECONCILE_APPLY` in `compose.yml` (0 reports only; 1 changes Radarr); 1 since
+  2026-11-22 (operator). After changing it, `media.sh up` recreates the container.
 - **One pass now:** `media.sh reconcile` (dry run) or `media.sh reconcile --apply`, whatever the service's
   setting.
 - **Credential:** none stored. It reads Radarr's API key from Radarr's own `config.xml` (config dir mounted
