@@ -64,9 +64,10 @@ LOKI_IMAGE="$REGISTRY/theorg/observability-loki:$OBSERVABILITY_TAG"
 # The host this folder belongs to. On any other host (test01 as a replica of d06) the stack runs
 # the services below only: no alert-relay (it files tasks in Vikunja), no emporia-collector or
 # scrape-proxy or the three gateways (they read production's OpenBao records) and no Vector (its chronicle
-# episodes would reach production's memory-system).
+# episodes would reach production's memory-system). prometheus-ingest runs on a replica too: it
+# reads nothing off this host, and the operations Prometheus's ingest-federate job reads it.
 SERVING_HOST="d06"
-REPLICA_SERVICES="loki prometheus prometheus-trends alertmanager pushgateway docker-state-exporter blackbox-exporter"
+REPLICA_SERVICES="loki prometheus prometheus-trends prometheus-ingest alertmanager pushgateway docker-state-exporter blackbox-exporter"
 
 # The services that read OpenBao in-process, each through the single-use wrapped token in the
 # variable token_var names. Each starts only when its token is here: started without one,
@@ -129,10 +130,12 @@ SELF_PROBES_WANT="http_2xx=1 icmp=1 tcp_connect=1"
 # stack's own scrape targets are up" (#327) checks the scrape-stack jobs from its checkout's files;
 # d06 has only the images, so they are listed here (check_stack_targets). With `latest` theOrg may
 # add, drop or rename a job: a job that reads "no target" fails verify until this list follows.
+# ingest-federate is the entrypoint's federate job of prometheus-ingest (FEDERATE_INGEST=true,
+# compose.yml; theOrg compose.ingest.yml at 04f31709).
 STACK_JOBS="prometheus:prometheus alert-relay:alert-relay alertmanager:alertmanager loki:loki
   prometheus-trends:prometheus-trends pushgateway:pushgateway scrape-proxy:scrape-proxy vector:vector
   blackbox-exporter:blackbox-exporter blackbox-selftest:blackbox-exporter
-  docker-state-exporter:docker-state-exporter"
+  docker-state-exporter:docker-state-exporter ingest-federate:prometheus-ingest"
 
 VERIFY_WAIT_S="${OBSERVABILITY_VERIFY_WAIT_S:-300}"
 # The least each tokened service's check waits after the shared VERIFY_WAIT_S: one 60 s scrape and
@@ -340,8 +343,7 @@ ensure_dirs() {
 }
 
 # Owners the images run as: Prometheus, the trends and ingest Prometheus and Alertmanager are
-# nobody (65534); prometheus-ingest-data is made while the ingest profile is off, so its bind
-# volume exists and is writable once the profile is dropped;
+# nobody (65534);
 # Loki runs as root in theOrg's image (Dockerfile.loki ends USER root) and grafana/loki's own user
 # is 10001, which suits both. Top directories only: what is inside is the service's own.
 own_dirs() {
@@ -921,24 +923,18 @@ check_one_gateway() {
 # so the gateway is up and refuses a caller with no account (theOrg loki-gateway/gateway.go: the
 # account check comes before the upstream). loki-gateway: a query (GET /loki/api/v1/labels);
 # prometheus-write-gateway: a write (POST /api/v1/write); pushgateway-gateway: a push
-# (PUT /metrics/job/verify). prometheus-write-gateway's upstream, prometheus-ingest, is behind the
-# compose profile ingest until theOrg ships its pieces (compose.yml), so while it has no container
-# that gateway's /ready is 502 (its bad gateway) and is checked as such; a write with an account
-# would be 502 too. That each Loki account gets in with its own password, for its own scope only,
+# (PUT /metrics/job/verify). prometheus-write-gateway's /ready is prometheus-ingest's /-/ready.
+# That each Loki account gets in with its own password, for its own scope only,
 # and a pushed line reads back is theOrg's `loki_clients.py verify`, which loki_accounts.py verify
-# runs through https://loki.asyla.org from the workstation (README.md); theOrg has no such check
-# for the other two modes.
+# runs through https://loki.asyla.org from the workstation (README.md); for remote writes,
+# loki_accounts.py verify --registry prometheus-write (a 204 for an empty and a one-sample write).
 check_gateway() {
-  local rc=0 ready=200
+  local rc=0
   if [ "$(service_state loki-gateway)" != missing ]; then
     check_one_gateway loki-gateway 200 GET /loki/api/v1/labels || rc=1
   fi
   if [ "$(service_state prometheus-write-gateway)" != missing ]; then
-    if [ "$(service_state prometheus-ingest)" = missing ]; then
-      ready=502
-      info "prometheus-write-gateway: prometheus-ingest not started (waiting on theOrg, asyla #1268): /ready must be 502"
-    fi
-    check_one_gateway prometheus-write-gateway "$ready" POST /api/v1/write || rc=1
+    check_one_gateway prometheus-write-gateway 200 POST /api/v1/write || rc=1
   fi
   if [ "$(service_state pushgateway-gateway)" != missing ]; then
     check_one_gateway pushgateway-gateway 200 PUT /metrics/job/verify || rc=1
@@ -946,10 +942,11 @@ check_gateway() {
   return "$rc"
 }
 
-# What runs: the services, Prometheus and its Alertmanager, docker-state-exporter, the trends
-# retention, the blackbox self-probes, every operations Prometheus target up, Vector's container
-# logs in Loki (not on a replica: no Vector), the tokened services' secrets (check_tokened),
-# loki-gateway's open /ready and its refusal of a query with no account (check_gateway), the
+# What runs: the services, Prometheus and its Alertmanager, prometheus-ingest on ingest,
+# docker-state-exporter, the trends retention, the blackbox self-probes, every operations
+# Prometheus target up (ingest-federate too), Vector's container logs in Loki (not on a replica: no
+# Vector), the tokened services' secrets (check_tokened), each gateway's open /ready and its
+# refusal of a request with no account (check_gateway), the
 # Watchdog's ping (check_watchdog) and alert-relay's Vikunja self-test and delivery ping
 # (check_delivery). The pieces that are off (compose.yml's header) have nothing to check.
 do_verify() {
@@ -975,6 +972,13 @@ do_verify() {
     info "prometheus /-/healthy OK"
   else
     echo "[ERROR] prometheus 127.0.0.1:9090/-/healthy failed" >&2; rc=1
+  fi
+  # prometheus-ingest has no port: it answers on ingest alone, so ask from prometheus-1 (on ingest,
+  # the address ingest-federate reads), with its image's busybox wget (its own healthcheck's).
+  if docker exec prometheus-1 wget -q -O- http://prometheus-ingest:9090/-/healthy < /dev/null > /dev/null 2>&1; then
+    info "prometheus-ingest /-/healthy OK from prometheus-1 on ingest"
+  else
+    echo "[ERROR] prometheus-ingest:9090/-/healthy failed from prometheus-1 on ingest" >&2; rc=1
   fi
   n="$(curl -sf --max-time 10 http://127.0.0.1:9090/api/v1/alertmanagers \
     | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["data"]["activeAlertmanagers"]))' 2>/dev/null)" || n=""
@@ -1257,11 +1261,12 @@ usage() {
   echo "             (replica: $REPLICA_SERVICES)" >&2
   echo "  down     - Stop and remove every container (the data stays; the tokened ones need a deploy)" >&2
   echo "  restart  - images ready, then down, then up; on $SERVING_HOST only with every wrapped token" >&2
-  echo "  verify   - Services running and healthy, Prometheus and its one Alertmanager," >&2
-  echo "             docker-state-exporter, trends retention, the blackbox self-probes, every" >&2
-  echo "             operations Prometheus target up, Vector's container logs in Loki, the" >&2
-  echo "             tokened services' secrets, loki-gateway's /ready and its 401 with no" >&2
-  echo "             account, the Watchdog's healthchecks.io ping, and" >&2
+  echo "  verify   - Services running and healthy, Prometheus and its one Alertmanager, the ingest" >&2
+  echo "             Prometheus on ingest, docker-state-exporter, trends retention, the blackbox" >&2
+  echo "             self-probes, every operations Prometheus target up (ingest-federate too)," >&2
+  echo "             Vector's container logs in Loki, the tokened services' secrets, each" >&2
+  echo "             gateway's /ready 200 and its 401 with no account, the Watchdog's" >&2
+  echo "             healthchecks.io ping, and" >&2
   echo "             alert-relay's Vikunja self-test and delivery check ping" >&2
   echo "  alert-test - On $SERVING_HOST: one test line into Loki and one info alert (no email) whose" >&2
   echo "             logql annotation selects it; passes when alert-relay opens a Vikunja task for" >&2

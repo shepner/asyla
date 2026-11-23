@@ -953,8 +953,9 @@ WANT_EXTERNAL = {
 
 def gateways_cases() -> list[bool]:
     """The three gateways: each registry matches its IDENTITIES line, its accounts literal and its
-    compose block; the networks, who joins each, internal and external; the ingest receiver behind
-    its profile; the pushgateway with no port; none on a replica; restart's network check."""
+    compose block; the networks, who joins each, internal and external; the ingest Prometheus, its
+    federation and the remote-write gateway's healthcheck; the pushgateway with no port; no gateway
+    on a replica; restart's network check."""
     import re
     import tomllib
     compose = (dr.HERE / "compose.yml").read_text()
@@ -1048,28 +1049,58 @@ def gateways_cases() -> list[bool]:
               and "down --remove-orphans -v" not in sh),
     ]
 
-    # The ingest receiver, behind its profile; the pushgateway with no port.
+    # The ingest Prometheus (theOrg compose.ingest.yml at 04f31709), its federation and the gateway in
+    # front of it; the pushgateway with no port.
     receivers = sorted(s for s in services if any("--web.enable-remote-write-receiver" in ln
                                                    for ln in service_block(compose, s)))
     profiled = {s: [ln for ln in service_block(compose, s) if ln.startswith("profiles:")] for s in services}
     pwg = service_block(compose, "prometheus-write-gateway")
+    ing = service_block(compose, "prometheus-ingest")
+    prom = service_block(compose, "prometheus")
+    gw_fn = shell_function(sh, "check_gateway")
+    stack_jobs = sh.split('STACK_JOBS="', 1)[1].split('"', 1)[0].split()
+    verify_fn = shell_function(sh, "do_verify")
     out += [
         check("ingest: only prometheus-ingest (and prometheus-trends, emporia-collector's, on "
-              "observability-net) has the remote-write receiver flag",
-              receivers == ["prometheus-ingest", "prometheus-trends"],
+              "observability-net) has the remote-write receiver flag; prometheus has none",
+              receivers == ["prometheus-ingest", "prometheus-trends"]
+              and not any("remote-write-receiver" in ln for ln in prom),
               repr(receivers)),
-        check("ingest: prometheus-ingest is behind the profile ingest, and no other service has a profile",
-              profiled.pop("prometheus-ingest", None) == ['profiles: ["ingest"]'] and not any(profiled.values()),
-              repr(profiled)),
+        check("ingest: no service has a profile (prometheus-ingest starts with the stack)",
+              not any(profiled.values()), repr(profiled)),
         check("ingest: observability.sh never enables a profile (no --profile, no COMPOSE_PROFILES)",
               "--profile" not in sh and "COMPOSE_PROFILES" not in sh),
-        check("ingest: prometheus-write-gateway has no depends_on (its upstream never starts) and no "
-              "healthcheck (its /ready is 502 until then)",
-              not any(ln.startswith("depends_on:") for ln in pwg) and "disable: true" in pwg
-              and not any("/loki-gateway" in ln for ln in pwg), repr(pwg)),
-        check("ingest: verify expects prometheus-write-gateway's /ready 502 while prometheus-ingest has no container",
-              'if [ "$(service_state prometheus-ingest)" = missing ]; then' in shell_function(sh, "check_gateway")
-              and "ready=502" in shell_function(sh, "check_gateway")),
+        check("ingest: prometheus-ingest is the operations image in ingest mode (PROMETHEUS_MODE=ingest, "
+              "ingest.yml, the receiver, 1d/2GB), on observability-ingest only, data under OBSERVABILITY_ROOT",
+              "image: gitea.asyla.org/theorg/observability-prometheus:${OBSERVABILITY_TAG:?}" in ing
+              and "PROMETHEUS_MODE: ingest" in ing
+              and "- --config.file=/etc/prometheus/ingest.yml" in ing
+              and "- --web.enable-remote-write-receiver" in ing
+              and "- --storage.tsdb.retention.time=${INGEST_RETENTION_TIME:-1d}" in ing
+              and "- --storage.tsdb.retention.size=${INGEST_RETENTION_SIZE:-2GB}" in ing
+              and services.get("prometheus-ingest") == {"ingest": []}
+              and any(ln.startswith("test:") and "/-/healthy" in ln for ln in ing)
+              and not any(ln.startswith("ports:") for ln in ing), repr(ing)),
+        check("ingest: prometheus federates prometheus-ingest (FEDERATE_INGEST=true, THEORG_SCRAPE=false, "
+              "FEDERATE_INGEST_HOST/_PORT)",
+              'FEDERATE_INGEST: "true"' in prom and 'THEORG_SCRAPE: "false"' in prom
+              and 'FEDERATE_INGEST_HOST: "prometheus-ingest"' in prom
+              and 'FEDERATE_INGEST_PORT: "9090"' in prom
+              and not any("MONITOR_THEORG" in ln for ln in prom), repr(prom)),
+        check("ingest: prometheus-write-gateway has loki-gateway's healthcheck and depends_on "
+              "prometheus-ingest healthy",
+              'test: ["CMD", "/loki-gateway", "healthcheck"]' in pwg and "disable: true" not in pwg
+              and pwg[pwg.index("depends_on:") + 1:pwg.index("depends_on:") + 3]
+              == ["prometheus-ingest:", "condition: service_healthy"] if "depends_on:" in pwg else False,
+              repr(pwg)),
+        check("ingest: check_gateway wants prometheus-write-gateway's /ready 200 (no 502 left)",
+              "check_one_gateway prometheus-write-gateway 200 POST /api/v1/write" in gw_fn
+              and "502" not in gw_fn and "ready=" not in gw_fn, gw_fn),
+        check("ingest: STACK_JOBS has ingest-federate, whose target is prometheus-ingest",
+              "ingest-federate:prometheus-ingest" in stack_jobs, repr(stack_jobs)),
+        check("ingest: verify asks prometheus-ingest's /-/healthy from prometheus-1 on ingest",
+              "docker exec prometheus-1 wget -q -O- http://prometheus-ingest:9090/-/healthy" in verify_fn,
+              verify_fn[:200]),
         check("push: the pushgateway has no ports",
               bool(service_block(compose, "pushgateway"))
               and not any(ln.startswith("ports:") for ln in service_block(compose, "pushgateway")),
@@ -1078,11 +1109,12 @@ def gateways_cases() -> list[bool]:
               "pushgateway:pushgateway" in sh.split('STACK_JOBS="', 1)[1].split('"', 1)[0]),
         check("verify: each gateway's anonymous route: loki a query, remote-write a POST, the pushgateway a PUT",
               "check_one_gateway loki-gateway 200 GET /loki/api/v1/labels" in sh
-              and 'check_one_gateway prometheus-write-gateway "$ready" POST /api/v1/write' in sh
+              and "check_one_gateway prometheus-write-gateway 200 POST /api/v1/write" in sh
               and "check_one_gateway pushgateway-gateway 200 PUT /metrics/job/verify" in sh),
-        check("replica: no gateway and no prometheus-ingest on a replica; prometheus and the pushgateway are",
-              not {c for c, *_ in GATEWAYS} & set(replica) and "prometheus-ingest" not in replica
-              and {"prometheus", "pushgateway"} <= set(replica), repr(replica)),
+        check("replica: no gateway on a replica; prometheus, prometheus-ingest (ingest-federate reads it) "
+              "and the pushgateway are",
+              not {c for c, *_ in GATEWAYS} & set(replica)
+              and {"prometheus", "prometheus-ingest", "pushgateway"} <= set(replica), repr(replica)),
         check("tokens: token_var, IDENTITIES and d06/host.toml start_env_optional name the same variables",
               tvars == {c: e for c, e, _ in dr.IDENTITIES}
               and len(app) == 1 and sorted(tvars.values()) == sorted(app[0].get("start_env_optional", []))
@@ -1262,7 +1294,7 @@ def alert_test_cases() -> list[bool]:
 def data_dirs_cases() -> list[bool]:
     """Every bind volume compose.yml puts under OBSERVABILITY_ROOT is made by ensure_dirs and owned
     by own_dirs, prometheus-ingest-data among them as nobody (65534) like the other Prometheus data
-    directories, so it exists and is writable once the ingest profile is dropped (asyla #1268)."""
+    directories (asyla #1268)."""
     import re
     compose = (dr.HERE / "compose.yml").read_text()
     sh = (dr.HERE / "observability.sh").read_text()
@@ -1306,9 +1338,9 @@ service_state() { case " $STUB_SERVICES " in *" $1 "*) echo "running (healthy)" 
 def gateway_check_cases() -> list[bool]:
     """verify's gateway check, run offline: observability.sh's own gateway_status, check_one_gateway
     and check_gateway in a local bash with docker a fake on PATH. /ready 200 and an anonymous write
-    401 pass; an anonymous write 200 fails; prometheus-write-gateway's /ready 502 passes while
-    prometheus-ingest has no container and fails once it exists. The fake gets wget's --method and
-    --body-data for the write, and neither for /ready."""
+    401 pass; an anonymous write 200 fails; check_gateway wants prometheus-write-gateway's /ready
+    200, with prometheus-ingest's container or without, and fails on 502. The fake gets wget's
+    --method and --body-data for the write, and neither for /ready."""
     sh = (dr.HERE / "observability.sh").read_text()
     funcs = "\n".join(shell_function(sh, n) for n in ("gateway_status", "check_one_gateway", "check_gateway"))
 
@@ -1339,14 +1371,16 @@ def gateway_check_cases() -> list[bool]:
     out.append(check("gateway check: an anonymous write 200 fails",
                      rc == 1 and f"{gw}: POST /api/v1/write with no account answers '200', not 401" in se,
                      f"rc={rc} out={so!r} err={se!r}"))
-    rc, so, se, calls = run("check_gateway", "502", "401", gw)
-    out.append(check("gateway check: prometheus-write-gateway's /ready 502 passes while prometheus-ingest has no container",
-                     rc == 0 and "prometheus-ingest not started" in so and f"{gw}: /ready 502 with no account" in so
-                     and calls == want, f"rc={rc} out={so!r} err={se!r} calls={calls}"))
-    rc, so, se, calls = run("check_gateway", "502", "401", f"{gw} prometheus-ingest")
-    out.append(check("gateway check: /ready 502 fails once prometheus-ingest exists",
-                     rc == 1 and f"{gw}: /ready answers '502', not 200" in se and "not started" not in so,
-                     f"rc={rc} out={so!r} err={se!r}"))
+    rc, so, se, calls = run("check_gateway", "200", "401", f"{gw} prometheus-ingest")
+    out.append(check("gateway check: check_gateway passes prometheus-write-gateway's /ready 200 and anonymous write 401",
+                     rc == 0 and f"{gw}: /ready 200 with no account" in so and calls == want,
+                     f"rc={rc} out={so!r} err={se!r} calls={calls}"))
+    for services in (f"{gw} prometheus-ingest", gw):
+        rc, so, se, calls = run("check_gateway", "502", "401", services)
+        out.append(check(f"gateway check: check_gateway fails prometheus-write-gateway's /ready 502 "
+                         f"({'with' if 'ingest' in services else 'without'} a prometheus-ingest container)",
+                         rc == 1 and f"{gw}: /ready answers '502', not 200" in se and "not started" not in so,
+                         f"rc={rc} out={so!r} err={se!r}"))
     return out
 
 
@@ -1367,9 +1401,8 @@ fi
 def service_state_cases() -> list[bool]:
     """observability.sh's own service_state, run offline with docker a fake on PATH: a missing
     container (an empty line on stdout, then exit 1) is exactly "missing", a running one is its
-    state; and check_gateway with the real service_state lets prometheus-write-gateway's /ready
-    502 pass while prometheus-ingest has no container (verify failed on d06 when "missing" came
-    out as "\\nmissing")."""
+    state (verify failed on d06 when "missing" came out as "\\nmissing"); and check_gateway with the
+    real service_state checks a running prometheus-write-gateway (/ready 200) and skips a missing one."""
     sh = (dr.HERE / "observability.sh").read_text()
     funcs = "\n".join(shell_function(sh, n)
                       for n in ("service_state", "gateway_status", "check_one_gateway", "check_gateway"))
@@ -1397,10 +1430,13 @@ def service_state_cases() -> list[bool]:
     rc, so, se, _ = run(f"service_state {gw}", gw)
     out.append(check("service_state: a running container is its state, running healthy",
                      rc == 0 and so == "running healthy\n", f"rc={rc} out={so!r} err={se!r}"))
-    rc, so, se, calls = run("check_gateway", gw, "502")
-    out.append(check("service_state: check_gateway with prometheus-ingest missing wants /ready 502 and passes",
-                     rc == 0 and "prometheus-ingest not started" in so and f"{gw}: /ready 502 with no account" in so
+    rc, so, se, calls = run("check_gateway", f"{gw} prometheus-ingest")
+    out.append(check("service_state: check_gateway with prometheus-write-gateway running wants /ready 200 and passes",
+                     rc == 0 and f"{gw}: /ready 200 with no account" in so
                      and calls == want, f"rc={rc} out={so!r} err={se!r} calls={calls}"))
+    rc, so, se, calls = run("check_gateway", "")
+    out.append(check("service_state: check_gateway with no gateway container checks nothing and passes",
+                     rc == 0 and calls == [], f"rc={rc} out={so!r} err={se!r} calls={calls}"))
     return out
 
 

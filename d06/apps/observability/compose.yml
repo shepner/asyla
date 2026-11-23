@@ -1,4 +1,4 @@
-# theOrg's observability stack on d06: Loki, its gateway, Prometheus, the trends Prometheus,
+# theOrg's observability stack on d06: Loki, its gateway, Prometheus, the trends and ingest Prometheus,
 # Alertmanager, alert-relay, emporia-collector, scrape-proxy, the pushgateway, Vector,
 # docker-state-exporter and blackbox-exporter. Written by asyla from theOrg observability docker-compose.yml,
 # compose.docker-socket.yml and compose.blackbox.yml, last read at main
@@ -23,15 +23,15 @@
 #   (observability-ingest), with only prometheus-write-gateway and the operations Prometheus; the
 #   pushgateway is on its own, push (observability-push), with only pushgateway-gateway and the
 #   operations Prometheus, which scrapes it there (theOrg DEPLOY.md, "Where the writes go");
-# - waiting on theOrg: an ingest image or switch with no scrape jobs and the receiver on, and a
-#   federate switch in the operations image (asyla #1268). Until then prometheus-ingest is behind
-#   the compose profile ingest, which nothing enables, so it never starts: the remote-write
-#   gateway runs and refuses a write with no account (401), and one with an account gets 502;
-#   the pushgateway's 127.0.0.1:9091 publish is dropped (nothing on d06 used it);
+# - prometheus-ingest is theOrg's compose.ingest.yml at 04f31709 (the operations image with
+#   PROMETHEUS_MODE=ingest: no job, no rule, 1d/2GB), and the operations Prometheus federates it
+#   (FEDERATE_INGEST=true: the job ingest-federate, one match[] per theOrg job name), folded in
+#   here as the other pieces are; the pushgateway's 127.0.0.1:9091 publish is dropped (nothing on
+#   d06 used it);
 # - no build sections: theOrg's published images of OBSERVABILITY_TAG (observability.sh: latest);
 # - no port on every address: every port on 127.0.0.1 only (Alertmanager on 9093,
 #   docker-state-exporter on 9099); the pushgateway has none (nothing on d06 pushes to it);
-# - Loki, both Prometheus and Alertmanager keep their data on d06's local data disk, as named
+# - Loki, the three Prometheus and Alertmanager keep their data on d06's local data disk, as named
 #   volumes bound to OBSERVABILITY_ROOT (theOrg decision asyla-network-monitoring §8: never NFS);
 # - no secret is in any file, volume or container environment (asyla SEC-5 and SEC-7; the
 #   operator, 2026-11-03: secrets live only in OpenBao). alert-relay, emporia-collector,
@@ -55,7 +55,7 @@
 # loki:3100 inside observability-net, the lines put in its task; README.md, On, off), the Loki
 # gateway (pushes and queries from off this host, each with its own account, as loki.asyla.org),
 # and the remote-write and pushgateway gateways (writes from off this host, each with its own
-# account; remote writes stop at 502 while prometheus-ingest waits on theOrg, above).
+# account; remote writes land in prometheus-ingest, federated by the operations Prometheus).
 # Off (README.md says what turns each on): chat-api (CHAT_API_URL empty).
 #
 # Run with observability.sh: it sets OBSERVABILITY_TAG, OBSERVABILITY_ROOT and the settings below
@@ -242,14 +242,8 @@ services:
   # across modes. Caddy reaches it on loki-edge as prometheus-write-gateway-edge
   # (prometheus-write.asyla.org); it reaches prometheus-ingest on ingest, and OpenBao on
   # observability-net. Not on a replica: it reads production's OpenBao.
-  # Waiting on theOrg: an ingest image or switch with no scrape jobs and the receiver on, and a
-  # federate switch in the operations image (asyla #1268). Until then prometheus-ingest is behind
-  # the profile ingest (below) and never starts, so this gateway runs with no upstream: a write
-  # with no account is 401 (the account check comes first: theOrg loki-gateway/gateway.go), one
-  # with an account 502, and its /ready, forwarded to the upstream's /-/ready, 502 too. So no
-  # depends_on on prometheus-ingest (a service no profile here enables) and no healthcheck (theOrg's
-  # `/loki-gateway healthcheck` is GET /ready, so it would never be healthy and `up --wait` would
-  # fail); observability.sh verify checks the 401 and the 502. Put both back with the profile's end.
+  # It starts once prometheus-ingest is healthy, and its healthcheck is loki-gateway's (theOrg's
+  # `/loki-gateway healthcheck`, GET /ready, forwarded to prometheus-ingest's /-/ready).
   prometheus-write-gateway:
     image: gitea.asyla.org/theorg/observability-loki-gateway:${OBSERVABILITY_TAG:?}
     container_name: prometheus-write-gateway-1
@@ -267,9 +261,16 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    depends_on:
+      prometheus-ingest:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      disable: true
+      test: ["CMD", "/loki-gateway", "healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     networks:
       observability-net: {}
       ingest: {}
@@ -327,11 +328,22 @@ services:
     ports:
       - "127.0.0.1:9090:9090"
     # prometheus-entrypoint.sh enables the two pieces' scrape jobs (folded in from theOrg's
-    # compose.docker-socket.yml and compose.blackbox.yml). MONITOR_THEORG stays unset, so no job
-    # here reads a token.
+    # compose.docker-socket.yml and compose.blackbox.yml). MONITOR_THEORG stays unset (theorg
+    # #1269), so no job here reads a token and theOrg's rules are not loaded.
+    # theOrg's compose.ingest.yml at 04f31709 sets the four below. FEDERATE_INGEST=true works with
+    # MONITOR_THEORG off: the entrypoint writes ingest-federate (/federate on
+    # FEDERATE_INGEST_HOST:FEDERATE_INGEST_PORT, one match[] per job name in its scrape-theorg/,
+    # honor_labels, track_timestamps_staleness) whatever MONITOR_THEORG says, so the Mini's series
+    # are here, with no rule on them until #1269. THEORG_SCRAPE=false changes nothing while
+    # MONITOR_THEORG is off (it is read only inside that switch), and is set now because with
+    # MONITOR_THEORG on and FEDERATE_INGEST on the entrypoint exits 2 unless it is false.
     environment:
       SCRAPE_DOCKER_STATE_EXPORTER: "true"
       SCRAPE_BLACKBOX_EXPORTER: "true"
+      FEDERATE_INGEST: "true"
+      THEORG_SCRAPE: "false"
+      FEDERATE_INGEST_HOST: "prometheus-ingest"
+      FEDERATE_INGEST_PORT: "9090"
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
@@ -347,9 +359,10 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
-    # Its own receiver stays off. It joins ingest to read prometheus-ingest by federation once
-    # theOrg's image has a federate switch (none at 28b23389: README.md, On, off), and push to scrape
-    # the pushgateway (theOrg's pushgateway job, by service name).
+    # Its own receiver stays off (in operations mode the entrypoint exits 2 on
+    # --web.enable-remote-write-receiver). It joins ingest to read prometheus-ingest by federation
+    # (ingest-federate), and push to scrape the pushgateway (theOrg's pushgateway job, by service
+    # name).
     networks:
       - observability-net
       - ingest
@@ -387,26 +400,24 @@ services:
   # one listener, so with the receiver on anything that reaches it can write: its only network is
   # ingest, joined by the gateway and the operations Prometheus alone; no port, not on
   # observability-net.
-  # Waiting on theOrg: an ingest image or switch with no scrape jobs and the receiver on, and a
-  # federate switch in the operations image (asyla #1268). asyla mounts no Prometheus config of its
-  # own, and theOrg's trends image (below, a stand-in) bakes in scrape jobs an ingest Prometheus
-  # must not run. So this service is behind the profile ingest, which nothing enables:
-  # observability.sh never passes --profile, so `up` never starts it and `config --services` does
-  # not list it. When theOrg ships both, set its image or switch here, drop the profile, and give
-  # prometheus-write-gateway back its depends_on and healthcheck. Retention 2 days, at most 2 GB:
-  # federation reads only each series' newest sample, so what it keeps past that is for a look by
-  # hand across a night or a weekend's first day, not history (the operations Prometheus keeps
-  # that).
+  # theOrg's compose.ingest.yml at 04f31709: the operations Prometheus image in its ingest mode
+  # (PROMETHEUS_MODE=ingest, prometheus-entrypoint.sh): /etc/prometheus/ingest.yml, globals only,
+  # no scrape job and no rule whatever the other switches say; the entrypoint refuses ingest mode
+  # unless the command names that file and the receiver. Retention 1 day, at most 2 GB, whichever
+  # first: federation reads only each series' newest sample, so this is a buffer, not history (the
+  # operations Prometheus keeps that). Its data is a bind volume under OBSERVABILITY_ROOT like the
+  # other Prometheus data (theOrg's is a plain named volume), not backed up. It reads nothing off
+  # this host (no OpenBao, no token, no socket), so it runs on a replica too, where the operations
+  # Prometheus's ingest-federate reads it (empty: a replica has no remote-write gateway).
   prometheus-ingest:
-    profiles: ["ingest"]
-    image: gitea.asyla.org/theorg/observability-prometheus-trends:${OBSERVABILITY_TAG:?}
+    image: gitea.asyla.org/theorg/observability-prometheus:${OBSERVABILITY_TAG:?}
     container_name: prometheus-ingest-1
     environment:
-      SCRAPE_EMPORIA: "false"
+      PROMETHEUS_MODE: ingest
     command:
-      - --config.file=/etc/prometheus/prometheus.yml
+      - --config.file=/etc/prometheus/ingest.yml
       - --storage.tsdb.path=/prometheus
-      - --storage.tsdb.retention.time=${INGEST_RETENTION_TIME:-2d}
+      - --storage.tsdb.retention.time=${INGEST_RETENTION_TIME:-1d}
       - --storage.tsdb.retention.size=${INGEST_RETENTION_SIZE:-2GB}
       - --web.enable-remote-write-receiver
     volumes:

@@ -1,10 +1,10 @@
 # observability (d06)
 
-theOrg's observability stack: Loki, Prometheus, the trends Prometheus, Alertmanager, alert-relay,
-emporia-collector, scrape-proxy, the pushgateway, Vector, docker-state-exporter, blackbox-exporter
-and three gateways from theOrg's loki-gateway image (theOrg's option B and route modes, asyla
-#1268; On, off, below): loki-gateway, prometheus-write-gateway and pushgateway-gateway, with the
-ingest Prometheus behind them waiting on theOrg. asyla deploys it here from
+theOrg's observability stack: Loki, Prometheus, the trends and ingest Prometheus, Alertmanager,
+alert-relay, emporia-collector, scrape-proxy, the pushgateway, Vector, docker-state-exporter,
+blackbox-exporter and three gateways from theOrg's loki-gateway image (theOrg's option B and route
+modes, asyla #1268; On, off, below): loki-gateway, prometheus-write-gateway (in front of the ingest
+Prometheus, which the operations Prometheus federates) and pushgateway-gateway. asyla deploys it here from
 theOrg observability `DEPLOY.md`, last read at main `f7579118fdac5d90101a5ec6698200ae2c9d836f`
 (#327; design 4 since #311). The images follow theOrg's `latest` (operator 2026-11-03: "keep
 'latest' no matter what. Anything running older images will need to update"); the revision is read
@@ -186,9 +186,12 @@ each check is a `docker run curlimages/curl` with verified TLS and the account i
 stdin. pushgateway.asyla.org: `/ready` 200; `PUT /metrics/job/asyla_verify` with no account or a
 wrong password 401, with `deploy-all` 200 or 202; its `DELETE` 202 (cleanup); `GET /metrics` 404
 (not an admitted path; theOrg `loki-gateway/gateway.go` at `28b23389`). prometheus-write.asyla.org:
-`POST /api/v1/write` with no account or a wrong password 401; with `host-agent-ws02` and an empty
-body 502 while the ingest Prometheus is not deployed (400 or 204 once it answers), and `/ready` 502
-(200 once it answers).
+`POST /api/v1/write` with no account or a wrong password 401; with `host-agent-ws02` 204 for a
+valid snappy-compressed empty WriteRequest and 204 for one hand-encoded sample,
+`asyla_remote_write_verify{job="asyla-verify"} 1` at now (each body a valid remote write, so a
+refusal is the account's, never the body's); and `/ready` 200 (prometheus-ingest's `/-/ready`).
+The sample is then in prometheus-ingest and, after the next federation scrape, in the operations
+Prometheus.
 
 ## Deploy
 
@@ -333,27 +336,36 @@ with `LOKI_GATEWAY_MODE` set, each with its own token, accounts and prefix (Secr
 - prometheus-write-gateway (`remote-write`), `https://prometheus-write.asyla.org`: admits only
   `POST /api/v1/write` with a push account and forwards it to prometheus-ingest on `ingest`;
   `/ready` is open and forwarded to the upstream's `/-/ready`; every other path is 404,
-  Prometheus's query, admin and federate paths included. prometheus-ingest is the ingest
-  Prometheus (theOrg DEPLOY.md, "Where the writes go"): its receiver on, its only network
-  `ingest`, no port, 2 days or 2 GB kept, for the operations Prometheus to read by federation.
+  Prometheus's query, admin and federate paths included. It starts once prometheus-ingest is
+  healthy (`depends_on`), and its healthcheck is theOrg's `/loki-gateway healthcheck` (`GET
+  /ready`, so prometheus-ingest's `/-/ready`).
+- prometheus-ingest is the ingest Prometheus (theOrg DEPLOY.md, "Where the writes go";
+  `compose.ingest.yml` at `04f31709`): the operations image with `PROMETHEUS_MODE=ingest`
+  (`/etc/prometheus/ingest.yml`, globals only: no scrape job and no rule), its receiver on, its
+  only network `ingest`, no port, 1 day or 2 GB kept, whichever first: a buffer, not history. Its
+  data is under `OBSERVABILITY_ROOT` like the other Prometheus data. It reads nothing off the host,
+  so it runs on a replica too (empty there: no gateway writes to it).
+- the operations Prometheus federates it: `FEDERATE_INGEST=true` with
+  `FEDERATE_INGEST_HOST=prometheus-ingest` and `FEDERATE_INGEST_PORT=9090` makes theOrg's
+  entrypoint write the job `ingest-federate` (`/federate` with one `match[]` per job name in its
+  `scrape-theorg/`, `honor_labels`), whatever `MONITOR_THEORG` says; its own receiver stays off.
+  `THEORG_SCRAPE=false` changes nothing while `MONITOR_THEORG` is off, and is set now because with
+  both on the entrypoint refuses to start unless it is false. So the remote-write path end to end:
+  the Mini's agent writes to `https://prometheus-write.asyla.org` with its account, Caddy hands it
+  to prometheus-write-gateway on `loki-edge`, the gateway checks the account (its record read from OpenBao at start) and
+  forwards to `prometheus-ingest:9090` on `ingest`, and the operations Prometheus reads it from
+  there by `ingest-federate`. `observability.sh verify` checks prometheus-ingest's `/-/healthy`
+  from `prometheus-1` on `ingest`, the `ingest-federate` target up, and the gateway's `/ready` 200;
+  `loki_accounts.py verify --registry prometheus-write` checks a write with the account (204,
+  above).
 - pushgateway-gateway (`pushgateway`), `https://pushgateway.asyla.org`: admits only `PUT`, `POST`
   and `DELETE` on `/metrics/job/...` with a push account and forwards it to `pushgateway:9091` on
   `push`. The pushgateway is on `push` alone (off `observability-net`, no published port), so
   this gateway is the one way in; the operations Prometheus scrapes it there by service name
   (theOrg's `prometheus/scrape-stack/pushgateway.yml`).
 
-Waiting on theOrg:
+Waiting:
 
-- theorg #1285: an ingest piece (an image or switch with no scrape jobs and the receiver on) and
-  a federate switch in the operations image (none at 28b23389). asyla mounts no Prometheus config
-  of its own, and theOrg's trends image bakes in scrape jobs an ingest Prometheus must not run, so
-  until then prometheus-ingest is behind the compose profile `ingest`, which nothing enables
-  (`observability.sh` never passes `--profile`): it never starts. The remote-write gateway runs
-  with no upstream: a write with no account is 401, one with an account 502, and `/ready` 502 too.
-  So that gateway has no `depends_on` on prometheus-ingest and no healthcheck for now (theOrg's
-  `/loki-gateway healthcheck` is `GET /ready`, so it would never be healthy and `up --wait` would
-  fail); `observability.sh verify` checks the 401 and the 502. When theOrg ships both, set the
-  image or switch, drop the profile, and give the gateway back its `depends_on` and healthcheck.
 - the second vault apply: components `prometheus-write-gateway` and `pushgateway-gateway` in the
   `observability-d06` token role (Secrets, above). Until then `deploy_role.py` stops at the mint.
 
@@ -363,7 +375,8 @@ Off here and nowhere else:
 - `MONITOR_THEORG` stays unset, though theOrg's alerts now file in 169. theorg #1278 adds
   `THEORG_SCRAPE`, and d06 sets `MONITOR_THEORG=true` with `THEORG_SCRAPE=false` only once the
   Mini's agent (theorg #1269) pushes: before that, the six `absent()` rules for theOrg's stacks
-  would fire.
+  would fire. Until then the federated series are in the operations Prometheus with no rule on
+  them.
 
 ## Upgrade
 
@@ -407,8 +420,8 @@ at least `SCRAPE_GRACE_S` (75 s, one scrape and some) for each:
   (`vector-1`'s wget to `<gateway>:3100`): `/ready` with no account, and an anonymous request on
   its one admitted route must be 401 (the account check comes before the upstream: theOrg
   `loki-gateway/gateway.go`). loki-gateway: `/ready` 200, `GET /loki/api/v1/labels` 401;
-  prometheus-write-gateway: `POST /api/v1/write` 401, and `/ready` 200 once prometheus-ingest
-  runs, 502 while it does not (On, off, above); pushgateway-gateway: `/ready` 200,
+  prometheus-write-gateway: `/ready` 200 (prometheus-ingest's `/-/ready`),
+  `POST /api/v1/write` 401; pushgateway-gateway: `/ready` 200,
   `PUT /metrics/job/verify` 401. vector-1's wget is GNU Wget (theOrg's `Dockerfile.vector` installs
   Debian's `wget` into `timberio/vector:0.56.0-debian`, which has no busybox; Wget 1.25.0 there
   lists `--method` and `--body-data`, checked 2026-11-22), so a POST or PUT is
@@ -505,9 +518,6 @@ from d06).
   subnet; d03 and d07 are not changed here.
 - d06's `update_all.sh` reports this app as FAIL. It runs `backup`, which this app does not have,
   and `update`, which needs the pull token from the workstation. This matches ticketing's `update`.
-- Remote writes from off this host get no further than prometheus-write-gateway (502 with an
-  account) until theOrg ships the ingest piece and the federate switch (theorg #1285; On, off,
-  above); the remote-write gateway has no healthcheck until then.
 - The deploy needs components `prometheus-write-gateway` and `pushgateway-gateway` in the
   `observability-d06` token role (the second vault apply); until it lands, `deploy_role.py` stops
   at the mint, with nothing started.
