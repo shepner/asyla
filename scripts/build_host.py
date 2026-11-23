@@ -50,7 +50,8 @@ Build phases, in order (each is safe to re-run):
              [gitlab_runner] runner: delete GitLab's entries with its description (HOST-NAME),
              create a new one (POST /user/runners, untagged jobs off, ref_protected), register it on the host
              (build/gitlab-runner/gitlab-runner.sh; the token over SSH stdin, into gitlab-runner's
-             environment), concurrent = the number of runners, wait until online
+             environment), concurrent = the number of runners, wait until online; the job user
+             ([gitlab_runner] user, else the package's gitlab-runner) is set right after install
   verify     mounts, every app's verify (or running containers), runners online with the spec's
              labels or tags, the host-maintenance key set
 
@@ -153,7 +154,10 @@ on the host and checks DHCP is off); for those, verify runs the app's own verify
 instead of only checking that it runs.
 
 GitLab runners: [gitlab_runner] runners = [{name, scope = "group:PATH" | "project:GROUP/PROJECT",
-tags, executor = "docker" | "shell", and for docker image, volumes, pull_policy}]. A rebuild
+tags, executor = "docker" | "shell", and for docker image, volumes, pull_policy}], and
+user = "NAME" beside runners: the account gitlab-runner runs its jobs as (a systemd drop-in,
+build/gitlab-runner/gitlab-runner.sh user; the package's unit runs them as gitlab-runner). A
+shell runner needs user (asyla #605: host-maintenance's jobs run as docker). A rebuild
 makes new runners (no GitLab CI secret holds a runner token); destroy deletes them. Listings are
 type-filtered (/groups/ID/runners?type=group_type): unfiltered, gitlab.com's shared runners
 fill the first page.
@@ -721,13 +725,17 @@ def gitea_env(section: str, key: str) -> str:
 
 def check_gitlab_runner_spec(path: Path, spec: dict) -> None:
     """[gitlab_runner] runners = [{name, scope, tags, executor, and for docker: image, volumes,
-    pull_policy}], or no table at all. Values go into a gitlab-runner command line and the API."""
+    pull_policy}] and optionally user = "NAME" (required with a shell runner), or no table at all.
+    Values go into a gitlab-runner command line, a systemd drop-in and the API."""
     gr = spec.get("gitlab_runner")
     if gr is None:
         return
     where = f"{path}: [gitlab_runner]"
-    if not isinstance(gr, dict) or set(gr) != {"runners"}:
-        raise Fail(f"{where} must hold only runners = [...]")
+    if not isinstance(gr, dict) or "runners" not in gr or not set(gr) <= {"runners", "user"}:
+        raise Fail(f"{where} must hold only runners = [...] and optionally user = \"NAME\"")
+    user = gr.get("user")
+    if user is not None and (not isinstance(user, str) or not HM_NAME.fullmatch(user)):
+        raise Fail(f"{where}: user must be an account name ([a-z_][a-z0-9_-]*), not {user!r}")
     runners = gr["runners"]
     if not isinstance(runners, list) or not runners or not all(isinstance(r, dict) for r in runners):
         raise Fail(f"{where}.runners must be a non-empty list of tables")
@@ -749,6 +757,9 @@ def check_gitlab_runner_spec(path: Path, spec: dict) -> None:
                        f"(a runner without tags would take untagged jobs)")
         if r.get("executor") not in GL_EXECUTORS:
             raise Fail(f"{where}: runner {name}: executor must be one of {GL_EXECUTORS}, not {r.get('executor')!r}")
+        if r["executor"] == "shell" and user is None:
+            raise Fail(f"{where}: runner {name}: a shell runner needs [gitlab_runner] user = \"NAME\" "
+                       f"(the package's unit runs jobs as gitlab-runner)")
         if r["executor"] == "docker":
             allowed |= {"image", "volumes", "pull_policy"}
             if not isinstance(r.get("image"), str) or not r["image"] or any(c.isspace() for c in r["image"]):
@@ -1628,6 +1639,11 @@ def gitlab_runners(spec: dict) -> list[dict]:
             for r in spec.get("gitlab_runner", {}).get("runners", [])]
 
 
+def gitlab_runner_user(spec: dict) -> str | None:
+    """[gitlab_runner] user: the account the runner's jobs run as, or None (the package's gitlab-runner)."""
+    return spec.get("gitlab_runner", {}).get("user")
+
+
 def gl_scope(scope: str) -> tuple[str, str]:
     """group:asyla -> ("group", "/groups/asyla"); project:a/b -> ("project", "/projects/a%2Fb")."""
     kind, _, where = scope.partition(":")
@@ -1696,7 +1712,8 @@ def phase_gitlab_runner(spec: dict, apply: bool) -> None:
     """Each [gitlab_runner] runner: delete GitLab's entries with its description, create a new one
     (POST /user/runners), register it on the host with the new token over SSH stdin
     (build/gitlab-runner/gitlab-runner.sh, sent from GitLab master), then set concurrent and wait
-    until GitLab sees each one online. A rebuild makes new runners: no token is kept anywhere but
+    until GitLab sees each one online. Right after install, `user NAME` ([gitlab_runner] user) or
+    `user -` sets the account jobs run as (a systemd drop-in, or none: the package's gitlab-runner). A rebuild makes new runners: no token is kept anywhere but
     the host's /etc/gitlab-runner/config.toml."""
     host, runners = spec["host"], gitlab_runners(spec)
     if not runners:
@@ -1710,12 +1727,15 @@ def phase_gitlab_runner(spec: dict, apply: bool) -> None:
         build_run(host, [BUILD_GITLAB_RUNNER], f'bash "$B/{BUILD_GITLAB_RUNNER}/gitlab-runner.sh" {args}',
                   as_root=True, stdin=stdin)
 
+    user = gitlab_runner_user(spec)
+    print(f"  jobs run as {user or 'gitlab-runner (the package unit)'}: gitlab-runner.sh user {user or '-'}")
     for r in runners:
         print(f"  {r['description']}: {gl_scope(r['scope'])[0]} runner on {r['scope']}, tags {r['tags']}, "
               f"untagged jobs off; register {shlex.join(gl_register_args(r))}")
     if not apply:
         return
     gl_run("install")
+    gl_run(f"user {shlex.quote(user or '-')}")
     created = {}
     for r in runners:
         rid, token = create_gitlab_runner(r)
@@ -1811,7 +1831,7 @@ def phase_gitea_runner(spec: dict, apply: bool, gitea_host: str = GITEA_TOKEN_HO
 def verify_gitlab_runners(spec: dict, check) -> None:
     """verify's GitLab runner lines: each spec runner has one entry, online, with exactly the
     spec's tags, untagged jobs off and access level GL_ACCESS_LEVEL; the host's gitlab-runner is active with the spec's
-    runners only and concurrent = their number."""
+    runners only and concurrent = their number, and its unit runs jobs as [gitlab_runner] user (else gitlab-runner)."""
     host = spec["host"]
     gl = gitlab_runners(spec)
     for r in gl:
@@ -1828,9 +1848,11 @@ def verify_gitlab_runners(spec: dict, check) -> None:
             check(f"GitLab runner {r['description']} access level {GL_ACCESS_LEVEL}",
                   d.get("access_level") == GL_ACCESS_LEVEL, f"access_level {d.get('access_level')}")
     if gl:
-        # The names and concurrent only: config.toml's token lines are never read here.
+        # The names and concurrent only: config.toml's token lines are never read here. The job
+        # user from the unit's ExecStart (the drop-in's, when there is one).
         r = ssh(host, "systemctl is-active gitlab-runner; sudo grep -E '^concurrent = |^  name = ' "
-                      "/etc/gitlab-runner/config.toml", check=False)
+                      "/etc/gitlab-runner/config.toml; "
+                      "systemctl show -p ExecStart --value gitlab-runner | grep -oE -- '--user [^ ;]+'", check=False)
         lines = r.stdout.splitlines()
         names = sorted(l.split("=", 1)[1].strip().strip('"') for l in lines if l.startswith("  name = "))
         conc = next((l.split("=", 1)[1].strip() for l in lines if l.startswith("concurrent = ")), "none")
@@ -1838,6 +1860,9 @@ def verify_gitlab_runners(spec: dict, check) -> None:
         check("gitlab-runner active with the spec's runners only, concurrent = their number",
               lines[:1] == ["active"] and names == want and conc == str(len(gl)),
               f"{lines[:1]} {names} concurrent {conc}")
+        user = gitlab_runner_user(spec) or "gitlab-runner"
+        users = [l.split(None, 1)[1] for l in lines if l.startswith("--user ")]
+        check(f"gitlab-runner runs shell jobs as {user}", users == [user], f"unit ExecStart --user {users or 'none'}")
 
 
 def verify_host_maintenance(spec: dict, check) -> None:
