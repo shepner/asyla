@@ -116,8 +116,9 @@ TOOL_FILES = ("vault_identity.py", "openbao.py")
 # asyla's hub token, so it is pinned apart from the images (which follow `latest`): the deploy runs
 # the tool from here, and stops when R's copy differs. Bump it only after reading theOrg's change
 # to scripts/vault_identity.py and scripts/openbao.py (f757911: both read 2026-11-03, the same at
-# 7947763).
-TOOL_REV = "f7579118fdac5d90101a5ec6698200ae2c9d836f"
+# 7947763; 001a2ac: read 2026-11-23, f857d40 and 2797bd4 only add openbao.revoke_self, which the
+# minting path does not call).
+TOOL_REV = "001a2ac8d124976ef929112a06644a942078564e"
 CALLER_TOKENS = ("OPENBAO_TOKEN", "VAULT_TOKEN", "BAO_ROOT_TOKEN")
 TAG_LINE = re.compile(r'^OBSERVABILITY_TAG="\$\{OBSERVABILITY_TAG_OVERRIDE:-([0-9a-f]{7,40}|latest)\}"', re.M)
 REGISTRY_LINE = re.compile(r'^REGISTRY="([a-z0-9][a-z0-9.-]*(?::[0-9]{1,5})?)"$', re.M)

@@ -558,8 +558,8 @@ def tool_cases() -> list[bool]:
 
     calls, files = unpack()
     subs = [c[0][3:] for c in calls]
-    out.append(check("tool: TOOL_REV is f757911, the commit asyla reviewed",
-                     dr.TOOL_REV == "f7579118fdac5d90101a5ec6698200ae2c9d836f"))
+    out.append(check("tool: TOOL_REV is 001a2ac, the commit asyla reviewed",
+                     dr.TOOL_REV == "001a2ac8d124976ef929112a06644a942078564e"))
     out.append(check("tool: unchanged between TOOL_REV and R: the files are git show TOOL_REV:..., never R",
                      sorted(files) == ["openbao.py", "vault_identity.py"]
                      and all(v.startswith(f"# {dr.TOOL_REV}:scripts/") for v in files.values())
