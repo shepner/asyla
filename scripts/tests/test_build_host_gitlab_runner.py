@@ -62,8 +62,8 @@ HELLO_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "test01-hello"
 
 
 def test01_spec() -> dict:
-    """test01's hello spec, frozen in fixtures/test01-hello/host.toml (test01/host.toml at c1cccf9),
-    never the live test01/host.toml: test01 is disposable and often a replica of a production host
+    """test01's hello spec, frozen in fixtures/test01-hello/host.toml (test01/host.toml's hello spec,
+    without host-maintenance's key since asyla #605), never the live test01/host.toml: test01 is disposable and often a replica of a production host
     (asyla #1101), which has none of the tables these cases test."""
     d = Path(tempfile.mkdtemp(prefix="build-host-test01-"))
     (d / "test01").symlink_to(HELLO_FIXTURE)

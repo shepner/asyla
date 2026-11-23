@@ -120,8 +120,8 @@ REAL_LOAD_SPEC = build_host.load_spec   # test01_spec stands in for it in main()
 
 
 def test01_spec(host: str = "test01", node: str | None = None) -> dict:
-    """test01's hello spec, frozen in fixtures/test01-hello/host.toml (test01/host.toml at c1cccf9),
-    never the live test01/host.toml: test01 is disposable and often a replica of a production host
+    """test01's hello spec, frozen in fixtures/test01-hello/host.toml (test01/host.toml's hello spec,
+    without host-maintenance's key since asyla #605), never the live test01/host.toml: test01 is disposable and often a replica of a production host
     (asyla #1101), whose apps and runners are not the ones these cases test."""
     assert host == "test01", host
     d = Path(tempfile.mkdtemp(prefix="build-host-test01-"))
