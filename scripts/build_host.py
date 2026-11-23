@@ -1475,12 +1475,32 @@ def replica_images(spec: dict, apply: bool) -> list[str]:
     return images
 
 
+def sleeping_ns_probe(host: str, img: str) -> int | None:
+    """The host's curl in the network namespace of a throwaway sleeping container of IMG on the
+    default bridge (an image with a shell but no probe tool: postgres's). Its exit, or None when there
+    is no proof: the container did not start, or the nsenter probe could not run (99). The container
+    is always removed; a failed removal is logged."""
+    r = ssh(host, f"docker run -d --rm --entrypoint sleep {shlex.quote(img)} 60", check=False)
+    cid = (r.stdout.strip().splitlines() or [""])[-1].strip()
+    if r.returncode != 0 or not cid:
+        return None
+    try:
+        p = ssh(host, NSENTER_PROBE.format(c=shlex.quote(cid), url=EGRESS_PROBES[0]), check=False)
+    finally:
+        rm = ssh(host, f"docker rm -f {shlex.quote(cid)}", check=False)
+        if rm.returncode != 0:
+            print(f"  egress probe: docker rm -f {cid} ({img}) on {host} failed (exit {rm.returncode}); "
+                  f"the container is left running until its sleep 60 ends", flush=True)
+    return None if p.returncode == 99 else p.returncode
+
+
 def egress_checks(spec: dict, images: list[str] = (), containers: list[str] = ()) -> list[tuple[str, bool, str]]:
     """(label, ok, detail) for the replica's egress block: the table and its unit, then no probe
     URL from the host, from a container of each image, or from inside each running container.
-    An image with no shell (127) or no probe tool (no curl, wget or python3: 99) is proved by another
-    image's blocked probe on the same default bridge, else fails; docker's own errors (125, 126) and a
-    reached URL (0) fail."""
+    An image with no probe tool (no curl, wget or python3: 99) is probed by the host's curl in a
+    sleeping container's network namespace; when that cannot run (99), it and an image with no shell
+    (127) are proved by another image's blocked probe on the same default bridge, else fail; docker's
+    own errors (125, 126) and a reached URL (0) fail."""
     host, out = spec["host"], []
     r = ssh(host, f"sudo nft list table {REPLICA_EGRESS_TABLE} >/dev/null && systemctl is-enabled {REPLICA_EGRESS_UNIT}",
             check=False)
@@ -1493,6 +1513,14 @@ def egress_checks(spec: dict, images: list[str] = (), containers: list[str] = ()
     proved, no_probe = None, []   # proved: an image whose probe ran and was blocked on the default bridge
     for img in images:
         r = ssh(host, f"docker run --rm --entrypoint sh {shlex.quote(img)} -c {probe} {EGRESS_PROBES[0]}", check=False)
+        ns = sleeping_ns_probe(host, img) if r.returncode == 99 else None
+        if ns is not None:   # no probe tool: the host's curl in a sleeping container's namespace
+            ok = ns not in (0, 99, 125, 126, 127)
+            proved = proved or (img if ok else None)
+            out.append((f"a container of {img} cannot reach {EGRESS_PROBES[0]}", ok,
+                        f"no curl, wget or python3 in the image; the host's curl in a sleeping container's "
+                        f"network namespace: exit {ns}"))
+            continue
         if r.returncode in (NO_SHELL, 99):
             no_probe.append((img, "no shell in the image" if r.returncode == NO_SHELL
                              else "no curl, wget or python3 in the image"))
@@ -1500,7 +1528,8 @@ def egress_checks(spec: dict, images: list[str] = (), containers: list[str] = ()
         ok = r.returncode not in (0, 125, 126)
         proved = proved or (img if ok else None)
         out.append((f"a container of {img} cannot reach {EGRESS_PROBES[0]}", ok, f"exit {r.returncode}"))
-    # An image with no shell (vikunja's, 127) or no probe tool (postgres's, 99) cannot run the probe.
+    # An image with no shell (vikunja's, 127), or no probe tool (postgres's, 99) whose sleeping
+    # container the host's curl could not probe, cannot run the probe.
     # `docker run --rm IMG` puts every image on the same default bridge, so another image's blocked
     # probe is that path's proof; with none, there is no proof. Running containers are probed below.
     for img, why in no_probe:

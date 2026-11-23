@@ -234,6 +234,50 @@ def egress_no_probe_tool_case() -> bool:
                  good and good2 and good3, str((res, res2, res3)))
 
 
+def egress_lone_no_probe_tool_case() -> bool:
+    """A lone image with no probe tool (postgres's on the d05 replica, exit 99) is probed by the
+    host's curl in a sleeping container's network namespace: blocked passes, reached fails, and a
+    probe that cannot run (99) falls back to "no other image proves". The container is always removed."""
+    spec = temp_specs({"d07": VM + GITEA_APP, "x": VM + REP_GITEA})("x")
+
+    def lone(ns_rc, run_rc=0):
+        seen = []
+
+        def f(t, c):
+            seen.append(c)
+            if "nft list" in c:
+                return Done(0)
+            if "docker run --rm --entrypoint sh pg" in c:
+                return Done(99)
+            if "docker run -d --rm --entrypoint sleep pg:16 60" in c:
+                return Done(run_rc, "abc123\n" if run_rc == 0 else "")
+            if "nsenter" in c:
+                return Done(ns_rc)
+            if c == "docker rm -f abc123":
+                return Done(0)
+            return Done(28)
+        res, _ = with_ssh(f, lambda: build_host.egress_checks(spec, ["pg:16"]))
+        return res, seen
+    res, seen = lone(28)
+    good = ([ok for _, ok, _ in res] == [True, True, True, True] and res[-1][2]
+            == "no curl, wget or python3 in the image; the host's curl in a sleeping container's network namespace: exit 28"
+            and any("nsenter" in c and "abc123" in c and "https://gitlab.com" in c for c in seen)
+            and seen[-1] == "docker rm -f abc123")
+    res2, seen2 = lone(0)
+    good2 = ([ok for _, ok, _ in res2] == [True, True, True, False] and res2[-1][2].endswith("namespace: exit 0")
+             and "docker rm -f abc123" in seen2)
+    res3, seen3 = lone(99)
+    good3 = ([ok for _, ok, _ in res3] == [True, True, True, False] and res3[-1][2]
+             == "no curl, wget or python3 in the image and no other image proves the default bridge"
+             and "docker rm -f abc123" in seen3)
+    res4, seen4 = lone(28, run_rc=125)   # the sleeping container did not start: no nsenter, no rm
+    good4 = ([ok for _, ok, _ in res4] == [True, True, True, False] and "no other image proves" in res4[-1][2]
+             and not any("nsenter" in c or "docker rm" in c for c in seen4))
+    return check("egress, lone no-probe-tool image: nsenter in a sleeping container; blocked passes, reached "
+                 "fails, no tooling or no container falls back; the container is removed",
+                 good and good2 and good3 and good4, str((res, seen, res2, res3, res4)))
+
+
 def replica_images_own_case() -> bool:
     """An app whose script has an `images` switch lists its own images (its env, login and replica
     overlay); one without keeps the bare compose listing."""
@@ -1122,6 +1166,7 @@ results = [
     egress_case(),
     egress_no_shell_case(),
     egress_no_probe_tool_case(),
+    egress_lone_no_probe_tool_case(),
     replica_images_own_case(),
     replica_start_drops_pull_case(),
     *app_env_cases(),
