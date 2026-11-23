@@ -125,8 +125,14 @@ one Ecobee threshold for a winter experiment (operator, 2026-11-08).
   2026-11-08 (hub backlog, HVAC optimiser item, "Winter heat pump experiment design"). It writes
   only the Ecobee's Compressor Min Outdoor Temp (`number.downstairs_hallway_compressor_minimum_temperature`),
   and only through `script.hvac_experiment_set_lockout`, which takes -15, 30, 35 or 65 °F.
-  - Nights from 2026-11-12 to 2027-03-31 alternate. At 21:00 it sets -15 on a heat pump night
-    (11-12 is one) or 65 on a gas night. At 09:00, from 11-13 to 2027-04-01, it sets the normal 35.
+  - Nights from 2026-11-12 to 2027-03-31. At 21:00 it sets -15 on a heat pump night or 65 on a gas
+    night. Which kind: from 2026-11-24 (operator 2026-11-23, "Yes, forecast bands"),
+    `asyla/hvac_experiment_pick.py` takes the hourly forecast (`weather.forecast_home`) for the night,
+    finds its 5 °F band, and picks gas while the band has fewer than 2 gas nights and no more gas than
+    heat pump nights, else heat pump, with one gas night for every two heat pump nights once a band
+    has 2 of each. The pick and its reason are in `input_text.hvac_experiment_tonight`; if the pick
+    fails, the night alternates as before (heat pump on an even number of days after 11-12, the rule
+    for 11-12 to 11-23). At 09:00, from 11-13 to 2027-04-01, it sets the normal 35.
     Gas nights use 65, not the approved 66: 66 is off the setting's 5 °F step and the Ecobee may
     refuse it, and 65 does the same on a winter night.
   - Comfort stop: on a heat pump night, if `sensor.mke_inside_temperature` stays more than 2 °F
