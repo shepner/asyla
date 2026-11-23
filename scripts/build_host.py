@@ -1617,15 +1617,34 @@ def phase_external(spec: dict, apply: bool) -> int:
     return gaps
 
 
+# Since 2026-11-20 GITEA_TOKEN is asyla-bot's token, an admin of org asyla only (asyla #599). The
+# runners are instance-scope (generate-runner-token), and /admin/actions/runners wants a site admin,
+# so the list answers 401/403 (asyla #1189). No site-admin token exists; adding one is the
+# operator's security decision. So a destroy or a re-registration leaves the old entry offline, and
+# verify fails its Gitea runner checks with that reason: it cannot prove them without the list.
+class RunnerListRefused(Fail):
+    def __init__(self, code: int):
+        super().__init__(f"Gitea runner list: HTTP {code} (GITEA_TOKEN is not a Gitea site admin; asyla #1189)")
+        self.code = code
+
+
 def runner_entries(host: str) -> list[dict]:
     code, body = gitea("GET", "/admin/actions/runners?limit=100")
+    if code in (401, 403):
+        raise RunnerListRefused(code)
     if code != 200:
         raise Fail(f"Gitea runner list: HTTP {code}")
     return [r for r in body.get("runners", []) if r.get("name") == host]
 
 
 def delete_runner_entry(host: str, apply: bool) -> None:
-    for r in runner_entries(host):
+    try:
+        entries = runner_entries(host)
+    except RunnerListRefused as e:
+        print(f"Gitea runner {host}: old entry not deleted (GITEA_TOKEN is not a Gitea site admin, "
+              f"HTTP {e.code}; asyla #1189): it stays as an offline entry")
+        return
+    for r in entries:
         print(f"delete Gitea runner {r['name']} (id {r['id']}, {r.get('status')})")
         if apply:
             code, _ = gitea("DELETE", f"/admin/actions/runners/{r['id']}")
@@ -2069,8 +2088,15 @@ def verify(spec: dict) -> int:
         r = ssh(host, f"for i in $(seq 60); do curl -sf -o /dev/null -m 5 {shlex.quote(url)} && exit 0; sleep 2; done; "
                       f"exit 1", check=False, timeout=600)
         check(f"replica answers {url}", r.returncode == 0, "" if r.returncode == 0 else "not within 120 s")
-    if spec.get("runner", {}).get("enabled"):
-        entries = runner_entries(host)
+    try:
+        entries = runner_entries(host) if spec.get("runner", {}).get("enabled") else None
+    except RunnerListRefused as e:   # asyla #1189: no list, so neither check can pass
+        entries = None
+        why = f"not provable, GITEA_TOKEN is not a Gitea site admin (HTTP {e.code}; asyla #1189)"
+        check("Gitea runner online", False, why)
+        if spec["runner"].get("labels"):
+            check("Gitea runner labels are the spec's", False, why)
+    if entries is not None:
         online = [e for e in entries if e.get("status") in ("online", "idle", "active")]
         check("Gitea runner online", len(entries) == 1 and bool(online),
               ", ".join(f"id {e['id']} {e.get('status')} {[l['name'] for l in e.get('labels', [])]}" for e in entries))
