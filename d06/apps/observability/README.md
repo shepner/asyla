@@ -141,10 +141,9 @@ under `secret/hubs/asyla/` but alert-relay's Vikunja token:
 
 Each gateway has its own prefix, token and accounts, so no password is shared across gateways, and
 for each the same tests check that `deploy_role.py`'s records and `observability.sh`'s account list
-match its registry. The two newer gateways' records need the second vault apply: the
-`observability-d06` token role gets components `prometheus-write-gateway` and
-`pushgateway-gateway` (theOrg's to make). Until then the mint of their tokens fails and
-`deploy_role.py` stops there, with nothing started.
+match its registry. The `observability-d06` token role holds components
+`prometheus-write-gateway` and `pushgateway-gateway` since the second vault apply (2026-11-23:
+secrets-vault `7327bcb9`, vault-auth run 26910).
 
 The gateways' account records are asyla's own: `loki_accounts.py` makes them, once, before the
 first deploy that names them (a deploy without one stops at the mint), from the workstation:
@@ -190,8 +189,9 @@ wrong password 401, with `deploy-all` 200 or 202; its `DELETE` 202 (cleanup); `G
 valid snappy-compressed empty WriteRequest and 204 for one hand-encoded sample,
 `asyla_remote_write_verify{job="asyla-verify"} 1` at now (each body a valid remote write, so a
 refusal is the account's, never the body's); and `/ready` 200 (prometheus-ingest's `/-/ready`).
-The sample is then in prometheus-ingest and, after the next federation scrape, in the operations
-Prometheus.
+The sample then stays in prometheus-ingest alone (its buffer keeps a day): `ingest-federate`
+carries only theOrg's scrape-theorg jobs, and `asyla-verify` is not one of them, so it never
+reaches the operations Prometheus.
 
 ## Deploy
 
@@ -364,11 +364,6 @@ with `LOKI_GATEWAY_MODE` set, each with its own token, accounts and prefix (Secr
   this gateway is the one way in; the operations Prometheus scrapes it there by service name
   (theOrg's `prometheus/scrape-stack/pushgateway.yml`).
 
-Waiting:
-
-- the second vault apply: components `prometheus-write-gateway` and `pushgateway-gateway` in the
-  `observability-d06` token role (Secrets, above). Until then `deploy_role.py` stops at the mint.
-
 Off here and nowhere else:
 
 - chat-api: `CHAT_API_URL` is empty; theOrg's, not asyla's.
@@ -518,9 +513,6 @@ from d06).
   subnet; d03 and d07 are not changed here.
 - d06's `update_all.sh` reports this app as FAIL. It runs `backup`, which this app does not have,
   and `update`, which needs the pull token from the workstation. This matches ticketing's `update`.
-- The deploy needs components `prometheus-write-gateway` and `pushgateway-gateway` in the
-  `observability-d06` token role (the second vault apply); until it lands, `deploy_role.py` stops
-  at the mint, with nothing started.
 - theOrg has no account check for the remote-write and pushgateway modes (`loki_clients.py
   verify` is Loki's only), so `observability.sh verify` checks only their anonymous refusals.
 - `VECTOR_DOCKER_LOGS` also loads theOrg's `to_memory_system` sink: `CHRONICLE_EPISODE` lines to

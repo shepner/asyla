@@ -56,8 +56,8 @@ asyla_remote_write_verify{job="asyla-verify"} 1 at the time of the run, hand-enc
 (write_request, snappy_literal); /ready wants 200. The sample stays in the ingest Prometheus's
 buffer (a day): asyla-verify is not one of theOrg's jobs, so ingest-federate does not carry it to
 the operations Prometheus. curl's stdin already holds its config, and curl reads `-K -` to the
-end, so a remote-write body cannot share it: it goes in a 0600 temp file that holds the body alone
-(no secret), bound read-only into the curl container as /body (`--data-binary @/body`) and
+end, so a remote-write body cannot share it: it goes in a 0644 temp file that holds the body alone
+(no secret; readable so the container's non-root curl can open it), bound read-only into the curl container as /body (`--data-binary @/body`) and
 removed after the call. Writes nothing to OpenBao.
 
 Never prints, logs or writes a password or the token: the tool prints `<name>: created` or
@@ -293,12 +293,16 @@ def curl_env(base: dict) -> dict:
 def curl(url: str, user: tuple[str, str] | None = None, method: str = "GET",
          body: str | bytes | None = None, headers: tuple = ()) -> int:
     """The HTTP status (0 when curl got none), the account in curl's config on stdin. A bytes body
-    goes in a 0600 temp file (mkstemp) holding that body alone, removed after the call."""
+    goes in a 0644 temp file (mkstemp) holding that body alone, removed after the call."""
     config = f'user = "{user[0]}:{user[1]}"\n' if user else ""
     body_file = None
     try:
         if isinstance(body, bytes):
             fd, body_file = tempfile.mkstemp(prefix="asyla-remote-write-")
+            # mkstemp makes it 0600, but the curlimages/curl container runs as a non-root user, so
+            # on a Linux docker host curl could not read /body. The file holds only the request
+            # body (never the account, which goes on stdin), so world-readable is safe.
+            os.fchmod(fd, 0o644)
             with os.fdopen(fd, "wb") as f:
                 f.write(body)
             body = None

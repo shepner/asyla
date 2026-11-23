@@ -1099,7 +1099,7 @@ def gateways_cases() -> list[bool]:
         check("ingest: STACK_JOBS has ingest-federate, whose target is prometheus-ingest",
               "ingest-federate:prometheus-ingest" in stack_jobs, repr(stack_jobs)),
         check("ingest: verify asks prometheus-ingest's /-/healthy from prometheus-1 on ingest",
-              "docker exec prometheus-1 wget -q -O- http://prometheus-ingest:9090/-/healthy" in verify_fn,
+              "docker exec prometheus-1 wget -q -T 10 -O- http://prometheus-ingest:9090/-/healthy" in verify_fn,
               verify_fn[:200]),
         check("push: the pushgateway has no ports",
               bool(service_block(compose, "pushgateway"))

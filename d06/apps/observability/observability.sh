@@ -975,7 +975,8 @@ do_verify() {
   fi
   # prometheus-ingest has no port: it answers on ingest alone, so ask from prometheus-1 (on ingest,
   # the address ingest-federate reads), with its image's busybox wget (its own healthcheck's).
-  if docker exec prometheus-1 wget -q -O- http://prometheus-ingest:9090/-/healthy < /dev/null > /dev/null 2>&1; then
+  # -T 10: a hung ingest cannot stall verify.
+  if docker exec prometheus-1 wget -q -T 10 -O- http://prometheus-ingest:9090/-/healthy < /dev/null > /dev/null 2>&1; then
     info "prometheus-ingest /-/healthy OK from prometheus-1 on ingest"
   else
     echo "[ERROR] prometheus-ingest:9090/-/healthy failed from prometheus-1 on ingest" >&2; rc=1

@@ -560,11 +560,11 @@ def metrics_cases() -> list[bool]:
                   and all(i.startswith('user = "host-agent-ws02:') for _, i, _, _, _, w in calls if w)
                   and all("Content-Encoding: snappy" in a for a, *_ in calls[:4])
                   and ACCOUNT_STAND_IN not in text, text),
-            check("verify prometheus-write: every write sends a valid snappy body from a 0600 file bound "
+            check("verify prometheus-write: every write sends a valid snappy body from a 0644 file bound "
                   "read-only as /body: 0x00 three times, then the encoded sample; /ready none",
                   sent[:3] == [b"\x00"] * 3 and bodies[4] is None
                   and snappy_decode(sent[3]).startswith(b"\x0a") and b"asyla_remote_write_verify" in sent[3]
-                  and all(b[1] == "0o600" and b[3:] == ("/body", "ro", "@/body") for b in bodies[:4]),
+                  and all(b[1] == "0o644" and b[3:] == ("/body", "ro", "@/body") for b in bodies[:4]),
                   repr(bodies)),
             check("verify prometheus-write: each body file is gone after, and none holds the password",
                   all(not Path(b[0]).exists() and ACCOUNT_STAND_IN.encode() not in b[2] for b in bodies[:4]),
