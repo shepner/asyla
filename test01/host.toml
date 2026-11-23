@@ -2,6 +2,8 @@
 # destroyed as testing needs (operator pre-approved for test01 only, 2026-10-13). Its runners
 # carry only the label or tag build-test, so they never take a real job; the one exception is the
 # hm runner below (tag hm-test01, asyla #605), which takes only host-maintenance jobs naming it.
+# test01 is maintained by that hm runner, not over SSH from d03: no [host_maintenance], so a build
+# installs no host-maintenance key, known_hosts or authorized_keys line (asyla #605).
 # The hello test (test01/apps/hello). To rehearse a production host instead, add
 # [replica] of = "dNN" (scripts/build_host.py docstring; the d03 replica of 2026-10-09 is in git
 # history under d04/, 4decdd6..fad6650).
@@ -32,29 +34,6 @@ var = "TEST01_HELLO_ENV"
 path = "/home/docker/scripts/test01/apps/hello/.env"
 owner = "docker:asyla"
 mode = "600"
-
-# host-maintenance's key set (gap G11; build/setup/host_maintenance_keys.sh, setup phase). The
-# key is a throwaway one, made for a test01 build and deleted after it (asyla backlog, G11 proof):
-# it authorizes docker@test01 only, never d01 to d03. The pins are d01 to d03's ed25519 host keys
-# (ssh-keyscan -t ed25519 from the workstation, 2026-10-15, equal to its known_hosts); the build
-# scans each address from test01 and fails on another key. self_address: test01's own new host
-# key, read on test01 by the setup phase, as the rebuilt d03 pins its own (d03/host.toml).
-[[secret]]
-var = "TEST01_HOST_MAINTENANCE_SSH_KEY"
-path = "/home/docker/.config/host-maintenance/ssh/id_ed25519"
-owner = "docker:docker"
-mode = "600"
-
-[host_maintenance]
-identity = "/home/docker/.config/host-maintenance/ssh/id_ed25519"
-user = "docker"
-known_hosts = [
-  "10.0.0.60 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDklyJ5JfOrunGhBVq3B00PFofICXisn2NryUP5yvA5D",
-  "10.0.0.61 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK+LjU+hfw8ZMCCFIDeMIXfut12jX3Njl+MDDZ/RG5qq",
-  # 10.0.0.62: the rebuilt d03 (VM 113, cutover 2026-10-17); VM 103's key was ...bhhGgU9S.
-  "10.0.0.62 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEWBYkIF2Vt24oPKu01VJPEExr3WzbsWyMjahtuYpaak",
-]
-self_address = "10.0.0.69"
 
 [[app]]
 name = "hello"

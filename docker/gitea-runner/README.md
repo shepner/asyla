@@ -28,6 +28,15 @@ A job runs inside the service, so stopping the service ends it after `shutdown_t
 Work that must outlive the runner (a reboot, restarting this runner) has to leave the service's
 cgroup, e.g. `sudo systemd-run --unit=<name> <command>`, and report back another way.
 
+## Docker mode (ci01)
+
+A host other than d01-d03 can set `mode = "docker"` in its `[runner]` table (asyla #1237): each
+label is registered as `NAME:docker://IMAGE` (`image = "..."`), so every job runs in a container
+of that image, with `capacity` (1-99, default 10) and `container_options` (docker run flags) from
+the spec. `docker_host` stays at its default, so the daemon's socket is mounted into job
+containers, as on the Mini. `install` skips nodejs; `gitea-runner.sh config` prints what it
+would write.
+
 ## Safety
 
 - Any account on the Gitea instance can write a workflow that runs here as `docker`, which is root

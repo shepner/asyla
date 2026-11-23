@@ -34,7 +34,7 @@
 #        cd ~/local/asyla && python3 core/tools/credentials.py exec GITLAB_TOKEN GITEA_TOKEN ASYLA_HOSTS_DEPLOY_USER ASYLA_HOSTS_DEPLOY_TOKEN -- python3 projects/asyla-hosts/scripts/build_host.py test01 destroy --apply
 #   3. A commit on master that makes test01 a d05 replica, reverted after the proof (as the ns01 and
 #      ns02 proofs, 67a7a3b / 698ef60), pulled into this checkout: in test01/host.toml, remove the
-#      hello [[secret]]s, [host_maintenance], the hello [[app]], [[external]], [runner],
+#      hello [[secret]], the hello [[app]], [[external]], [runner],
 #      [[gitlab_runner.runners]] and [node_exporter].textfile_sources, and add
 #        [replica]
 #        of = "d05"

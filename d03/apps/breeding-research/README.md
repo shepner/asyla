@@ -72,6 +72,41 @@ the new value and deploy.
   starts, so the app never starts on an empty database. Deleting `pg-data` by hand does the same on
   the next `up`.
 
+### Schema and data load (BigQuery export)
+
+The schema and the loader are the app image's own (breeding-research repo `db/migrations/`,
+`scripts/db_migrate.py`, `scripts/pg_load.py`; central breed DB milestone 3). These run them in the
+running `breeding-research` container (`/app`, uid 65534), which already has `DATABASE_URL`, so no
+password passes through them:
+
+- `dbmigrate` applies the pending migrations (`python scripts/db_migrate.py`); `dbstatus` lists
+  them and changes nothing (`--status`).
+- `dbload` reads a tar of one export directory (`manifest.json` and `<table>.jsonl`, from the
+  repo's `scripts/bq_export.py`) on stdin and runs `python scripts/pg_load.py --tar -`, which loads
+  each table in its own transaction, prints each table's export-vs-Postgres row count and checksums,
+  and exits nonzero on any mismatch. Running the same export again adds no rows. Refused when stdin
+  is a terminal.
+- All three are refused, with nothing run, when the app is not running or its image has no such
+  script ("update the app image first"): images built before milestone 3 do not ship them.
+
+From the workstation, `dbload_from_workstation.sh EXPORT_DIR` (in this directory) sends the
+export: it packs `manifest.json` and the top-level `*.jsonl` (macOS-safe: `COPYFILE_DISABLE=1 tar
+--no-xattrs`, no `._` members) and pipes it, in memory, into one `ssh -o BatchMode=yes docker@d03`
+running `breeding-research.sh dbmigrate dbload`. `D03_SSH` and `D03_SCRIPT` override the target.
+Offline test: `bash scripts/tests/test_breeding_research_db_sh.sh`.
+
+Operator steps, each approved on its own:
+
+1. Push breeding-research: its CI builds `:<sha>` and `:latest` with the scripts in the image.
+2. Merge and push this repo's branch.
+3. Sync the scripts to d03: `python3 tools/host_maintenance_run.py --task scripts --hosts d03`
+   (asyla hub).
+4. Move the app to the new image: `python3 tools/host_maintenance_run.py --task apps --hosts d03
+   --apps breeding-research` (runs `refresh`); `dbstatus` on d03 then lists the migrations.
+5. Export from BigQuery (breeding-research `scripts/bq_export.py`), then
+   `d03/apps/breeding-research/dbload_from_workstation.sh <export dir>`; every table must report a
+   match. Take a `backup` afterwards so the loaded data is in `pgdump/` and the mirror.
+
 The app's own mount (`/mnt/docker/breeding-research` as `/data/app`, uid 65534) covers `pg-data/`
 (Postgres's, 0700) and `pgdump/` (the docker user's, 0700); it can read neither.
 
