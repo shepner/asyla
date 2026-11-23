@@ -247,8 +247,8 @@ named `HOST:hw:KEY`. Both directories are mounted by `compose.yml` on theOrg's d
 | Checker | Host (served by) | Runs | Stale after |
 | --- | --- | --- | --- |
 | `nas-smart` | nas01 (d03's `smart.prom`) | hourly at :17, TrueNAS cron job 9 (hub `tools/export_nas_smart.py`) | 3h |
-| `vmh-health` | vmh01-03 (`asyla-vmh-health.prom`) | every 15 min, host-maintenance's monitor (`vmh/health.sh`) | 30m |
-| guests | d01-d07 (`~/maint/guest-health.prom`) | every 15 min, host-maintenance's monitor | 30m |
+| `vmh-health` | vmh01-03 (`asyla-vmh-health.prom`) | hourly, host-maintenance's monitor (`vmh/health.sh`; its */15 schedule runs hourly on GitLab Free) | 3h |
+| guests | d01-d07 (`~/maint/guest-health.prom`) | hourly, host-maintenance's monitor | 3h |
 
 - `AsylaHwProblemUrgent`: fires at once; `AsylaHwProblemWarning`: after 10 minutes. Both keep firing
   15 minutes after the series goes, so a missed scrape does not close and reopen the task.

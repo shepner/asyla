@@ -89,7 +89,7 @@ tests:
         alertname: AsylaHwCheckerMissing
         exp_alerts: []
 
-  # Stale: vmh03's checker stopped at 0m (limit 30m), nas01's export at 0m (limit 3h); vmh01 runs on.
+  # Stale: vmh03's checker and nas01's export stopped at 0m (limit 3h for both); vmh01 runs on.
   - interval: 1m
     input_series:
       - series: 'asyla_hw_check_last_run_timestamp_seconds{job="asyla-hw",instance="vmh03.asyla.org:9100",host="vmh03",checker="vmh-health"}'
@@ -102,22 +102,10 @@ tests:
       - eval_time: 29m
         alertname: AsylaHwCheckerStale
         exp_alerts: []
-      - eval_time: 31m
+      # 70m: a vmh checker between hourly monitor runs is not stale (the old 30m limit fired here).
+      - eval_time: 70m
         alertname: AsylaHwCheckerStale
-        exp_alerts:
-          - exp_labels:
-              alertname: AsylaHwCheckerStale
-              job: asyla-hw
-              instance: vmh03.asyla.org:9100
-              host: vmh03
-              checker: vmh-health
-              severity: warning
-              alert_repo: asyla/asyla-hosts
-              name: vmh03:hw:stale.vmh-health
-            exp_annotations:
-              summary: "vmh03: hardware checker vmh-health last ran 31m 0s ago"
-              description: "No new run of vmh-health on vmh03 (limit 3h for nas-smart, 30m for the others): its hardware problems are not being checked."
-              runbook_url: https://gitlab.com/asyla/asyla-hosts/-/blob/master/d06/apps/observability/README.md#hardware-alerts-asyla-610
+        exp_alerts: []
       - eval_time: 181m
         alertname: AsylaHwCheckerStale
         exp_alerts:
@@ -132,7 +120,7 @@ tests:
               name: vmh03:hw:stale.vmh-health
             exp_annotations:
               summary: "vmh03: hardware checker vmh-health last ran 3h 1m 0s ago"
-              description: "No new run of vmh-health on vmh03 (limit 3h for nas-smart, 30m for the others): its hardware problems are not being checked."
+              description: "No new run of vmh-health on vmh03 (limit 3h; every checker runs hourly): its hardware problems are not being checked."
               runbook_url: https://gitlab.com/asyla/asyla-hosts/-/blob/master/d06/apps/observability/README.md#hardware-alerts-asyla-610
           - exp_labels:
               alertname: AsylaHwCheckerStale
@@ -145,24 +133,11 @@ tests:
               name: nas01:hw:stale.nas-smart
             exp_annotations:
               summary: "nas01: hardware checker nas-smart last ran 3h 1m 0s ago"
-              description: "No new run of nas-smart on nas01 (limit 3h for nas-smart, 30m for the others): its hardware problems are not being checked."
+              description: "No new run of nas-smart on nas01 (limit 3h; every checker runs hourly): its hardware problems are not being checked."
               runbook_url: https://gitlab.com/asyla/asyla-hosts/-/blob/master/d06/apps/observability/README.md#hardware-alerts-asyla-610
       - eval_time: 179m
         alertname: AsylaHwCheckerStale
-        exp_alerts:
-          - exp_labels:
-              alertname: AsylaHwCheckerStale
-              job: asyla-hw
-              instance: vmh03.asyla.org:9100
-              host: vmh03
-              checker: vmh-health
-              severity: warning
-              alert_repo: asyla/asyla-hosts
-              name: vmh03:hw:stale.vmh-health
-            exp_annotations:
-              summary: "vmh03: hardware checker vmh-health last ran 2h 59m 0s ago"
-              description: "No new run of vmh-health on vmh03 (limit 3h for nas-smart, 30m for the others): its hardware problems are not being checked."
-              runbook_url: https://gitlab.com/asyla/asyla-hosts/-/blob/master/d06/apps/observability/README.md#hardware-alerts-asyla-610
+        exp_alerts: []
 
   # Missing: d05's exporter answers with no checker series, and nas01's export is gone entirely.
   - interval: 1m
