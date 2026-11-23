@@ -119,17 +119,15 @@ spec_refused("self_address also pinned", sec + table(pins=[PIN_A, "10.0.0.250 ss
 spec_refused("self_address another host's ip", sec + table(extra='self_address = "10.0.0.62"\n'), "own [vm] ip")
 spec_refused("self_address not a string", sec + table(extra="self_address = 1\n"), "own [vm] ip")
 
+HELLO_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "test01-hello"
+
+
 def test01_spec() -> dict:
-    """test01's spec. While test01 rehearses a production host ([replica], e.g. gap G1), the hello
-    spec as committed at 226904e instead, so these cases keep a spec with the tables they test."""
-    t = build_host.load_spec("test01")
-    if not t.get("replica"):
-        return t
-    text = REAL_RUN(["git", "-C", str(build_host.REPO), "show", "226904e:test01/host.toml"],
-                    capture_output=True, text=True, check=True).stdout
+    """test01's hello spec, frozen in fixtures/test01-hello/host.toml (test01/host.toml at c1cccf9),
+    never the live test01/host.toml: test01 is disposable and often a replica of a production host
+    (asyla #1101), which has none of the tables these cases test."""
     d = Path(tempfile.mkdtemp(prefix="build-host-test01-"))
-    (d / "test01").mkdir()
-    (d / "test01" / "host.toml").write_text(text)
+    (d / "test01").symlink_to(HELLO_FIXTURE)
     (d / "build").symlink_to(build_host.REPO / "build")
     real, build_host.REPO = build_host.REPO, d
     try:
@@ -144,8 +142,8 @@ check("test01: the identity is TEST01_HOST_MAINTENANCE_SSH_KEY's path, user dock
       [x["var"] for x in t["secret"] if x["path"] == hm.get("identity")] == ["TEST01_HOST_MAINTENANCE_SSH_KEY"]
       and hm.get("user") == "docker"
       and [p.split()[0] for p in hm.get("known_hosts", [])] == ["10.0.0.60", "10.0.0.61", "10.0.0.62"])
-check("test01: its own key at its address 10.0.0.69 (self_address; the hello spec of 226904e has none)",
-      bool(build_host.load_spec("test01").get("replica")) or hm.get("self_address") == "10.0.0.69", str(hm))
+check("test01: its own key at its address 10.0.0.69 (self_address)",
+      hm.get("self_address") == "10.0.0.69", str(hm))
 check("no legacy spec has [host_maintenance] (none is left)",
       not any(build_host.load_spec(h).get("host_maintenance") for h in build_host.LEGACY_HOSTS
               if (build_host.REPO / h / "host.toml").is_file()))
@@ -159,9 +157,9 @@ check("d03: the interim key set: D03_HOST_MAINTENANCE_SSH_KEY's path, user docke
                                                                  "10.0.0.37", "10.0.0.35", "10.0.0.36"]
       and d03_hm.get("self_address") == "10.0.0.62"
       and not any(e.get("name") == "host-maintenance key set" for e in d03.get("external", [])), str(d03_hm))
-# test01's own spec, a replica included (it keeps test01's key set): the hello spec of 226904e pins old keys.
+# The hello fixture's pins (test01 at c1cccf9) against d03's live ones.
 check("d03 and test01 pin d01 and d02 alike", d03_hm.get("known_hosts", [])[:2]
-      == build_host.load_spec("test01").get("host_maintenance", {}).get("known_hosts", [])[:2])
+      == hm.get("known_hosts", [])[:2])
 
 
 # ---------------------------------------------------------------- the setup phase
