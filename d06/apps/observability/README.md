@@ -30,6 +30,9 @@ the images disagree. It prints that revision and passes it to `verify`.
   `pushgateway-clients.toml` (5 accounts) for pushgateway-gateway.
 - Tests, offline: `python3 scripts/tests/test_d06_deploy_role.py`,
   `python3 scripts/tests/test_d06_loki_accounts.py` and `python3 scripts/tests/test_build_host_args.py`.
+- `prometheus/rules/`, `prometheus/scrape/`: asyla's own alert rules and scrape jobs, mounted
+  read-only over the operations Prometheus's `/etc/prometheus/rules` and `/etc/prometheus/scrape`;
+  `prometheus/tests/`: their promtool tests ([Hardware alerts](#hardware-alerts-asyla-610)).
 - `docker-credential-observability-env`: the credential helper `observability.sh` points Docker at
   for the pulls (below).
 - Data: `/mnt/docker/Observability/{alertmanager-data,loki-data,prometheus-data,prometheus-trends-data}`
@@ -230,6 +233,43 @@ without the tokens, starts the rest
 and never fails on a component it cannot start. `restart` on d06 refuses unless all three tokens
 are set, because `down` removes the tokened containers. After `down`, they come back only with a
 deploy.
+
+## Hardware alerts (asyla #610)
+
+asyla's hardware checkers write `asyla_hw_problem{host,key,severity} 1` (one series per open
+problem, severity `warning` or `urgent`) and `asyla_hw_check_last_run_timestamp_seconds{host,checker}`
+into node_exporter textfiles. The job `asyla-hw` (`prometheus/scrape/asyla-hw.yml`) scrapes d01-d07
+and vmh01-03 on `:9100` and keeps only `asyla_hw_*`; the rules (`prometheus/rules/asyla-hw.yml`)
+alert through Alertmanager and alert-relay, which files a task in asyla/asyla-hosts (`alert_repo`),
+named `HOST:hw:KEY`. Both directories are mounted by `compose.yml` on theOrg's deployer hooks
+(DEPLOY.md at 04f3170).
+
+| Checker | Host (served by) | Runs | Stale after |
+| --- | --- | --- | --- |
+| `nas-smart` | nas01 (d03's `smart.prom`) | hourly at :17, TrueNAS cron job 9 (hub `tools/export_nas_smart.py`) | 3h |
+| `vmh-health` | vmh01-03 (`asyla-vmh-health.prom`) | every 15 min, host-maintenance's monitor (`vmh/health.sh`) | 30m |
+| guests | d01-d07 (`~/maint/guest-health.prom`) | every 15 min, host-maintenance's monitor | 30m |
+
+- `AsylaHwProblemUrgent`: fires at once; `AsylaHwProblemWarning`: after 10 minutes. Both keep firing
+  15 minutes after the series goes, so a missed scrape does not close and reopen the task.
+- `AsylaHwCheckerStale` (warning): a checker's last run is older than its limit above.
+- `AsylaHwCheckerMissing` (warning, 30m): an `asyla-hw` exporter answers with no checker series, or
+  there is no nas01 series at all. An exporter that does not answer is theOrg's `ScrapeTargetFailing`.
+
+What to do: read the checker's own output for the key. nas01: `status.json` (host-maintenance's
+`[[status]] nas01-smart`); a vmh: `vmh/apply.sh health NODE`; a guest: host-maintenance's
+`maint_host.py check`. A stale or missing checker: is its schedule running, and is its textfile in
+the node_exporter's textfile directory?
+
+Check before a deploy (prom/prometheus:v2.55.1 is the base of theOrg's image at 04f3170):
+
+```sh
+docker run --rm -v "$PWD/d06/apps/observability/prometheus:/r:ro" -w /r/tests --entrypoint promtool prom/prometheus:v2.55.1 test rules asyla-hw_test.yml
+```
+
+theOrg's `scripts/check_deployer_rules.sh <image> d06/apps/observability/prometheus/rules
+d06/apps/observability/prometheus/tests` also checks every rule has a `runbook_url`, with the image
+d06 runs. A changed rule or scrape file reaches Prometheus at its next restart (a deploy).
 
 ## Restart behaviour
 

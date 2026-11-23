@@ -115,7 +115,26 @@ lib_case("a backup IN PROGRESS: a failure", "IN PROGRESS since 2026-10-16T00:00:
 
 # ---------------------------------------------------------------- gap (c): the phase and the build
 
-SPEC = build_host.load_spec("test01")
+HELLO_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "test01-hello"
+REAL_LOAD_SPEC = build_host.load_spec   # test01_spec stands in for it in main() below
+
+
+def test01_spec(host: str = "test01", node: str | None = None) -> dict:
+    """test01's hello spec, frozen in fixtures/test01-hello/host.toml (test01/host.toml at c1cccf9),
+    never the live test01/host.toml: test01 is disposable and often a replica of a production host
+    (asyla #1101), whose apps and runners are not the ones these cases test."""
+    assert host == "test01", host
+    d = Path(tempfile.mkdtemp(prefix="build-host-test01-"))
+    (d / "test01").symlink_to(HELLO_FIXTURE)
+    (d / "build").symlink_to(build_host.REPO / "build")
+    real, build_host.REPO = build_host.REPO, d
+    try:
+        return REAL_LOAD_SPEC("test01", node)
+    finally:
+        build_host.REPO = real
+
+
+SPEC = test01_spec()
 APP = SPEC["app"][0]["name"]
 
 
@@ -235,7 +254,7 @@ def build_from_restore(rc: int) -> tuple[int, list[str], str]:
     err = io.StringIO()
     argv, sys.argv = sys.argv, ["build_host.py", "test01", "build", "--from", "restore", "--apply"]
     try:
-        with patched(ssh=ssh, secrets_cmd=lambda *a, **kw: 0, phase_apps=rec("apps"),
+        with patched(load_spec=test01_spec, ssh=ssh, secrets_cmd=lambda *a, **kw: 0, phase_apps=rec("apps"),
                      phase_external=rec("external", 0), phase_runner=rec("runner"), verify=rec("verify", 0)):
             with contextlib.redirect_stderr(err):
                 code = build_host.main()

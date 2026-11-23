@@ -445,6 +445,37 @@ got=$(FAKE_IPMI_LOG="$T/ipmi.log" PATH="$T/bin:$PATH" call ipmi 10 sel clear 2>&
 case "$got" in *"refusing ipmitool sel clear"*"rc=2") ok "bmc: ipmi refuses anything but the three reads" ;;
   *) bad "bmc: ipmi refuses anything but the three reads" "got [$got]" ;; esac
 
+# ---- hw_textfile (#610 step 5): the asyla_hw_* contract the hub's render_hw_prom writes.
+printf '%s\n' "ok	node	vmh02 production" "crit	zfs	pool rpool DEGRADED" "warn	reboot	/run/reboot-required" \
+  "warn	kernel	next boot" "warn	bmc.sensor.FAN1	lnc" "warn	bmc.sel.Memory.Uncorrectable_ECC	x" \
+  "crit	bmc.sel.Memory.Uncorrectable_ECC	y" "warn	disk.sda	SMART not read" "warn	smart.S1.reallocated-sectors	rose" \
+  "warn	kern	journal not read" "crit	kern.nvme-removed.nvme0	z" "warn	thin.data	81% data" \
+  "warn	hw.textfile	self" "warn	kernelish	no" 'warn	bmc.sensor.A"B\C	q' >"$T/hw.lines"
+call hw_textfile "$T/tf" vmh02 1763870000 <"$T/hw.lines"; rc=$?
+expect "hw: writes the textfile" "0" "$rc"
+P="$T/tf/asyla-vmh-health.prom"
+got=$(grep '^asyla_hw_problem{' "$P" | sort | tr '\n' ';')
+expect "hw: only hardware keys, crit is urgent, warn is warning, one series per key" \
+  'asyla_hw_problem{host="vmh02",key="bmc.sel.Memory.Uncorrectable_ECC",severity="urgent"} 1;asyla_hw_problem{host="vmh02",key="bmc.sensor.A_B_C",severity="warning"} 1;asyla_hw_problem{host="vmh02",key="bmc.sensor.FAN1",severity="warning"} 1;asyla_hw_problem{host="vmh02",key="disk.sda",severity="warning"} 1;asyla_hw_problem{host="vmh02",key="kern",severity="warning"} 1;asyla_hw_problem{host="vmh02",key="kern.nvme-removed.nvme0",severity="urgent"} 1;asyla_hw_problem{host="vmh02",key="smart.S1.reallocated-sectors",severity="warning"} 1;asyla_hw_problem{host="vmh02",key="zfs",severity="urgent"} 1;' \
+  "$got"
+expect "hw: last run, checker vmh-health" \
+  'asyla_hw_check_last_run_timestamp_seconds{host="vmh02",checker="vmh-health"} 1763870000' \
+  "$(grep '^asyla_hw_check_last_run' "$P")"
+expect "hw: never critical" "0" "$(grep -c critical "$P")"
+expect "hw: HELP and TYPE for both metrics" "2 2" "$(grep -c '^# HELP' "$P") $(grep -c '^# TYPE' "$P")"
+expect "hw: no temp file left" "asyla-vmh-health.prom" "$(ls -A "$T/tf" | tr '\n' ' ' | sed 's/ $//')"
+expect "hw: world-readable for node_exporter" "-rw-r--r--" "$(ls -l "$P" | cut -c1-10)"
+printf 'ok\tnode\tx\nok\tzfs\thealthy\n' | call hw_textfile "$T/tf" vmh03 1763870900
+expect "hw: all ok: only the last run, the old problems gone" "0 1" \
+  "$(grep -c '^asyla_hw_problem{' "$P") $(grep -c 'host="vmh03",checker="vmh-health"} 1763870900$' "$P")"
+if command -v promtool >/dev/null; then
+  if promtool check metrics <"$P" >/dev/null 2>&1 || [ "$(promtool check metrics <"$P" 2>&1 | grep -vc 'should have "_total"\|no help text')" = 0 ]; then
+    ok "hw: promtool check metrics"; else bad "hw: promtool check metrics" "$(promtool check metrics <"$P" 2>&1)"; fi
+else echo "skip hw: promtool check metrics (promtool not installed)"; fi
+: >"$T/notadir"
+if call hw_textfile "$T/notadir/sub" vmh02 1 <"$T/hw.lines" 2>/dev/null; then bad "hw: an unwritable dir fails"
+else ok "hw: an unwritable dir fails"; fi
+
 # Sourcing defines the functions and runs no check (no id, pveversion or apt output).
 out=$(ASYLA_VMH_HEALTH_FUNCTIONS_ONLY=1 "$SH" -c '. "$0"; echo sourced' "$REPO/vmh/health.sh" 2>&1)
 expect "sourcing for functions runs no check" "sourced" "$out"

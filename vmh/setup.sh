@@ -29,7 +29,10 @@
 #   netconsole-rx  vmh03 only: UDP 6666 from vmh01/vmh02, one log per sender with receive times
 #   health         /usr/local/sbin/asyla-vmh-health (read-only), and root's authorized_keys line that
 #                  lets host-maintenance's monitor (the d03 runner's key) run it and nothing else
-#   swap           no swap on a ZFS zvol: swapoff it and comment its fstab line (the zvol stays).
+#   node_exporter  Debian's prometheus-node-exporter on :9100, textfile collector on
+#                  /var/lib/prometheus/node-exporter (health's asyla_hw_* textfile, asyla #610 step 5),
+#                  TCP 9100 only from 10.0.0.0/24 and lo (an nft table, as netconsole-rx does)
+#   swap          no swap on a ZFS zvol: swapoff it and comment its fstab line (the zvol stays).
 #                  vmh02 deadlocked swapping to rpool/swap on 2026-05-24 (asyla incident
 #                  vmh02-may24-hang-investigation; openzfs/zfs#18200 still open 2026-10-24)
 set -eu
@@ -441,6 +444,71 @@ part_health() {
     fi
 }
 
+# ---- node_exporter (asyla #610 step 5)
+# d06's operations Prometheus (job asyla-hw) scrapes :9100 for vmh/health.sh's asyla_hw_* textfile.
+# Debian's package (trixie 1.9.0-1) runs /usr/bin/prometheus-node-exporter $ARGS as user prometheus;
+# its patch 0001-Debian-defaults sets the textfile directory default to NE_TEXTFILE. The drop-in
+# names both flags anyway (so /etc/default/prometheus-node-exporter's ARGS cannot move them) and
+# loads the nft table before every start. No recommends: prometheus-node-exporter-collectors would
+# add its own smartctl and apt timers. The table and drop-in are written before the install, so the
+# package's first start is already filtered.
+NE_PORT=9100
+NE_ALLOW=10.0.0.0/24
+NE_TEXTFILE=/var/lib/prometheus/node-exporter
+NE_NFT=/etc/asyla/node-exporter.nft
+NE_DROPIN=/etc/systemd/system/prometheus-node-exporter.service.d/asyla.conf
+ne_nft_body() {
+    cat <<EOF
+# asyla-hosts vmh/setup.sh (part node_exporter): TCP $NE_PORT only from $NE_ALLOW and this host.
+table inet asyla_node_exporter
+delete table inet asyla_node_exporter
+table inet asyla_node_exporter {
+    chain input {
+        type filter hook input priority filter; policy accept;
+        tcp dport $NE_PORT iif lo accept
+        tcp dport $NE_PORT ip saddr $NE_ALLOW accept
+        tcp dport $NE_PORT drop
+    }
+}
+EOF
+}
+ne_dropin_body() {
+    cat <<EOF
+# asyla-hosts vmh/setup.sh (part node_exporter)
+[Service]
+ExecStartPre=+/usr/sbin/nft -f $NE_NFT
+ExecStart=
+ExecStart=/usr/bin/prometheus-node-exporter --web.listen-address=:$NE_PORT --collector.textfile.directory=$NE_TEXTFILE
+ExecStopPost=-+/usr/sbin/nft delete table inet asyla_node_exporter
+EOF
+}
+
+part_node_exporter() {
+    say "== node_exporter"
+    apt_install nftables
+    reset_changed
+    ne_nft_body | install_file "$NE_NFT" 644
+    ne_dropin_body | install_file "$NE_DROPIN" 644
+    conf=0; changed && conf=1
+    [ "$conf" = 1 ] && systemctl daemon-reload
+    nft -f "$NE_NFT"
+    say "ok      nft table inet asyla_node_exporter loaded"
+    if ! installed prometheus-node-exporter; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends prometheus-node-exporter
+        say "changed installed prometheus-node-exporter"
+        conf=1
+    fi
+    if [ -d "$NE_TEXTFILE" ]; then say "ok      $NE_TEXTFILE"
+    else install -d -m 755 "$NE_TEXTFILE"; say "changed $NE_TEXTFILE created"; fi
+    systemctl enable -q prometheus-node-exporter.service
+    if [ "$conf" = 1 ] || ! systemctl -q is-active prometheus-node-exporter.service; then
+        systemctl restart prometheus-node-exporter.service
+        say "changed prometheus-node-exporter.service (re)started"
+    else
+        say "ok      prometheus-node-exporter.service"
+    fi
+}
+
 # ---- swap
 zvol_swaps() {   # active swap devices that are ZFS zvols (/dev/zdN)
     awk 'NR > 1 { print $1 }' /proc/swaps | while read -r d; do
@@ -473,7 +541,7 @@ part_swap() {
 
 # ---- check
 check() {   # check [PART...]: only those parts' lines (default all), so a one-part setup passes alone
-    cparts=" ${*:-repos updates crash netconsole-rx health swap} "
+    cparts=" ${*:-repos updates crash netconsole-rx health node_exporter swap} "
     part() { case "$cparts" in *" $1 "*) return 0 ;; esac; return 1; }
     bad=0; rm -f "$BADMARK"
     flag() { say "FAIL    $*"; bad=1; : >"$BADMARK"; }
@@ -548,6 +616,29 @@ check() {   # check [PART...]: only those parts' lines (default all), so a one-p
         || flag "$(root_keys) lacks the host-maintenance line (health only)"
     if [ -n "${HEALTH_B64:-}" ] && [ -x /usr/local/sbin/asyla-vmh-health ]; then
         payload HEALTH_B64 | want_file /usr/local/sbin/asyla-vmh-health
+    fi
+    fi
+    if part node_exporter; then
+    installed prometheus-node-exporter && okay "prometheus-node-exporter installed" || flag "prometheus-node-exporter not installed"
+    ne_nft_body | want_file "$NE_NFT"
+    ne_dropin_body | want_file "$NE_DROPIN"
+    nft list table inet asyla_node_exporter >/dev/null 2>&1 && okay "nft table inet asyla_node_exporter" \
+        || flag "nft table inet asyla_node_exporter missing"
+    systemctl -q is-active prometheus-node-exporter.service && okay "prometheus-node-exporter active" \
+        || flag "prometheus-node-exporter not active"
+    [ -n "$(ss -Hltn "sport = :$NE_PORT" 2>/dev/null)" ] && okay "listening on :$NE_PORT" || flag "nothing listens on :$NE_PORT"
+    if command -v curl >/dev/null; then
+        m=$(curl -fsS --max-time 5 "http://127.0.0.1:$NE_PORT/metrics" 2>/dev/null || true)
+        printf '%s\n' "$m" | grep -qx 'node_textfile_scrape_error 0' && okay "textfile collector reads $NE_TEXTFILE" \
+            || flag "no node_textfile_scrape_error 0 on :$NE_PORT/metrics (textfile collector)"
+        if [ -f "$NE_TEXTFILE/asyla-vmh-health.prom" ]; then
+            printf '%s\n' "$m" | grep -q '^asyla_hw_check_last_run_timestamp_seconds{' && okay "asyla_hw_* served" \
+                || flag "$NE_TEXTFILE/asyla-vmh-health.prom exists but :$NE_PORT does not serve asyla_hw_*"
+        else
+            note "$NE_TEXTFILE/asyla-vmh-health.prom not written yet (asyla-vmh-health has not run since)"
+        fi
+    else
+        note "no curl: :$NE_PORT/metrics not read"
     fi
     fi
     if part swap; then
@@ -887,12 +978,12 @@ mode=${1:-check}; [ $# -gt 0 ] && shift
 case "$mode" in
     check) check "$@" ;;
     setup)
-        parts=${*:-repos updates crash netconsole-rx health swap}
+        parts=${*:-repos updates crash netconsole-rx health node_exporter swap}
         for p in $parts; do
             case "$p" in
                 repos) part_repos ;; updates) part_updates ;; crash) part_crash ;;
-                netconsole-rx) part_netconsole_rx ;; health) part_health ;; swap) part_swap ;;
-                *) die "unknown part $p (repos updates crash netconsole-rx health swap)" ;;
+                netconsole-rx) part_netconsole_rx ;; health) part_health ;; node_exporter) part_node_exporter ;; swap) part_swap ;;
+                *) die "unknown part $p (repos updates crash netconsole-rx health node_exporter swap)" ;;
             esac
         done
         check $parts ;;
