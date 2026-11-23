@@ -350,8 +350,14 @@ services:
       - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION_TIME:-15d}
       - --storage.tsdb.retention.size=${PROMETHEUS_RETENTION_SIZE:-8GB}
       - --web.external-url=${PROMETHEUS_EXTERNAL_URL:?}
+    # asyla's own rules and scrape jobs (asyla #610 step 5: the asyla-hw job and its alerts), on
+    # theOrg's deployer hooks (DEPLOY.md at 04f3170: /etc/prometheus/rules and /etc/prometheus/scrape,
+    # read-only, read beside the stack's own). Only *.yml rule files go in prometheus/rules; their
+    # promtool tests are in prometheus/tests (README.md, "Hardware alerts").
     volumes:
       - prometheus-data:/prometheus
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+      - ./prometheus/scrape:/etc/prometheus/scrape:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:9090/-/healthy"]

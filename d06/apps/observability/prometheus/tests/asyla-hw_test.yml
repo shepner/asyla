@@ -3,7 +3,7 @@
 # Run (prom/prometheus:v2.55.1 is the base of theOrg's observability-prometheus at 04f3170):
 #   docker run --rm -v "$PWD/d06/apps/observability/prometheus:/r:ro" -w /r/tests --entrypoint promtool prom/prometheus:v2.55.1 test rules asyla-hw_test.yml
 # Series in the shape the asyla-hw job scrapes them: the checker's own host label beside the
-# exporter's instance (d03:9100 serves nas01's smart.prom).
+# exporter's instance (d03.asyla.org:9100 serves nas01's smart.prom).
 rule_files:
   - ../rules/asyla-hw.yml
 evaluation_interval: 1m
@@ -13,23 +13,23 @@ tests:
   # firing through a missed scrape.
   - interval: 1m
     input_series:
-      - series: 'up{job="asyla-hw",instance="vmh02:9100"}'
+      - series: 'up{job="asyla-hw",instance="vmh02.asyla.org:9100"}'
         values: '1x40'
-      - series: 'up{job="asyla-hw",instance="d04:9100"}'
+      - series: 'up{job="asyla-hw",instance="d04.asyla.org:9100"}'
         values: '1x40'
-      - series: 'asyla_hw_check_last_run_timestamp_seconds{job="asyla-hw",instance="vmh02:9100",host="vmh02",checker="vmh-health"}'
+      - series: 'asyla_hw_check_last_run_timestamp_seconds{job="asyla-hw",instance="vmh02.asyla.org:9100",host="vmh02",checker="vmh-health"}'
         values: '0+60x40'
-      - series: 'asyla_hw_check_last_run_timestamp_seconds{job="asyla-hw",instance="d04:9100",host="d04",checker="guest-health"}'
+      - series: 'asyla_hw_check_last_run_timestamp_seconds{job="asyla-hw",instance="d04.asyla.org:9100",host="d04",checker="guest-health"}'
         values: '0+60x40'
-      - series: 'asyla_hw_check_last_run_timestamp_seconds{job="asyla-hw",instance="d03:9100",host="nas01",checker="nas-smart"}'
+      - series: 'asyla_hw_check_last_run_timestamp_seconds{job="asyla-hw",instance="d03.asyla.org:9100",host="nas01",checker="nas-smart"}'
         values: '0+60x40'
       # Present 0-3m, then gone (cleared, or missed scrapes).
-      - series: 'asyla_hw_problem{job="asyla-hw",instance="vmh02:9100",host="vmh02",key="bmc.sel.Memory.Uncorrectable_ECC",severity="urgent"}'
+      - series: 'asyla_hw_problem{job="asyla-hw",instance="vmh02.asyla.org:9100",host="vmh02",key="bmc.sel.Memory.Uncorrectable_ECC",severity="urgent"}'
         values: '1 1 1 1'
-      - series: 'asyla_hw_problem{job="asyla-hw",instance="d04:9100",host="d04",key="kern.fs-error",severity="warning"}'
+      - series: 'asyla_hw_problem{job="asyla-hw",instance="d04.asyla.org:9100",host="d04",key="kern.fs-error",severity="warning"}'
         values: '1x40'
       # A warning seen for 1 minute (present until 6m with the 5m lookback): never fires.
-      - series: 'asyla_hw_problem{job="asyla-hw",instance="d03:9100",host="nas01",key="smart.S1.reallocated_sectors",severity="warning"}'
+      - series: 'asyla_hw_problem{job="asyla-hw",instance="d03.asyla.org:9100",host="nas01",key="smart.S1.reallocated_sectors",severity="warning"}'
         values: '1 1'
     alert_rule_test:
       - eval_time: 1m
@@ -38,7 +38,7 @@ tests:
           - exp_labels: &urgent
               alertname: AsylaHwProblemUrgent
               job: asyla-hw
-              instance: vmh02:9100
+              instance: vmh02.asyla.org:9100
               host: vmh02
               key: bmc.sel.Memory.Uncorrectable_ECC
               severity: urgent
@@ -71,7 +71,7 @@ tests:
           - exp_labels:
               alertname: AsylaHwProblemWarning
               job: asyla-hw
-              instance: d04:9100
+              instance: d04.asyla.org:9100
               host: d04
               key: kern.fs-error
               severity: warning
@@ -92,11 +92,11 @@ tests:
   # Stale: vmh03's checker stopped at 0m (limit 30m), nas01's export at 0m (limit 3h); vmh01 runs on.
   - interval: 1m
     input_series:
-      - series: 'asyla_hw_check_last_run_timestamp_seconds{job="asyla-hw",instance="vmh03:9100",host="vmh03",checker="vmh-health"}'
+      - series: 'asyla_hw_check_last_run_timestamp_seconds{job="asyla-hw",instance="vmh03.asyla.org:9100",host="vmh03",checker="vmh-health"}'
         values: '0x200'
-      - series: 'asyla_hw_check_last_run_timestamp_seconds{job="asyla-hw",instance="vmh01:9100",host="vmh01",checker="vmh-health"}'
+      - series: 'asyla_hw_check_last_run_timestamp_seconds{job="asyla-hw",instance="vmh01.asyla.org:9100",host="vmh01",checker="vmh-health"}'
         values: '0+60x200'
-      - series: 'asyla_hw_check_last_run_timestamp_seconds{job="asyla-hw",instance="d03:9100",host="nas01",checker="nas-smart"}'
+      - series: 'asyla_hw_check_last_run_timestamp_seconds{job="asyla-hw",instance="d03.asyla.org:9100",host="nas01",checker="nas-smart"}'
         values: '0x200'
     alert_rule_test:
       - eval_time: 29m
@@ -108,7 +108,7 @@ tests:
           - exp_labels:
               alertname: AsylaHwCheckerStale
               job: asyla-hw
-              instance: vmh03:9100
+              instance: vmh03.asyla.org:9100
               host: vmh03
               checker: vmh-health
               severity: warning
@@ -124,7 +124,7 @@ tests:
           - exp_labels:
               alertname: AsylaHwCheckerStale
               job: asyla-hw
-              instance: vmh03:9100
+              instance: vmh03.asyla.org:9100
               host: vmh03
               checker: vmh-health
               severity: warning
@@ -137,7 +137,7 @@ tests:
           - exp_labels:
               alertname: AsylaHwCheckerStale
               job: asyla-hw
-              instance: d03:9100
+              instance: d03.asyla.org:9100
               host: nas01
               checker: nas-smart
               severity: warning
@@ -153,7 +153,7 @@ tests:
           - exp_labels:
               alertname: AsylaHwCheckerStale
               job: asyla-hw
-              instance: vmh03:9100
+              instance: vmh03.asyla.org:9100
               host: vmh03
               checker: vmh-health
               severity: warning
@@ -167,11 +167,11 @@ tests:
   # Missing: d05's exporter answers with no checker series, and nas01's export is gone entirely.
   - interval: 1m
     input_series:
-      - series: 'up{job="asyla-hw",instance="d05:9100"}'
+      - series: 'up{job="asyla-hw",instance="d05.asyla.org:9100"}'
         values: '1x40'
-      - series: 'up{job="asyla-hw",instance="d06:9100"}'
+      - series: 'up{job="asyla-hw",instance="d06.asyla.org:9100"}'
         values: '1x40'
-      - series: 'asyla_hw_check_last_run_timestamp_seconds{job="asyla-hw",instance="d06:9100",host="d06",checker="guest-health"}'
+      - series: 'asyla_hw_check_last_run_timestamp_seconds{job="asyla-hw",instance="d06.asyla.org:9100",host="d06",checker="guest-health"}'
         values: '0+60x40'
     alert_rule_test:
       - eval_time: 29m
@@ -183,12 +183,12 @@ tests:
           - exp_labels:
               alertname: AsylaHwCheckerMissing
               job: asyla-hw
-              instance: d05:9100
+              instance: d05.asyla.org:9100
               severity: warning
               alert_repo: asyla/asyla-hosts
-              name: d05:9100:hw:missing
+              name: d05.asyla.org:9100:hw:missing
             exp_annotations:
-              summary: "d05:9100: no hardware checker series for 30 minutes"
+              summary: "d05.asyla.org:9100: no hardware checker series for 30 minutes"
               description: "The asyla-hw job reads no asyla_hw_check_last_run_timestamp_seconds from this exporter (or none for nas01): the checker's textfile is missing, so its hardware problems are not seen."
               runbook_url: https://gitlab.com/asyla/asyla-hosts/-/blob/master/d06/apps/observability/README.md#hardware-alerts-asyla-610
           - exp_labels:

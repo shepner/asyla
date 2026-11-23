@@ -1,0 +1,30 @@
+# asyla's hardware-problem series (asyla #610 step 5) for d06's operations Prometheus: this directory
+# is mounted over /etc/prometheus/scrape (theOrg observability DEPLOY.md at 04f3170: one file per
+# job, no job name the stack already has, no credential keys). Rules: ../rules/asyla-hw.yml.
+# Targets are node_exporters on :9100, open to 10.0.0.0/24 (d01-d07: [node_exporter] allow in each
+# host.toml; vmh01-03: vmh/setup.sh part node_exporter):
+#   d03         nas01's smart.prom (host="nas01") and d03's own guest-health.prom
+#   d01-d07     host-maintenance's /home/docker/maint/guest-health.prom (textfile_sources)
+#   vmh01-03    vmh/health.sh's asyla-vmh-health.prom
+# Only asyla_hw_* is kept: the trends Prometheus already has the rest of each node (ASY-TRD), and
+# this one alerts. `up` for each target is kept by Prometheus whatever metric_relabel_configs say.
+scrape_configs:
+  - job_name: asyla-hw
+    scrape_interval: 1m
+    scrape_timeout: 15s
+    static_configs:
+      - targets:
+          - d01.asyla.org:9100
+          - d02.asyla.org:9100
+          - d03.asyla.org:9100
+          - d04.asyla.org:9100
+          - d05.asyla.org:9100
+          - d06.asyla.org:9100
+          - d07.asyla.org:9100
+          - vmh01.asyla.org:9100
+          - vmh02.asyla.org:9100
+          - vmh03.asyla.org:9100
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: asyla_hw_.*
+        action: keep
