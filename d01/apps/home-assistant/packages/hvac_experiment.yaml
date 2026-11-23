@@ -11,10 +11,19 @@
 # other entity is written.
 #
 # Dates (local time, America/Chicago). A "night" runs 21:00 to 08:59 and carries the date of the
-# evening it started. Nights from 2026-11-12 to 2027-03-31: on a heat pump night (an even number of
-# days after 2026-11-12, so 11-12 is one and 11-13 is gas) 21:00 sets -15 (the compressor runs at
-# any outdoor temperature); on a gas night it sets 65 (the compressor is locked out, the furnace
-# heats). Each morning from 2026-11-13 to 2027-04-01, 09:00 sets the normal 35. If the house is more
+# evening it started. Nights from 2026-11-12 to 2027-03-31: on a heat pump night 21:00 sets -15 (the
+# compressor runs at any outdoor temperature); on a gas night it sets 65 (the compressor is locked
+# out, the furnace heats).
+#
+# Which kind (operator 2026-11-23, "Yes, forecast bands"): at 21:00, asyla/hvac_experiment_pick.py
+# takes the hourly forecast (weather.forecast_home, Met.no) for 21:00-08:59, finds its 5 °F band and
+# that band's gas and heat pump nights so far. It picks gas while the band has fewer than 2 gas
+# nights and no more gas than heat pump nights; once it has 2 of each, heat pump, with one gas night
+# for every two heat pump nights. The pick and its reason are kept in
+# input_text.hvac_experiment_tonight. If the forecast or the script fails, it falls back to the old
+# alternation (heat pump on an even number of days after 2026-11-12). 11-12 to 11-23 alternated.
+#
+# Each morning from 2026-11-13 to 2027-04-01, 09:00 sets the normal 35. If the house is more
 # than 2 °F below the sleep setpoint for 30 min on a heat pump night, it sets 35 for the rest of that
 # night (the comfort stop). A one-time write test (30, then 35) proves a write lands before the first
 # night.
@@ -37,6 +46,19 @@ input_boolean:
   # The comfort stop fired tonight; the 21:00 night and 09:00 morning runs clear it.
   hvac_experiment_comfort_stopped:
     name: "HVAC experiment comfort stopped"
+
+input_text:
+  # Tonight's pick: "YYYY-MM-DD heat_pump|gas <reason>". Restored at start (no `initial`), so a restart
+  # in the night puts back the same kind (the start automation below).
+  hvac_experiment_tonight:
+    name: "HVAC experiment tonight"
+    max: 255
+
+# Tonight's kind from the forecast band (asyla/hvac_experiment_pick.py): one JSON line, about 1 s
+# now, more as the season grows; the script stops itself at 45 s, under shell_command's 60 s.
+shell_command:
+  hvac_experiment_pick: >-
+    python3 /config/asyla/hvac_experiment_pick.py --unit {{ unit }} --forecast {{ forecast }}
 
 script:
   # The only number.set_value in this file. A value other than -15, 30, 35 or 65, or the entity in a
@@ -97,7 +119,8 @@ automation:
     alias: "HVAC experiment: night"
     description: >-
       At 21:00 on a night from 2026-11-12 to 2027-03-31, unless stopped: clear the comfort-stop
-      flag, then set -15 on a heat pump night or 65 on a gas night.
+      flag, pick heat pump or gas from the forecast band (alternation if that fails), keep the pick
+      in input_text.hvac_experiment_tonight, then set -15 on a heat pump night or 65 on a gas night.
     mode: single
     triggers:
       - trigger: time
@@ -109,7 +132,13 @@ automation:
         {{ ((now() - timedelta(hours=9)).date() - strptime('2026-11-12', '%Y-%m-%d').date()).days }}
       night_in_window: >-
         {{ 0 <= night_day <= (strptime('2027-03-31', '%Y-%m-%d').date() - strptime('2026-11-12', '%Y-%m-%d').date()).days }}
-      night_value: "{{ -15 if night_day % 2 == 0 else 65 }}"
+      night_date: "{{ (now() - timedelta(hours=9)).strftime('%Y-%m-%d') }}"
+      # Tonight's kept pick if it is for tonight, else the alternation.
+      night_value: >-
+        {%- set s = states('input_text.hvac_experiment_tonight').split(' ') -%}
+        {%- if s | length >= 2 and s[0] == night_date and s[1] in ['heat_pump', 'gas'] -%}
+        {{- -15 if s[1] == 'heat_pump' else 65 -}}
+        {%- else -%}{{- -15 if night_day % 2 == 0 else 65 -}}{%- endif -%}
     conditions:
       - condition: state
         entity_id: input_boolean.hvac_experiment_stop
@@ -120,9 +149,43 @@ automation:
       - action: input_boolean.turn_off
         target:
           entity_id: input_boolean.hvac_experiment_comfort_stopped
+      - action: weather.get_forecasts
+        target:
+          entity_id: weather.forecast_home
+        data:
+          type: hourly
+        response_variable: fc
+        continue_on_error: true
+      - action: shell_command.hvac_experiment_pick
+        response_variable: picked
+        continue_on_error: true
+        data:
+          unit: "{{ 'C' if state_attr('weather.forecast_home', 'temperature_unit') == '°C' else 'F' }}"
+          forecast: >-
+            {%- set f = fc['weather.forecast_home'].forecast if fc is defined and 'weather.forecast_home' in fc else [] -%}
+            {%- for x in f if x.temperature is number and x.datetime is string -%}
+            {{- x.datetime }}={{ x.temperature }}{{ ',' if not loop.last -}}
+            {%- endfor -%}
+      - variables:
+          pick: >-
+            {%- if picked is defined and picked.returncode == 0 -%}{{- picked.stdout | from_json -}}
+            {%- else -%}{{- {} -}}{%- endif -%}
+          night_kind: >-
+            {%- if pick.kind is defined and pick.kind in ['heat_pump', 'gas'] -%}{{- pick.kind -}}
+            {%- else -%}{{- 'heat_pump' if night_day % 2 == 0 else 'gas' -}}{%- endif -%}
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.hvac_experiment_tonight
+        data:
+          value: >-
+            {%- if pick.kind is defined -%}
+            {{- night_date }} {{ night_kind }} forecast {{ pick.mean_f }} °F, band {{ pick.band_f[0] }}-{{ pick.band_f[1] }} °F: {{ pick.gas_nights }} gas, {{ pick.hp_nights }} heat pump so far
+            {%- else -%}
+            {{- night_date }} {{ night_kind }} alternation (the forecast pick failed)
+            {%- endif -%}
       - action: script.hvac_experiment_set_lockout
         data:
-          value: "{{ night_value }}"
+          value: "{{ -15 if night_kind == 'heat_pump' else 65 }}"
 
   - id: asyla_hvac_experiment_morning
     alias: "HVAC experiment: morning"
@@ -198,7 +261,8 @@ automation:
     alias: "HVAC experiment: start"
     description: >-
       3 min after Home Assistant starts: run the write test if it is not done (09:15-20:45);
-      on an experiment night (21:00-09:00) set that night's value unless stopped or comfort-stopped;
+      on an experiment night (21:00-09:00) set that night's value (tonight's kept pick, else the
+      alternation) unless stopped or comfort-stopped;
       otherwise set 35 if the setting reads anything else.
     mode: single
     triggers:
