@@ -1098,9 +1098,9 @@ def gateways_cases() -> list[bool]:
               and "502" not in gw_fn and "ready=" not in gw_fn, gw_fn),
         check("ingest: STACK_JOBS has ingest-federate, whose target is prometheus-ingest",
               "ingest-federate:prometheus-ingest" in stack_jobs, repr(stack_jobs)),
-        check("ingest: verify asks prometheus-ingest's /-/healthy from prometheus-1 on ingest",
-              "docker exec prometheus-1 wget -q -T 10 -O- http://prometheus-ingest:9090/-/healthy" in verify_fn,
-              verify_fn[:200]),
+        check("ingest: verify proves prometheus-1 reaches prometheus-ingest by the federate target, "
+              "not a busybox wget (its lookup fails on the internal network)",
+              "prometheus-ingest:9090/-/healthy" not in verify_fn, verify_fn[:200]),
         check("push: the pushgateway has no ports",
               bool(service_block(compose, "pushgateway"))
               and not any(ln.startswith("ports:") for ln in service_block(compose, "pushgateway")),

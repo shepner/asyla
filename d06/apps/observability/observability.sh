@@ -973,14 +973,10 @@ do_verify() {
   else
     echo "[ERROR] prometheus 127.0.0.1:9090/-/healthy failed" >&2; rc=1
   fi
-  # prometheus-ingest has no port: it answers on ingest alone, so ask from prometheus-1 (on ingest,
-  # the address ingest-federate reads), with its image's busybox wget (its own healthcheck's).
-  # -T 10: a hung ingest cannot stall verify.
-  if docker exec prometheus-1 wget -q -T 10 -O- http://prometheus-ingest:9090/-/healthy < /dev/null > /dev/null 2>&1; then
-    info "prometheus-ingest /-/healthy OK from prometheus-1 on ingest"
-  else
-    echo "[ERROR] prometheus-ingest:9090/-/healthy failed from prometheus-1 on ingest" >&2; rc=1
-  fi
+  # prometheus-ingest has no port and answers on ingest alone. That prometheus-1 reaches it is the
+  # ingest-federate target's health (STACK_JOBS, check_stack_targets), read by Prometheus's own
+  # resolver. Not a busybox wget from prometheus-1: on d06's internal ingest network its lookup
+  # answered "bad address" while the federate target was up (2026-11-23).
   n="$(curl -sf --max-time 10 http://127.0.0.1:9090/api/v1/alertmanagers \
     | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["data"]["activeAlertmanagers"]))' 2>/dev/null)" || n=""
   if [ "$n" = "1" ]; then
