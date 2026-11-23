@@ -49,9 +49,16 @@ mode admits PUT, POST and DELETE on /metrics/job/... only, remote-write mode POS
 only, and any other path is 404 before an account is asked) is a `docker run curlimages/curl` on
 the workstation with verified TLS on the image's own trust store (no --cacert, never -k), the
 account in curl's config on stdin (`-K -`): never on argv, in the environment or in a file. The
-pushgateway's pushed group is deleted again. Until the ingest Prometheus behind prometheus-write
-is deployed, its account's write and its /ready are 502 (said in the output); 400 or 204 for the
-write, 200 for /ready, mean the upstream answered. Writes nothing to OpenBao.
+pushgateway's pushed group is deleted again. prometheus-write's account sends two remote writes,
+each wanting 204 from the ingest Prometheus behind the gateway: an empty WriteRequest (zero
+protobuf bytes, snappy-compressed: the single byte 0x00), then one sample,
+asyla_remote_write_verify{job="asyla-verify"} 1 at the time of the run, hand-encoded here
+(write_request, snappy_literal); /ready wants 200. The sample stays in the ingest Prometheus's
+buffer (a day): asyla-verify is not one of theOrg's jobs, so ingest-federate does not carry it to
+the operations Prometheus. curl's stdin already holds its config, and curl reads `-K -` to the
+end, so a remote-write body cannot share it: it goes in a 0600 temp file that holds the body alone
+(no secret), bound read-only into the curl container as /body (`--data-binary @/body`) and
+removed after the call. Writes nothing to OpenBao.
 
 Never prints, logs or writes a password or the token: the tool prints `<name>: created` or
 `<name>: exists` (verify: one `ok` or `FAIL` line per check), and an error by its category
@@ -64,13 +71,16 @@ Exit: 0 every account exists or was created (verify: every check passed); 1 othe
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib.util
 import os
 import secrets
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
 from pathlib import Path
 
@@ -107,16 +117,71 @@ PUSH_BODY = "asyla_verify_push 1\n"
 TEXT_FORMAT = ("Content-Type: text/plain; version=0.0.4",)
 REMOTE_WRITE = ("Content-Type: application/x-protobuf", "Content-Encoding: snappy",
                 "X-Prometheus-Remote-Write-Version: 0.1.0")
-DOWN = "the ingest Prometheus is not deployed yet, so the gateway has no upstream"
-UP = "the upstream answered"
+# The one sample prometheus-write's verify writes (verify_sample), and where curl finds a body.
+VERIFY_SERIES = {"__name__": "asyla_remote_write_verify", "job": "asyla-verify"}
+BODY_IN_CONTAINER = "/body"
 MIN_PASSWORD_LEN = 32   # theOrg loki_clients.py check_value at f757911
 CURL_TIMEOUT = 60       # s per curl container (curl itself stops at 20 s)
 # curlimages/curl 8.23.0, pinned by its index digest (docker buildx imagetools inspect
 # curlimages/curl:8.23.0, 2026-11-22; the same as :latest that day).
 CURL_IMAGE = ("curlimages/curl:8.23.0"
               "@sha256:3fb7e13e5d179a845c97d78204f3f1064d1907037f26a3ebf91710571151fd93")
+
+
+def varint(n: int) -> bytes:
+    """n as a protobuf base-128 varint (also snappy's length preamble): 7 bits a byte, low first."""
+    if n < 0:
+        raise ValueError("varint: negative")
+    out = bytearray()
+    while True:
+        low, n = n & 0x7F, n >> 7
+        if not n:
+            out.append(low)
+            return bytes(out)
+        out.append(low | 0x80)
+
+
+def pb_bytes(field: int, payload: bytes) -> bytes:
+    """A protobuf length-delimited field (wire type 2): its tag, its length, the payload."""
+    return varint(field << 3 | 2) + varint(len(payload)) + payload
+
+
+def write_request(labels: dict[str, str], value: float, ts_ms: int) -> bytes:
+    """A Prometheus remote-write v1 WriteRequest holding one TimeSeries with one Sample
+    (prometheus prompb/types.proto and remote.proto: WriteRequest.timeseries = 1; TimeSeries.labels
+    = 1, .samples = 2; Label.name = 1, .value = 2; Sample.value = 1 a double, .timestamp = 2 an
+    int64 in ms). Labels go in name order, as the receiver expects."""
+    if ts_ms < 0:
+        raise ValueError("write_request: negative timestamp")
+    series = b"".join(pb_bytes(1, pb_bytes(1, k.encode()) + pb_bytes(2, v.encode()))
+                      for k, v in sorted(labels.items()))
+    sample = b"\x09" + struct.pack("<d", value) + b"\x10" + varint(ts_ms)   # field 1 fixed64, field 2 varint
+    return pb_bytes(1, series + pb_bytes(2, sample))
+
+
+def snappy_literal(data: bytes) -> bytes:
+    """data in snappy's block format (google/snappy format_description.txt), literals only: the
+    uncompressed length as a varint, then literal elements of at most 60 bytes, each tag byte
+    (length-1) << 2 (low bits 00, a literal). Valid snappy, not compressed. Empty data is 0x00."""
+    out = bytearray(varint(len(data)))
+    for i in range(0, len(data), 60):
+        chunk = data[i:i + 60]
+        out.append((len(chunk) - 1) << 2)
+        out += chunk
+    return bytes(out)
+
+
+EMPTY_WRITE = snappy_literal(b"")   # an empty WriteRequest (zero protobuf bytes): b"\x00"
+
+
+def verify_sample() -> bytes:
+    """VERIFY_SERIES at value 1, now, as a snappy-compressed WriteRequest."""
+    return snappy_literal(write_request(VERIFY_SERIES, 1.0, time.time_ns() // 1_000_000))
+
+
 # Per gateway, in order: (label, method, path, who, body, headers, {wanted status: note}); who is
-# None (no account), "wrong" (the account with a wrong password) or "account". gateway.go at
+# None (no account), "wrong" (the account with a wrong password) or "account"; body is text (on
+# curl's argv), bytes or a function returning bytes (in a temp file: curl()). gateway.go at
 # 28b23389: /ready is open; an admitted path asks for an account (401); GET /metrics is not an
 # admitted path in pushgateway mode, so 404 comes before the account is asked.
 METRIC_CHECKS = {
@@ -128,14 +193,16 @@ METRIC_CHECKS = {
         ("delete, {account} (cleanup)", "DELETE", PUSH_JOB, "account", None, (), {202: ""}),
         ("/metrics, {account} (not an admitted path)", "GET", "/metrics", "account", None, (), {404: ""}),
     ],
-    # 502 is accepted while the ingest Prometheus is not deployed; tighten the account's write
-    # (to 400 or 204) and /ready (to 200) when it ships (theorg #1285).
+    # Every write is a valid remote write, so a refusal is the account's, never the body's; the
+    # ingest Prometheus answers an accepted one 204.
     "prometheus-write": [
-        ("write, no account", "POST", "/api/v1/write", None, "", REMOTE_WRITE, {401: ""}),
-        ("write, wrong password", "POST", "/api/v1/write", "wrong", "", REMOTE_WRITE, {401: ""}),
-        ("write, {account}, empty body", "POST", "/api/v1/write", "account", "", REMOTE_WRITE,
-         {502: DOWN, 400: UP, 204: UP}),
-        ("/ready, no account", "GET", "/ready", None, None, (), {502: DOWN, 200: UP}),
+        ("write, no account", "POST", "/api/v1/write", None, EMPTY_WRITE, REMOTE_WRITE, {401: ""}),
+        ("write, wrong password", "POST", "/api/v1/write", "wrong", EMPTY_WRITE, REMOTE_WRITE, {401: ""}),
+        ("write, {account}, an empty WriteRequest", "POST", "/api/v1/write", "account", EMPTY_WRITE,
+         REMOTE_WRITE, {204: ""}),
+        ("write, {account}, one sample of asyla_remote_write_verify", "POST", "/api/v1/write", "account",
+         verify_sample, REMOTE_WRITE, {204: ""}),
+        ("/ready, no account", "GET", "/ready", None, None, (), {200: ""}),
     ],
 }
 
@@ -198,14 +265,20 @@ def tool_argv(tool_dir: Path, registry: Path = REGISTRY, mode: str = "provision"
     return argv
 
 
-def curl_argv(url: str, method: str = "GET", body: str | None = None, headers: tuple = ()) -> list[str]:
+def curl_argv(url: str, method: str = "GET", body: str | None = None, headers: tuple = (),
+              body_file: str | None = None) -> list[str]:
     """A curl container's command line: no account and no password on it (curl reads its config,
-    the account, from stdin: -K -); TLS verified on the image's own trust store (no --cacert)."""
-    argv = ["docker", "run", "--rm", "-i", "--cpus", "0.5", "--memory", "64m", CURL_IMAGE,
+    the account, from stdin: -K -); TLS verified on the image's own trust store (no --cacert).
+    A text body is on argv; body_file, a host file holding a binary body, is bound read-only as
+    BODY_IN_CONTAINER and sent from there (stdin holds the config)."""
+    mount = ["-v", f"{os.path.realpath(body_file)}:{BODY_IN_CONTAINER}:ro"] if body_file else []
+    argv = ["docker", "run", "--rm", "-i", "--cpus", "0.5", "--memory", "64m", *mount, CURL_IMAGE,
             "-sS", "--max-time", "20", "-K", "-", "-X", method, "-w", "%{http_code}", "-o", "/dev/null"]
     for h in headers:
         argv += ["-H", h]
-    if body is not None:
+    if body_file:
+        argv += ["--data-binary", f"@{BODY_IN_CONTAINER}"]
+    elif body is not None:
         argv += ["--data-binary", body]
     return [*argv, url]
 
@@ -217,15 +290,26 @@ def curl_env(base: dict) -> dict:
             if k not in DROP and k != "BAO_ROOT_TOKEN" and not k.startswith(DROP_PREFIX)}
 
 
-def curl(url: str, user: tuple[str, str] | None = None, method: str = "GET", body: str | None = None,
-         headers: tuple = ()) -> int:
-    """The HTTP status (0 when curl got none), the account in curl's config on stdin."""
+def curl(url: str, user: tuple[str, str] | None = None, method: str = "GET",
+         body: str | bytes | None = None, headers: tuple = ()) -> int:
+    """The HTTP status (0 when curl got none), the account in curl's config on stdin. A bytes body
+    goes in a 0600 temp file (mkstemp) holding that body alone, removed after the call."""
     config = f'user = "{user[0]}:{user[1]}"\n' if user else ""
+    body_file = None
     try:
-        proc = subprocess.run(curl_argv(url, method, body, headers), input=config, capture_output=True,
-                              text=True, timeout=CURL_TIMEOUT, env=curl_env(os.environ))
+        if isinstance(body, bytes):
+            fd, body_file = tempfile.mkstemp(prefix="asyla-remote-write-")
+            with os.fdopen(fd, "wb") as f:
+                f.write(body)
+            body = None
+        proc = subprocess.run(curl_argv(url, method, body, headers, body_file), input=config,
+                              capture_output=True, text=True, timeout=CURL_TIMEOUT, env=curl_env(os.environ))
     except (subprocess.TimeoutExpired, OSError):
         return 0
+    finally:
+        if body_file:
+            with contextlib.suppress(OSError):
+                os.unlink(body_file)
     try:
         return int(proc.stdout.strip())
     except ValueError:
@@ -271,7 +355,7 @@ def verify_metrics(registry: str, password: str) -> bool:
     def run(i: int) -> bool:
         label, method, path, who, body, headers, want = checks[i]
         ran.add(i)
-        got = curl(base + path, users[who], method, body, headers)
+        got = curl(base + path, users[who], method, body() if callable(body) else body, headers)
         good = got in want
         note = want[got] if good else ""
         print(f"{'ok' if good else 'FAIL':4} {label.format(account=name)}: {method} {path} HTTP {got} "

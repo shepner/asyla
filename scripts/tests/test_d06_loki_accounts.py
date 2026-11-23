@@ -188,12 +188,14 @@ def main_cases() -> list[bool]:
                      and "GET /metrics, want 404" in text and "loki_clients.py verify" not in text, text))
     rc, text = quiet(lambda: la.main(["verify", "--registry", "prometheus-write", "--dry-run"]))
     out.append(check("verify --registry prometheus-write dry run: exit 0, host-agent-ws02's record, 401 "
-                     "refusals, and 502 for the write and /ready while the ingest Prometheus is not deployed",
+                     "refusals, 204 for both of the account's writes and 200 for /ready; no 502 accepted",
                      rc == 0 and "https://prometheus-write.asyla.org" in text
                      and "secret/hubs/asyla/own/prometheus-write-clients/host-agent-ws02" in text
-                     and "POST /api/v1/write, want 401" in text
-                     and "POST /api/v1/write, want 502 or 400 or 204" in text
-                     and "GET /ready, want 502 or 200" in text and "not deployed" in text, text))
+                     and text.count("POST /api/v1/write, want 401") == 2
+                     and text.count("POST /api/v1/write, want 204\n") == 2
+                     and "one sample of asyla_remote_write_verify" in text
+                     and "GET /ready, want 200\n" in text and "502" not in text and "not deployed" not in text,
+                     text))
     rc, text = quiet(lambda: la.main(["verify", "--dry-run"]))
     out.append(check("verify dry run: exit 0, the plan (url, no --cacert, both check accounts, curl), "
                      "nothing fetched, signed in or curled (any contact fails)",
@@ -305,9 +307,10 @@ class StandInBao:
         return self.records[record]
 
 
-def gateway(answers: dict, calls: list):
+def gateway(answers: dict, calls: list, bodies: list | None = None):
     """A stand-in subprocess.run for curl containers: the status for (method, path, who), who from
-    the config on stdin (None, "wrong" or "account")."""
+    the config on stdin (None, "wrong" or "account"). With bodies, each call's bound body file as
+    (host path, its mode, its bytes, the --data-binary argument), or None with no -v."""
     def run(argv, input=None, env=None, **kw):
         if argv[:2] != ["docker", "run"]:
             raise AssertionError(f"not a curl container: {argv[:2]}")
@@ -316,6 +319,13 @@ def gateway(answers: dict, calls: list):
         who = None
         if input:
             who = "account" if input.endswith(f':{ACCOUNT_STAND_IN}"\n') else "wrong"
+        if bodies is not None:
+            data = argv[argv.index("--data-binary") + 1] if "--data-binary" in argv else None
+            if "-v" in argv:
+                host, inside, ro = argv[argv.index("-v") + 1].split(":")
+                bodies.append((host, oct(os.stat(host).st_mode & 0o777), Path(host).read_bytes(), inside, ro, data))
+            else:
+                bodies.append(None)
         calls.append((argv, input, env, method, path, who))
         return Done(0, str(answers.get((method, path, who), 0)).zfill(3))
     return run
@@ -330,7 +340,74 @@ PUSH_ANSWERS = {("GET", "/ready", None): 200, ("PUT", la.PUSH_JOB, None): 401,
                 ("PUT", la.PUSH_JOB, "wrong"): 401, ("PUT", la.PUSH_JOB, "account"): 200,
                 ("DELETE", la.PUSH_JOB, "account"): 202, ("GET", "/metrics", "account"): 404}
 WRITE_ANSWERS = {("POST", "/api/v1/write", None): 401, ("POST", "/api/v1/write", "wrong"): 401,
-                 ("POST", "/api/v1/write", "account"): 502, ("GET", "/ready", None): 502}
+                 ("POST", "/api/v1/write", "account"): 204, ("GET", "/ready", None): 200}
+
+
+def snappy_decode(data: bytes) -> bytes:
+    """A literal-only snappy block decoder (google/snappy format_description.txt), for the test:
+    the varint length, then literal elements; any other element fails."""
+    n = shift = i = 0
+    while True:
+        b = data[i]
+        i += 1
+        n |= (b & 0x7F) << shift
+        shift += 7
+        if not b & 0x80:
+            break
+    out = bytearray()
+    while i < len(data):
+        tag = data[i]
+        assert tag & 3 == 0 and tag >> 2 < 60, f"not a short literal tag: {tag:#x}"
+        size = (tag >> 2) + 1
+        out += data[i + 1:i + 1 + size]
+        i += 1 + size
+    assert len(out) == n, (len(out), n)
+    return bytes(out)
+
+
+def encoder_cases() -> list[bool]:
+    """The remote-write encoders against bytes derived by hand from the formats (protobuf
+    encoding; prometheus prompb remote.proto and types.proto; google/snappy
+    format_description.txt). python-snappy is not installed here, so no library cross-check; the
+    bodies were also sent to a throwaway prom/prometheus:v2.55.1 with the receiver on (204 each,
+    and the sample read back by /api/v1/query), 2026-11-23."""
+    import struct
+    import time
+    one = la.write_request({"job": "b", "__name__": "a"}, 1.0, 1000)
+    want = bytes.fromhex(
+        "0a27"                                     # WriteRequest.timeseries (1), 39 bytes
+        "0a0d" "0a08" + b"__name__".hex() + "120161"   # TimeSeries.labels (1): name __name__, value a
+        + "0a08" "0a03" + b"job".hex() + "120162"      # labels: name job, value b (name order)
+        + "120c" "09" "000000000000f03f" "10e807")     # samples (2): value 1.0 (fixed64), timestamp 1000
+    sample = la.verify_sample()
+    now = time.time_ns() // 1_000_000
+    raw = snappy_decode(sample)
+    value = b"\x09" + struct.pack("<d", 1.0) + b"\x10"   # Sample.value 1.0, then the timestamp's tag
+    ts = raw[raw.rindex(value) + len(value):] if value in raw else b""
+    got_ts = sum((b & 0x7F) << (7 * k) for k, b in enumerate(ts))
+    return [
+        check("encode: varint 0, 1, 127, 128, 300 and a ms timestamp",
+              [la.varint(n).hex() for n in (0, 1, 127, 128, 300, 1795439103158)]
+              == ["00", "01", "7f", "8001", "ac02", "b6998ac4a034"]),
+        check("encode: a length-delimited field is its tag, its length, the payload",
+              la.pb_bytes(1, b"abc") == b"\x0a\x03abc" and la.pb_bytes(2, b"") == b"\x12\x00"),
+        check("encode: write_request of {__name__=a, job=b} 1.0 at 1000 is the hand-derived bytes",
+              one == want, one.hex()),
+        check("snappy: the empty input is the single byte 0x00, and that is EMPTY_WRITE",
+              la.snappy_literal(b"") == b"\x00" == la.EMPTY_WRITE),
+        check("snappy: 3 bytes are varint 3, tag (3-1)<<2, the bytes",
+              la.snappy_literal(b"abc") == bytes.fromhex("0308616263")),
+        check("snappy: 61 bytes are varint 61, a 60-byte literal (tag 0xec), a 1-byte one (tag 0x00)",
+              la.snappy_literal(bytes(range(61))) == b"\x3d\xec" + bytes(range(60)) + b"\x00\x3c"),
+        check("snappy: 300 bytes start with varint 300 (ac 02) and are 5 literals of 60, each tagged 0xec",
+              (s := la.snappy_literal(bytes(300)))[:2] == b"\xac\x02" and len(s) == 2 + 5 * 61
+              and all(s[2 + k * 61] == 0xEC for k in range(5))),
+        check("verify_sample: decodes to one TimeSeries of asyla_remote_write_verify{job=asyla-verify} 1 "
+              "at about now",
+              raw == la.write_request(la.VERIFY_SERIES, 1.0, got_ts) and abs(got_ts - now) < 5000
+              and len(sample) > 61 and la.VERIFY_SERIES == {"__name__": "asyla_remote_write_verify", "job": "asyla-verify"},
+              raw.hex()),
+    ]
 
 
 def metrics_cases() -> list[bool]:
@@ -345,11 +422,17 @@ def metrics_cases() -> list[bool]:
                      and "-k" not in argv and "--insecure" not in argv and "-u" not in argv
                      and "--user" not in argv and argv[-1].endswith(la.PUSH_JOB)
                      and argv[argv.index("--data-binary") + 1] == "asyla_verify_push 1\n", repr(argv)))
-    w = la.curl_argv("https://prometheus-write.asyla.org/api/v1/write", "POST", "", la.REMOTE_WRITE)
-    out.append(check("curl argv: remote write sends an empty body with the remote-write headers",
-                     w[w.index("--data-binary") + 1] == ""
+    w = la.curl_argv("https://prometheus-write.asyla.org/api/v1/write", "POST", None, la.REMOTE_WRITE,
+                     "/stand-in/body")
+    out.append(check("curl argv: a remote write binds its body file read-only as /body before the image, "
+                     "sends @/body, with the remote-write headers; stdin stays the config",
+                     w[w.index("--data-binary") + 1] == "@/body"
+                     and w[w.index("-v") + 1] == f"{os.path.realpath('/stand-in/body')}:/body:ro"
+                     and w.index("-v") < w.index(la.CURL_IMAGE) and w[w.index("-K") + 1] == "-"
                      and all(h in w for h in ("Content-Type: application/x-protobuf", "Content-Encoding: snappy",
                                               "X-Prometheus-Remote-Write-Version: 0.1.0")), repr(w)))
+    p = la.curl_argv("https://pushgateway.asyla.org" + la.PUSH_JOB, "PUT", la.PUSH_BODY, la.TEXT_FORMAT)
+    out.append(check("curl argv: a text body binds nothing", "-v" not in p, repr(p)))
 
     # read_password(): the record at the registry's prefix, read with the hub token; Stop never shows it.
     rec = "secret/hubs/asyla/own/pushgateway-clients/deploy-all"
@@ -461,26 +544,41 @@ def metrics_cases() -> list[bool]:
         out.append(check("verify pushgateway: a push answered 202 passes too", rc == 0))
 
         calls.clear()
-        subprocess.run = gateway(WRITE_ANSWERS, calls)
+        bodies: list = []
+        subprocess.run = gateway(WRITE_ANSWERS, calls, bodies)
         rc, text = quiet(lambda: la.main(["verify", "--registry", "prometheus-write"]))
         seen = [(m, p, who) for _, _, _, m, p, who in calls]
-        out.append(check("verify prometheus-write: exit 0 with 502s, saying the ingest Prometheus is not "
-                         "deployed; host-agent-ws02 signs in; headers and empty body sent",
-                         rc == 0 and ran(text).count("not deployed") == 2
-                         and "every check passed at https://prometheus-write.asyla.org" in text
-                         and seen == [("POST", "/api/v1/write", None), ("POST", "/api/v1/write", "wrong"),
-                                      ("POST", "/api/v1/write", "account"), ("GET", "/ready", None)]
-                         and all(i.startswith('user = "host-agent-ws02:') for _, i, _, _, _, w in calls if w)
-                         and all("Content-Encoding: snappy" in a for a, *_ in calls[:3])
-                         and ACCOUNT_STAND_IN not in text, text))
+        sent = [b[2] if b else None for b in bodies]
+        out += [
+            check("verify prometheus-write: exit 0, five ok lines; host-agent-ws02 signs in; the checks in "
+                  "order (anonymous, wrong, empty WriteRequest, one sample, /ready)",
+                  rc == 0 and ran(text).count("ok ") == 5 and "FAIL" not in text
+                  and "every check passed at https://prometheus-write.asyla.org" in text
+                  and seen == [("POST", "/api/v1/write", None), ("POST", "/api/v1/write", "wrong"),
+                               ("POST", "/api/v1/write", "account"), ("POST", "/api/v1/write", "account"),
+                               ("GET", "/ready", None)]
+                  and all(i.startswith('user = "host-agent-ws02:') for _, i, _, _, _, w in calls if w)
+                  and all("Content-Encoding: snappy" in a for a, *_ in calls[:4])
+                  and ACCOUNT_STAND_IN not in text, text),
+            check("verify prometheus-write: every write sends a valid snappy body from a 0600 file bound "
+                  "read-only as /body: 0x00 three times, then the encoded sample; /ready none",
+                  sent[:3] == [b"\x00"] * 3 and bodies[4] is None
+                  and snappy_decode(sent[3]).startswith(b"\x0a") and b"asyla_remote_write_verify" in sent[3]
+                  and all(b[1] == "0o600" and b[3:] == ("/body", "ro", "@/body") for b in bodies[:4]),
+                  repr(bodies)),
+            check("verify prometheus-write: each body file is gone after, and none holds the password",
+                  all(not Path(b[0]).exists() and ACCOUNT_STAND_IN.encode() not in b[2] for b in bodies[:4]),
+                  repr([b[0] for b in bodies[:4]])),
+        ]
 
-        calls.clear()
-        subprocess.run = gateway({**WRITE_ANSWERS, ("POST", "/api/v1/write", "account"): 204,
-                                  ("GET", "/ready", None): 200}, calls)
-        rc, text = quiet(lambda: la.main(["verify", "--registry", "prometheus-write"]))
-        out.append(check("verify prometheus-write: 204 and a ready 200 pass, noting the upstream answered",
-                         rc == 0 and ran(text).count("the upstream answered") == 2
-                         and "not deployed" not in ran(text), text))
+        for key, code, line in ((("POST", "/api/v1/write", "account"), 502, "FAIL write, host-agent-ws02, an empty"),
+                                (("POST", "/api/v1/write", "account"), 400, "FAIL write, host-agent-ws02, an empty"),
+                                (("GET", "/ready", None), 502, "FAIL /ready, no account")):
+            calls.clear()
+            subprocess.run = gateway({**WRITE_ANSWERS, key: code}, calls)
+            rc, text = quiet(lambda: la.main(["verify", "--registry", "prometheus-write"]))
+            out.append(check(f"verify prometheus-write: {key[0]} {key[1]} {code} is a FAIL, exit 1",
+                             rc == 1 and line in text, text))
 
         calls.clear()
         subprocess.run = gateway({**WRITE_ANSWERS, ("POST", "/api/v1/write", "wrong"): 502}, calls)
@@ -527,6 +625,6 @@ def real_openbao_cases() -> list[bool]:
 
 
 results = [*registry_cases(), *env_cases(), *path_cases(), *gateway_accounts_cases(), *argv_cases(),
-           *main_cases(), *metrics_cases(), *real_openbao_cases()]
+           *main_cases(), *encoder_cases(), *metrics_cases(), *real_openbao_cases()]
 print("all cases passed" if all(results) else f"{results.count(False)} case(s) failed")
 sys.exit(0 if all(results) else 1)
