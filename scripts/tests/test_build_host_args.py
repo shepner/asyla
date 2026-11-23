@@ -706,6 +706,9 @@ def node_image_cases() -> list[bool]:
                      not err and "--net0 virtio,bridge=vmbr1,firewall=1,tag=100 --onboot" in printed
                      and f"import-from={build_host.IMAGE}," in printed and VMH03_IMG not in printed
                      and not any("sha256sum" in c for c in asked), repr((err, asked, printed))))
+    out.append(check("phase_vm dry: qm create gives a serial console and a virtio-rng (asyla #1290)",
+                     not err and "--vga std --serial0 socket --rng0 source=/dev/urandom --net0 " in printed,
+                     repr((err, printed))))
     return out
 
 
