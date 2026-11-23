@@ -81,7 +81,7 @@ VAULT_READERS="alert-relay emporia-collector scrape-proxy loki-gateway prometheu
 # gateway-accounts` prints them); test_d06_loki_accounts.py checks the two agree. The gateway reads
 # each one's record, secret/hubs/asyla/own/loki-clients/<name>, at start (deploy_role.py
 # IDENTITIES), so every record exists first (loki_accounts.py).
-LOKI_GATEWAY_ACCOUNTS="alert-relay:query,grafana-reporting:query,host-agent-ws02:push,observability-check-push:push,observability-check-query:query,staff-alert-triage:query,vector-certificate-management:push,vector-identity-platform:push,vector-memory-system:push,vector-reporting:push,vector-secrets-vault:push,vector-staff:push,vector-workforce-management:push"
+LOKI_GATEWAY_ACCOUNTS="alert-relay:query,grafana-reporting:query,host-agent-ws02:push,hub-theorg:query,observability-check-push:push,observability-check-query:query,staff-alert-triage:query,vector-certificate-management:push,vector-identity-platform:push,vector-memory-system:push,vector-reporting:push,vector-secrets-vault:push,vector-staff:push,vector-workforce-management:push"
 # The same for the two push-only gateways (asyla #1268 items 3 and 4), each from its own registry
 # in the same order (test_d06_loki_accounts.py checks them too), its records under its own prefix:
 # prometheus-write-gateway's (prometheus-write-clients.toml) and pushgateway-gateway's

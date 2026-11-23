@@ -25,8 +25,9 @@ the images disagree. It prints that revision and passes it to `verify`.
   scrape-proxy, Vector or any of the three gateways.
 - `deploy_role.py`: the deploy (below): pulls, mints the six wrapped tokens, starts the stack.
 - `loki_accounts.py` and the three account registries, created once in OpenBao (Secrets, below):
-  `loki-clients.toml`, asyla's own 13 Loki accounts for d06, which loki-gateway checks
-  (alert-relay's query account, the Mini's senders and readers, and the two check accounts),
+  `loki-clients.toml`, asyla's own 14 Loki accounts for d06, which loki-gateway checks
+  (alert-relay's query account, the Mini's senders and readers, theOrg's WS01 readers
+  (`hub-theorg`), and the two check accounts),
   checked end to end; `prometheus-write-clients.toml` (1 account) for prometheus-write-gateway;
   `pushgateway-clients.toml` (5 accounts) for pushgateway-gateway.
 - Tests, offline: `python3 scripts/tests/test_d06_deploy_role.py`,
@@ -124,7 +125,7 @@ under `secret/hubs/asyla/` but alert-relay's Vikunja token:
 - scrape-proxy (`HOME_ASSISTANT_TOKEN_KV`, plain path, field `value`):
   `home-assistant-prometheus-token`.
 - loki-gateway (`LOKI_CLIENTS_KV_PREFIX`, `LOKI_GATEWAY_ACCOUNTS`): every account of
-  `loki-clients.toml`, `secret/hubs/asyla/own/loki-clients/<name>` (13 records). It reads each at
+  `loki-clients.toml`, `secret/hubs/asyla/own/loki-clients/<name>` (14 records). It reads each at
   start with its own wrapped token and checks each caller's Basic auth against it, push accounts
   for pushes only and query accounts for queries only (theOrg `loki-gateway/gateway.go`).
   `deploy_role.py` names one record per `[clients.<name>]` of `loki-clients.toml`, and

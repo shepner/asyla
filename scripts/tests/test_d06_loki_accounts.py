@@ -60,8 +60,8 @@ def quiet(call):
 
 
 def registry_cases() -> list[bool]:
-    out = [check("accounts: loki-clients.toml lists the 13 accounts, alert-relay and both check accounts among them",
-                 len(la.accounts()) == 13 and "alert-relay" in la.accounts()
+    out = [check("accounts: loki-clients.toml lists the 14 accounts, alert-relay, hub-theorg and both check accounts among them",
+                 len(la.accounts()) == 14 and "alert-relay" in la.accounts() and "hub-theorg" in la.accounts()
                  and all(n in la.accounts() for n in la.CHECK_ACCOUNTS), repr(la.accounts()))]
     with tempfile.TemporaryDirectory() as d:
         empty = Path(d) / "empty.toml"

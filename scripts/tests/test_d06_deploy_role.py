@@ -1156,8 +1156,8 @@ def gateway_cases() -> list[bool]:
               repr((tvars, app[:1]))),
         check("gateway: compose.yml prometheus has no remote-write receiver flag",
               bool(prom) and not any("remote-write" in ln for ln in prom), repr(prom)),
-        check("gateway: loki-clients.toml has the 13 accounts, in name order",
-              len(names) == 13 and names == sorted(names), repr(names)),
+        check("gateway: loki-clients.toml has the 14 accounts, in name order",
+              len(names) == 14 and names == sorted(names), repr(names)),
         check("gateway: IDENTITIES has loki-gateway with every account's own/loki-clients record",
               env == "LOKI_GATEWAY_OPENBAO_WRAPPED_TOKEN"
               and records == [f"own/loki-clients/{n}" for n in names], repr(records)),

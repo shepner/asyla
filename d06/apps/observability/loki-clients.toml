@@ -29,6 +29,12 @@ scope = ["query"]
 [clients.host-agent-ws02]
 scope = ["push"]
 
+# theOrg's WS01 readers, verify_engine_log.py and memory_authz_soak_read.py (theorg #1271). This
+# branch merges only after theOrg's secrets-vault apply adds this record to component loki-gateway
+# of token role observability-d06; until then deploy_role.py's mint and the gateway's start fail.
+[clients.hub-theorg]
+scope = ["query"]
+
 # theOrg's `loki_clients.py verify` push check, run by `loki_accounts.py verify` from the workstation.
 [clients.observability-check-push]
 scope = ["push"]
