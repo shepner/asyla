@@ -62,6 +62,7 @@ def load(text: str, host: str = "d09") -> dict:
     d = Path(tempfile.mkdtemp(prefix="build-host-hm-"))
     (d / host).mkdir()
     (d / host / "host.toml").write_text(VM + text)
+    (d / "build").symlink_to(build_host.REPO / "build")   # [setup].steps are checked against build/setup/
     real, build_host.REPO = build_host.REPO, d
     try:
         return build_host.load_spec(host)
@@ -118,14 +119,16 @@ spec_refused("self_address also pinned", sec + table(pins=[PIN_A, "10.0.0.250 ss
              "also pinned")
 spec_refused("self_address another host's ip", sec + table(extra='self_address = "10.0.0.62"\n'), "own [vm] ip")
 spec_refused("self_address not a string", sec + table(extra="self_address = 1\n"), "own [vm] ip")
+STEPS = '[setup]\nsteps = ["systemConfig.sh", "nfs.sh", "docker.sh"]\n'   # build/setup/ scripts
+s_steps = spec_ok("[setup] steps, a [[secret]], a user, two pins and self_address", STEPS + sec + table(extra=SELF))
 
 HELLO_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "test01-hello"
 
 
 def test01_spec() -> dict:
-    """test01's hello spec, frozen in fixtures/test01-hello/host.toml (test01/host.toml at c1cccf9),
-    never the live test01/host.toml: test01 is disposable and often a replica of a production host
-    (asyla #1101), which has none of the tables these cases test."""
+    """test01's hello spec, frozen in fixtures/test01-hello/host.toml (test01/host.toml's hello spec,
+    without host-maintenance's key since asyla #605), never the live test01/host.toml: test01 is
+    disposable and often a replica of a production host (asyla #1101)."""
     d = Path(tempfile.mkdtemp(prefix="build-host-test01-"))
     (d / "test01").symlink_to(HELLO_FIXTURE)
     (d / "build").symlink_to(build_host.REPO / "build")
@@ -137,13 +140,16 @@ def test01_spec() -> dict:
 
 
 t = test01_spec()
-hm = t.get("host_maintenance", {})
-check("test01: the identity is TEST01_HOST_MAINTENANCE_SSH_KEY's path, user docker, d01 to d03 pinned",
-      [x["var"] for x in t["secret"] if x["path"] == hm.get("identity")] == ["TEST01_HOST_MAINTENANCE_SSH_KEY"]
-      and hm.get("user") == "docker"
-      and [p.split()[0] for p in hm.get("known_hosts", [])] == ["10.0.0.60", "10.0.0.61", "10.0.0.62"])
-check("test01: its own key at its address 10.0.0.69 (self_address)",
-      hm.get("self_address") == "10.0.0.69", str(hm))
+# asyla #605: test01 is maintained by its hm runner (tag hm-test01), not over SSH from d03, so its
+# hello spec has no key set: no [host_maintenance] and no [[secret]] under host-maintenance's folder.
+check("test01: no [host_maintenance] (its hm runner maintains it, asyla #605)",
+      "host_maintenance" not in t, str(t.get("host_maintenance")))
+check("test01: no [[secret]] for a host-maintenance key",
+      [x["var"] for x in t.get("secret", []) if "host-maintenance" in x["path"] or "HOST_MAINTENANCE" in x["var"]] == [],
+      str(t.get("secret")))
+check("test01: its hm runner stays (tag hm-test01, shell, as docker)",
+      [(r["name"], r["tags"], r["executor"]) for r in t["gitlab_runner"]["runners"] if r["name"] == "hm"]
+      == [("hm", ["hm-test01"], "shell")] and t["gitlab_runner"].get("user") == "docker", str(t.get("gitlab_runner")))
 check("no legacy spec has [host_maintenance] (none is left)",
       not any(build_host.load_spec(h).get("host_maintenance") for h in build_host.LEGACY_HOSTS
               if (build_host.REPO / h / "host.toml").is_file()))
@@ -157,9 +163,8 @@ check("d03: the interim key set: D03_HOST_MAINTENANCE_SSH_KEY's path, user docke
                                                                  "10.0.0.37", "10.0.0.35", "10.0.0.36"]
       and d03_hm.get("self_address") == "10.0.0.62"
       and not any(e.get("name") == "host-maintenance key set" for e in d03.get("external", [])), str(d03_hm))
-# The hello fixture's pins (test01 at c1cccf9) against d03's live ones.
-check("d03 and test01 pin d01 and d02 alike", d03_hm.get("known_hosts", [])[:2]
-      == hm.get("known_hosts", [])[:2])
+check("d03 pins no test01 address (test01 is not reached over SSH, asyla #605)",
+      "10.0.0.69" not in [p.split()[0] for p in d03_hm.get("known_hosts", [])], str(d03_hm.get("known_hosts")))
 
 
 # ---------------------------------------------------------------- the setup phase
@@ -177,11 +182,14 @@ def setup_calls(spec: dict, apply: bool) -> tuple[list[tuple], str]:
     return calls, out.getvalue()
 
 
-calls, out = setup_calls(t, False)
+calls, out = setup_calls(s_steps, False)
 check("setup dry run: names the key set step, runs nothing", not calls and build_host.HM_SCRIPT in out, out)
-calls, out = setup_calls(t, True)
+calls, out = setup_calls(s_steps, True)
 check("setup: the key set step runs after the spec's steps, from build/setup/",
-      [c[1] for c in calls] == t["setup"]["steps"] + [build_host.HM_SCRIPT] and calls[-1][0] == "test01", str(calls))
+      [c[1] for c in calls] == s_steps["setup"]["steps"] + [build_host.HM_SCRIPT] and calls[-1][0] == "d09", str(calls))
+calls, out = setup_calls(t, True)
+check("setup: test01's hello spec runs its steps alone, no key set step (asyla #605)",
+      [c[1] for c in calls] == t["setup"]["steps"] and build_host.HM_SCRIPT not in out, str(calls))
 calls, out = setup_calls(s, True)
 check("setup: no [setup] steps, the key set step alone", [c[1] for c in calls] == [build_host.HM_SCRIPT], str(calls))
 calls, out = setup_calls(load(sec), True)

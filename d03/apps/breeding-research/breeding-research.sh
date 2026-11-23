@@ -1,5 +1,5 @@
 #!/bin/bash
-# breeding-research on d03. Usage: breeding-research.sh [build|backup|restore|update|refresh|up|down|restart|verify|logs|dbrestore [FILE]|dbcheck [FILE]]
+# breeding-research on d03. Usage: breeding-research.sh [build|backup|restore|update|refresh|up|down|restart|verify|logs|dbrestore [FILE]|dbcheck [FILE]|dbmigrate|dbstatus|dbload]
 # Image: gitea.asyla.org/personal/breeding-research:latest (its CI publishes it from main and
 # rebuilds it weekly). up and restart pull it only when it is not on this host, so a running app
 # never moves to a new image by itself (host-maintenance's rollback re-tags the old image, then runs
@@ -332,6 +332,52 @@ do_dbcheck() {
   return "$rc"
 }
 
+# The app image's own database tools (breeding-research repo scripts/, central breed DB milestone
+# 3), run in the running app container (/app, user nobody), which has DATABASE_URL in its
+# environment already (compose): nothing here reads or passes the password. An image older than
+# those scripts is refused before anything runs, with the step that fixes it.
+APP_SERVICE="breeding-research"
+app_tool_ready() {
+  local script="$1" id
+  id="$(run_compose ps -q --status running "$APP_SERVICE" 2>/dev/null </dev/null)" || id=""
+  if [ -z "$id" ]; then
+    echo "[ERROR] the $APP_SERVICE container is not running (start it: up)" >&2
+    return 1
+  fi
+  if ! run_compose exec -T "$APP_SERVICE" test -f "/app/$script" </dev/null; then
+    echo "[ERROR] the running $APP_SERVICE image has no /app/$script: update the app image first (refresh pulls :latest, which must be built from a breeding-research commit that ships it)" >&2
+    return 1
+  fi
+}
+
+# dbmigrate: apply the pending schema migrations (db_migrate.py; exit 0 when none are left).
+# dbstatus: list them, changing nothing. Neither reads this script's stdin, so `dbmigrate dbload`
+# leaves the tar for dbload.
+do_dbmigrate() {
+  app_tool_ready scripts/db_migrate.py || return
+  echo "[INFO] dbmigrate: scripts/db_migrate.py in $APP_SERVICE"
+  run_compose exec -T -w /app "$APP_SERVICE" python scripts/db_migrate.py </dev/null
+}
+do_dbstatus() {
+  app_tool_ready scripts/db_migrate.py || return
+  run_compose exec -T -w /app "$APP_SERVICE" python scripts/db_migrate.py --status </dev/null
+}
+
+# dbload: a tar of one export directory (manifest.json and <table>.jsonl, from breeding-research
+# scripts/bq_export.py) on this script's stdin, loaded by pg_load.py --tar -, which prints each
+# table's export-vs-Postgres count and checksums and exits nonzero on any mismatch. Refused when
+# stdin is a terminal. Re-running the same export adds nothing (pg_load.py skips rows already
+# there). From the workstation: dbload_from_workstation.sh EXPORT_DIR (it runs dbmigrate first).
+do_dbload() {
+  if [ -t 0 ]; then
+    echo "[ERROR] dbload reads a tar of an export directory on stdin (dbload_from_workstation.sh EXPORT_DIR sends one); stdin is a terminal" >&2
+    return 1
+  fi
+  app_tool_ready scripts/pg_load.py || return
+  echo "[INFO] dbload: stdin -> scripts/pg_load.py --tar - in $APP_SERVICE"
+  run_compose exec -T -w /app "$APP_SERVICE" python scripts/pg_load.py --tar -
+}
+
 do_update() {
   if use_registry_pull; then
     echo "[INFO] Pulling $BREEDING_RESEARCH_IMAGE"
@@ -393,14 +439,20 @@ run_cmd() {
     # dbrestore and dbcheck take the dump in pgdump/; a FILE only as `$0 dbrestore|dbcheck FILE`.
     dbrestore) do_dbrestore ;;
     dbcheck) do_dbcheck ;;
+    # The app image's database tools; dbload reads a tar of an export directory on stdin.
+    dbmigrate) do_dbmigrate ;;
+    dbstatus) do_dbstatus ;;
+    dbload) do_dbload ;;
     logs) run_compose logs -f ;;
     *) echo "[ERROR] Unknown: $1" >&2; usage; return 2 ;;
   esac
 }
 
 usage() {
-  echo "Usage: $0 build|rebuild|backup|restore|update|refresh|up|down|restart|verify|logs|dbrestore|dbcheck ..." >&2
+  echo "Usage: $0 build|rebuild|backup|restore|update|refresh|up|down|restart|verify|logs|dbrestore|dbcheck|dbmigrate|dbstatus|dbload ..." >&2
   echo "       $0 dbrestore FILE | dbcheck FILE   (a dump other than $PG_DUMP; RESTORE_FORCE=1 dbrestore replaces existing tables)" >&2
+  echo "       $0 dbmigrate | dbstatus   (apply | list the app image's schema migrations)" >&2
+  echo "       $0 dbload < EXPORT.tar    (load a tar of an export directory; dbload_from_workstation.sh EXPORT_DIR sends one)" >&2
 }
 
 if [ $# -eq 0 ]; then
