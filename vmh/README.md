@@ -19,6 +19,18 @@ joined vmc01): every changing mode needs the operator's approval of the exact co
 Its `apt` line warns on vmh01/vmh02 only for a security package still pending after the last
 unattended-upgrades run that saw it, or after no run in 36 hours, never one the overnight list refresh
 fetched for the morning run (test: `scripts/tests/test_vmh_health_sh.sh`).
+It also reads, for asyla #610 (same tests):
+- **kernel journal** lines since its last run (a cursor; the first run only sets it), matched to the
+  patterns of the asyla hub's `tools/export_nas_smart.py`. `crit kern.nic-removed|nvme-removed|pool-suspended`;
+  `warn` for NIC ECC, resets and firmware errors, PCIe AER, MCE/EDAC, ATA/SCSI, NVMe timeouts, I/O, ZFS
+  zio, filesystem and nfsd errors, OOM, oops, lockups and hung tasks. Keys are `kern.KIND.DEVICE`; each
+  stays listed for 24 h after its last line.
+- **SMART by serial** (`disk.SERIAL`, one `smartctl --json -a` per disk): `crit` on a FAILED verdict or
+  an NVMe critical warning; `warn` on pending sectors above 0, on reallocated, offline-uncorrectable,
+  reported-uncorrect, CRC or NVMe media-error counts that rose in the last 7 days, on NVMe 80% used or
+  ATA wear 10 or less, and on a temperature at the drive's own limit (else 158 °F for an SSD, 131 °F for
+  a disk).
+Its only writes are this state, in `/var/lib/asyla-vmh-health`.
 
 ## Commands (from the repo root)
 
