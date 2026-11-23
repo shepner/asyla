@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """The winter experiment's section of the cold-spell HVAC mail: heat pump nights against gas nights. Read-only.
 
-packages/hvac_experiment.yaml alternates nights from 2026-11-12 to 2027-03-31: at 21:00 it sets the
-house Ecobee's compressor lockout to -15 °F (a heat pump night, an even number of days after 11-12)
-or 65 °F (a gas night); at 09:00 it puts back the normal 35 °F; its comfort stop sets 35 early on a
-heat pump night. report_hvac_cycles.py imports this module, puts its section at the top of the mail
-from 2026-11-12 through 2027-04-07 (a week past the last night) and under "experiment" in --json.
+packages/hvac_experiment.yaml runs nights from 2026-11-12 to 2027-03-31: at 21:00 it sets the house
+Ecobee's compressor lockout to -15 °F (a heat pump night) or 65 °F (a gas night), picked from the
+forecast's 5 °F band by hvac_experiment_pick.py (alternating until 11-23, and when the pick
+fails); at 09:00 it puts back the normal 35 °F; its comfort stop sets 35 early on a heat pump night.
+report_hvac_cycles.py imports this module, puts its section at the top of the mail from 2026-11-12
+through 2027-04-07 (a week past the last night) and under "experiment" in --json.
 
 A night runs 21:00 to 08:59 Chicago time and carries its evening's date (DST-change nights are 11 or
 13 h). fetch() reads the season so far from theOrg's trends Prometheus (GET only) through the

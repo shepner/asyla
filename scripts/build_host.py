@@ -1500,7 +1500,8 @@ def egress_checks(spec: dict, images: list[str] = (), containers: list[str] = ()
     An image with no probe tool (no curl, wget or python3: 99) is probed by the host's curl in a
     sleeping container's network namespace; when that cannot run (99), it and an image with no shell
     (127) are proved by another image's blocked probe on the same default bridge, else fail; docker's
-    own errors (125, 126) and a reached URL (0) fail."""
+    own errors (125, 126) and a reached URL (0) fail.
+    A running container with no shell (126, 127) or no probe tool (99) is probed by NSENTER_PROBE."""
     host, out = spec["host"], []
     r = ssh(host, f"sudo nft list table {REPLICA_EGRESS_TABLE} >/dev/null && systemctl is-enabled {REPLICA_EGRESS_UNIT}",
             check=False)
@@ -1539,9 +1540,10 @@ def egress_checks(spec: dict, images: list[str] = (), containers: list[str] = ()
     for c in containers:
         r = ssh(host, f"docker exec {shlex.quote(c)} sh -c {probe} {EGRESS_PROBES[1]}", check=False)
         how = ""
-        if r.returncode in (126, NO_SHELL):   # no shell inside: the host's curl in its network namespace
+        if r.returncode in (126, NO_SHELL, 99):   # no shell or no probe tool: the host's curl in its namespace
+            how = (" (no probe tool: the host's curl in its network namespace)" if r.returncode == 99
+                   else " (no shell: the host's curl in its network namespace)")
             r = ssh(host, NSENTER_PROBE.format(c=shlex.quote(c), url=EGRESS_PROBES[1]), check=False)
-            how = " (no shell: the host's curl in its network namespace)"
         out.append((f"container {c} cannot reach {EGRESS_PROBES[1]}{how}", r.returncode not in (0, 99, 125, 126, 127),
                     f"exit {r.returncode}"))
     return out
