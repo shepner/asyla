@@ -335,15 +335,18 @@ do_update() {
 
 ensure_dirs() {
   mkdir -p "$OBSERVABILITY_ROOT/loki-data" "$OBSERVABILITY_ROOT/prometheus-data" \
-    "$OBSERVABILITY_ROOT/prometheus-trends-data" "$OBSERVABILITY_ROOT/alertmanager-data"
+    "$OBSERVABILITY_ROOT/prometheus-trends-data" "$OBSERVABILITY_ROOT/prometheus-ingest-data" \
+    "$OBSERVABILITY_ROOT/alertmanager-data"
 }
 
-# Owners the images run as: Prometheus, the trends Prometheus and Alertmanager are nobody (65534);
+# Owners the images run as: Prometheus, the trends and ingest Prometheus and Alertmanager are
+# nobody (65534); prometheus-ingest-data is made while the ingest profile is off, so its bind
+# volume exists and is writable once the profile is dropped;
 # Loki runs as root in theOrg's image (Dockerfile.loki ends USER root) and grafana/loki's own user
 # is 10001, which suits both. Top directories only: what is inside is the service's own.
 own_dirs() {
   docker run --rm --network none --pull never -v "$OBSERVABILITY_ROOT:/data" --entrypoint sh "$LOKI_IMAGE" -c \
-    'chown 10001:10001 /data/loki-data && chown 65534:65534 /data/prometheus-data /data/prometheus-trends-data /data/alertmanager-data' \
+    'chown 10001:10001 /data/loki-data && chown 65534:65534 /data/prometheus-data /data/prometheus-trends-data /data/prometheus-ingest-data /data/alertmanager-data' \
     < /dev/null
 }
 
@@ -883,7 +886,7 @@ check_vector_logs() {
 gateway_status() {
   local gw="$1" method="$2" p="$3" how=()
   [ "$method" = GET ] || how=(--method="$method" --body-data=)
-  { docker exec vector-1 wget -S -O /dev/null -T 10 -t 1 "${how[@]}" "http://$gw:3100$p" < /dev/null 2>&1 || true; } \
+  { docker exec vector-1 wget -S -O /dev/null -T 10 -t 1 ${how[@]+"${how[@]}"} "http://$gw:3100$p" < /dev/null 2>&1 || true; } \
     | awk '$1 ~ /^HTTP\// {code = $2} END {print code}'
 }
 

@@ -1255,6 +1255,97 @@ def alert_test_cases() -> list[bool]:
     return out
 
 
+def data_dirs_cases() -> list[bool]:
+    """Every bind volume compose.yml puts under OBSERVABILITY_ROOT is made by ensure_dirs and owned
+    by own_dirs, prometheus-ingest-data among them as nobody (65534) like the other Prometheus data
+    directories, so it exists and is writable once the ingest profile is dropped (asyla #1268)."""
+    import re
+    compose = (dr.HERE / "compose.yml").read_text()
+    sh = (dr.HERE / "observability.sh").read_text()
+    binds = re.findall(r'device: "\$\{OBSERVABILITY_ROOT:\?\}/([a-z-]+)"', compose)
+    made, owned = shell_function(sh, "ensure_dirs"), shell_function(sh, "own_dirs")
+    nobody = re.search(r"chown 65534:65534 ([^']*)'", owned)
+    nobody_dirs = nobody.group(1).split() if nobody else []
+    return [
+        check("dirs: compose.yml binds prometheus-ingest-data under OBSERVABILITY_ROOT",
+              "prometheus-ingest-data" in binds, repr(binds)),
+        check("dirs: ensure_dirs makes every bind volume compose.yml names",
+              bool(binds) and all(f'"$OBSERVABILITY_ROOT/{b}"' in made for b in binds), repr((binds, made))),
+        check("dirs: own_dirs owns every bind volume compose.yml names",
+              bool(binds) and all(f"/data/{b}" in owned for b in binds), repr((binds, owned))),
+        check("dirs: own_dirs gives prometheus-ingest-data to 65534 with the other Prometheus data directories",
+              all(f"/data/{b}" in nobody_dirs for b in
+                  ("prometheus-data", "prometheus-trends-data", "prometheus-ingest-data")), repr(nobody_dirs)),
+    ]
+
+
+# check_one_gateway's one contact, docker, as a fake on PATH: it records each call's arguments on
+# one line and answers as GNU wget -S would, the status line on stderr ($STUB_READY for /ready,
+# $STUB_WRITE for anything else), exiting 8 (wget's server error) when the status is not 2xx.
+FAKE_DOCKER = r'''#!/bin/sh
+printf '%s\n' "$*" >> "$STUB/docker"
+case "$*" in
+  */ready) code="$STUB_READY" ;;
+  *) code="$STUB_WRITE" ;;
+esac
+echo "  HTTP/1.1 $code Stub" >&2
+case "$code" in 2*) exit 0 ;; *) exit 8 ;; esac
+'''
+
+# check_gateway's other names: service_state is missing for a service not in $STUB_SERVICES.
+GATEWAY_STUBS = r'''
+info() { echo "[INFO] $*"; }
+service_state() { case " $STUB_SERVICES " in *" $1 "*) echo "running (healthy)" ;; *) echo missing ;; esac; }
+'''
+
+
+def gateway_check_cases() -> list[bool]:
+    """verify's gateway check, run offline: observability.sh's own gateway_status, check_one_gateway
+    and check_gateway in a local bash with docker a fake on PATH. /ready 200 and an anonymous write
+    401 pass; an anonymous write 200 fails; prometheus-write-gateway's /ready 502 passes while
+    prometheus-ingest has no container and fails once it exists. The fake gets wget's --method and
+    --body-data for the write, and neither for /ready."""
+    sh = (dr.HERE / "observability.sh").read_text()
+    funcs = "\n".join(shell_function(sh, n) for n in ("gateway_status", "check_one_gateway", "check_gateway"))
+
+    def run(call: str, ready: str, write: str, services: str = "") -> tuple[int, str, str, list[str]]:
+        with tempfile.TemporaryDirectory() as stub:
+            fake = Path(stub, "bin", "docker")
+            fake.parent.mkdir()
+            fake.write_text(FAKE_DOCKER)
+            fake.chmod(0o755)
+            env = {"PATH": f"{fake.parent}:{os.environ['PATH']}", "STUB": stub, "STUB_READY": ready,
+                   "STUB_WRITE": write, "STUB_SERVICES": services}
+            p = REAL_RUN(["bash", "-c", f"set -euo pipefail\n{funcs}\n{GATEWAY_STUBS}\n{call}"],
+                         env=env, capture_output=True, text=True, timeout=60)
+            calls = Path(stub, "docker").read_text().splitlines() if Path(stub, "docker").exists() else []
+        return p.returncode, p.stdout, p.stderr, calls
+
+    wget = "exec vector-1 wget -S -O /dev/null -T 10 -t 1"
+    gw = "prometheus-write-gateway"
+    want = [f"{wget} http://{gw}:3100/ready", f"{wget} --method=POST --body-data= http://{gw}:3100/api/v1/write"]
+    out = []
+    rc, so, se, calls = run(f"check_one_gateway {gw} 200 POST /api/v1/write", "200", "401")
+    out.append(check("gateway check: /ready 200 and an anonymous write 401 pass",
+                     rc == 0 and f"{gw}: /ready 200 with no account" in so
+                     and f"{gw}: POST /api/v1/write with no account 401" in so, f"rc={rc} out={so!r} err={se!r}"))
+    out.append(check("gateway check: the fake gets no --method for /ready, --method=POST --body-data= for the write",
+                     calls == want, repr(calls)))
+    rc, so, se, calls = run(f"check_one_gateway {gw} 200 POST /api/v1/write", "200", "200")
+    out.append(check("gateway check: an anonymous write 200 fails",
+                     rc == 1 and f"{gw}: POST /api/v1/write with no account answers '200', not 401" in se,
+                     f"rc={rc} out={so!r} err={se!r}"))
+    rc, so, se, calls = run("check_gateway", "502", "401", gw)
+    out.append(check("gateway check: prometheus-write-gateway's /ready 502 passes while prometheus-ingest has no container",
+                     rc == 0 and "prometheus-ingest not started" in so and f"{gw}: /ready 502 with no account" in so
+                     and calls == want, f"rc={rc} out={so!r} err={se!r} calls={calls}"))
+    rc, so, se, calls = run("check_gateway", "502", "401", f"{gw} prometheus-ingest")
+    out.append(check("gateway check: /ready 502 fails once prometheus-ingest exists",
+                     rc == 1 and f"{gw}: /ready answers '502', not 200" in se and "not started" not in so,
+                     f"rc={rc} out={so!r} err={se!r}"))
+    return out
+
+
 with tempfile.TemporaryDirectory() as d:
     sh = Path(d) / "observability.sh"
     sh.write_text(f'x=1\nOBSERVABILITY_TAG="${{OBSERVABILITY_TAG_OVERRIDE:-{TAG}}}"\n')
@@ -1302,6 +1393,8 @@ results = [
     d06_spec_case(),
     *relay_records_cases(),
     *alert_test_cases(),
+    *data_dirs_cases(),
+    *gateway_check_cases(),
     check("start: --only apps, or late for an after_external app",
           dr.start_argv(SPEC)[4:6] == ["--only", "apps"]
           and dr.start_argv({**SPEC, "app": [{**SPEC["app"][0], "after_external": True}]})[4:6] == ["--only", "late"]),
