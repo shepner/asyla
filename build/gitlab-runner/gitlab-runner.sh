@@ -4,7 +4,7 @@
 # SSH command and runs it as root from a folder that is removed afterwards, so nothing of it stays
 # on the host. What stays: the gitlab-runner package with its apt source and key (the same files
 # GitLab's own install script writes, as on d03), /etc/gitlab-runner/config.toml, the
-# package's systemd unit and, with [gitlab_runner] user, the drop-in DROPIN.
+# package's systemd unit and, with [gitlab_runner] user, the drop-in DROPIN (and logout_aside's move).
 #
 # Usage (root):
 #   gitlab-runner.sh install                   GitLab's apt repository, the package, its unit started
@@ -120,6 +120,7 @@ ExecStart=/usr/bin/gitlab-runner \"run\" \"--config\" \"/etc/gitlab-runner/confi
     if [ -z "${GITLAB_RUNNER_CONFIG:-}" ]; then
         chown "$name:" "$home/.gitlab-runner"
     fi
+    logout_aside "$name" "$home"
     if [ -f "$DROPIN" ] && [ "$(cat "$DROPIN")" = "$new" ]; then
         echo "jobs run as $name: unchanged"
         return
@@ -129,6 +130,21 @@ ExecStart=/usr/bin/gitlab-runner \"run\" \"--config\" \"/etc/gitlab-runner/confi
     chmod 0644 "$DROPIN"
     restart_unit
     echo "jobs run as $name: $DROPIN written, gitlab-runner restarted"
+}
+
+# logout_aside NAME HOME: a shell job runs `bash --login` under set -eo pipefail, so a
+# ~NAME/.bash_logout that runs clear_console (Debian's skeleton does) exits 1 with no TTY and every
+# job fails with "prepare environment: exit status 1" (test01, 2026-11-23; GitLab's "Shell profile
+# loading", https://docs.gitlab.com/runner/shells/#shell-profile-loading). Move such a file to
+# ~NAME/.bash_logout.asyla-gitlab-runner; a missing one, or one without clear_console, stays as it
+# is. `user -` does not put it back.
+logout_aside() {
+    local name="$1" home="$2"
+    local f="$home/.bash_logout"
+    if [ -f "$f" ] && grep -q clear_console "$f"; then
+        mv -f "$f" "$f.asyla-gitlab-runner"
+        echo "~$name/.bash_logout runs clear_console (a job's login shell exits 1 with no TTY): moved to ~$name/.bash_logout.asyla-gitlab-runner"
+    fi
 }
 
 restart_unit() {

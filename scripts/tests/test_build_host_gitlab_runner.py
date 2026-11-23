@@ -329,7 +329,7 @@ check("destroy: the host's runner entry is deleted, the others stay",
       80 not in gl.runners and all(i in gl.runners for i in (53360564, 56843179, 70)))
 
 # Verify: online, tags and run_untagged from GitLab; names and concurrent from the host.
-good_host = 'active\nconcurrent = 2\n  name = "test01-build"\n  name = "test01-hm"\n--user docker\n'
+good_host = 'active\nconcurrent = 2\n  name = "test01-build"\n  name = "test01-hm"\n--user docker\nlogin-shell-exit 0\n'
 
 
 def verify_lines(runners: dict[int, dict], host_out: str = good_host) -> list[str]:
@@ -350,10 +350,19 @@ ok_runner = {81: {"description": "test01-build", "scope": "group:asyla", "status
              91: {"description": "test01-hm", "scope": "project:asyla/host-maintenance", "status": "online",
                   "tag_list": ["hm-test01"], "run_untagged": False, "access_level": "ref_protected"}}
 lines = verify_lines({**others(), **ok_runner})
-check("verify: two runners online with the spec's tags, ref_protected, host config and job user right: eight OK lines",
-      len(lines) == 8 and all(l.startswith("[OK]") for l in lines), str(lines))
+check("verify: two runners online with the spec's tags, ref_protected, host config, job user and its login shell "
+      "right: nine OK lines",
+      len(lines) == 9 and all(l.startswith("[OK]") for l in lines), str(lines))
 check("verify: the job user line names docker",
       any(l.startswith("[OK] gitlab-runner runs shell jobs as docker") for l in lines), str(lines))
+check("verify: with a shell runner, docker's login shell line passes on exit 0",
+      any(l.startswith("[OK] docker's login shell exits 0 with no TTY") for l in lines), str(lines))
+check("verify: the login shell exiting 1 (a clear_console in ~/.bash_logout) fails",
+      fails_on(verify_lines({**others(), **ok_runner}, good_host.replace("login-shell-exit 0", "login-shell-exit 1")),
+               "login shell exits 0"))
+check("verify: no login shell result fails",
+      fails_on(verify_lines({**others(), **ok_runner}, good_host.replace("login-shell-exit 0\n", "")),
+               "login shell exits 0"))
 check("verify: the package unit's user (gitlab-runner) fails for a docker spec",
       fails_on(verify_lines({**others(), **ok_runner}, good_host.replace("--user docker", "--user gitlab-runner")),
                "runs shell jobs as docker"))
@@ -377,6 +386,8 @@ check("verify: without a job user the unit's --user gitlab-runner passes",
           'active\nconcurrent = 1\n  name = "d09-build"\n--user gitlab-runner\n')))
 check("verify: without a job user a leftover drop-in (--user docker) fails",
       fails_on(verify_nouser('active\nconcurrent = 1\n  name = "d09-build"\n--user docker\n'), "as gitlab-runner"))
+check("verify: no shell runner, no login shell line",
+      not any("login shell" in l for l in verify_nouser('active\nconcurrent = 1\n  name = "d09-build"\n--user gitlab-runner\n')))
 ssh_cmds: list[str] = []
 with_fakes(FakeGitLab({**others(), **ok_runner}), lambda: (
     setattr(build_host, "ssh", lambda target, command, **kw: (ssh_cmds.append(command), type("R", (), {"stdout": good_host})())[1]),
@@ -384,6 +395,15 @@ with_fakes(FakeGitLab({**others(), **ok_runner}), lambda: (
 check("verify: the user comes from the unit's ExecStart, config.toml read for names and concurrent only",
       len(ssh_cmds) == 1 and "systemctl show -p ExecStart --value gitlab-runner | grep -oE -- '--user [^ ;]+'" in ssh_cmds[0]
       and "grep -E '^concurrent = |^  name = '" in ssh_cmds[0] and "token" not in ssh_cmds[0], str(ssh_cmds))
+check("verify: the login shell probe is the test01 reproduction, as docker, output dropped, in the same ssh call",
+      len(ssh_cmds) == 1 and "printf 'set -eo pipefail\\necho x\\nexit 0\\n' | sudo env -i PATH=/usr/bin:/bin "
+      "su -s /bin/bash docker -c 'bash --login' >/dev/null 2>&1; echo \"login-shell-exit $?\"" in ssh_cmds[0], str(ssh_cmds))
+nouser_cmds: list[str] = []
+with_fakes(FakeGitLab(others()), lambda: (
+    setattr(build_host, "ssh", lambda target, command, **kw: (nouser_cmds.append(command), type("R", (), {"stdout": ""})())[1]),
+    build_host.verify_gitlab_runners(nouser, lambda *a: None)))
+check("verify: no shell runner, no login shell probe", len(nouser_cmds) == 1 and "bash --login" not in nouser_cmds[0],
+      str(nouser_cmds))
 check("verify: an extra tag fails",
       fails_on(verify_lines({**others(), 81: {**ok_runner[81], "tag_list": ["build-test", "d03"]}}), "tags are the spec's"))
 check("verify: untagged jobs on fails",
@@ -505,9 +525,10 @@ for tool in ("systemctl", "chown"):
 DROPIN = ud / "dropin" / "asyla-user.conf"
 
 
-def user_script(arg: str) -> tuple[int, str, str]:
+def user_script(arg: str, user_home: Path | None = None) -> tuple[int, str, str]:
     env = {**os.environ, "PATH": f"{ud / 'bin'}:{os.environ['PATH']}", "GITLAB_RUNNER_CONFIG": str(ud / "config.toml"),
-           "GITLAB_RUNNER_DROPIN_DIR": str(ud / "dropin"), "GITLAB_RUNNER_USER_HOME": str(ud / "home" / "docker")}
+           "GITLAB_RUNNER_DROPIN_DIR": str(ud / "dropin"),
+           "GITLAB_RUNNER_USER_HOME": str(user_home or ud / "home" / "docker")}
     r = REAL_RUN(["bash", str(SCRIPT), "user", arg], capture_output=True, text=True, env=env, timeout=60)
     return r.returncode, r.stdout, r.stderr
 
@@ -537,6 +558,39 @@ rc, out, err = user_script("-")
 check("script user -: removes the drop-in", rc == 0 and "removed" in out and not DROPIN.exists(), out + err)
 rc, out, err = user_script("-")
 check("script user - again: unchanged", rc == 0 and "unchanged" in out, out + err)
+check("script user docker: no ~/.bash_logout, nothing moved", not (home / ".bash_logout.asyla-gitlab-runner").exists()
+      and not (home / ".bash_logout").exists())
+
+# ~NAME/.bash_logout: Debian's skeleton runs clear_console, which exits 1 with no TTY and fails
+# every shell job's login shell (test01, 2026-11-23). As in /etc/skel on Debian 12.
+SKEL_LOGOUT = ('# ~/.bash_logout: executed by bash(1) when login shell exits.\n\n'
+               '# when leaving the console clear the screen to increase privacy\n\n'
+               'if [ "$SHLVL" = 1 ]; then\n    [ -x /usr/bin/clear_console ] && /usr/bin/clear_console -q\nfi\n')
+lh = ud / "home" / "skel"
+lh.mkdir()
+(lh / ".bash_logout").write_text(SKEL_LOGOUT)
+rc, out, err = user_script("docker", lh)
+check("script user docker: a ~/.bash_logout with clear_console is moved aside, one line says so",
+      rc == 0 and not (lh / ".bash_logout").exists()
+      and (lh / ".bash_logout.asyla-gitlab-runner").read_text() == SKEL_LOGOUT
+      and sum("bash_logout" in l for l in out.splitlines()) == 1
+      and "moved to ~docker/.bash_logout.asyla-gitlab-runner" in out, out + err)
+rc, out, err = user_script("docker", lh)
+check("script user docker again: the moved file is left as it is, nothing printed about it",
+      rc == 0 and not (lh / ".bash_logout").exists()
+      and (lh / ".bash_logout.asyla-gitlab-runner").read_text() == SKEL_LOGOUT and "bash_logout" not in out, out + err)
+rc, out, err = user_script("-", lh)
+check("script user -: does not put ~/.bash_logout back",
+      rc == 0 and not (lh / ".bash_logout").exists() and (lh / ".bash_logout.asyla-gitlab-runner").exists(), out + err)
+oh = ud / "home" / "own"
+oh.mkdir()
+OWN_LOGOUT = "# the user's own logout file\nhistory -a\n"
+(oh / ".bash_logout").write_text(OWN_LOGOUT)
+rc, out, err = user_script("docker", oh)
+check("script user docker: a ~/.bash_logout without clear_console is left alone",
+      rc == 0 and (oh / ".bash_logout").read_text() == OWN_LOGOUT
+      and not (oh / ".bash_logout.asyla-gitlab-runner").exists() and "bash_logout" not in out, out + err)
+rc, out, err = user_script("-", oh)
 check("script user: no systemctl or chown in the test mode", not (ud / "called").exists())
 rc, out, err, d = host_script(["user"], "")
 check("script user: no argument is refused", rc == 2 and "user needs NAME or -" in err, err)
