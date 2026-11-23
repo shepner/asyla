@@ -104,8 +104,9 @@ services:
 
   # The directory Keycloak federates: LDAPS on d05:636 as ldap.asyla.org (straight, not through
   # Caddy). Its first start runs osixia's bootstrap, so it is the M5 cutover's, after the restore.
-  # The leaf (SANs ldap.asyla.org, openldap) goes in openldap-tls, read-write: the image writes
-  # dhparam.pem there at first start. openldap-leaf.sh (identity-platform.sh leaf-issue) issues it
+  # The leaf (SANs ldap.asyla.org, openldap) goes in openldap-tls, read-write. The restored
+  # cn=config names dhparam.pem there, and a restored start is no osixia first start, so the image
+  # does not write it: identity-platform.sh start-openldap does, before the up. openldap-leaf.sh (identity-platform.sh leaf-issue) issues it
   # from step-ca's JWK provisioner `ldap` before openldap's first start (else the image makes a
   # self-signed one), and leaf-renew renews it.
   openldap:

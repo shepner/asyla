@@ -2,6 +2,12 @@
 # Run: ~/scripts/d03/apps/breeding-research/breeding-research.sh up
 # Image: breeding-research.sh sets BREEDING_RESEARCH_IMAGE: the registry's latest by default, or a
 # local build from source (breeding-research:local) with BREEDING_RESEARCH_PULL_OVERRIDE=0.
+# Postgres (the central breed DB; personal breeding-research plan central-breed-db, milestone 1):
+# data in /mnt/docker/breeding-research/pg-data, its pg_dump in pgdump/ (breeding-research.sh
+# backup; dbcheck restore-tests it). No host port: the app reaches it as
+# breeding-research-postgres:5432 on breeding_research_net, nothing else does. No password in a
+# file: breeding-research.sh sets POSTGRES_PASSWORD and DATABASE_URL in compose's environment from
+# BREEDING_RESEARCH_PG_PASSWORD (OpenBao, build_host.py start_env; else the running container's).
 
 networks:
   breeding_research_net:
@@ -9,10 +15,38 @@ networks:
     driver: bridge
 
 services:
+  postgres:
+    # Pinned by digest, as d05's keycloak-db and d06's comms-postgres: the multi-arch index of
+    # postgres:16.16-bookworm as `docker buildx imagetools inspect` read it on 2026-11-23.
+    image: postgres:16.16-bookworm@sha256:ce3efec6bc404f6b15ebf5d9bed6b45a9d4655aea238d7dacc3467ccb05a1175
+    container_name: breeding-research-postgres
+    restart: unless-stopped
+    environment:
+      - TZ=${LOCAL_TZ:-America/Chicago}
+      - POSTGRES_DB=breeding_research
+      - POSTGRES_USER=breeding_research
+      # Name only: breeding-research.sh sets it (pg_password); up refuses without it.
+      - POSTGRES_PASSWORD
+    volumes:
+      - ${DOCKER_DL:-/mnt/docker}/breeding-research/pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U breeding_research -d breeding_research"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    cpus: 1
+    mem_limit: 1g
+    networks:
+      - breeding_research_net
+
   breeding-research:
     image: ${BREEDING_RESEARCH_IMAGE:-gitea.asyla.org/personal/breeding-research:latest}
     container_name: breeding-research
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
     # Healthcheck: asyla backlog 2026-10-20-hosts-observability-through-theorg (operator, 2026-10-20).
     # The image has python and no curl or wget; / asks for basic auth, /healthz does not.
     healthcheck:
@@ -30,6 +64,9 @@ services:
       - BQ_DATASET_ID=${BQ_DATASET_ID}
       - BASIC_AUTH_USER=${BASIC_AUTH_USER}
       - BASIC_AUTH_PASS=${BASIC_AUTH_PASS}
+      # Name only: breeding-research.sh builds it (role and database breeding_research,
+      # breeding-research-postgres:5432).
+      - DATABASE_URL
     ports:
       - "8080:8080"
     volumes:

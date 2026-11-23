@@ -50,7 +50,8 @@ Build phases, in order (each is safe to re-run):
              [gitlab_runner] runner: delete GitLab's entries with its description (HOST-NAME),
              create a new one (POST /user/runners, untagged jobs off, ref_protected), register it on the host
              (build/gitlab-runner/gitlab-runner.sh; the token over SSH stdin, into gitlab-runner's
-             environment), concurrent = the number of runners, wait until online
+             environment), concurrent = the number of runners, wait until online; the job user
+             ([gitlab_runner] user, else the package's gitlab-runner) is set right after install
   verify     mounts, every app's verify (or running containers), runners online with the spec's
              labels or tags, the host-maintenance key set
 
@@ -171,7 +172,10 @@ on the host and checks DHCP is off); for those, verify runs the app's own verify
 instead of only checking that it runs.
 
 GitLab runners: [gitlab_runner] runners = [{name, scope = "group:PATH" | "project:GROUP/PROJECT",
-tags, executor = "docker" | "shell", and for docker image, volumes, pull_policy}]. A rebuild
+tags, executor = "docker" | "shell", and for docker image, volumes, pull_policy}], and
+user = "NAME" beside runners: the account gitlab-runner runs its jobs as (a systemd drop-in,
+build/gitlab-runner/gitlab-runner.sh user; the package's unit runs them as gitlab-runner). A
+shell runner needs user (asyla #605: host-maintenance's jobs run as docker). A rebuild
 makes new runners (no GitLab CI secret holds a runner token); destroy deletes them. Listings are
 type-filtered (/groups/ID/runners?type=group_type): unfiltered, gitlab.com's shared runners
 fill the first page.
@@ -813,13 +817,17 @@ def runner_label_lines(spec: dict) -> list[str]:
 
 def check_gitlab_runner_spec(path: Path, spec: dict) -> None:
     """[gitlab_runner] runners = [{name, scope, tags, executor, and for docker: image, volumes,
-    pull_policy}], or no table at all. Values go into a gitlab-runner command line and the API."""
+    pull_policy}] and optionally user = "NAME" (required with a shell runner), or no table at all.
+    Values go into a gitlab-runner command line, a systemd drop-in and the API."""
     gr = spec.get("gitlab_runner")
     if gr is None:
         return
     where = f"{path}: [gitlab_runner]"
-    if not isinstance(gr, dict) or set(gr) != {"runners"}:
-        raise Fail(f"{where} must hold only runners = [...]")
+    if not isinstance(gr, dict) or "runners" not in gr or not set(gr) <= {"runners", "user"}:
+        raise Fail(f"{where} must hold only runners = [...] and optionally user = \"NAME\"")
+    user = gr.get("user")
+    if user is not None and (not isinstance(user, str) or not HM_NAME.fullmatch(user)):
+        raise Fail(f"{where}: user must be an account name ([a-z_][a-z0-9_-]*), not {user!r}")
     runners = gr["runners"]
     if not isinstance(runners, list) or not runners or not all(isinstance(r, dict) for r in runners):
         raise Fail(f"{where}.runners must be a non-empty list of tables")
@@ -841,6 +849,9 @@ def check_gitlab_runner_spec(path: Path, spec: dict) -> None:
                        f"(a runner without tags would take untagged jobs)")
         if r.get("executor") not in GL_EXECUTORS:
             raise Fail(f"{where}: runner {name}: executor must be one of {GL_EXECUTORS}, not {r.get('executor')!r}")
+        if r["executor"] == "shell" and user is None:
+            raise Fail(f"{where}: runner {name}: a shell runner needs [gitlab_runner] user = \"NAME\" "
+                       f"(the package's unit runs jobs as gitlab-runner)")
         if r["executor"] == "docker":
             allowed |= {"image", "volumes", "pull_policy"}
             if not isinstance(r.get("image"), str) or not r["image"] or any(c.isspace() for c in r["image"]):
@@ -1009,9 +1020,15 @@ def phase_vm(spec: dict, apply: bool, recreate: bool, confirm: str | None) -> No
 
     d, img = vm["os_disk"], vm_image(node)
     q = f"qm set {vmid}"
+    # serial0 and rng0 (asyla #1290): the Debian image's kernel line ends console=ttyS0, and the PVE
+    # Cloud-Init wiki says many cloud images rely on a serial console. On 2026-11-22 a test01 first
+    # boot with no serial port and no rng stopped after the initramfs growroot (root never remounted
+    # rw, crng init at 438 s, no packet out); with serial0 its next boot ran cloud-init to the end.
+    # The serial line is also the full boot log, read on the node with: qm terminal VMID.
     cmds = [
         f"qm create {vmid} --name {host} --sockets {vm['sockets']} --cores {vm['cores']} "
         f"--memory {vm['memory_mb']} --ostype l26 --scsihw virtio-scsi-pci --vga std "
+        f"--serial0 socket --rng0 source=/dev/urandom "
         f"--net0 {net0_arg(vm)} --onboot 1 "
         f"--agent 1,fstrim_cloned_disks=1" + (f" --startup {vm['startup']}" if vm.get("startup") else "")
         + (f" --cpu {vm['cpu']}" if vm.get("cpu") else ""),
@@ -1051,7 +1068,10 @@ def phase_vm(spec: dict, apply: bool, recreate: bool, confirm: str | None) -> No
     # A recreated VM has a new host key: drop the old one for its name and address only.
     for name in (host, ip_only(spec), f"{host}.{SEARCHDOMAIN}"):
         run(["ssh-keygen", "-R", name], check=False)
-    wait_ssh(host)
+    try:
+        wait_ssh(host)
+    except Fail as e:
+        raise Fail(f"{e}; its boot log is the serial console: ssh {root(node)} qm terminal {vmid} (Ctrl-O quits)") from None
     print("waiting for cloud-init")
     ssh(host, "cloud-init status --wait >/dev/null", timeout=1800, check=False)
     r = ssh(host, "cloud-init status; id docker; test -f /var/lib/cloud/instance/asyla-vendor-done", check=False)
@@ -1548,10 +1568,33 @@ def replica_images(spec: dict, apply: bool) -> list[str]:
     return images
 
 
+def sleeping_ns_probe(host: str, img: str) -> int | None:
+    """The host's curl in the network namespace of a throwaway sleeping container of IMG on the
+    default bridge (an image with a shell but no probe tool: postgres's). Its exit, or None when there
+    is no proof: the container did not start, or the nsenter probe could not run (99). The container
+    is always removed; a failed removal is logged."""
+    r = ssh(host, f"docker run -d --rm --entrypoint sleep {shlex.quote(img)} 60", check=False)
+    cid = (r.stdout.strip().splitlines() or [""])[-1].strip()
+    if r.returncode != 0 or not cid:
+        return None
+    try:
+        p = ssh(host, NSENTER_PROBE.format(c=shlex.quote(cid), url=EGRESS_PROBES[0]), check=False)
+    finally:
+        rm = ssh(host, f"docker rm -f {shlex.quote(cid)}", check=False)
+        if rm.returncode != 0:
+            print(f"  egress probe: docker rm -f {cid} ({img}) on {host} failed (exit {rm.returncode}); "
+                  f"the container is left running until its sleep 60 ends", flush=True)
+    return None if p.returncode == 99 else p.returncode
+
+
 def egress_checks(spec: dict, images: list[str] = (), containers: list[str] = ()) -> list[tuple[str, bool, str]]:
     """(label, ok, detail) for the replica's egress block: the table and its unit, then no probe
     URL from the host, from a container of each image, or from inside each running container.
-    A probe that cannot run (no curl, wget or python3: 99; docker's own errors: 125 to 127) is no proof."""
+    An image with no probe tool (no curl, wget or python3: 99) is probed by the host's curl in a
+    sleeping container's network namespace; when that cannot run (99), it and an image with no shell
+    (127) are proved by another image's blocked probe on the same default bridge, else fail; docker's
+    own errors (125, 126) and a reached URL (0) fail.
+    A running container with no shell (126, 127) or no probe tool (99) is probed by NSENTER_PROBE."""
     host, out = spec["host"], []
     r = ssh(host, f"sudo nft list table {REPLICA_EGRESS_TABLE} >/dev/null && systemctl is-enabled {REPLICA_EGRESS_UNIT}",
             check=False)
@@ -1561,28 +1604,39 @@ def egress_checks(spec: dict, images: list[str] = (), containers: list[str] = ()
         r = ssh(host, f"curl -s -o /dev/null -m 5 {url}", check=False)
         out.append((f"{host} cannot reach {url}", r.returncode not in (0, 127), f"curl exit {r.returncode}"))
     probe = shlex.quote(EGRESS_PROBE_SH)
-    proved, no_shell = None, []   # proved: an image whose probe ran and was blocked on the default bridge
+    proved, no_probe = None, []   # proved: an image whose probe ran and was blocked on the default bridge
     for img in images:
         r = ssh(host, f"docker run --rm --entrypoint sh {shlex.quote(img)} -c {probe} {EGRESS_PROBES[0]}", check=False)
-        if r.returncode == NO_SHELL:
-            no_shell.append(img)
+        ns = sleeping_ns_probe(host, img) if r.returncode == 99 else None
+        if ns is not None:   # no probe tool: the host's curl in a sleeping container's namespace
+            ok = ns not in (0, 99, 125, 126, 127)
+            proved = proved or (img if ok else None)
+            out.append((f"a container of {img} cannot reach {EGRESS_PROBES[0]}", ok,
+                        f"no curl, wget or python3 in the image; the host's curl in a sleeping container's "
+                        f"network namespace: exit {ns}"))
             continue
-        ok = r.returncode not in (0, 99, 125, 126, 127)
+        if r.returncode in (NO_SHELL, 99):
+            no_probe.append((img, "no shell in the image" if r.returncode == NO_SHELL
+                             else "no curl, wget or python3 in the image"))
+            continue
+        ok = r.returncode not in (0, 125, 126)
         proved = proved or (img if ok else None)
         out.append((f"a container of {img} cannot reach {EGRESS_PROBES[0]}", ok, f"exit {r.returncode}"))
-    # An image with no shell (vikunja's) cannot run the probe. `docker run --rm IMG` puts every
-    # image on the same default bridge, so another image's blocked probe is that path's proof; with
-    # none, there is no proof. Its running containers are probed from the host at verify (below).
-    for img in no_shell:
+    # An image with no shell (vikunja's, 127), or no probe tool (postgres's, 99) whose sleeping
+    # container the host's curl could not probe, cannot run the probe.
+    # `docker run --rm IMG` puts every image on the same default bridge, so another image's blocked
+    # probe is that path's proof; with none, there is no proof. Running containers are probed below.
+    for img, why in no_probe:
         out.append((f"a container of {img} cannot reach {EGRESS_PROBES[0]}", proved is not None,
-                    f"no shell in the image; the default bridge proved by {proved}" if proved
-                    else "no shell in the image and no other image proves the default bridge"))
+                    f"{why}; the default bridge proved by {proved}" if proved
+                    else f"{why} and no other image proves the default bridge"))
     for c in containers:
         r = ssh(host, f"docker exec {shlex.quote(c)} sh -c {probe} {EGRESS_PROBES[1]}", check=False)
         how = ""
-        if r.returncode in (126, NO_SHELL):   # no shell inside: the host's curl in its network namespace
+        if r.returncode in (126, NO_SHELL, 99):   # no shell or no probe tool: the host's curl in its namespace
+            how = (" (no probe tool: the host's curl in its network namespace)" if r.returncode == 99
+                   else " (no shell: the host's curl in its network namespace)")
             r = ssh(host, NSENTER_PROBE.format(c=shlex.quote(c), url=EGRESS_PROBES[1]), check=False)
-            how = " (no shell: the host's curl in its network namespace)"
         out.append((f"container {c} cannot reach {EGRESS_PROBES[1]}{how}", r.returncode not in (0, 99, 125, 126, 127),
                     f"exit {r.returncode}"))
     return out
@@ -1699,15 +1753,34 @@ def phase_external(spec: dict, apply: bool) -> int:
     return gaps
 
 
+# Since 2026-11-20 GITEA_TOKEN is asyla-bot's token, an admin of org asyla only (asyla #599). The
+# runners are instance-scope (generate-runner-token), and /admin/actions/runners wants a site admin,
+# so the list answers 401/403 (asyla #1189). No site-admin token exists; adding one is the
+# operator's security decision. So a destroy or a re-registration leaves the old entry offline, and
+# verify fails its Gitea runner checks with that reason: it cannot prove them without the list.
+class RunnerListRefused(Fail):
+    def __init__(self, code: int):
+        super().__init__(f"Gitea runner list: HTTP {code} (GITEA_TOKEN is not a Gitea site admin; asyla #1189)")
+        self.code = code
+
+
 def runner_entries(host: str) -> list[dict]:
     code, body = gitea("GET", "/admin/actions/runners?limit=100")
+    if code in (401, 403):
+        raise RunnerListRefused(code)
     if code != 200:
         raise Fail(f"Gitea runner list: HTTP {code}")
     return [r for r in body.get("runners", []) if r.get("name") == host]
 
 
 def delete_runner_entry(host: str, apply: bool) -> None:
-    for r in runner_entries(host):
+    try:
+        entries = runner_entries(host)
+    except RunnerListRefused as e:
+        print(f"Gitea runner {host}: old entry not deleted (GITEA_TOKEN is not a Gitea site admin, "
+              f"HTTP {e.code}; asyla #1189): it stays as an offline entry")
+        return
+    for r in entries:
         print(f"delete Gitea runner {r['name']} (id {r['id']}, {r.get('status')})")
         if apply:
             code, _ = gitea("DELETE", f"/admin/actions/runners/{r['id']}")
@@ -1719,6 +1792,11 @@ def gitlab_runners(spec: dict) -> list[dict]:
     """The spec's GitLab runners, each with its description in GitLab: HOST-NAME."""
     return [{**r, "description": f"{spec['host']}-{r['name']}"}
             for r in spec.get("gitlab_runner", {}).get("runners", [])]
+
+
+def gitlab_runner_user(spec: dict) -> str | None:
+    """[gitlab_runner] user: the account the runner's jobs run as, or None (the package's gitlab-runner)."""
+    return spec.get("gitlab_runner", {}).get("user")
 
 
 def gl_scope(scope: str) -> tuple[str, str]:
@@ -1789,7 +1867,8 @@ def phase_gitlab_runner(spec: dict, apply: bool) -> None:
     """Each [gitlab_runner] runner: delete GitLab's entries with its description, create a new one
     (POST /user/runners), register it on the host with the new token over SSH stdin
     (build/gitlab-runner/gitlab-runner.sh, sent from GitLab master), then set concurrent and wait
-    until GitLab sees each one online. A rebuild makes new runners: no token is kept anywhere but
+    until GitLab sees each one online. Right after install, `user NAME` ([gitlab_runner] user) or
+    `user -` sets the account jobs run as (a systemd drop-in, or none: the package's gitlab-runner). A rebuild makes new runners: no token is kept anywhere but
     the host's /etc/gitlab-runner/config.toml."""
     host, runners = spec["host"], gitlab_runners(spec)
     if not runners:
@@ -1803,12 +1882,15 @@ def phase_gitlab_runner(spec: dict, apply: bool) -> None:
         build_run(host, [BUILD_GITLAB_RUNNER], f'bash "$B/{BUILD_GITLAB_RUNNER}/gitlab-runner.sh" {args}',
                   as_root=True, stdin=stdin)
 
+    user = gitlab_runner_user(spec)
+    print(f"  jobs run as {user or 'gitlab-runner (the package unit)'}: gitlab-runner.sh user {user or '-'}")
     for r in runners:
         print(f"  {r['description']}: {gl_scope(r['scope'])[0]} runner on {r['scope']}, tags {r['tags']}, "
               f"untagged jobs off; register {shlex.join(gl_register_args(r))}")
     if not apply:
         return
     gl_run("install")
+    gl_run(f"user {shlex.quote(user or '-')}")
     created = {}
     for r in runners:
         rid, token = create_gitlab_runner(r)
@@ -1904,9 +1986,12 @@ def phase_gitea_runner(spec: dict, apply: bool, gitea_host: str = GITEA_TOKEN_HO
 def verify_gitlab_runners(spec: dict, check) -> None:
     """verify's GitLab runner lines: each spec runner has one entry, online, with exactly the
     spec's tags, untagged jobs off and access level GL_ACCESS_LEVEL; the host's gitlab-runner is active with the spec's
-    runners only and concurrent = their number."""
+    runners only and concurrent = their number, and its unit runs jobs as [gitlab_runner] user (else gitlab-runner).
+    With a shell runner, that user's login shell under set -eo pipefail exits 0 with no TTY (as a
+    shell job's does; a clear_console in ~/.bash_logout fails it: gitlab-runner.sh logout_aside)."""
     host = spec["host"]
     gl = gitlab_runners(spec)
+    shell_user = gitlab_runner_user(spec) if any(r["executor"] == "shell" for r in gl) else None
     for r in gl:
         entries = gl_runner_entries(r["scope"], r["description"])
         check(f"GitLab runner {r['description']} online in {r['scope']}",
@@ -1921,9 +2006,19 @@ def verify_gitlab_runners(spec: dict, check) -> None:
             check(f"GitLab runner {r['description']} access level {GL_ACCESS_LEVEL}",
                   d.get("access_level") == GL_ACCESS_LEVEL, f"access_level {d.get('access_level')}")
     if gl:
-        # The names and concurrent only: config.toml's token lines are never read here.
+        # The names and concurrent only: config.toml's token lines are never read here. The job
+        # user from the unit's ExecStart (the drop-in's, when there is one).
+        # With a shell runner, the job user's login shell as a shell job starts it (test01,
+        # 2026-11-23), its output dropped: only its exit status is printed.
+        probe = ""
+        if shell_user:
+            probe = ("; printf 'set -eo pipefail\\necho x\\nexit 0\\n' | sudo env -i PATH=/usr/bin:/bin "
+                     f"su -s /bin/bash {shlex.quote(shell_user)} -c 'bash --login' >/dev/null 2>&1; "
+                     "echo \"login-shell-exit $?\"")
         r = ssh(host, "systemctl is-active gitlab-runner; sudo grep -E '^concurrent = |^  name = ' "
-                      "/etc/gitlab-runner/config.toml", check=False)
+                      "/etc/gitlab-runner/config.toml; "
+                      "systemctl show -p ExecStart --value gitlab-runner | grep -oE -- '--user [^ ;]+'" + probe,
+                check=False)
         lines = r.stdout.splitlines()
         names = sorted(l.split("=", 1)[1].strip().strip('"') for l in lines if l.startswith("  name = "))
         conc = next((l.split("=", 1)[1].strip() for l in lines if l.startswith("concurrent = ")), "none")
@@ -1931,6 +2026,15 @@ def verify_gitlab_runners(spec: dict, check) -> None:
         check("gitlab-runner active with the spec's runners only, concurrent = their number",
               lines[:1] == ["active"] and names == want and conc == str(len(gl)),
               f"{lines[:1]} {names} concurrent {conc}")
+        user = gitlab_runner_user(spec) or "gitlab-runner"
+        users = [l.split(None, 1)[1] for l in lines if l.startswith("--user ")]
+        check(f"gitlab-runner runs shell jobs as {user}", users == [user], f"unit ExecStart --user {users or 'none'}")
+        if shell_user:
+            exits = [l.split()[1] for l in lines if l.startswith("login-shell-exit ") and len(l.split()) == 2]
+            check(f"{shell_user}'s login shell exits 0 with no TTY (shell jobs pass prepare environment)",
+                  exits == ["0"], f"exit {exits[0] if exits else 'not read'}"
+                  + ("; ~/.bash_logout running clear_console? gitlab-runner.sh user moves it aside"
+                     if exits and exits != ["0"] else ""))
 
 
 def verify_host_maintenance(spec: dict, check) -> None:
@@ -2156,8 +2260,15 @@ def verify(spec: dict) -> int:
         r = ssh(host, f"for i in $(seq 60); do curl -sf -o /dev/null -m 5 {shlex.quote(url)} && exit 0; sleep 2; done; "
                       f"exit 1", check=False, timeout=600)
         check(f"replica answers {url}", r.returncode == 0, "" if r.returncode == 0 else "not within 120 s")
-    if spec.get("runner", {}).get("enabled"):
-        entries = runner_entries(host)
+    try:
+        entries = runner_entries(host) if spec.get("runner", {}).get("enabled") else None
+    except RunnerListRefused as e:   # asyla #1189: no list, so neither check can pass
+        entries = None
+        why = f"not provable, GITEA_TOKEN is not a Gitea site admin (HTTP {e.code}; asyla #1189)"
+        check("Gitea runner online", False, why)
+        if spec["runner"].get("labels"):
+            check("Gitea runner labels are the spec's", False, why)
+    if entries is not None:
         online = [e for e in entries if e.get("status") in ("online", "idle", "active")]
         check("Gitea runner online", len(entries) == 1 and bool(online),
               ", ".join(f"id {e['id']} {e.get('status')} {[l['name'] for l in e.get('labels', [])]}" for e in entries))

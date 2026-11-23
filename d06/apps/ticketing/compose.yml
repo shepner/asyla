@@ -12,7 +12,11 @@ name: ticketing
 
 services:
   vikunja:
-    image: vikunja/vikunja:2.2.2@sha256:a96c20c0997bae4a445bf717002328524c5449c2b64391032c671ff4e1d8b2fa
+    # The Vikunja of theOrg ticketing's docker-compose.yml and Dockerfile.configure (main a9b667d,
+    # PR 57: 2.8.0, theOrg #1262). Keep the two equal: the configure image's Vikunja CLI migrates
+    # the database it opens (/db), so a configure image of another version changes the schema under
+    # this server. A theOrg Vikunja bump needs this line moved before the next ticketing up.
+    image: vikunja/vikunja:2.8.0@sha256:35d937baf3b5d5803bed6b9e11d007448b7b536df9e4346dc35551e1072636c3
     user: "0:0"
     ports:
       # Host-local only: verify and the build's replica check curl it on the host.
@@ -27,8 +31,8 @@ services:
       VIKUNJA_CORS_ENABLE: "true"
       VIKUNJA_CORS_ORIGINS: https://vikunja.asyla.org
       # Webhooks may call private addresses, so Vikunja reaches communications' relay at
-      # http://webhook-to-mq-vikunja:9092/webhook/vikunja on ticketing_net. Vikunja 2.2.2 has no
-      # allowlist: this lets every webhook reach the LAN. Registration is off, so only existing accounts
+      # http://webhook-to-mq-vikunja:9092/webhook/vikunja on ticketing_net. Vikunja 2.2.2 had no
+      # allowlist (2.8.0 not checked; theOrg ticketing DEPLOY.md): this lets every webhook reach the LAN. Registration is off, so only existing accounts
       # can make one. The operator: "Yes, allow it" (2026-11-10, asyla session local_379bb45f). It
       # takes effect at the next ticketing up (the C4 cutover).
       VIKUNJA_OUTGOINGREQUESTS_ALLOWNONROUTABLEIPS: "true"

@@ -37,7 +37,15 @@ steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "container_dns.sh", "bashrc.s
 # asyla-d06-node (a hand-off; asyla ticket #626). On this running host the step is installed by
 # `build_host.py d06 build --only setup --step node_exporter.sh --apply` (the operator's run).
 [node_exporter]
-allow = ["10.0.0.0/24"]    # a subnet, not a host (operator, 2026-10-25): the trends Prometheus can move
+# 172.16.0.0/12: d06's own operations Prometheus (a container) scrapes this host's 9100 for the asyla-hw
+# job, and its packets come from its Docker network (observability_observability-net, 172.19.0.0/16 on
+# 2026-11-23), not from 10.0.0.0/24, so systemd's IPAddressAllow dropped them (asyla #610 step 5).
+# The whole Docker range, not 172.19/16: a recreated network can take another subnet (as the vmh
+# health key allows 172.16.0.0/12). Containers on d06 can read node metrics; nothing else is opened.
+allow = ["10.0.0.0/24", "172.16.0.0/12"]    # a subnet, not a host (operator, 2026-10-25): the trends Prometheus can move
+textfile_sources = [
+  "/home/docker/maint/guest-health.prom",   # asyla_hw_*, written by host-maintenance's monitor every 15 min (asyla #610 step 5)
+]
 
 # No [[secret]]: d06 keeps no secret on disk (the operator's rule, 2026-10-18). Ticketing's values
 # and the proxy's Cloudflare key are resolved from OpenBao on the workstation at use (its [[app]],
@@ -61,8 +69,9 @@ start_env = ["TICKETING_DEPLOY_DEX_CLIENT_SECRET", "TICKETING_MCP_DEX_CLIENT_SEC
 # theOrg's observability stack (d06/apps/observability, theOrg observability DEPLOY.md last read
 # at main f757911; follows latest, the revision read from the images' provenance at deploy). The
 # theorg-registry pull token reaches it for the image pulls (OBSERVABILITY_REGISTRY_PULL_TOKEN).
-# alert-relay, emporia-collector and scrape-proxy read their secrets from OpenBao in-process:
-# deploy_role.py (beside the app) mints each a token from the observability-d06 token role and
+# alert-relay, emporia-collector, scrape-proxy and the three gateways (loki-gateway,
+# prometheus-write-gateway, pushgateway-gateway) read their secrets from OpenBao
+# in-process: deploy_role.py (beside the app) mints each a token from the observability-d06 token role and
 # passes it response-wrapped, single use, in the start_env_optional names. No secret goes in a
 # container's environment. Optional, not start_env: a ticketing-only or full d06 build passes
 # pre-flight without them, and observability.sh leaves a tokened service as it is when its name is
@@ -72,7 +81,7 @@ name = "observability"
 verify = ["verify"]
 restore = false
 pull_token_env = "THEORG_REGISTRY_PULL_TOKEN"
-start_env_optional = ["ALERT_RELAY_OPENBAO_WRAPPED_TOKEN", "EMPORIA_OPENBAO_WRAPPED_TOKEN", "SCRAPE_PROXY_OPENBAO_WRAPPED_TOKEN"]
+start_env_optional = ["ALERT_RELAY_OPENBAO_WRAPPED_TOKEN", "EMPORIA_OPENBAO_WRAPPED_TOKEN", "SCRAPE_PROXY_OPENBAO_WRAPPED_TOKEN", "LOKI_GATEWAY_OPENBAO_WRAPPED_TOKEN", "PROMETHEUS_WRITE_GATEWAY_OPENBAO_WRAPPED_TOKEN", "PUSHGATEWAY_GATEWAY_OPENBAO_WRAPPED_TOKEN"]
 
 # theOrg's communications (d06/apps/communications, theOrg communications DEPLOY.md at beff7c55;
 # its images pinned to that commit, COMMS_TAG in communications.sh). The theorg-registry pull token

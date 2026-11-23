@@ -2,7 +2,8 @@
 """Offline test of d06/apps/observability/deploy_role.py: the plan it builds, and what each step
 sends where. No SSH, no vault, no git, no registry: subprocess.run, build_host.ssh and http_get
 are replaced so that any contact fails the test (run_start's own cases run a local python child,
-nothing else; the registry cases answer from a stand-in registry in this file).
+and alert_test_cases a local bash child with docker and the relay stubbed, nothing else; the
+registry cases answer from a stand-in registry in this file).
 
     python3 scripts/tests/test_d06_deploy_role.py
 
@@ -32,13 +33,16 @@ def _no_contact(*a, **kw):
 
 
 REAL_HTTP_GET = dr.http_get
+REAL_RUN = subprocess.run   # alert_test_cases only: a local bash child with every contact stubbed
 subprocess.run = _no_contact
 bh.ssh = _no_contact
 dr.http_get = _no_contact
 
 TAG = "f7579118fdac5d90101a5ec6698200ae2c9d836f"
 REV = "a" * 40   # a stand-in revision
-OBS_TOKENS = ["SCRAPE_PROXY_OPENBAO_WRAPPED_TOKEN", "EMPORIA_OPENBAO_WRAPPED_TOKEN", "ALERT_RELAY_OPENBAO_WRAPPED_TOKEN"]
+OBS_TOKENS = ["SCRAPE_PROXY_OPENBAO_WRAPPED_TOKEN", "EMPORIA_OPENBAO_WRAPPED_TOKEN", "ALERT_RELAY_OPENBAO_WRAPPED_TOKEN",
+              "LOKI_GATEWAY_OPENBAO_WRAPPED_TOKEN", "PROMETHEUS_WRITE_GATEWAY_OPENBAO_WRAPPED_TOKEN",
+              "PUSHGATEWAY_GATEWAY_OPENBAO_WRAPPED_TOKEN"]
 PULL = "stand-in-pull"
 HUB_STAND_IN = "stand-in-hub"
 OTHER_STAND_IN = "stand-in-other"
@@ -398,7 +402,7 @@ def main_cases() -> list[bool]:
                          repr((rc, sorted(env), printed))))
         out.append(check("run: vault_identity.py --token-role observability-d06, one --identity per component, then the app start",
                          argv[1:2] == ["-I"] and argv[2].endswith("vault_identity.py")
-                         and argv[3:5] == ["--token-role", "observability-d06"] and argv.count("--identity") == 3
+                         and argv[3:5] == ["--token-role", "observability-d06"] and argv.count("--identity") == 6
                          and argv[argv.index("--") + 1:][1:] == [str(REPO / "scripts/build_host.py"), "d06", "build", "--only",
                                                                  "apps", "--app", "observability", "--apply"],
                          repr(argv)))
@@ -554,8 +558,8 @@ def tool_cases() -> list[bool]:
 
     calls, files = unpack()
     subs = [c[0][3:] for c in calls]
-    out.append(check("tool: TOOL_REV is f757911, the commit asyla reviewed",
-                     dr.TOOL_REV == "f7579118fdac5d90101a5ec6698200ae2c9d836f"))
+    out.append(check("tool: TOOL_REV is 001a2ac, the commit asyla reviewed",
+                     dr.TOOL_REV == "001a2ac8d124976ef929112a06644a942078564e"))
     out.append(check("tool: unchanged between TOOL_REV and R: the files are git show TOOL_REV:..., never R",
                      sorted(files) == ["openbao.py", "vault_identity.py"]
                      and all(v.startswith(f"# {dr.TOOL_REV}:scripts/") for v in files.values())
@@ -765,6 +769,10 @@ def registry_cases() -> list[bool]:
     out.append(check("registry: 10 theOrg images, one provenance revision each, all R: R (no config label read)",
                      rev == REV and f"revision {REV}" in printed and "10 pulled theOrg images" in printed,
                      repr((rev, printed))))
+    shared = reg.pulled() + reg.pulled()[:1] * 2
+    rev2, _ = read(StandInRegistry(good), pulled=shared)
+    out.append(check("registry: an image `images` lists once per service (the three gateways' one image) "
+                     "still matches `digests`, which lists it once", rev2 == REV, repr(rev2)))
     out.append(check("registry: the pull token (Basic) goes only to the token realm on the registry's host, "
                      "over https; the bearer only to that host",
                      basic_to and all(u.startswith(f"https://{REG}/v2/token?") for u in basic_to)
@@ -852,6 +860,323 @@ VIKUNJA_TOKEN = "secret/v2/vikunja/alert-tokens/svc-alert-relay-d06"   # outside
 LOKI_ACCOUNT = "own/loki-clients/alert-relay"   # asyla's own Loki account (loki_accounts.py)
 
 
+def service_block(compose: str, name: str) -> list[str]:
+    """The stripped, uncommented lines of compose.yml's service NAME (indent 2), up to the next one."""
+    lines, inside = [], False
+    for ln in compose.splitlines():
+        if ln.startswith("  ") and not ln.startswith("   ") and ln.rstrip().endswith(":") \
+                and not ln.lstrip().startswith("#"):
+            inside = ln.strip() == f"{name}:"
+            continue
+        if ln and not ln.startswith(" "):
+            inside = False
+        if inside and ln.strip() and not ln.lstrip().startswith("#"):
+            lines.append(ln.strip())
+    return lines
+
+
+def shell_words(sh: str, var: str) -> list[str]:
+    """The words of observability.sh's top-level VAR="..." assignment."""
+    import re
+    m = re.search(rf'^{var}="([^"]*)"$', sh, re.M)
+    return m.group(1).split() if m else []
+
+
+def token_vars(sh: str) -> dict[str, str]:
+    """observability.sh token_var's case arms: service -> variable."""
+    import re
+    body = sh.split("\ntoken_var() {", 1)[1].split("\n}", 1)[0] if "\ntoken_var() {" in sh else ""
+    return dict(re.findall(r"^\s*([a-z][a-z-]*)\) echo ([A-Z_]+) ;;$", body, re.M))
+
+
+def compose_networks(compose: str) -> dict[str, dict]:
+    """Every service's networks, as {network: aliases} (lines of indent 6 and 10 under networks:),
+    and the top-level networks block as {name: its stripped lines} under the key ''."""
+    services: dict[str, dict] = {}
+    top: dict[str, list[str]] = {}
+    section, svc, inside, net = "", "", False, ""
+    for ln in compose.splitlines():
+        if not ln.strip() or ln.lstrip().startswith("#"):
+            continue
+        indent = len(ln) - len(ln.lstrip())
+        text = ln.strip()
+        if indent == 0:
+            section = text.rstrip(":")
+            continue
+        if section == "services":
+            if indent == 2:
+                svc, inside = text.rstrip(":"), False
+                services[svc] = {}
+            elif indent == 4:
+                inside = text == "networks:"
+            elif inside and indent == 6:
+                net = text.lstrip("- ").split(":")[0]
+                services[svc][net] = []
+            elif inside and indent == 10 and text.startswith("- "):
+                services[svc][net].append(text[2:])
+        elif section == "networks":
+            if indent == 2:
+                net = text.rstrip(":")
+                top[net] = []
+            else:
+                top[net].append(text)
+    return {**services, "": top}
+
+
+# The three gateways (asyla #1268: option B, items 3 and 4): component, its registry, its
+# observability.sh accounts variable, LOKI_GATEWAY_MODE and LOKI_UPSTREAM.
+GATEWAYS = [
+    ("loki-gateway", "loki-clients.toml", "LOKI_GATEWAY_ACCOUNTS", None, "http://loki:3100"),
+    ("prometheus-write-gateway", "prometheus-write-clients.toml", "PROMETHEUS_WRITE_GATEWAY_ACCOUNTS",
+     "remote-write", "http://prometheus-ingest:9090"),
+    ("pushgateway-gateway", "pushgateway-clients.toml", "PUSHGATEWAY_GATEWAY_ACCOUNTS", "pushgateway",
+     "http://pushgateway:9091"),
+]
+# Every service that joins more than observability-net, or not it, with its aliases; every other
+# service is on observability-net alone.
+WANT_NETS = {
+    "loki-gateway": {"observability-net": [], "loki-edge": ["loki-gateway-edge"]},
+    "prometheus-write-gateway": {"observability-net": [], "ingest": [], "loki-edge": ["prometheus-write-gateway-edge"]},
+    "pushgateway-gateway": {"observability-net": [], "push": [], "loki-edge": ["pushgateway-gateway-edge"]},
+    "prometheus": {"observability-net": [], "ingest": [], "push": []},
+    "prometheus-ingest": {"ingest": []},
+    "pushgateway": {"push": []},
+}
+# The external networks: compose key, Docker name, who joins it.
+WANT_EXTERNAL = {
+    # Historical name (loki-gateway's alone in items 1-2): it carries all three gateways' hops.
+    "loki-edge": ("observability-loki-edge", ["loki-gateway", "prometheus-write-gateway", "pushgateway-gateway"]),
+    "ingest": ("observability-ingest", ["prometheus", "prometheus-ingest", "prometheus-write-gateway"]),
+    "push": ("observability-push", ["prometheus", "pushgateway", "pushgateway-gateway"]),
+}
+
+
+def gateways_cases() -> list[bool]:
+    """The three gateways: each registry matches its IDENTITIES line, its accounts literal and its
+    compose block; the networks, who joins each, internal and external; the ingest Prometheus, its
+    federation and the remote-write gateway's healthcheck; the pushgateway with no port; no gateway
+    on a replica; restart's network check."""
+    import re
+    import tomllib
+    compose = (dr.HERE / "compose.yml").read_text()
+    sh = (dr.HERE / "observability.sh").read_text()
+    ids = {c: (e, rs) for c, e, rs in dr.IDENTITIES}
+    nets = compose_networks(compose)
+    top = nets[""]
+    services = {s: n for s, n in nets.items() if s}
+    readers, replica, tvars = shell_words(sh, "VAULT_READERS"), shell_words(sh, "REPLICA_SERVICES"), token_vars(sh)
+    app = [a for a in bh.load_spec("d06").get("app", []) if a.get("name") == "observability"]
+    out = []
+    for comp, toml, var, mode, upstream in GATEWAYS:
+        clients = tomllib.loads((dr.HERE / toml).read_text())["clients"]
+        names = list(clients)
+        stem = toml.removesuffix(".toml")
+        env, records = ids.get(comp, ("", []))
+        m = re.search(rf'^{var}="([^"]*)"$', sh, re.M)
+        block = service_block(compose, comp)
+        out += [
+            check(f"gateways {comp}: IDENTITIES records are every account of {toml}, under own/{stem}/, in its order",
+                  env == tvars.get(comp) and env.endswith("_OPENBAO_WRAPPED_TOKEN")
+                  and records == [f"own/{stem}/{n}" for n in names] and names == sorted(names) and bool(names),
+                  repr((env, records))),
+            check(f"gateways {comp}: observability.sh {var} = {toml}'s name:scope, in name order",
+                  bool(m) and m.group(1) == ",".join(f"{n}:{clients[n]['scope'][0]}" for n in names),
+                  repr(m.group(1) if m else None)),
+            check(f"gateways {comp}: compose passes {var} as its LOKI_GATEWAY_ACCOUNTS, its own token and prefix, "
+                  "TLS off, its mode and upstream, read_only, cap_drop ALL, no ports",
+                  f"LOKI_GATEWAY_ACCOUNTS: ${{{var}:?}}" in block
+                  and f"OPENBAO_WRAPPED_TOKEN: ${{{env}:-}}" in block
+                  and f'LOKI_CLIENTS_KV_PREFIX: "secret/hubs/asyla/own/{stem}"' in block
+                  and 'LOKI_GATEWAY_TLS: "off"' in block and f'LOKI_UPSTREAM: "{upstream}"' in block
+                  and (f'LOKI_GATEWAY_MODE: "{mode}"' in block if mode else not any("LOKI_GATEWAY_MODE" in ln for ln in block))
+                  and "read_only: true" in block and "- ALL" in block
+                  and not any(ln.startswith(("ports:", "extra_hosts:")) for ln in block), repr(block)),
+            check(f"gateways {comp}: a vault reader, not a replica service (it reads production's OpenBao)",
+                  comp in readers and comp not in replica, repr((readers, replica))),
+        ]
+    prefixes = [f"own/{t.removesuffix('.toml')}/" for _, t, *_ in GATEWAYS]
+    out.append(check("gateways: no two gateways share a record prefix, and none reads another's",
+                     all(sum(r.startswith(p) for p in prefixes) == 1 and r.startswith(prefixes[i])
+                         for i, (c, *_) in enumerate(GATEWAYS) for r in ids[c][1]), repr(prefixes)))
+
+    # Networks: who joins each, internal and external, the aliases.
+    out.append(check("networks: each service's networks and aliases are as named; every other is on "
+                     "observability-net alone",
+                     all(services.get(s) == n for s, n in WANT_NETS.items())
+                     and all(n == {"observability-net": []} for s, n in services.items() if s not in WANT_NETS),
+                     repr({s: n for s, n in services.items() if n != {"observability-net": []}})))
+    out.append(check("networks: observability-net is the stack's own bridge; the other three are external",
+                     sorted(top) == sorted(["observability-net", *WANT_EXTERNAL])
+                     and top["observability-net"] == ["driver: bridge"], repr(top)))
+    for key, (name, joiners) in WANT_EXTERNAL.items():
+        out.append(check(f"networks: {key} is the external {name} (no driver or internal in compose), "
+                         f"joined by {', '.join(joiners)} only",
+                         sorted(top.get(key, [])) == sorted([f"name: {name}", "external: true"])
+                         and sorted(s for s, n in services.items() if key in n) == joiners,
+                         repr((top.get(key), sorted(s for s, n in services.items() if key in n)))))
+    live = [ln for ln in compose.splitlines() if not ln.lstrip().startswith("#")]
+    aliases = [a for n in services.values() for al in n.values() for a in al]
+    out.append(check("networks: three aliases, each on edge alone and in one place",
+                     sorted(aliases) == sorted(f"{c}-edge" for c, *_ in GATEWAYS)
+                     and all(sum(f"{c}-edge" in ln for ln in live) == 1 for c, *_ in GATEWAYS)
+                     and all(not al for s, n in services.items() for k, al in n.items() if k != "loki-edge"),
+                     repr(aliases)))
+    nw = shell_words(sh, "NETWORKS")
+    fn = shell_function(sh, "ensure_networks")
+    up_fn = shell_function(sh, "do_up")
+    up_body = [ln.strip() for ln in up_fn.splitlines()[1:] if ln.strip() and not ln.strip().startswith(("local ", "#"))]
+    restart_arm = sh.split("\n    restart)", 1)[1].split(";;", 1)[0] if "\n    restart)" in sh else ""
+    out += [
+        check("networks: observability.sh NETWORKS are compose.yml's three external names",
+              sorted(nw) == sorted(n for n, _ in WANT_EXTERNAL.values()), repr(nw)),
+        check("networks: ensure_networks makes each missing one --internal and refuses one that is not internal",
+              'for net in $NETWORKS; do' in fn and 'docker network inspect "$net" >/dev/null' in fn
+              and 'docker network create --internal --driver bridge "$net"' in fn
+              and "docker network inspect -f '{{.Internal}}' \"$net\"" in fn
+              and '[ "$got" = "true" ] || die "network $net exists but is not internal' in fn, fn),
+        check("networks: do_up calls ensure_networks before anything else, so before every up "
+              "(restart's too), replica or not, token or not",
+              bool(up_body) and up_body[0] == "ensure_networks"
+              and sh.count("run_compose up ") == up_fn.count("run_compose up ") == 2
+              and "&& do_up" in restart_arm, repr(up_body[:3])),
+        check("networks: restart calls ensure_networks before it takes the stack down",
+              "images_ready && ensure_networks && run_compose down --remove-orphans && do_up" in restart_arm,
+              repr(restart_arm[-200:])),
+        check("networks: no ensure_edge_network is left, and the edge network is not renamed",
+              "ensure_edge_network" not in sh + compose and "observability-edge" not in sh + compose),
+        check("networks: nothing in observability.sh removes a network (down leaves them)",
+              "network rm" not in "\n".join(ln for ln in sh.splitlines() if "die " not in ln)
+              and "down --remove-orphans -v" not in sh),
+    ]
+
+    # The ingest Prometheus (theOrg compose.ingest.yml at 04f31709), its federation and the gateway in
+    # front of it; the pushgateway with no port.
+    receivers = sorted(s for s in services if any("--web.enable-remote-write-receiver" in ln
+                                                   for ln in service_block(compose, s)))
+    profiled = {s: [ln for ln in service_block(compose, s) if ln.startswith("profiles:")] for s in services}
+    pwg = service_block(compose, "prometheus-write-gateway")
+    ing = service_block(compose, "prometheus-ingest")
+    prom = service_block(compose, "prometheus")
+    gw_fn = shell_function(sh, "check_gateway")
+    stack_jobs = sh.split('STACK_JOBS="', 1)[1].split('"', 1)[0].split()
+    verify_fn = shell_function(sh, "do_verify")
+    out += [
+        check("ingest: only prometheus-ingest (and prometheus-trends, emporia-collector's, on "
+              "observability-net) has the remote-write receiver flag; prometheus has none",
+              receivers == ["prometheus-ingest", "prometheus-trends"]
+              and not any("remote-write-receiver" in ln for ln in prom),
+              repr(receivers)),
+        check("ingest: no service has a profile (prometheus-ingest starts with the stack)",
+              not any(profiled.values()), repr(profiled)),
+        check("ingest: observability.sh never enables a profile (no --profile, no COMPOSE_PROFILES)",
+              "--profile" not in sh and "COMPOSE_PROFILES" not in sh),
+        check("ingest: prometheus-ingest is the operations image in ingest mode (PROMETHEUS_MODE=ingest, "
+              "ingest.yml, the receiver, 1d/2GB), on observability-ingest only, data under OBSERVABILITY_ROOT",
+              "image: gitea.asyla.org/theorg/observability-prometheus:${OBSERVABILITY_TAG:?}" in ing
+              and "PROMETHEUS_MODE: ingest" in ing
+              and "- --config.file=/etc/prometheus/ingest.yml" in ing
+              and "- --web.enable-remote-write-receiver" in ing
+              and "- --storage.tsdb.retention.time=${INGEST_RETENTION_TIME:-1d}" in ing
+              and "- --storage.tsdb.retention.size=${INGEST_RETENTION_SIZE:-2GB}" in ing
+              and services.get("prometheus-ingest") == {"ingest": []}
+              and any(ln.startswith("test:") and "/-/healthy" in ln for ln in ing)
+              and not any(ln.startswith("ports:") for ln in ing), repr(ing)),
+        check("ingest: prometheus federates prometheus-ingest (FEDERATE_INGEST=true, THEORG_SCRAPE=false, "
+              "FEDERATE_INGEST_HOST/_PORT)",
+              'FEDERATE_INGEST: "true"' in prom and 'THEORG_SCRAPE: "false"' in prom
+              and 'FEDERATE_INGEST_HOST: "prometheus-ingest"' in prom
+              and 'FEDERATE_INGEST_PORT: "9090"' in prom, repr(prom)),
+        # theOrg's entrypoint at 04f31709 exits 2 with MONITOR_THEORG and FEDERATE_INGEST on unless
+        # THEORG_SCRAPE is false; COMMUNICATIONS_REMOTE=true is communications-placement d06.
+        check("ingest: prometheus runs theOrg's rules (MONITOR_THEORG=true, once, beside "
+              "THEORG_SCRAPE=false) with communications' remote set (COMMUNICATIONS_REMOTE=true)",
+              [ln for ln in prom if ln.startswith("MONITOR_THEORG:")] == ['MONITOR_THEORG: "true"']
+              and [ln for ln in prom if ln.startswith("THEORG_SCRAPE:")] == ['THEORG_SCRAPE: "false"']
+              and [ln for ln in prom if ln.startswith("COMMUNICATIONS_REMOTE:")]
+              == ['COMMUNICATIONS_REMOTE: "true"'], repr(prom)),
+        check("ingest: prometheus-write-gateway has loki-gateway's healthcheck and depends_on "
+              "prometheus-ingest healthy",
+              'test: ["CMD", "/loki-gateway", "healthcheck"]' in pwg and "disable: true" not in pwg
+              and pwg[pwg.index("depends_on:") + 1:pwg.index("depends_on:") + 3]
+              == ["prometheus-ingest:", "condition: service_healthy"] if "depends_on:" in pwg else False,
+              repr(pwg)),
+        check("ingest: check_gateway wants prometheus-write-gateway's /ready 200 (no 502 left)",
+              "check_one_gateway prometheus-write-gateway 200 POST /api/v1/write" in gw_fn
+              and "502" not in gw_fn and "ready=" not in gw_fn, gw_fn),
+        check("ingest: STACK_JOBS has ingest-federate, whose target is prometheus-ingest",
+              "ingest-federate:prometheus-ingest" in stack_jobs, repr(stack_jobs)),
+        check("ingest: verify proves prometheus-1 reaches prometheus-ingest by the federate target, "
+              "not a busybox wget (its lookup fails on the internal network)",
+              "prometheus-ingest:9090/-/healthy" not in verify_fn, verify_fn[:200]),
+        check("push: the pushgateway has no ports",
+              bool(service_block(compose, "pushgateway"))
+              and not any(ln.startswith("ports:") for ln in service_block(compose, "pushgateway")),
+              repr(service_block(compose, "pushgateway"))),
+        check("push: STACK_JOBS keeps the pushgateway job (prometheus scrapes it on push)",
+              "pushgateway:pushgateway" in sh.split('STACK_JOBS="', 1)[1].split('"', 1)[0]),
+        check("verify: each gateway's anonymous route: loki a query, remote-write a POST, the pushgateway a PUT",
+              "check_one_gateway loki-gateway 200 GET /loki/api/v1/labels" in sh
+              and "check_one_gateway prometheus-write-gateway 200 POST /api/v1/write" in sh
+              and "check_one_gateway pushgateway-gateway 200 PUT /metrics/job/verify" in sh),
+        check("replica: no gateway on a replica; prometheus, prometheus-ingest (ingest-federate reads it) "
+              "and the pushgateway are",
+              not {c for c, *_ in GATEWAYS} & set(replica)
+              and {"prometheus", "prometheus-ingest", "pushgateway"} <= set(replica), repr(replica)),
+        check("tokens: token_var, IDENTITIES and d06/host.toml start_env_optional name the same variables",
+              tvars == {c: e for c, e, _ in dr.IDENTITIES}
+              and len(app) == 1 and sorted(tvars.values()) == sorted(app[0].get("start_env_optional", []))
+              and sorted(tvars) == sorted(readers), repr((tvars, app[:1]))),
+    ]
+    return out
+
+
+def gateway_cases() -> list[bool]:
+    """loki-gateway (option B, asyla #1268): its token reads every account of loki-clients.toml,
+    d06/host.toml sends its variable, and compose.yml runs it plain HTTP with no port and asyla's
+    prefix, reached by Caddy only on edge; the operations prometheus has no remote-write receiver."""
+    import tomllib
+    names = list(tomllib.loads((dr.HERE / "loki-clients.toml").read_text())["clients"])
+    ids = {c: (e, rs) for c, e, rs in dr.IDENTITIES}
+    env, records = ids.get("loki-gateway", ("", []))
+    app = [a for a in bh.load_spec("d06").get("app", []) if a.get("name") == "observability"]
+    compose = (dr.HERE / "compose.yml").read_text()
+    gw = service_block(compose, "loki-gateway")
+    prom = service_block(compose, "prometheus")
+    sh = (dr.HERE / "observability.sh").read_text()
+    readers, replica, tvars = shell_words(sh, "VAULT_READERS"), shell_words(sh, "REPLICA_SERVICES"), token_vars(sh)
+    return [
+        check("gateway: loki-gateway is a vault reader and not a replica service (it reads production's OpenBao)",
+              "loki-gateway" in readers and "loki-gateway" not in replica and bool(replica), repr((readers, replica))),
+        check("gateway: token_var maps exactly the VAULT_READERS services",
+              bool(readers) and sorted(tvars) == sorted(readers), repr((tvars, readers))),
+        check("gateway: token_var's variables are IDENTITIES' env names, service by service",
+              tvars == {c: e for c, e, _ in dr.IDENTITIES}, repr((tvars, dr.IDENTITIES))),
+        check("gateway: token_var's variables are d06/host.toml observability start_env_optional",
+              len(app) == 1 and sorted(tvars.values()) == sorted(app[0].get("start_env_optional", [])),
+              repr((tvars, app[:1]))),
+        check("gateway: compose.yml prometheus has no remote-write receiver flag",
+              bool(prom) and not any("remote-write" in ln for ln in prom), repr(prom)),
+        check("gateway: loki-clients.toml has the 13 accounts, in name order",
+              len(names) == 13 and names == sorted(names), repr(names)),
+        check("gateway: IDENTITIES has loki-gateway with every account's own/loki-clients record",
+              env == "LOKI_GATEWAY_OPENBAO_WRAPPED_TOKEN"
+              and records == [f"own/loki-clients/{n}" for n in names], repr(records)),
+        check("gateway: deploy_role.loki_client_names reads the same names",
+              dr.loki_client_names(dr.HERE / "loki-clients.toml") == names),
+        check("gateway: d06/host.toml observability start_env_optional names its variable",
+              len(app) == 1 and "LOKI_GATEWAY_OPENBAO_WRAPPED_TOKEN" in app[0].get("start_env_optional", []),
+              repr(app[:1])),
+        check("gateway: compose.yml runs it with TLS off, asyla's prefix, its token and accounts, no ports",
+              bool(gw) and 'LOKI_GATEWAY_TLS: "off"' in gw
+              and 'LOKI_CLIENTS_KV_PREFIX: "secret/hubs/asyla/own/loki-clients"' in gw
+              and "OPENBAO_WRAPPED_TOKEN: ${LOKI_GATEWAY_OPENBAO_WRAPPED_TOKEN:-}" in gw
+              and "LOKI_GATEWAY_ACCOUNTS: ${LOKI_GATEWAY_ACCOUNTS:?}" in gw
+              and 'LOKI_UPSTREAM: "http://loki:3100"' in gw
+              and not any(ln.startswith(("ports:", "extra_hosts:")) or "loki-ca" in ln or "STEP" in ln
+                          for ln in gw), repr(gw)),
+    ]
+
+
 def relay_records_cases() -> list[bool]:
     """alert-relay's token reads its SMTP login, the Watchdog's ping URL, the Vikunja token (by its
     full path, outside the hub's KV), the delivery check's ping URL and its Loki query account (a
@@ -889,11 +1214,237 @@ def relay_records_cases() -> list[bool]:
         check("relay: compose.yml has no Gitea setting left (forge token, URL, alert repo, repos)",
               not any(ln.startswith(k) for ln in live
                       for k in ("ALERT_RELAY_FORGE_KV", "GITEA_ALERT_REPO", "GITEA_URL", "ALERT_REPOS"))),
-        check("relay: alerts go to Vikunja project 170 (compose.yml takes ALERT_PROJECTS from observability.sh)",
-              "ALERT_PROJECTS: ${ALERT_PROJECTS:?}" in live and '\nALERT_PROJECTS="asyla=170"\n' in sh),
+        check("relay: alerts go to Vikunja project 170 by default, theOrg's to 169 (compose.yml takes "
+              "ALERT_PROJECTS from observability.sh; asyla first, so the default)",
+              "ALERT_PROJECTS: ${ALERT_PROJECTS:?}" in live and '\nALERT_PROJECTS="asyla=170 theOrg=169"\n' in sh),
         check("relay: the watchdog piece is on in observability.sh",
               '\nALERT_WATCHDOG_PING="on"\n' in sh),
     ]
+
+
+def shell_function(sh: str, name: str) -> str:
+    """observability.sh's top-level function NAME, from `NAME() {` to its closing `}` line."""
+    import re
+    m = re.search(rf"^{name}\(\) \{{\n.*?^\}}$", sh, re.M | re.S)
+    if not m:
+        raise AssertionError(f"observability.sh has no function {name}")
+    return m.group(0)
+
+
+# do_alert_test's contacts, stubbed: docker records its arguments one per line (amtool's labels
+# among them) and answers nothing; the relay's log names task 42 in project $STUB_PID; relay_logql
+# reads 0 lines, then 1. date -d is GNU only, so it answers a fixed time.
+ALERT_TEST_STUBS = r'''
+SERVING_HOST=d06
+is_replica() { return 1; }
+service_state() { echo "running (healthy)"; }
+info() { echo "[INFO] $*"; }
+sleep() { :; }
+date() { case "$*" in *-d*) echo 2026-11-22T00:00:00Z ;; *) command date "$@" ;; esac; }
+docker() { printf '%s\n' "$@" >> "$STUB/docker"; }
+alert_test_fingerprint() { echo abc123; }
+relay_logql() {
+  if [ -e "$STUB/logql" ]; then echo "lines=1 empty=0 error=0 unconfigured=0"
+  else echo seen > "$STUB/logql"; echo "lines=0 empty=0 error=0 unconfigured=0"; fi
+}
+wait_relay_task() { if [ "$3" = opened ]; then echo "42 $STUB_PID"; fi; return 0; }
+'''
+
+
+def alert_test_cases() -> list[bool]:
+    """alert-test, run offline: observability.sh's own default_project_id, alert_test_project and
+    do_alert_test in a local bash with every contact stubbed. Unset ALERT_TEST_PROJECT is the
+    default (170) with no alert_repo label; theOrg sets alert_repo="theOrg/observability" and
+    wants 169; a name not in ALERT_PROJECTS is refused before any contact."""
+    import re
+    sh = (dr.HERE / "observability.sh").read_text()
+    projects = re.search(r'^ALERT_PROJECTS="[^"]*"$', sh, re.M).group(0)
+    funcs = "\n".join(shell_function(sh, n) for n in ("default_project_id", "alert_test_project", "do_alert_test"))
+
+    def run(call: str, project: str | None, pid: str = "") -> tuple[int, str, str, list[str]]:
+        with tempfile.TemporaryDirectory() as stub:
+            env = {"PATH": os.environ["PATH"], "STUB": stub, "STUB_PID": pid}
+            if project is not None:
+                env["ALERT_TEST_PROJECT"] = project
+            p = REAL_RUN(["bash", "-c", f"set -euo pipefail\n{projects}\n{funcs}\n{ALERT_TEST_STUBS}\n{call}"],
+                         env=env, capture_output=True, text=True, timeout=60)
+            calls = Path(stub, "docker").read_text().splitlines() if Path(stub, "docker").exists() else []
+        return p.returncode, p.stdout, p.stderr, calls
+
+    out = []
+    rc, so, se, _ = run("default_project_id", None)
+    out.append(check("alert-test: default_project_id is 170 (asyla, the first ALERT_PROJECTS entry)",
+                     rc == 0 and so == "170\n", f"rc={rc} out={so!r} err={se!r}"))
+    rc, so, se, calls = run("do_alert_test", None, "170")
+    out.append(check("alert-test: unset ALERT_TEST_PROJECT wants the default 170, no alert_repo label",
+                     rc == 0 and "alertname=AsylaAlertRelayTest" in calls
+                     and not any(c.startswith("alert_repo=") for c in calls)
+                     and "alert-test OK: task 42 in Vikunja project 170" in so, f"rc={rc} err={se!r}"))
+    rc, so, se, calls = run("do_alert_test", "theOrg", "169")
+    out.append(check('alert-test: ALERT_TEST_PROJECT=theOrg sets alert_repo="theOrg/observability" and wants 169',
+                     rc == 0 and 'alert_repo="theOrg/observability"' in calls
+                     and "alert-test OK: task 42 in Vikunja project 169" in so, f"rc={rc} err={se!r}"))
+    rc, so, se, calls = run("do_alert_test", "theorg", "169")
+    out.append(check("alert-test: the name matches case-insensitively; the label takes ALERT_PROJECTS' spelling",
+                     rc == 0 and 'alert_repo="theOrg/observability"' in calls, f"rc={rc} err={se!r}"))
+    rc, so, se, calls = run("do_alert_test", "theOrg", "170")
+    out.append(check("alert-test: theOrg's task in the default 170 fails (it wants 169)",
+                     rc == 1 and "task 42 is in project 170, not project 169 (theOrg, ALERT_TEST_PROJECT)" in se,
+                     f"rc={rc} err={se!r}"))
+    rc, so, se, calls = run("do_alert_test", "nope", "170")
+    out.append(check("alert-test: a name not in ALERT_PROJECTS is refused, naming the entries, before any contact",
+                     rc == 1 and "ALERT_TEST_PROJECT 'nope' is not in ALERT_PROJECTS (asyla=170 theOrg=169)" in se
+                     and calls == [], f"rc={rc} err={se!r} calls={calls}"))
+    return out
+
+
+def data_dirs_cases() -> list[bool]:
+    """Every bind volume compose.yml puts under OBSERVABILITY_ROOT is made by ensure_dirs and owned
+    by own_dirs, prometheus-ingest-data among them as nobody (65534) like the other Prometheus data
+    directories (asyla #1268)."""
+    import re
+    compose = (dr.HERE / "compose.yml").read_text()
+    sh = (dr.HERE / "observability.sh").read_text()
+    binds = re.findall(r'device: "\$\{OBSERVABILITY_ROOT:\?\}/([a-z-]+)"', compose)
+    made, owned = shell_function(sh, "ensure_dirs"), shell_function(sh, "own_dirs")
+    nobody = re.search(r"chown 65534:65534 ([^']*)'", owned)
+    nobody_dirs = nobody.group(1).split() if nobody else []
+    return [
+        check("dirs: compose.yml binds prometheus-ingest-data under OBSERVABILITY_ROOT",
+              "prometheus-ingest-data" in binds, repr(binds)),
+        check("dirs: ensure_dirs makes every bind volume compose.yml names",
+              bool(binds) and all(f'"$OBSERVABILITY_ROOT/{b}"' in made for b in binds), repr((binds, made))),
+        check("dirs: own_dirs owns every bind volume compose.yml names",
+              bool(binds) and all(f"/data/{b}" in owned for b in binds), repr((binds, owned))),
+        check("dirs: own_dirs gives prometheus-ingest-data to 65534 with the other Prometheus data directories",
+              all(f"/data/{b}" in nobody_dirs for b in
+                  ("prometheus-data", "prometheus-trends-data", "prometheus-ingest-data")), repr(nobody_dirs)),
+    ]
+
+
+# check_one_gateway's one contact, docker, as a fake on PATH: it records each call's arguments on
+# one line and answers as GNU wget -S would, the status line on stderr ($STUB_READY for /ready,
+# $STUB_WRITE for anything else), exiting 8 (wget's server error) when the status is not 2xx.
+FAKE_DOCKER = r'''#!/bin/sh
+printf '%s\n' "$*" >> "$STUB/docker"
+case "$*" in
+  */ready) code="$STUB_READY" ;;
+  *) code="$STUB_WRITE" ;;
+esac
+echo "  HTTP/1.1 $code Stub" >&2
+case "$code" in 2*) exit 0 ;; *) exit 8 ;; esac
+'''
+
+# check_gateway's other names: service_state is missing for a service not in $STUB_SERVICES.
+GATEWAY_STUBS = r'''
+info() { echo "[INFO] $*"; }
+service_state() { case " $STUB_SERVICES " in *" $1 "*) echo "running (healthy)" ;; *) echo missing ;; esac; }
+'''
+
+
+def gateway_check_cases() -> list[bool]:
+    """verify's gateway check, run offline: observability.sh's own gateway_status, check_one_gateway
+    and check_gateway in a local bash with docker a fake on PATH. /ready 200 and an anonymous write
+    401 pass; an anonymous write 200 fails; check_gateway wants prometheus-write-gateway's /ready
+    200, with prometheus-ingest's container or without, and fails on 502. The fake gets wget's
+    --method and --body-data for the write, and neither for /ready."""
+    sh = (dr.HERE / "observability.sh").read_text()
+    funcs = "\n".join(shell_function(sh, n) for n in ("gateway_status", "check_one_gateway", "check_gateway"))
+
+    def run(call: str, ready: str, write: str, services: str = "") -> tuple[int, str, str, list[str]]:
+        with tempfile.TemporaryDirectory() as stub:
+            fake = Path(stub, "bin", "docker")
+            fake.parent.mkdir()
+            fake.write_text(FAKE_DOCKER)
+            fake.chmod(0o755)
+            env = {"PATH": f"{fake.parent}:{os.environ['PATH']}", "STUB": stub, "STUB_READY": ready,
+                   "STUB_WRITE": write, "STUB_SERVICES": services}
+            p = REAL_RUN(["bash", "-c", f"set -euo pipefail\n{funcs}\n{GATEWAY_STUBS}\n{call}"],
+                         env=env, capture_output=True, text=True, timeout=60)
+            calls = Path(stub, "docker").read_text().splitlines() if Path(stub, "docker").exists() else []
+        return p.returncode, p.stdout, p.stderr, calls
+
+    wget = "exec vector-1 wget -S -O /dev/null -T 10 -t 1"
+    gw = "prometheus-write-gateway"
+    want = [f"{wget} http://{gw}:3100/ready", f"{wget} --method=POST --body-data= http://{gw}:3100/api/v1/write"]
+    out = []
+    rc, so, se, calls = run(f"check_one_gateway {gw} 200 POST /api/v1/write", "200", "401")
+    out.append(check("gateway check: /ready 200 and an anonymous write 401 pass",
+                     rc == 0 and f"{gw}: /ready 200 with no account" in so
+                     and f"{gw}: POST /api/v1/write with no account 401" in so, f"rc={rc} out={so!r} err={se!r}"))
+    out.append(check("gateway check: the fake gets no --method for /ready, --method=POST --body-data= for the write",
+                     calls == want, repr(calls)))
+    rc, so, se, calls = run(f"check_one_gateway {gw} 200 POST /api/v1/write", "200", "200")
+    out.append(check("gateway check: an anonymous write 200 fails",
+                     rc == 1 and f"{gw}: POST /api/v1/write with no account answers '200', not 401" in se,
+                     f"rc={rc} out={so!r} err={se!r}"))
+    rc, so, se, calls = run("check_gateway", "200", "401", f"{gw} prometheus-ingest")
+    out.append(check("gateway check: check_gateway passes prometheus-write-gateway's /ready 200 and anonymous write 401",
+                     rc == 0 and f"{gw}: /ready 200 with no account" in so and calls == want,
+                     f"rc={rc} out={so!r} err={se!r} calls={calls}"))
+    for services in (f"{gw} prometheus-ingest", gw):
+        rc, so, se, calls = run("check_gateway", "502", "401", services)
+        out.append(check(f"gateway check: check_gateway fails prometheus-write-gateway's /ready 502 "
+                         f"({'with' if 'ingest' in services else 'without'} a prometheus-ingest container)",
+                         rc == 1 and f"{gw}: /ready answers '502', not 200" in se and "not started" not in so,
+                         f"rc={rc} out={so!r} err={se!r}"))
+    return out
+
+
+# FAKE_DOCKER with docker inspect answered as Docker 29 does on d06 (asyla #1268): a container
+# named in $STUB_RUNNING (without its -1) is "running healthy"; any other prints an empty line to
+# stdout, an error to stderr, and exits 1. Inspect calls are not recorded.
+FAKE_DOCKER_INSPECT = r'''#!/bin/sh
+if [ "$1" = inspect ]; then
+  for a; do name="$a"; done
+  case " $STUB_RUNNING " in *" ${name%-1} "*) echo "running healthy"; exit 0 ;; esac
+  echo
+  echo "Error: No such object: $name" >&2
+  exit 1
+fi
+''' + FAKE_DOCKER.split("\n", 1)[1]
+
+
+def service_state_cases() -> list[bool]:
+    """observability.sh's own service_state, run offline with docker a fake on PATH: a missing
+    container (an empty line on stdout, then exit 1) is exactly "missing", a running one is its
+    state (verify failed on d06 when "missing" came out as "\\nmissing"); and check_gateway with the
+    real service_state checks a running prometheus-write-gateway (/ready 200) and skips a missing one."""
+    sh = (dr.HERE / "observability.sh").read_text()
+    funcs = "\n".join(shell_function(sh, n)
+                      for n in ("service_state", "gateway_status", "check_one_gateway", "check_gateway"))
+
+    def run(call: str, running: str, ready: str = "200", write: str = "401") -> tuple[int, str, str, list[str]]:
+        with tempfile.TemporaryDirectory() as stub:
+            fake = Path(stub, "bin", "docker")
+            fake.parent.mkdir()
+            fake.write_text(FAKE_DOCKER_INSPECT)
+            fake.chmod(0o755)
+            env = {"PATH": f"{fake.parent}:{os.environ['PATH']}", "STUB": stub, "STUB_RUNNING": running,
+                   "STUB_READY": ready, "STUB_WRITE": write}
+            p = REAL_RUN(["bash", "-c", f"set -euo pipefail\n{funcs}\ninfo() {{ echo \"[INFO] $*\"; }}\n{call}"],
+                         env=env, capture_output=True, text=True, timeout=60)
+            calls = Path(stub, "docker").read_text().splitlines() if Path(stub, "docker").exists() else []
+        return p.returncode, p.stdout, p.stderr, calls
+
+    gw = "prometheus-write-gateway"
+    wget = "exec vector-1 wget -S -O /dev/null -T 10 -t 1"
+    want = [f"{wget} http://{gw}:3100/ready", f"{wget} --method=POST --body-data= http://{gw}:3100/api/v1/write"]
+    out = []
+    rc, so, se, _ = run("service_state prometheus-ingest", gw)
+    out.append(check("service_state: a missing container (empty line, then exit 1) is exactly missing",
+                     rc == 0 and so == "missing\n", f"rc={rc} out={so!r} err={se!r}"))
+    rc, so, se, _ = run(f"service_state {gw}", gw)
+    out.append(check("service_state: a running container is its state, running healthy",
+                     rc == 0 and so == "running healthy\n", f"rc={rc} out={so!r} err={se!r}"))
+    rc, so, se, calls = run("check_gateway", f"{gw} prometheus-ingest")
+    out.append(check("service_state: check_gateway with prometheus-write-gateway running wants /ready 200 and passes",
+                     rc == 0 and f"{gw}: /ready 200 with no account" in so
+                     and calls == want, f"rc={rc} out={so!r} err={se!r} calls={calls}"))
+    rc, so, se, calls = run("check_gateway", "")
+    out.append(check("service_state: check_gateway with no gateway container checks nothing and passes",
+                     rc == 0 and calls == [], f"rc={rc} out={so!r} err={se!r} calls={calls}"))
+    return out
 
 
 with tempfile.TemporaryDirectory() as d:
@@ -923,9 +1474,13 @@ results = [
           == ["--identity", "component=a,env=A_T,kv=secret/hubs/asyla/r1,kv=secret/v2/x/y"]),
     stops("identities: one with no record stops (take its line out instead)", "no KV record",
           lambda: dr.identity_args([("a", "A_T", [])])),
-    check("identities: the static list is scrape-proxy, emporia-collector, alert-relay",
-          [(c, e) for c, e, _ in dr.IDENTITIES] == [("scrape-proxy", OBS_TOKENS[0]), ("emporia-collector", OBS_TOKENS[1]),
-                                                    ("alert-relay", OBS_TOKENS[2])]),
+    check("identities: the list is scrape-proxy, emporia-collector, alert-relay, loki-gateway, "
+          "prometheus-write-gateway, pushgateway-gateway",
+          [(c, e) for c, e, _ in dr.IDENTITIES] == list(zip(
+              ["scrape-proxy", "emporia-collector", "alert-relay", "loki-gateway", "prometheus-write-gateway",
+               "pushgateway-gateway"], OBS_TOKENS, strict=True))),
+    *gateway_cases(),
+    *gateways_cases(),
     check("identities: every record is a plain name or an own/ path under the hub's KV, or a full secret/ "
           "path, none with #",
           all(r and "#" not in r and ("/" not in r or r.startswith(("secret/", "own/")))
@@ -938,6 +1493,10 @@ results = [
           lambda: dr.check_spec(SPEC, [("a", OBS_TOKENS[0], ["r"]), ("b", OBS_TOKENS[0], ["r"])])),
     d06_spec_case(),
     *relay_records_cases(),
+    *alert_test_cases(),
+    *data_dirs_cases(),
+    *gateway_check_cases(),
+    *service_state_cases(),
     check("start: --only apps, or late for an after_external app",
           dr.start_argv(SPEC)[4:6] == ["--only", "apps"]
           and dr.start_argv({**SPEC, "app": [{**SPEC["app"][0], "after_external": True}]})[4:6] == ["--only", "late"]),

@@ -1,6 +1,9 @@
 #!/bin/bash
-# Media stack on d01: Sonarr, Radarr, Overseerr, Jackett, Transmission, where-to-stream.
+# Media stack on d01: Sonarr, Radarr, Seerr, Jackett, Transmission, where-to-stream,
+# radarr-reconcile.
 # Usage: media.sh [switch ...] e.g. backup|up|down|logs|refresh|update|restart
+#        media.sh reconcile [--apply]   one radarr-reconcile pass now (dry run unless --apply)
+#        media.sh migrate-seerr [--apply]   one-time move from Overseerr (dry run unless --apply)
 # Switches can be combined (e.g. down backup up). Run from anywhere; loads ~/scripts/docker/common.env.
 # Backups: per-service rsync snapshots with hardlinks, under ${DOCKER_D1}/media-<service>/<stamp>/.
 
@@ -25,22 +28,28 @@ APP_ROOT="$DOCKER_DL"
 
 export DOCKER_DL
 export DOCKER_D1
+# compose.yml mounts radarr_reconcile.py from this directory into radarr-reconcile.
+export MEDIA_SCRIPT_DIR="$SCRIPT_DIR"
 export DATA1
 export LOCAL_TZ
 
 # Services in the media stack and the per-service config subdir under DOCKER_DL.
 # where-to-stream is not here: it has no config to back up (its source is shipped by
 # push-where-to-stream.sh, its /data is a rebuildable cache), and restore would refuse its empty dir.
-MEDIA_SERVICES=(sonarr radarr overseerr jackett transmission)
+MEDIA_SERVICES=(sonarr radarr seerr jackett transmission)
 
-# Directories that need to exist for `up`/`refresh`/`restart`. overseerr/config/db is where-to-stream's
-# read-only mount of Overseerr's database dir; made here so docker does not create it as root.
+# Directories that need to exist for `up`/`refresh`/`restart`. seerr/config/db is where-to-stream's
+# read-only mount of Seerr's database dir; made here so docker does not create it as root.
 MEDIA_UP_DIRS=(
-  sonarr/config radarr/config overseerr/config jackett/config jackett/downloads
+  sonarr/config radarr/config seerr/config jackett/config jackett/downloads
   transmission/config transmission/watch transmission/downloads
   transmission/downloads/complete transmission/downloads/incomplete
-  overseerr/config/db where-to-stream/src where-to-stream/data
+  seerr/config/db where-to-stream/src where-to-stream/data
 )
+
+# Overseerr's config dir (kept as it was at the move, for rollback) and Seerr's, which starts as a copy.
+OVERSEERR_CONFIG="${DOCKER_DL}/overseerr/config"
+SEERR_CONFIG="${DOCKER_DL}/seerr/config"
 
 run_compose() {
   docker compose -f "$COMPOSE_FILE" --project-directory "$APP_ROOT" "$@"
@@ -56,6 +65,101 @@ ensure_dirs() {
   if [ "$(id -u)" -eq 0 ]; then
     chown "${DOCKER_UID:-1003}:${DOCKER_GID:-1000}" "${DOCKER_DL}/where-to-stream/data"
   fi
+}
+
+# Seerr started on an empty config dir sets itself up as a new, empty instance. While Overseerr's
+# database is here and Seerr has none, the move has not been made: refuse to start the stack.
+require_seerr_migrated() {
+  if [ -f "$OVERSEERR_CONFIG/db/db.sqlite3" ] && [ ! -f "$SEERR_CONFIG/db/db.sqlite3" ]; then
+    echo "[ERROR] media: Seerr has no database yet but Overseerr's is in $OVERSEERR_CONFIG;" \
+      "run '$0 migrate-seerr' (dry run, then --apply) before starting the stack" >&2
+    return 1
+  fi
+}
+
+# Integrity and row counts of an Overseerr/Seerr database, read from a copy of db.sqlite3 and its
+# -wal in a temp dir, so the dir itself is never written (opening a WAL database writes its -shm).
+# Prints counts only: the user table also holds passwords and Plex tokens.
+db_summary() {
+  local db_dir="$1" tmp rc=0
+  tmp=$(mktemp -d)
+  cp -p "$db_dir/db.sqlite3" "$tmp/"
+  if [ -f "$db_dir/db.sqlite3-wal" ]; then cp -p "$db_dir/db.sqlite3-wal" "$tmp/"; fi
+  python3 - "$tmp/db.sqlite3" <<'PY' || rc=$?
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+check = db.execute("pragma integrity_check").fetchone()[0]
+counts = ", ".join(f"{t} {db.execute(f'select count(*) from {t}').fetchone()[0]}"
+                   for t in ("user", "media", "media_request"))
+print(f"integrity {check}; {counts}")
+sys.exit(0 if check == "ok" else 1)
+PY
+  rm -rf "$tmp"
+  return $rc
+}
+
+# One-time move from Overseerr to Seerr (https://docs.seerr.dev/migration-guide/: Seerr migrates a
+# config dir on its first start, so back it up first). Seerr gets a copy: Overseerr's own dir is
+# left exactly as it was, for rollback. Steps: stop Overseerr; mirror its config to the backup
+# (media-overseerr/mirror) and check it; copy it to seerr/config (without Overseerr's logs and the
+# linuxserver image's .cache/.yarn); remove the stopped overseerr container (host-maintenance counts
+# a stopped container in the project as unhealthy; its image stays); start Seerr and where-to-stream.
+# Dry unless --apply. A re-run once Seerr has a database does nothing.
+do_migrate_seerr() {
+  local apply="${1:-}" state summary
+  case "$apply" in
+    ""|--apply) ;;
+    *) echo "[ERROR] migrate-seerr takes only --apply, not '$apply'" >&2; return 1 ;;
+  esac
+  if [ -f "$SEERR_CONFIG/db/db.sqlite3" ]; then
+    echo "[INFO] Seerr already has a database ($SEERR_CONFIG/db/db.sqlite3); nothing to do"
+    return 0
+  fi
+  if [ ! -f "$OVERSEERR_CONFIG/db/db.sqlite3" ]; then
+    echo "[ERROR] migrate-seerr: no Overseerr database at $OVERSEERR_CONFIG/db/db.sqlite3" >&2
+    return 1
+  fi
+  if [ -d "$SEERR_CONFIG" ] && [ -n "$(find "$SEERR_CONFIG" -type f -print -quit)" ]; then
+    echo "[ERROR] migrate-seerr: $SEERR_CONFIG holds files but no database; look at it by hand" >&2
+    return 1
+  fi
+  state=$(docker inspect -f '{{.State.Status}}' overseerr 2>/dev/null || echo "absent")
+  echo "[INFO] overseerr container: $state"
+  summary=$(db_summary "$OVERSEERR_CONFIG/db") || {
+    echo "[ERROR] migrate-seerr: Overseerr's database failed its check: $summary" >&2
+    return 1
+  }
+  echo "[INFO] Overseerr database now: $summary"
+  if [ "$apply" != "--apply" ]; then
+    echo "[DRY] would stop overseerr, mirror $OVERSEERR_CONFIG to ${DOCKER_D1}/media-overseerr/mirror and check it,"
+    echo "[DRY] copy it to $SEERR_CONFIG, remove the overseerr container (image and config kept), start seerr"
+    echo "[DRY] run again with --apply to do it"
+    return 0
+  fi
+  if [ "$state" = "running" ] || [ "$state" = "restarting" ]; then
+    docker stop -t 60 overseerr
+  fi
+  # From here a failure leaves Overseerr stopped and Seerr not started; nothing else has changed.
+  local undo="Overseerr is stopped and unchanged: 'docker start overseerr' brings it back"
+  echo "[INFO] === overseerr backup ==="
+  do_rsync_mirror_backup "$OVERSEERR_CONFIG" "${DOCKER_D1}/media-overseerr/mirror" -- \
+    --exclude="logs/" --exclude="cache/" --exclude="*.bak" \
+    || { echo "[ERROR] migrate-seerr: backup failed. $undo" >&2; return 1; }
+  summary=$(db_summary "${DOCKER_D1}/media-overseerr/mirror/db") \
+    || { echo "[ERROR] migrate-seerr: backup check failed ($summary). $undo" >&2; return 1; }
+  echo "[INFO] backup: $summary"
+  mkdir -p "$SEERR_CONFIG"
+  rsync -a --exclude=/logs/ --exclude=/.cache/ --exclude=/.yarn/ "$OVERSEERR_CONFIG/" "$SEERR_CONFIG/" \
+    || { echo "[ERROR] migrate-seerr: copy failed; remove $SEERR_CONFIG by hand. $undo" >&2; return 1; }
+  summary=$(db_summary "$SEERR_CONFIG/db") \
+    || { echo "[ERROR] migrate-seerr: copy check failed ($summary); remove $SEERR_CONFIG by hand. $undo" >&2; return 1; }
+  echo "[INFO] copy: $summary"
+  if [ "$state" != "absent" ]; then
+    docker rm overseerr
+  fi
+  ensure_dirs
+  run_compose up -d seerr where-to-stream
+  echo "[OK] Seerr started on the copy; watch its log for the migration: $0 logs seerr"
 }
 
 do_backup() {
@@ -154,6 +258,23 @@ do_reset_auth() {
   echo "[OK] $service: login removed (copy at $cfg.$stamp.bak); open its page and set a new login"
 }
 
+# One radarr-reconcile pass in a throwaway container, whatever RECONCILE_APPLY the service has:
+# a dry run unless --apply. The output is the pass's log (no credential is ever printed).
+do_reconcile() {
+  local apply="${1:-}"
+  case "$apply" in
+    ""|--apply) ;;
+    *) echo "[ERROR] reconcile takes only --apply, not '$apply'" >&2; return 1 ;;
+  esac
+  if [ "$apply" = "--apply" ]; then
+    run_compose run --rm --no-deps -e RECONCILE_APPLY=1 radarr-reconcile \
+      python3 /app/radarr_reconcile.py --once --apply
+  else
+    run_compose run --rm --no-deps -e RECONCILE_APPLY=0 radarr-reconcile \
+      python3 /app/radarr_reconcile.py --once
+  fi
+}
+
 do_update() {
   echo "[INFO] Pulling latest images (not starting app; use up or restart to start)"
   run_compose pull
@@ -166,6 +287,7 @@ run_cmd() {
     restore) do_restore ;;
     update)  do_update ;;
     up)
+      require_seerr_migrated
       echo "[INFO] Creating app dirs if needed"
       ensure_dirs
       echo "[INFO] Starting media stack"
@@ -179,11 +301,13 @@ run_cmd() {
       ;;
     refresh)
       echo "[INFO] Pulling latest images and starting"
+      require_seerr_migrated
       ensure_dirs
       run_compose pull
       run_compose up -d
       ;;
     restart)
+      require_seerr_migrated
       run_compose down
       ensure_dirs
       run_compose up -d
@@ -208,6 +332,8 @@ if [ $# -eq 0 ]; then
   echo "  restart  - Down then up" >&2
   echo "  logs     - Follow logs (optionally for one service)" >&2
   echo "  reset-auth sonarr|radarr [--apply] - forgotten login: delete it so the UI asks for a new one" >&2
+  echo "  reconcile [--apply] - one radarr-reconcile pass now (dry run unless --apply)" >&2
+  echo "  migrate-seerr [--apply] - one-time move from Overseerr to Seerr (dry run unless --apply)" >&2
   exit 1
 fi
 
@@ -219,6 +345,16 @@ fi
 if [ "$1" = "reset-auth" ]; then
   do_reset_auth "${2:-}" "${3:-}"
   exit 0
+fi
+
+if [ "$1" = "migrate-seerr" ]; then
+  do_migrate_seerr "${2:-}"
+  exit $?
+fi
+
+if [ "$1" = "reconcile" ]; then
+  do_reconcile "${2:-}"
+  exit $?
 fi
 
 for cmd in "$@"; do

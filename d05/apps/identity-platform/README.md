@@ -201,8 +201,12 @@ runs the cutover image's `unpack` into the two dirs the restores read (`backup/`
     `PGPASSWORD`, an argv, a file or a log). keycloak-db must be running and healthy. Refused (exit
     3) with `IDP_KEYCLOAK_DB_PASSWORD` in its environment, a terminal or an empty read on stdin.
     Writes `restored-keycloak`.
-  - `start-openldap` (cutover step 5): reads `IDP_LDAP_ADMIN_PASSWORD`'s value as one line on stdin
-    and runs `docker compose --profile restored up -d --no-deps --wait --wait-timeout 300 openldap`
+  - `start-openldap` (cutover step 5): reads `IDP_LDAP_ADMIN_PASSWORD`'s value as one line on stdin,
+    then ensures `openldap-tls/dhparam.pem`, which the restored cn=config names and no osixia first
+    start writes on a restored start ("with an empty TLS volume the restored slapd does not start",
+    theOrg DEPLOY.md at d706369c): one that parses is kept, else the pinned openldap image (as root,
+    no network) writes 2048-bit parameters to a `.tmp`, sets 911:911 0600 and renames it; a failure
+    exits 1 with no up and no marker. Then it runs `docker compose --profile restored up -d --no-deps --wait --wait-timeout 300 openldap`
     (DEPLOY.md's form; the timeout is asyla's, `IDENTITY_PLATFORM_START_WAIT_S`) with the value only
     in that process's environment, as `LDAP_ADMIN_PASSWORD` and `LDAP_CONFIG_PASSWORD`. Then it
     checks an admin bind with it (the admin password is then the copy's) in theOrg's stdin form

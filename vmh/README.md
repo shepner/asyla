@@ -19,6 +19,24 @@ joined vmc01): every changing mode needs the operator's approval of the exact co
 Its `apt` line warns on vmh01/vmh02 only for a security package still pending after the last
 unattended-upgrades run that saw it, or after no run in 36 hours, never one the overnight list refresh
 fetched for the morning run (test: `scripts/tests/test_vmh_health_sh.sh`).
+It also reads, for asyla #610 (same tests):
+- **kernel journal** lines since its last run (a cursor; the first run only sets it), matched to the
+  patterns of the asyla hub's `tools/export_nas_smart.py`. `crit kern.nic-removed|nvme-removed|pool-suspended`;
+  `warn` for NIC ECC, resets and firmware errors, PCIe AER, MCE/EDAC, ATA/SCSI, NVMe timeouts, I/O, ZFS
+  zio, filesystem and nfsd errors, OOM, oops, lockups and hung tasks. Keys are `kern.KIND.DEVICE`; each
+  stays listed for 24 h after its last line.
+- **SMART by serial** (`disk.SERIAL`, one `smartctl --json -a` per disk): `crit` on a FAILED verdict or
+  an NVMe critical warning; `warn` on pending sectors above 0, on reallocated, offline-uncorrectable,
+  reported-uncorrect, CRC or NVMe media-error counts that rose in the last 7 days, on NVMe 80% used or
+  ATA wear 10 or less, and on a temperature at the drive's own limit (else 158 °F for an SSD, 131 °F for
+  a disk).
+Its only writes are this state, in `/var/lib/asyla-vmh-health`, and (#610 step 5) the textfile
+`/var/lib/prometheus/node-exporter/asyla-vmh-health.prom`, written through a temp file and a rename:
+`asyla_hw_problem{host,key,severity} 1` for each `crit` (`urgent`) or `warn` (`warning`) line whose key
+is `kern*`, `disk*`, `smart*`, `bmc*` or `zfs`, and
+`asyla_hw_check_last_run_timestamp_seconds{host,checker="vmh-health"}`. The node's node_exporter
+(part `node_exporter`) serves it, and d06's operations Prometheus alerts on it
+(`d06/apps/observability/prometheus/rules/asyla-hw.yml`).
 
 ## Commands (from the repo root)
 
@@ -27,7 +45,7 @@ vmh/apply.sh survey vmh01 vmh02 vmh03     # read-only facts, side by side (VMH_S
 vmh/apply.sh check vmh03 [PART...]       # read-only: does the node match setup.sh (those parts)?
 vmh/apply.sh health vmh03                 # read-only: the checks host-maintenance runs
 vmh/apply.sh patch vmh01 --plan           # read-only: what a patch would install or hold, and why
-vmh/apply.sh setup vmh03 [PART...] --production   # repos updates crash netconsole-rx health swap
+vmh/apply.sh setup vmh03 [PART...] --production   # repos updates crash netconsole-rx health node_exporter swap
 vmh/apply.sh patch vmh03 [--dry-run] --production # apt upgrade, no reboot
 vmh/apply.sh kernel vmh03 VERSION --next-boot --production   # one trial boot; a panic (panic=10) falls back
 vmh/apply.sh kernel vmh03 VERSION|none --production   # pin for every boot, or remove the pin
@@ -52,6 +70,12 @@ vmh/usage.py [--node vmh01] [--window 2]  # read-only: guest load by hour of wee
 - **health**: `/usr/local/sbin/asyla-vmh-health` (read-only), plus one line in root's
   authorized_keys. That line lets host-maintenance's d03 runner key run the health check, and nothing
   else.
+- **node_exporter**: Debian's `prometheus-node-exporter` (no recommends) on `:9100`, with the textfile
+  collector on `/var/lib/prometheus/node-exporter` (health's `asyla-vmh-health.prom`), for d06's
+  `asyla-hw` job. A systemd drop-in (`prometheus-node-exporter.service.d/asyla.conf`) names both flags
+  and loads `/etc/asyla/node-exporter.nft` before each start: TCP 9100 from `10.0.0.0/24` and lo only.
+  Table and drop-in are in place before the install, so the package's first start is filtered.
+  `check` reads `:9100/metrics` for `node_textfile_scrape_error 0` and, once health has run, `asyla_hw_*`.
 - **swap**: no swap on a ZFS zvol. It runs `swapoff` and comments out the fstab line, keeping the zvol
   and a copy at `/etc/fstab.before-asyla-swap`. vmh02 deadlocked on 2026-05-24 while swapping to
   `rpool/swap` (OpenZFS zvol write path, openzfs/zfs#18200, still open on 2026-10-24). It refuses if the

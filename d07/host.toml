@@ -37,6 +37,7 @@ textfile_sources = [
   "/mnt/docker/unifi-monitor/unifi.prom",
   "/mnt/docker/att-monitor/att.prom",
   "/mnt/docker/openevse-monitor/openevse.prom",
+  "/home/docker/maint/guest-health.prom",   # asyla_hw_*, written by host-maintenance's monitor every 15 min (asyla #610 step 5)
 ]
 
 # Port proxies (build/setup/port_proxy.sh): a host port to a loopback-published container port, open

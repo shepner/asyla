@@ -1,5 +1,5 @@
 #!/bin/bash
-# theOrg's observability stack on d06 (Loki without its gateway, Prometheus, the trends Prometheus,
+# theOrg's observability stack on d06 (Loki and its gateway, Prometheus, the trends Prometheus,
 # Alertmanager, alert-relay, emporia-collector, scrape-proxy, Vector and the probes). Usage:
 # observability.sh [switch ...], e.g. up|down|restart|verify|update|pull|images|logs|status;
 # switches can be combined. Loads ~/scripts/docker/common.env. From theOrg observability DEPLOY.md,
@@ -12,12 +12,17 @@
 # sends at use over SSH stdin (build_host.py, d06/host.toml):
 # - OBSERVABILITY_REGISTRY_PULL_TOKEN (pull_token_env), for the image pulls, answered by the
 #   credential helper beside this script under a throwaway DOCKER_CONFIG;
-# - ALERT_RELAY_, EMPORIA_ and SCRAPE_PROXY_OPENBAO_WRAPPED_TOKEN (start_env_optional): each a
+# - ALERT_RELAY_, EMPORIA_, SCRAPE_PROXY_, LOKI_GATEWAY_, PROMETHEUS_WRITE_GATEWAY_ and
+#   PUSHGATEWAY_GATEWAY_OPENBAO_WRAPPED_TOKEN (start_env_optional): each a
 #   single-use wrapping token that deploy_role.py mints from the observability-d06 token role.
 #   Its container unwraps it once at start and holds the real token in memory, so what Docker
 #   keeps in the container's config is spent. A wrapping token lapses 300 s after it is minted, so
 #   `up` never pulls while one is here (the deploy runs `images` first).
 # A tokened service starts only when its token is here; without it, it is left as it is (VAULT_READERS).
+# Every `up` (and restart's, before its down) first makes the external networks
+# observability-loki-edge, observability-ingest and observability-push, each internal, with or without any gateway's token
+# and on a replica too, and refuses one that is not internal (ensure_networks); `down` never
+# removes them, so d06's proxy can always start.
 # compose.yml's header says what is on and off, README.md what turns each on.
 # Data under /mnt/docker/Observability (d06's local data disk; never NFS).
 
@@ -53,34 +58,55 @@ OBSERVABILITY_TAG="${OBSERVABILITY_TAG_OVERRIDE:-latest}"
 REGISTRY="gitea.asyla.org"
 # Already pulled for the stack, here and on a replica; also the throwaway container that sets the
 # data directories' owners: theOrg's Dockerfile.loki ends USER root on grafana/loki (Alpine: sh,
-# chown). Not the gateway's image any more: it is not in the stack, and at f757911 it is FROM
-# scratch, with no shell.
+# chown). Not the gateway's image: at f757911 it is FROM scratch, with no shell.
 LOKI_IMAGE="$REGISTRY/theorg/observability-loki:$OBSERVABILITY_TAG"
 
 # The host this folder belongs to. On any other host (test01 as a replica of d06) the stack runs
 # the services below only: no alert-relay (it files tasks in Vikunja), no emporia-collector or
-# scrape-proxy (they read production's OpenBao records) and no Vector (its chronicle episodes would
-# reach production's memory-system).
+# scrape-proxy or the three gateways (they read production's OpenBao records) and no Vector (its chronicle
+# episodes would reach production's memory-system). prometheus-ingest runs on a replica too: it
+# reads nothing off this host, and the operations Prometheus's ingest-federate job reads it.
 SERVING_HOST="d06"
-REPLICA_SERVICES="loki prometheus prometheus-trends alertmanager pushgateway docker-state-exporter blackbox-exporter"
+REPLICA_SERVICES="loki prometheus prometheus-trends prometheus-ingest alertmanager pushgateway docker-state-exporter blackbox-exporter"
 
 # The services that read OpenBao in-process, each through the single-use wrapped token in the
 # variable token_var names. Each starts only when its token is here: started without one,
-# emporia-collector exits and the other two serve nothing, so `up --wait` would fail or the
-# service would sit idle. Without its token a service is left as it is, running or not.
-VAULT_READERS="alert-relay emporia-collector scrape-proxy"
+# emporia-collector exits and the others serve nothing (loki-gateway would have no account), so
+# `up --wait` would fail or the service would sit idle. Without its token a service is left as it
+# is, running or not.
+VAULT_READERS="alert-relay emporia-collector scrape-proxy loki-gateway prometheus-write-gateway pushgateway-gateway"
+
+# loki-gateway's accounts (theOrg's LOKI_GATEWAY_ACCOUNTS format: name:push or name:query,
+# comma-separated), in loki-clients.toml's order (name order, as theOrg's `loki_clients.py
+# gateway-accounts` prints them); test_d06_loki_accounts.py checks the two agree. The gateway reads
+# each one's record, secret/hubs/asyla/own/loki-clients/<name>, at start (deploy_role.py
+# IDENTITIES), so every record exists first (loki_accounts.py).
+LOKI_GATEWAY_ACCOUNTS="alert-relay:query,grafana-reporting:query,host-agent-ws02:push,observability-check-push:push,observability-check-query:query,staff-alert-triage:query,vector-certificate-management:push,vector-identity-platform:push,vector-memory-system:push,vector-reporting:push,vector-secrets-vault:push,vector-staff:push,vector-workforce-management:push"
+# The same for the two push-only gateways (asyla #1268 items 3 and 4), each from its own registry
+# in the same order (test_d06_loki_accounts.py checks them too), its records under its own prefix:
+# prometheus-write-gateway's (prometheus-write-clients.toml) and pushgateway-gateway's
+# (pushgateway-clients.toml). compose.yml passes each to its gateway as LOKI_GATEWAY_ACCOUNTS.
+PROMETHEUS_WRITE_GATEWAY_ACCOUNTS="host-agent-ws02:push"
+PUSHGATEWAY_GATEWAY_ACCOUNTS="deploy-all:push,functionality-test:push,host-agent-ws02:push,identity-platform-dex-client-validity:push,memory-system-deploy-marker:push,staff-stack:push"
 
 # asyla's settings (asyla hub, the observability-on-d06 item).
 PROMETHEUS_EXTERNAL_URL="${PROMETHEUS_EXTERNAL_URL:-https://prometheus.asyla.org}"
 ALERTMANAGER_EXTERNAL_URL="${ALERTMANAGER_EXTERNAL_URL:-https://alertmanager.asyla.org}"
 # The Vikunja projects alert-relay files alerts in, name=id (theOrg DEPLOY.md, "alert-relay on d06
-# (asyla)"): 170 is asyla's child of theOrg's Alerts project. The only entry is the default, so
-# every alert goes there, whatever its alert_repo label.
-ALERT_PROJECTS="asyla=170"
+# (asyla)"): 170 is asyla's child of theOrg's Alerts project, 169 is theOrg's. The first entry,
+# asyla, is the default: an alert whose alert_repo label's owner part names a listed project
+# (case-insensitive) files there, any other in the default, and one in a project Vikunja refuses
+# falls back to the default with a Routing note (theOrg alert-relay). User svc-alert-relay-d06 gets
+# write on 169 from theOrg ticketing 8c1cc236 (theorg #1277), live after d06's next ticketing
+# redeploy; theOrg's rules (MONITOR_THEORG, compose.yml) carry alert_repo: theOrg at 04f31709
+# (theorg #1278). alert-test with
+# ALERT_TEST_PROJECT=theOrg proves the 169 path.
+ALERT_PROJECTS="asyla=170 theOrg=169"
 # memory-system's Vector on the Mini (theOrg lead, 2026-11-03).
 CHRONICLE_VECTOR_ADDRESS="10.0.0.150:6000"
 COMPOSE_PROJECT_NAME="observability"
-# Where alert-relay, emporia-collector and scrape-proxy read their secrets (theOrg's default).
+# Where alert-relay, emporia-collector, scrape-proxy and loki-gateway read their secrets (theOrg's
+# default).
 OPENBAO_ADDR="https://vault.asyla.org"
 # Critical alerts by email: Alertmanager's email piece posts them to alert-relay, which sends them
 # with the SMTP login it reads from OpenBao (theOrg deploy.yml's recipient).
@@ -105,10 +131,24 @@ SELF_PROBES_WANT="http_2xx=1 icmp=1 tcp_connect=1"
 # stack's own scrape targets are up" (#327) checks the scrape-stack jobs from its checkout's files;
 # d06 has only the images, so they are listed here (check_stack_targets). With `latest` theOrg may
 # add, drop or rename a job: a job that reads "no target" fails verify until this list follows.
+# ingest-federate is the entrypoint's federate job of prometheus-ingest (FEDERATE_INGEST=true,
+# compose.yml; theOrg compose.ingest.yml at 04f31709).
 STACK_JOBS="prometheus:prometheus alert-relay:alert-relay alertmanager:alertmanager loki:loki
   prometheus-trends:prometheus-trends pushgateway:pushgateway scrape-proxy:scrape-proxy vector:vector
   blackbox-exporter:blackbox-exporter blackbox-selftest:blackbox-exporter
-  docker-state-exporter:docker-state-exporter"
+  docker-state-exporter:docker-state-exporter ingest-federate:prometheus-ingest"
+# Jobs MONITOR_THEORG adds whose service is another stack's (compose.yml: communications' remote
+# set at theOrg 04f31709, prometheus/scrape-communications/remote/chat-api.yml, d06's chat-api by
+# theorg.asyla.org:443). Each must have a target, so verify fails if the switch stops taking
+# effect, but its health is not judged here: it needs communications and internal-access, which
+# d06's build starts after this stack (host.toml), and a replica has neither. theOrg's
+# ChatApiUnavailable alerts on it. Each entry is job:instance, the instance remote/ scrapes: a
+# target at any other instance (local/'s host.docker.internal:9098 if COMMUNICATIONS_REMOTE were
+# lost) fails, as theOrg's deploy.yml checks chat-api's scheme at 04f31709.
+OTHER_STACK_JOBS="chat-api:theorg.asyla.org:443"
+# A rule group from theOrg's alerts/theorg/ (MONITOR_THEORG), which theOrg's deploy.yml also
+# requires at 04f31709: loaded from /etc/prometheus/alerts-enabled/ (check_theorg_rules).
+THEORG_RULE_GROUP="chat-api"
 
 VERIFY_WAIT_S="${OBSERVABILITY_VERIFY_WAIT_S:-300}"
 # The least each tokened service's check waits after the shared VERIFY_WAIT_S: one 60 s scrape and
@@ -132,7 +172,8 @@ DELIVERY_WAIT_S="${OBSERVABILITY_DELIVERY_WAIT_S:-180}"
 
 export DOCKER_DL OBSERVABILITY_ROOT OBSERVABILITY_TAG PROMETHEUS_EXTERNAL_URL ALERTMANAGER_EXTERNAL_URL \
   ALERT_PROJECTS CHRONICLE_VECTOR_ADDRESS COMPOSE_PROJECT_NAME \
-  OPENBAO_ADDR ALERT_EMAIL_TO ALERT_WATCHDOG_PING HOME_ASSISTANT_URL
+  OPENBAO_ADDR ALERT_EMAIL_TO ALERT_WATCHDOG_PING HOME_ASSISTANT_URL LOKI_GATEWAY_ACCOUNTS \
+  PROMETHEUS_WRITE_GATEWAY_ACCOUNTS PUSHGATEWAY_GATEWAY_ACCOUNTS
 
 info() { echo "[INFO] $*"; }
 warn() { echo "[WARN] $*" >&2; }
@@ -152,6 +193,9 @@ token_var() {
     alert-relay) echo ALERT_RELAY_OPENBAO_WRAPPED_TOKEN ;;
     emporia-collector) echo EMPORIA_OPENBAO_WRAPPED_TOKEN ;;
     scrape-proxy) echo SCRAPE_PROXY_OPENBAO_WRAPPED_TOKEN ;;
+    loki-gateway) echo LOKI_GATEWAY_OPENBAO_WRAPPED_TOKEN ;;
+    prometheus-write-gateway) echo PROMETHEUS_WRITE_GATEWAY_OPENBAO_WRAPPED_TOKEN ;;
+    pushgateway-gateway) echo PUSHGATEWAY_GATEWAY_OPENBAO_WRAPPED_TOKEN ;;
     *) return 1 ;;
   esac
 }
@@ -307,30 +351,60 @@ do_update() {
 
 ensure_dirs() {
   mkdir -p "$OBSERVABILITY_ROOT/loki-data" "$OBSERVABILITY_ROOT/prometheus-data" \
-    "$OBSERVABILITY_ROOT/prometheus-trends-data" "$OBSERVABILITY_ROOT/alertmanager-data"
+    "$OBSERVABILITY_ROOT/prometheus-trends-data" "$OBSERVABILITY_ROOT/prometheus-ingest-data" \
+    "$OBSERVABILITY_ROOT/alertmanager-data"
 }
 
-# Owners the images run as: Prometheus, the trends Prometheus and Alertmanager are nobody (65534);
+# Owners the images run as: Prometheus, the trends and ingest Prometheus and Alertmanager are
+# nobody (65534);
 # Loki runs as root in theOrg's image (Dockerfile.loki ends USER root) and grafana/loki's own user
 # is 10001, which suits both. Top directories only: what is inside is the service's own.
 own_dirs() {
   docker run --rm --network none --pull never -v "$OBSERVABILITY_ROOT:/data" --entrypoint sh "$LOKI_IMAGE" -c \
-    'chown 10001:10001 /data/loki-data && chown 65534:65534 /data/prometheus-data /data/prometheus-trends-data /data/alertmanager-data' \
+    'chown 10001:10001 /data/loki-data && chown 65534:65534 /data/prometheus-data /data/prometheus-trends-data /data/prometheus-ingest-data /data/alertmanager-data' \
     < /dev/null
 }
 
 # --- up -------------------------------------------------------------------------------------------
 
 # Every `up` and `down` passes --remove-orphans: a service taken out of compose.yml leaves its
-# container behind otherwise (loki-gateway-1 when 64a2bf3 dropped the gateway, option A). It
+# container behind otherwise (as loki-gateway-1 was when 64a2bf3 dropped the gateway; it is back
+# since asyla #1268, option B). It
 # removes only containers of this project whose service is not in compose.yml; a tokened service
 # left out of the named list stays as it is. Measured with Compose v5.6.1 (d06's version) on a
 # throwaway busybox project, 2026-11-03: a service dropped from the file was removed by
 # `up -d --wait --remove-orphans <one service>` and another running service kept, while a service
 # kept in the file under an inactive `profiles:` was not removed (so the gateway is dropped, not
 # profiled out).
+# The external networks of compose.yml (its networks: loki-edge, ingest, push), so compose never
+# makes or removes them: observability-loki-edge, where Caddy reaches the three gateways and
+# forwards callers' passwords in plain text (the name is historical: it was loki-gateway's alone,
+# and now carries all three gateways' hops); observability-ingest, where anything can write to prometheus-ingest's
+# receiver; observability-push, where anything can push to or wipe the pushgateway. Each is here
+# whether or not a gateway starts (its token may be absent), so d06's proxy, which joins
+# observability-loki-edge as external, can always start, and so is each on a replica (compose needs
+# every external network a started service joins: prometheus joins ingest and push). Each is made
+# internal (no egress); one that exists but is not internal is refused, as compose would use it as
+# it is. internal-access hosts/d06/networks.txt makes observability-loki-edge the same way.
+NETWORKS="observability-loki-edge observability-ingest observability-push"
+ensure_networks() {
+  local net got
+  for net in $NETWORKS; do
+    if ! docker network inspect "$net" >/dev/null 2>&1; then
+      info "network $net: creating (internal bridge)"
+      docker network create --internal --driver bridge "$net" >/dev/null \
+        || die "cannot create network $net"
+    fi
+    got="$(docker network inspect -f '{{.Internal}}' "$net")" \
+      || die "cannot read network $net"
+    [ "$got" = "true" ] || die "network $net exists but is not internal (Internal=$got); not using it. Stop its containers and remove it (docker network rm $net), then run up again"
+    info "network $net: internal"
+  done
+}
+
 do_up() {
   local all svc services="" left=""
+  ensure_networks
   ensure_dirs || return
   images_ready || return
   own_dirs || die "cannot set the data directories' owners under $OBSERVABILITY_ROOT"
@@ -389,10 +463,17 @@ not_deployed() {
   echo "${out# }"
 }
 
-# "running healthy", "running none" (no healthcheck), ... or "missing".
+# "running healthy", "running none" (no healthcheck), ... or exactly "missing". For a container
+# that does not exist, docker inspect prints an empty line to stdout and then exits 1 (measured on
+# d06, Docker 29, asyla #1268), so its output is captured and dropped unless it exited 0 with text.
 service_state() {
-  docker inspect -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$1-1" 2>/dev/null \
-    || echo missing
+  local out
+  if out="$(docker inspect -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$1-1" 2>/dev/null)" \
+    && [ -n "$out" ]; then
+    echo "$out"
+  else
+    echo missing
+  fi
 }
 
 wait_ready() {
@@ -474,12 +555,15 @@ check_self_probes() {
 }
 
 # The operations Prometheus's active targets (127.0.0.1:9090/api/v1/targets) in one line: "N
-# targets up in M jobs" when each reads health up at a scrape (lastScrape) after S and each job of
-# STACK_JOBS has a target; else "not up: ..." naming each other target with Prometheus's error, and
+# targets up in M jobs, each scraped after it started; J has a target ..." when each judged target
+# reads health up at a scrape (lastScrape) after S and each job of STACK_JOBS has a target; else
+# "not up: ..." naming each other target with Prometheus's error, and
 # exit 1. health is that scrape's outcome, which Prometheus also writes as up (1 when up). S: the
 # later .State.StartedAt of prometheus-1 and the job's service (STACK_JOBS; prometheus-1 alone for
 # a job not listed there). A listed job whose service is not expected here (a replica's, or a
-# tokened service never deployed: expected_services) is left out: its target cannot be up.
+# tokened service never deployed: expected_services) is left out: its target cannot be up. Each job
+# of OTHER_STACK_JOBS must have a target too, each at its entry's instance, but its health is
+# another stack's: not judged.
 stack_targets() {
   local entry job svc since base expected
   local -a args=()
@@ -491,6 +575,7 @@ stack_targets() {
     since="$(started_at prometheus-1 "$svc-1")" || return 1
     args+=("$job=$since")
   done
+  for entry in $OTHER_STACK_JOBS; do args+=("${entry%%:*}=~${entry#*:}"); done
   curl -sf --max-time 10 'http://127.0.0.1:9090/api/v1/targets?state=active' | python3 -c '
 import calendar, json, re, sys, time
 def epoch(s):
@@ -501,17 +586,23 @@ def epoch(s):
     if m[3] != "Z":
         t -= (1 if m[3][0] == "+" else -1) * (int(m[3][1:3]) * 3600 + int(m[3][4:6]) * 60)
     return t
-base, since, skip = float(sys.argv[1]), {}, set()
+base, since, skip, other = float(sys.argv[1]), {}, set(), {}
 for a in sys.argv[2:]:
     job, s = a.split("=", 1)
     if s == "-":
         skip.add(job)
+    elif s.startswith("~"):
+        other[job] = s[1:]
     else:
         since[job] = float(s)
 targets = [t for t in json.load(sys.stdin)["data"]["activeTargets"] if t["labels"].get("job") not in skip]
 jobs = {t["labels"].get("job") for t in targets}
-bad = ["%s: no target" % j for j in sorted(set(since) - jobs)]
-for t in targets:
+bad = ["%s: no target" % j for j in sorted((set(since) | set(other)) - jobs)]
+bad += ["%s %s: not at %s" % (t["labels"]["job"], t["labels"].get("instance", "?"), other[t["labels"]["job"]])
+        for t in targets if t["labels"].get("job") in other
+        and t["labels"].get("instance") != other[t["labels"]["job"]]]
+judged = [t for t in targets if t["labels"].get("job") not in other]
+for t in judged:
     job = t["labels"].get("job")
     fresh = epoch(t.get("lastScrape")) > since.get(job, base)
     if t.get("health") != "up" or not fresh:
@@ -521,7 +612,8 @@ for t in targets:
 if bad:
     print("not up: " + "; ".join(bad))
     sys.exit(1)
-print("%d targets up in %d jobs" % (len(targets), len(jobs)))' "$base" "${args[@]}"
+print("%d targets up in %d jobs, each scraped after it started%s" % (len(judged), len({t["labels"].get("job") for t in judged}),
+      "".join("; %s has a target at %s (another stack, health not judged)" % (j, other[j]) for j in sorted(other))))' "$base" "${args[@]}"
 }
 
 # Every target of the operations Prometheus up after the restart (stack_targets). Not the trends
@@ -534,14 +626,37 @@ check_stack_targets() {
   deadline=$(( $(date +%s) + SCRAPE_GRACE_S ))
   while :; do
     if got="$(stack_targets 2>/dev/null)"; then
-      info "prometheus: $got, each scraped after it started"
+      info "prometheus: $got"
       return 0
     fi
     [ "$(date +%s)" -lt "$deadline" ] || break
     sleep 5
   done
   echo "[ERROR] prometheus targets: ${got:-no reading (a start time, or 127.0.0.1:9090/api/v1/targets)}" >&2
-  echo "[ERROR] a job that reads \"no target\": compare STACK_JOBS in $0 with theOrg observability prometheus/ (scrape-stack/, scrape-optional/, base_config.py) at revision ${OBSERVABILITY_REVISION:-R (not given: deploy_role.py prints it)}" >&2
+  echo "[ERROR] a job that reads \"no target\": compare STACK_JOBS and OTHER_STACK_JOBS in $0 with theOrg observability prometheus/ (scrape-stack/, scrape-optional/, base_config.py, scrape-communications/) at revision ${OBSERVABILITY_REVISION:-R (not given: deploy_role.py prints it)}" >&2
+  return 1
+}
+
+# theOrg's rules are loaded (MONITOR_THEORG, compose.yml): the operations Prometheus's rule groups
+# (127.0.0.1:9090/api/v1/rules) hold THEORG_RULE_GROUP from a file under
+# /etc/prometheus/alerts-enabled/, where theOrg's entrypoint copies alerts-theorg/. Read once, after
+# check_stack_targets: Prometheus loads the rule files with the configuration, before any scrape
+# that check waited for. theOrg's deploy.yml at 04f31709 checks the same group.
+check_theorg_rules() {
+  local got
+  if got="$(curl -sf --max-time 10 http://127.0.0.1:9090/api/v1/rules | python3 -c '
+import json, sys
+want = sys.argv[1]
+groups = json.load(sys.stdin)["data"]["groups"]
+theorg = [g["name"] for g in groups if g.get("file", "").startswith("/etc/prometheus/alerts-enabled/")]
+if want not in theorg:
+    print("no %s group from alerts-enabled/ (%d theOrg groups loaded)" % (want, len(theorg)))
+    sys.exit(1)
+print("%d theOrg rule groups loaded (%s among them)" % (len(theorg), want))' "$THEORG_RULE_GROUP" 2>/dev/null)"; then
+    info "prometheus: $got"
+    return 0
+  fi
+  echo "[ERROR] prometheus theOrg rules: ${got:-no reading (127.0.0.1:9090/api/v1/rules)}; MONITOR_THEORG in compose.yml" >&2
   return 1
 }
 
@@ -611,6 +726,24 @@ default_project_id() {
   first="$(printf '%s\n' "$ALERT_PROJECTS" | tr ',' ' ' | awk '{print $1}')"
   [[ "$first" =~ ^[A-Za-z0-9_.-]+=[1-9][0-9]*$ ]] || return 1
   printf '%s\n' "${first#*=}"
+}
+
+# alert_test_project <name>: "<name> <project id>" for the ALERT_PROJECTS entry <name> names,
+# matched case-insensitively as alert-relay matches an alert_repo label's owner part, printed with
+# the entry's own spelling. Fails, naming the entries, when it names none.
+alert_test_project() {
+  local want entry entries
+  want="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  read -ra entries <<< "$(printf '%s\n' "$ALERT_PROJECTS" | tr ',' ' ')"
+  for entry in ${entries[@]+"${entries[@]}"}; do
+    [[ "$entry" =~ ^[A-Za-z0-9_.-]+=[1-9][0-9]*$ ]] || continue
+    if [ "$(printf '%s' "${entry%%=*}" | tr '[:upper:]' '[:lower:]')" = "$want" ]; then
+      printf '%s %s\n' "${entry%%=*}" "${entry#*=}"
+      return 0
+    fi
+  done
+  echo "[ERROR] alert-test: ALERT_TEST_PROJECT '$1' is not in ALERT_PROJECTS ($ALERT_PROJECTS); name one of its entries, or unset it for the default" >&2
+  return 1
 }
 
 # "on" when the running Alertmanager loaded the watchdog piece, else "off": its loaded
@@ -798,9 +931,70 @@ check_vector_logs() {
   return 1
 }
 
-# What runs: the services, Prometheus and its Alertmanager, docker-state-exporter, the trends
-# retention, the blackbox self-probes, every operations Prometheus target up, Vector's container
-# logs in Loki (not on a replica: no Vector), the tokened services' secrets (check_tokened), the
+# The HTTP status gateway $1 answers for method $2 on path $3 with no account, asked from inside
+# observability-net, which every gateway joins: vector-1's own wget (GNU wget: Dockerfile.vector
+# installs Debian's into timberio/vector:0.56.0-debian, which has no busybox; GNU Wget 1.25.0
+# there lists --method and --body-data, checked 2026-11-22) to <gateway>:3100 (Caddy proxies to
+# the same port by the gateway's edge alias). A method other than GET (POST, PUT) is sent with
+# --method and an empty body. -S prints each
+# response's status line; the last one is the answer. Empty when nothing answered. wget exits
+# non-zero on a 401, so its status is not the pipeline's.
+gateway_status() {
+  local gw="$1" method="$2" p="$3" how=()
+  [ "$method" = GET ] || how=(--method="$method" --body-data=)
+  { docker exec vector-1 wget -S -O /dev/null -T 10 -t 1 ${how[@]+"${how[@]}"} "http://$gw:3100$p" < /dev/null 2>&1 || true; } \
+    | awk '$1 ~ /^HTTP\// {code = $2} END {print code}'
+}
+
+# One gateway's anonymous answers: $1 the gateway, $2 what /ready must answer, $3 the method and
+# $4 the path a caller with no account must get 401 on.
+check_one_gateway() {
+  local gw="$1" ready="$2" method="$3" p="$4" rc=0 got
+  got="$(gateway_status "$gw" GET /ready)"
+  if [ "$got" = "$ready" ]; then
+    info "$gw: /ready $got with no account (from vector-1 at $gw:3100)"
+  else
+    echo "[ERROR] $gw: /ready answers '${got:-nothing}', not $ready (from vector-1 at $gw:3100)" >&2; rc=1
+  fi
+  got="$(gateway_status "$gw" "$method" "$p")"
+  if [ "$got" = 401 ]; then
+    info "$gw: $method $p with no account 401"
+  else
+    echo "[ERROR] $gw: $method $p with no account answers '${got:-nothing}', not 401 (from vector-1)" >&2; rc=1
+  fi
+  return "$rc"
+}
+
+# The three gateways, each where its container exists: /ready answers 200 with no account (it is
+# forwarded to the upstream's readiness), and an anonymous request on its one admitted route 401,
+# so the gateway is up and refuses a caller with no account (theOrg loki-gateway/gateway.go: the
+# account check comes before the upstream). loki-gateway: a query (GET /loki/api/v1/labels);
+# prometheus-write-gateway: a write (POST /api/v1/write); pushgateway-gateway: a push
+# (PUT /metrics/job/verify). prometheus-write-gateway's /ready is prometheus-ingest's /-/ready.
+# That each Loki account gets in with its own password, for its own scope only,
+# and a pushed line reads back is theOrg's `loki_clients.py verify`, which loki_accounts.py verify
+# runs through https://loki.asyla.org from the workstation (README.md); for remote writes,
+# loki_accounts.py verify --registry prometheus-write (a 204 for an empty and a one-sample write).
+check_gateway() {
+  local rc=0
+  if [ "$(service_state loki-gateway)" != missing ]; then
+    check_one_gateway loki-gateway 200 GET /loki/api/v1/labels || rc=1
+  fi
+  if [ "$(service_state prometheus-write-gateway)" != missing ]; then
+    check_one_gateway prometheus-write-gateway 200 POST /api/v1/write || rc=1
+  fi
+  if [ "$(service_state pushgateway-gateway)" != missing ]; then
+    check_one_gateway pushgateway-gateway 200 PUT /metrics/job/verify || rc=1
+  fi
+  return "$rc"
+}
+
+# What runs: the services, Prometheus and its Alertmanager, prometheus-ingest on ingest,
+# docker-state-exporter, the trends retention, the blackbox self-probes, every operations
+# Prometheus target up (ingest-federate too; OTHER_STACK_JOBS only present), theOrg's rules
+# loaded (check_theorg_rules), Vector's container logs in Loki (not on a replica: no
+# Vector), the tokened services' secrets (check_tokened), each gateway's open /ready and its
+# refusal of a request with no account (check_gateway), the
 # Watchdog's ping (check_watchdog) and alert-relay's Vikunja self-test and delivery ping
 # (check_delivery). The pieces that are off (compose.yml's header) have nothing to check.
 do_verify() {
@@ -827,6 +1021,10 @@ do_verify() {
   else
     echo "[ERROR] prometheus 127.0.0.1:9090/-/healthy failed" >&2; rc=1
   fi
+  # prometheus-ingest has no port and answers on ingest alone. That prometheus-1 reaches it is the
+  # ingest-federate target's health (STACK_JOBS, check_stack_targets), read by Prometheus's own
+  # resolver. Not a busybox wget from prometheus-1: on d06's internal ingest network its lookup
+  # answered "bad address" while the federate target was up (2026-11-23).
   n="$(curl -sf --max-time 10 http://127.0.0.1:9090/api/v1/alertmanagers \
     | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["data"]["activeAlertmanagers"]))' 2>/dev/null)" || n=""
   if [ "$n" = "1" ]; then
@@ -849,8 +1047,10 @@ do_verify() {
 
   check_self_probes || rc=1
   check_stack_targets || rc=1
+  check_theorg_rules || rc=1
   if ! is_replica; then check_vector_logs || rc=1; fi
   check_tokened || rc=1
+  check_gateway || rc=1
   check_watchdog || rc=1
   check_delivery || rc=1
 
@@ -915,8 +1115,12 @@ wait_relay_task() {
 # alert-test (theOrg piece 6, alert-relay on d06): proves that an alert from this host's
 # Alertmanager lands as a Vikunja task in the default project (default_project_id: 170) with its
 # log lines, and that its resolve closes the task again, read from alert-relay-1's own log lines
-# and metrics, so no token leaves the relay. Modelled on theOrg scripts/alert_routing_selftest.sh
-# without its routing half (d06 has one project): it pushes one line under
+# and metrics, so no token leaves the relay. With ALERT_TEST_PROJECT=<name> in the environment
+# (switches take no arguments), the alert carries alert_repo="<name>/observability" and the task
+# must land in that ALERT_PROJECTS entry's project instead (alert_test_project; a name not listed
+# is refused): theOrg=169 proves the relay's routing and its write there. Unset, the alert has no
+# alert_repo label. Modelled on theOrg scripts/alert_routing_selftest.sh, one project per run: it
+# pushes one line under
 # {job="asyla-alert-test"} into Loki through loki-1's own wget to 127.0.0.1:3100, and the alert's
 # logql annotation selects it; the relay's logql query must return lines
 # (alert_relay_logql_queries_total{result="lines"} rises: relay_logql), so the task carries them.
@@ -930,6 +1134,7 @@ wait_relay_task() {
 # failed` the relay logs during the run, an unrelated alert's included, fails it.
 do_alert_test() {
   local pid run now started ends deadline fp="" opened="" task got_pid errors rc=0 body logql_before logql_after
+  local target where label_args=()
   if is_replica; then
     echo "[ERROR] alert-test runs on $SERVING_HOST only (this is $(hostname -s))" >&2
     return 1
@@ -941,10 +1146,18 @@ do_alert_test() {
       return 1
       ;;
   esac
-  pid="$(default_project_id)" || {
-    echo "[ERROR] alert-test: ALERT_PROJECTS ('$ALERT_PROJECTS') does not start with name=<project id>" >&2
-    return 1
-  }
+  if [ -n "${ALERT_TEST_PROJECT:-}" ]; then
+    target="$(alert_test_project "$ALERT_TEST_PROJECT")" || return 1
+    pid="${target#* }"
+    label_args=("alert_repo=\"${target%% *}/observability\"")
+    where="project $pid (${target%% *}, ALERT_TEST_PROJECT)"
+  else
+    pid="$(default_project_id)" || {
+      echo "[ERROR] alert-test: ALERT_PROJECTS ('$ALERT_PROJECTS') does not start with name=<project id>" >&2
+      return 1
+    }
+    where="the default project $pid (the first in ALERT_PROJECTS)"
+  fi
   run="$(date -u +%Y%m%dT%H%M%SZ)-$RANDOM"
   now=$(date +%s)
   started="$(date -u -d "@$now" +%Y-%m-%dT%H:%M:%SZ)"
@@ -966,12 +1179,13 @@ do_alert_test() {
   if ! docker exec alertmanager-1 amtool alert add --alertmanager.url=http://127.0.0.1:9093 \
       --start="$started" --end="$ends" \
       alertname=AsylaAlertRelayTest severity=info "test_run=\"$run\"" "name=\"alert-test-$run\"" \
+      ${label_args[@]+"${label_args[@]}"} \
       "--annotation=summary=\"Alert relay test $run from $SERVING_HOST: a task in Vikunja project $pid with its log line, closed on the resolve\"" \
       "--annotation=logql=\"{job=\\\"asyla-alert-test\\\"} |= \\\"$run\\\"\""; then
     echo "[ERROR] alert-test: amtool did not add the alert to alertmanager-1" >&2
     return 1
   fi
-  info "alert-test $run: added AsylaAlertRelayTest (severity info, a logql annotation) to alertmanager-1, ending $ends"
+  info "alert-test $run: added AsylaAlertRelayTest (severity info, a logql annotation${label_args[0]+, ${label_args[0]}}) to alertmanager-1 for $where, ending $ends"
 
   deadline=$(( $(date +%s) + 30 ))
   while :; do
@@ -999,7 +1213,7 @@ do_alert_test() {
       rc=1
     fi
     if [ "$got_pid" != "$pid" ]; then
-      echo "[ERROR] alert-test $run: task $task is in project $got_pid, not the default project $pid (the first in ALERT_PROJECTS)" >&2
+      echo "[ERROR] alert-test $run: task $task is in project $got_pid, not $where" >&2
       rc=1
     elif wait_relay_task 600 "$started" closed "$fp" "$task" >/dev/null; then
       info "alert-test $run: alert-relay closed task $task in project $pid on the resolve"
@@ -1060,7 +1274,8 @@ run_cmd() {
         echo "[ERROR] restart takes down $VAULT_READERS, and no wrapped token is here for: $(tokens_absent). Deploy instead (README.md, Deploy)" >&2
         return 1
       fi
-      images_ready && run_compose down --remove-orphans && do_up
+      # The networks first: a refused one stops restart while the old stack still runs.
+      images_ready && ensure_networks && run_compose down --remove-orphans && do_up
       ;;
     verify)
       do_verify
@@ -1092,15 +1307,21 @@ usage() {
   echo "             (replica: $REPLICA_SERVICES)" >&2
   echo "  down     - Stop and remove every container (the data stays; the tokened ones need a deploy)" >&2
   echo "  restart  - images ready, then down, then up; on $SERVING_HOST only with every wrapped token" >&2
-  echo "  verify   - Services running and healthy, Prometheus and its one Alertmanager," >&2
-  echo "             docker-state-exporter, trends retention, the blackbox self-probes, every" >&2
-  echo "             operations Prometheus target up, Vector's container logs in Loki, the" >&2
-  echo "             tokened services' secrets, the Watchdog's healthchecks.io ping, and" >&2
+  echo "  verify   - Services running and healthy, Prometheus and its one Alertmanager, the ingest" >&2
+  echo "             Prometheus on ingest, docker-state-exporter, trends retention, the blackbox" >&2
+  echo "             self-probes, every operations Prometheus target up (ingest-federate too; chat-api" >&2
+  echo "             only present), theOrg's chat-api rule group loaded," >&2
+  echo "             Vector's container logs in Loki, the tokened services' secrets, each" >&2
+  echo "             gateway's /ready 200 and its 401 with no account, the Watchdog's" >&2
+  echo "             healthchecks.io ping, and" >&2
   echo "             alert-relay's Vikunja self-test and delivery check ping" >&2
   echo "  alert-test - On $SERVING_HOST: one test line into Loki and one info alert (no email) whose" >&2
   echo "             logql annotation selects it; passes when alert-relay opens a Vikunja task for" >&2
   echo "             it in the default project (the first in ALERT_PROJECTS: $ALERT_PROJECTS) with" >&2
-  echo "             the line, and closes it on the resolve (about 6 minutes)" >&2
+  echo "             the line, and closes it on the resolve (about 6 minutes). With" >&2
+  echo "             ALERT_TEST_PROJECT=<name> in the environment (an ALERT_PROJECTS name, e.g. theOrg)," >&2
+  echo "             the alert carries alert_repo=\"<name>/observability\" and the task must land in" >&2
+  echo "             that project instead; a name not listed is refused" >&2
   echo "  status   - Containers" >&2
   echo "  logs     - Follow logs (optionally for one service)" >&2
 }

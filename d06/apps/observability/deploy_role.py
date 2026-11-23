@@ -30,8 +30,12 @@ Run on the workstation, from ~/local/asyla (asyla's hub token is the hub of the 
    of the working directory), set only in the minting tool's environment as BAO_TOKEN;
    OPENBAO_TOKEN, VAULT_TOKEN and BAO_ROOT_TOKEN are removed from it. With
    OBSERVABILITY_DEPLOY_VAULT_TOKEN set (below), that token instead: no hub sign-in.
-5. `vault_identity.py --token-role observability-d06` with one --identity per IDENTITIES line,
-   which then runs `build_host.py d06 build --only apps --app observability --apply`: build_host
+5. `vault_identity.py --token-role observability-d06` with one --identity per IDENTITIES line
+   (one wrapped token for each of the six components scrape-proxy, emporia-collector,
+   alert-relay, loki-gateway, prometheus-write-gateway and pushgateway-gateway; each gateway's
+   records are every account of its registry, loki-clients.toml, prometheus-write-clients.toml
+   and pushgateway-clients.toml; the role grants loki-gateway's since theorg #1276, and until it
+   has the other two components the mint stops here with nothing started), which then runs `build_host.py d06 build --only apps --app observability --apply`: build_host
    sends each wrapping token to `observability.sh up` over SSH stdin, as a start_env_optional
    name of d06/host.toml. A mint that fails (a missing record, a policy that does not take) exits
    1 before anything starts, and so does this script. A start that fails may leave the stack
@@ -76,6 +80,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -111,8 +116,9 @@ TOOL_FILES = ("vault_identity.py", "openbao.py")
 # asyla's hub token, so it is pinned apart from the images (which follow `latest`): the deploy runs
 # the tool from here, and stops when R's copy differs. Bump it only after reading theOrg's change
 # to scripts/vault_identity.py and scripts/openbao.py (f757911: both read 2026-11-03, the same at
-# 7947763).
-TOOL_REV = "f7579118fdac5d90101a5ec6698200ae2c9d836f"
+# 7947763; 001a2ac: read 2026-11-23, f857d40 and 2797bd4 only add openbao.revoke_self, which the
+# minting path does not call).
+TOOL_REV = "001a2ac8d124976ef929112a06644a942078564e"
 CALLER_TOKENS = ("OPENBAO_TOKEN", "VAULT_TOKEN", "BAO_ROOT_TOKEN")
 TAG_LINE = re.compile(r'^OBSERVABILITY_TAG="\$\{OBSERVABILITY_TAG_OVERRIDE:-([0-9a-f]{7,40}|latest)\}"', re.M)
 REGISTRY_LINE = re.compile(r'^REGISTRY="([a-z0-9][a-z0-9.-]*(?::[0-9]{1,5})?)"$', re.M)
@@ -133,7 +139,13 @@ VERIFY_TIMEOUT = 1800   # s: verify waits up to VERIFY_WAIT_S (300 s) per wait, 
 
 # (component, the variable observability.sh up receives its wrapping token in, KV records): a
 # record is a name under KV, or a full mount-first path when it starts with "secret/" (kv_path).
-# Plain paths: vault_identity.py kv= takes no #field. One line per component.
+# Plain paths: vault_identity.py kv= takes no #field. One line per component: six wrapped tokens.
+def loki_client_names(registry: Path) -> list[str]:
+    """The account names of a gateway registry in loki-clients.toml's format (its [clients.<name>]
+    tables), in the file's order."""
+    return list(tomllib.loads(registry.read_text()).get("clients", {}))
+
+
 IDENTITIES = [
     ("scrape-proxy", "SCRAPE_PROXY_OPENBAO_WRAPPED_TOKEN", ["home-assistant-prometheus-token"]),
     ("emporia-collector", "EMPORIA_OPENBAO_WRAPPED_TOKEN", ["emporia-username", "emporia-password"]),
@@ -147,6 +159,21 @@ IDENTITIES = [
      ["smtp-relay-username", "smtp-relay-password", "observability-watchdog-ping-url",
       "secret/v2/vikunja/alert-tokens/svc-alert-relay-d06", "observability-delivery-ping-url",
       "own/loki-clients/alert-relay"]),
+    # Every Loki account's password, for the gateway to check (compose.yml loki-gateway, asyla
+    # #1268): one record per [clients.<name>] of loki-clients.toml beside this file, so the two
+    # never drift. Each is created by loki_accounts.py first; the token role needs a loki-gateway
+    # component reading them (theorg #1276), else the mint stops the deploy before the stack.
+    ("loki-gateway", "LOKI_GATEWAY_OPENBAO_WRAPPED_TOKEN",
+     [f"own/loki-clients/{name}" for name in loki_client_names(HERE / "loki-clients.toml")]),
+    # The same gateway in its two push-only modes (asyla #1268 items 3 and 4), each with its own
+    # registry and prefix, so no password is shared across modes: remote write's accounts
+    # (prometheus-write-clients.toml) and the pushgateway's (pushgateway-clients.toml). Each needs
+    # its own component in the token role, as loki-gateway does, else the mint stops the deploy.
+    ("prometheus-write-gateway", "PROMETHEUS_WRITE_GATEWAY_OPENBAO_WRAPPED_TOKEN",
+     [f"own/prometheus-write-clients/{name}"
+      for name in loki_client_names(HERE / "prometheus-write-clients.toml")]),
+    ("pushgateway-gateway", "PUSHGATEWAY_GATEWAY_OPENBAO_WRAPPED_TOKEN",
+     [f"own/pushgateway-clients/{name}" for name in loki_client_names(HERE / "pushgateway-clients.toml")]),
 ]
 
 
@@ -505,7 +532,9 @@ def stack_revision(spec: dict, tag: str, registry: str, pulled: list[str]) -> st
     each digest's provenance must name exactly one commit, the same for all. A pinned TAG must be
     that commit."""
     digests = image_digests(spec, registry)
-    if sorted(digests) != sorted(pulled):
+    # As sets: `images` names an image once per service (the three gateways share one image),
+    # `digests` once per image.
+    if sorted(digests) != sorted(set(pulled)):
         raise Stop(f"`{APP}.sh digests` on {spec['host']} lists other theOrg images than `images` pulled "
                    f"({len(digests)} vs {len(pulled)}); nothing minted")
     secret = build_host.from_env(app_of(spec)["pull_token_env"], f"[[app]] {APP} pull_token_env")

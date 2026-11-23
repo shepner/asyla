@@ -7,7 +7,9 @@
   docker/backup_lib.sh refusals;
 - the Gitea host (gap (f)): GITEA_TOKEN_HOST is the default, --gitea-host overrides it for one
   build, and the runner phase checks that the Gitea host serves gitea.asyla.org before it deletes,
-  installs or registers anything.
+  installs or registers anything;
+- the runner list refused (asyla #1189): an HTTP 401/403 from /admin/actions/runners makes destroy
+  warn and go on and verify fail its runner checks with the reason; any other failure still stops.
 
     python3 scripts/tests/test_build_host_restore_gitea_host.py
 
@@ -113,7 +115,26 @@ lib_case("a backup IN PROGRESS: a failure", "IN PROGRESS since 2026-10-16T00:00:
 
 # ---------------------------------------------------------------- gap (c): the phase and the build
 
-SPEC = build_host.load_spec("test01")
+HELLO_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "test01-hello"
+REAL_LOAD_SPEC = build_host.load_spec   # test01_spec stands in for it in main() below
+
+
+def test01_spec(host: str = "test01", node: str | None = None) -> dict:
+    """test01's hello spec, frozen in fixtures/test01-hello/host.toml (test01/host.toml at c1cccf9),
+    never the live test01/host.toml: test01 is disposable and often a replica of a production host
+    (asyla #1101), whose apps and runners are not the ones these cases test."""
+    assert host == "test01", host
+    d = Path(tempfile.mkdtemp(prefix="build-host-test01-"))
+    (d / "test01").symlink_to(HELLO_FIXTURE)
+    (d / "build").symlink_to(build_host.REPO / "build")
+    real, build_host.REPO = build_host.REPO, d
+    try:
+        return REAL_LOAD_SPEC("test01", node)
+    finally:
+        build_host.REPO = real
+
+
+SPEC = test01_spec()
 APP = SPEC["app"][0]["name"]
 
 
@@ -233,7 +254,7 @@ def build_from_restore(rc: int) -> tuple[int, list[str], str]:
     err = io.StringIO()
     argv, sys.argv = sys.argv, ["build_host.py", "test01", "build", "--from", "restore", "--apply"]
     try:
-        with patched(ssh=ssh, secrets_cmd=lambda *a, **kw: 0, phase_apps=rec("apps"),
+        with patched(load_spec=test01_spec, ssh=ssh, secrets_cmd=lambda *a, **kw: 0, phase_apps=rec("apps"),
                      phase_external=rec("external", 0), phase_runner=rec("runner"), verify=rec("verify", 0)):
             with contextlib.redirect_stderr(err):
                 code = build_host.main()
@@ -344,6 +365,92 @@ check("runner, Gitea host d04 before the cutover: stops before deleting, install
 f, acts = gitea_runner("d04", {"d04": "10.0.0.63 \n10.0.0.63 172.17.0.1\n"})
 check("runner, Gitea host d04 after the name moves: the token comes from d04",
       f == "" and "token from d04" in acts and "token from d03" not in acts, f or str(acts))
+
+
+# ---------------------------------------------------------------- the runner list without a site admin
+# asyla #1189, #599: GITEA_TOKEN is an org admin only, so /admin/actions/runners answers 403. A
+# destroy or a re-registration warns and goes on; any other failure still stops the build.
+
+RUNNER_SPEC = {**SPEC, "runner": {"enabled": True, "labels": ["build-test"]}}
+ENTRY = {"id": 7, "name": "test01", "status": "offline", "labels": [{"name": "build-test"}]}
+
+
+def fake_gitea(list_code: int, delete_code: int = 204, entries: list[dict] | None = None):
+    calls = []
+
+    def gitea(method, path):
+        calls.append(f"{method} {path}")
+        if method == "GET" and path.startswith("/admin/actions/runners"):
+            return list_code, ({"runners": entries if entries is not None else [ENTRY]} if list_code == 200 else {})
+        if method == "DELETE":
+            return delete_code, {}
+        raise AssertionError(f"unexpected Gitea call {method} {path}")
+    return gitea, calls
+
+
+def destroy(list_code: int, delete_code: int = 204) -> tuple[str, list[str], list[str], str]:
+    """destroy_vm(test01 with its runner on, --apply): (Fail text or "", Gitea calls, ssh commands, output)."""
+    gitea, calls = fake_gitea(list_code, delete_code)
+    sshs, failed = [], ""
+    with patched(gitea=gitea, ssh=lambda t, c, **kw: sshs.append(c) or Done(0),
+                 delete_gitlab_runner_entries=lambda s, ap: None) as buf:
+        try:
+            build_host.destroy_vm(RUNNER_SPEC, True, "vmh01")
+        except build_host.Fail as e:
+            failed = str(e)
+    return failed, calls, sshs, buf.getvalue()
+
+
+WARN = ("Gitea runner test01: old entry not deleted (GITEA_TOKEN is not a Gitea site admin, HTTP {}; "
+        "asyla #1189): it stays as an offline entry")
+for code in (403, 401):
+    f, calls, sshs, out = destroy(code)
+    check(f"destroy, runner list HTTP {code}: one warning line, no DELETE, the VM is still destroyed",
+          f == "" and [l for l in out.splitlines() if l.startswith("Gitea runner")] == [WARN.format(code)]
+          and not any(c.startswith("DELETE") for c in calls) and any("qm destroy" in s for s in sshs),
+          f or f"{calls} {sshs} {out!r}")
+f, calls, sshs, out = destroy(500)
+check("destroy, runner list HTTP 500: Fail before qm destroy",
+      f == "Gitea runner list: HTTP 500" and not sshs, f or str(sshs))
+f, calls, sshs, out = destroy(200)
+check("destroy, runner list 200: the entry is deleted, then the VM",
+      f == "" and "DELETE /admin/actions/runners/7" in calls and any("qm destroy" in s for s in sshs), f or str(calls))
+f, calls, sshs, out = destroy(200, delete_code=403)
+check("destroy, DELETE refused: Fail before qm destroy", f == "delete runner 7: HTTP 403" and not sshs, f or str(sshs))
+
+
+def verify_runner_lines(list_code: int, entries: list[dict] | None = None) -> tuple[int, list[str], bool]:
+    """verify(test01 with its runner on), every other check faked: (exit, the Gitea runner lines, later checks ran)."""
+    gitea, _ = fake_gitea(list_code, entries=entries)
+    later = []
+    spec = {**RUNNER_SPEC, "replica": {}}
+    with patched(gitea=gitea, ssh=lambda t, c, **kw: Done(0, "test01\n1003\n/mnt/nas/data1/docker /mnt/nas/data2/docker"),
+                 find_vm=lambda v: None, net0_matches=lambda n, vm: True, token_file_absent=lambda h: True,
+                 scripts_drift=lambda s: ("0" * 12, []), legacy=lambda s: True, starts_apps=lambda s: True,
+                 verify_apps=lambda s, c: None, verify_gitlab_runners=lambda s, c: later.append(1),
+                 verify_host_maintenance=lambda s, c: None, verify_externals=lambda s, c: None) as buf:
+        rc = build_host.verify(spec)
+    return rc, [l.strip() for l in buf.getvalue().splitlines() if "Gitea runner" in l], bool(later)
+
+
+rc, lines, later = verify_runner_lines(403)
+why = "not provable, GITEA_TOKEN is not a Gitea site admin (HTTP 403; asyla #1189)"
+check("verify, runner list HTTP 403: both runner checks FAIL with the reason (never a silent pass), the rest still run",
+      rc == 1 and lines == [f"[FAIL] Gitea runner online: {why}", f"[FAIL] Gitea runner labels are the spec's: {why}"]
+      and later, f"{rc} {lines} {later}")
+rc, lines, later = verify_runner_lines(200, [{**ENTRY, "status": "idle"}])
+check("verify, runner list 200 with the one entry idle: both runner checks OK",
+      [l.split(":")[0] for l in lines] == ["[OK] Gitea runner online", "[OK] Gitea runner labels are the spec's"],
+      str(lines))
+f = ""
+with patched(gitea=fake_gitea(500)[0], ssh=lambda t, c, **kw: Done(0, "test01\n1003\n"), find_vm=lambda v: None,
+             net0_matches=lambda n, vm: True, token_file_absent=lambda h: True, scripts_drift=lambda s: ("0" * 12, []),
+             legacy=lambda s: True, starts_apps=lambda s: True, verify_apps=lambda s, c: None):
+    try:
+        build_host.verify({**RUNNER_SPEC, "replica": {}})
+    except build_host.Fail as e:
+        f = str(e)
+check("verify, runner list HTTP 500: Fail, as before", f == "Gitea runner list: HTTP 500", f)
 
 print("all cases passed" if all(results) else f"{results.count(False)} case(s) failed")
 sys.exit(0 if all(results) else 1)

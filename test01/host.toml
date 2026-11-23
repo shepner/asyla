@@ -1,6 +1,7 @@
 # test01: the build test host (asyla hub decisions/host-layout.md, decision 4). Created and
 # destroyed as testing needs (operator pre-approved for test01 only, 2026-10-13). Its runners
-# carry only the label or tag build-test, so they never take a real job.
+# carry only the label or tag build-test, so they never take a real job; the one exception is the
+# hm runner below (tag hm-test01, asyla #605), which takes only host-maintenance jobs naming it.
 # The hello test (test01/apps/hello). To rehearse a production host instead, add
 # [replica] of = "dNN" (scripts/build_host.py docstring; the d03 replica of 2026-10-09 is in git
 # history under d04/, 4decdd6..fad6650).
@@ -90,7 +91,12 @@ container_options = "--cpus=1 --memory=1g"
 
 # GitLab runners (build/gitlab-runner/gitlab-runner.sh, run by the build's runner phase); one
 # [[gitlab_runner.runners]] table each. GitLab description test01-build; tag build-test only, and
-# untagged jobs off, so it never takes a job.
+# untagged jobs off, so it never takes a job. user: the account jobs run as (a unit drop-in), docker
+# for host-maintenance's ~/maint, sudo and docker group (asyla #605). The plain table comes first:
+# TOML puts every key after [[gitlab_runner.runners]] into that runner.
+[gitlab_runner]
+user = "docker"
+
 [[gitlab_runner.runners]]
 name = "build"
 scope = "group:asyla"
@@ -99,3 +105,12 @@ executor = "docker"
 image = "python:3.12-alpine"
 volumes = []
 pull_policy = "if-not-present"
+
+# asyla #605: the per-host host-maintenance runner, proven on test01 first (operator 2026-11-22).
+# A shell runner on host-maintenance only, as docker; GitLab description test01-hm, tag hm-test01,
+# which only host-maintenance's per-host jobs name.
+[[gitlab_runner.runners]]
+name = "hm"
+scope = "project:asyla/host-maintenance"
+tags = ["hm-test01"]
+executor = "shell"

@@ -192,18 +192,95 @@ def egress_no_shell_case() -> bool:
     good2 = [ok for _, ok, _ in res2] == [True, True, True, False]
     seen = []
 
-    def ns(rc):
+    def ns(rc, exec_rc=127):
         def f(t, c):
             seen.append(c)
-            return Done(0 if "nft list" in c else 127 if "docker exec" in c else rc if "nsenter" in c else 28)
+            return Done(0 if "nft list" in c else exec_rc if "docker exec" in c else rc if "nsenter" in c else 28)
         return f
     res3, _ = with_ssh(ns(7), lambda: build_host.egress_checks(spec, containers=["ticketing-vikunja-1"]))
     good3 = res3[-1][1] and "network namespace" in res3[-1][0] and any("nsenter" in c for c in seen)
     res4, _ = with_ssh(ns(99), lambda: build_host.egress_checks(spec, containers=["ticketing-vikunja-1"]))
     res5, _ = with_ssh(ns(0), lambda: build_host.egress_checks(spec, containers=["ticketing-vikunja-1"]))
+    seen.clear()   # a running container with a shell but no probe tool (postgres's, 99) also goes through nsenter
+    res6, _ = with_ssh(ns(28, exec_rc=99), lambda: build_host.egress_checks(spec, containers=["identity-platform-keycloak-db-1"]))
+    good6 = res6[-1][1] and "no probe tool" in res6[-1][0] and any("nsenter" in c for c in seen)
+    res7, _ = with_ssh(ns(0, exec_rc=99), lambda: build_host.egress_checks(spec, containers=["identity-platform-keycloak-db-1"]))
     return check("egress, no shell: an image passes beside a proving one, alone fails; a container goes "
-                 "through nsenter, blocked passes, reached or no tooling fails",
-                 good and good2 and good3 and not res4[-1][1] and not res5[-1][1], str((res, res2, res3, res4, res5)))
+                 "through nsenter, blocked passes, reached or no tooling fails; a no-probe-tool container (99) too",
+                 good and good2 and good3 and not res4[-1][1] and not res5[-1][1] and good6 and not res7[-1][1],
+                 str((res, res2, res3, res4, res5, res6, res7)))
+
+
+def egress_no_probe_tool_case() -> bool:
+    """An image with a shell but no curl, wget or python3 (postgres's, exit 99) is handled as a
+    no-shell image: it passes beside an image whose probe was blocked, alone fails; docker's own
+    error (125) still fails."""
+    spec = temp_specs({"d07": VM + GITEA_APP, "x": VM + REP_GITEA})("x")
+
+    def fake(rcs):
+        def f(t, c):
+            for needle, rc in rcs:
+                if needle in c:
+                    return Done(rc)
+            return Done(28)
+        return f
+    base = [("nft list", 0)]
+    res, _ = with_ssh(fake(base + [("docker run --rm --entrypoint sh pg", 99), ("docker run", 28)]),
+                      lambda: build_host.egress_checks(spec, ["pg:16", "kc:1"]))
+    good = ([ok for _, ok, _ in res] == [True, True, True, True, True] and "pg:16" in res[-1][0]
+            and res[-1][2] == "no curl, wget or python3 in the image; the default bridge proved by kc:1")
+    res2, _ = with_ssh(fake(base + [("docker run", 99)]), lambda: build_host.egress_checks(spec, ["pg:16", "pg2:1"]))
+    good2 = ([ok for _, ok, _ in res2] == [True, True, True, False, False] and res2[-1][2]
+             == "no curl, wget or python3 in the image and no other image proves the default bridge")
+    res3, _ = with_ssh(fake(base + [("docker run --rm --entrypoint sh pg", 99), ("docker run", 125)]),
+                       lambda: build_host.egress_checks(spec, ["kc:1", "pg:16"]))
+    good3 = [ok for _, ok, _ in res3] == [True, True, True, False, False] and res3[3][2] == "exit 125"
+    return check("egress, no probe tool (99): an image passes beside a proving one, alone fails; 125 still fails",
+                 good and good2 and good3, str((res, res2, res3)))
+
+
+def egress_lone_no_probe_tool_case() -> bool:
+    """A lone image with no probe tool (postgres's on the d05 replica, exit 99) is probed by the
+    host's curl in a sleeping container's network namespace: blocked passes, reached fails, and a
+    probe that cannot run (99) falls back to "no other image proves". The container is always removed."""
+    spec = temp_specs({"d07": VM + GITEA_APP, "x": VM + REP_GITEA})("x")
+
+    def lone(ns_rc, run_rc=0):
+        seen = []
+
+        def f(t, c):
+            seen.append(c)
+            if "nft list" in c:
+                return Done(0)
+            if "docker run --rm --entrypoint sh pg" in c:
+                return Done(99)
+            if "docker run -d --rm --entrypoint sleep pg:16 60" in c:
+                return Done(run_rc, "abc123\n" if run_rc == 0 else "")
+            if "nsenter" in c:
+                return Done(ns_rc)
+            if c == "docker rm -f abc123":
+                return Done(0)
+            return Done(28)
+        res, _ = with_ssh(f, lambda: build_host.egress_checks(spec, ["pg:16"]))
+        return res, seen
+    res, seen = lone(28)
+    good = ([ok for _, ok, _ in res] == [True, True, True, True] and res[-1][2]
+            == "no curl, wget or python3 in the image; the host's curl in a sleeping container's network namespace: exit 28"
+            and any("nsenter" in c and "abc123" in c and "https://gitlab.com" in c for c in seen)
+            and seen[-1] == "docker rm -f abc123")
+    res2, seen2 = lone(0)
+    good2 = ([ok for _, ok, _ in res2] == [True, True, True, False] and res2[-1][2].endswith("namespace: exit 0")
+             and "docker rm -f abc123" in seen2)
+    res3, seen3 = lone(99)
+    good3 = ([ok for _, ok, _ in res3] == [True, True, True, False] and res3[-1][2]
+             == "no curl, wget or python3 in the image and no other image proves the default bridge"
+             and "docker rm -f abc123" in seen3)
+    res4, seen4 = lone(28, run_rc=125)   # the sleeping container did not start: no nsenter, no rm
+    good4 = ([ok for _, ok, _ in res4] == [True, True, True, False] and "no other image proves" in res4[-1][2]
+             and not any("nsenter" in c or "docker rm" in c for c in seen4))
+    return check("egress, lone no-probe-tool image: nsenter in a sleeping container; blocked passes, reached "
+                 "fails, no tooling or no container falls back; the container is removed",
+                 good and good2 and good3 and good4, str((res, seen, res2, res3, res4)))
 
 
 def replica_images_own_case() -> bool:
@@ -259,7 +336,8 @@ ENV_NAMES = ["PULL_X", "START_A", "START_B", "OPT_C"]
 ENV_OPT_APP = ENV_APP + 'start_env_optional = ["OPT_C"]\n'
 # d06 observability's wrapped vault tokens (deploy_role.py mints them; a plain build lacks them).
 D06_OBS_TOKENS = ["ALERT_RELAY_OPENBAO_WRAPPED_TOKEN", "EMPORIA_OPENBAO_WRAPPED_TOKEN",
-                  "SCRAPE_PROXY_OPENBAO_WRAPPED_TOKEN"]
+                  "LOKI_GATEWAY_OPENBAO_WRAPPED_TOKEN", "PROMETHEUS_WRITE_GATEWAY_OPENBAO_WRAPPED_TOKEN",
+                  "PUSHGATEWAY_GATEWAY_OPENBAO_WRAPPED_TOKEN", "SCRAPE_PROXY_OPENBAO_WRAPPED_TOKEN"]
 # The Staff workers' NATS users (theOrg secrets-vault #55): optional until identity-platform provisions them.
 D06_COMMS_MQ = sorted(f"COMMS_MQ_USER_{p}_{f}" for p in ("STAFF_WORKER_1", "STAFF_ALERT_TRIAGE_1",
                       "STAFF_DELIVERY_MANAGER_1", "STAFF_QA_1") for f in ("USERNAME", "PASSWORD"))
@@ -877,6 +955,9 @@ def node_image_cases() -> list[bool]:
                      not err and "--net0 virtio,bridge=vmbr1,firewall=1,tag=100 --onboot" in printed
                      and f"import-from={build_host.IMAGE}," in printed and VMH03_IMG not in printed
                      and not any("sha256sum" in c for c in asked), repr((err, asked, printed))))
+    out.append(check("phase_vm dry: qm create gives a serial console and a virtio-rng (asyla #1290)",
+                     not err and "--vga std --serial0 socket --rng0 source=/dev/urandom --net0 " in printed,
+                     repr((err, printed))))
     return out
 
 
@@ -1031,10 +1112,14 @@ results = [
     check("d03 no longer carries the network monitors (moved to d07)",
           not {"unifi-monitor", "unifi-backup", "switch-monitor", "att-monitor", "openevse-monitor"}
           & {a["name"] for a in build_host.load_spec("d03")["app"]}),
-    check("d03: no port proxy, and only nas01's SMART textfile",
+    check("d03: no port proxy, and only nas01's SMART and its own guest-health textfiles",
           "port_proxy" not in build_host.load_spec("d03")
           and build_host.load_spec("d03")["node_exporter"]["textfile_sources"]
-          == ["/mnt/nas/data1/docker/nas01-smart/smart.prom"]),
+          == ["/mnt/nas/data1/docker/nas01-smart/smart.prom", "/home/docker/maint/guest-health.prom"]),
+    # asyla #610 step 5: every guest serves host-maintenance's asyla_hw_* textfile to d06's asyla-hw job.
+    check("d01-d07 each copy /home/docker/maint/guest-health.prom",
+          all("/home/docker/maint/guest-health.prom" in build_host.load_spec(h)["node_exporter"].get("textfile_sources", [])
+              for h in ("d01", "d02", "d03", "d04", "d05", "d06", "d07"))),
     spec_case("test01 defaults to its spec's node", "test01", None, "vmh01"),
     spec_case("test01 on the other node", "test01", "vmh02", "vmh02"),
     spec_case("a production host keeps its node", "d03", "vmh02", "is not disposable", refused=True),
@@ -1257,6 +1342,8 @@ results = [
     replica_guard_dry(),
     egress_case(),
     egress_no_shell_case(),
+    egress_no_probe_tool_case(),
+    egress_lone_no_probe_tool_case(),
     replica_images_own_case(),
     replica_start_drops_pull_case(),
     *app_env_cases(),
