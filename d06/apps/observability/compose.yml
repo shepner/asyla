@@ -1,32 +1,35 @@
-# theOrg's observability stack on d06: Loki, Prometheus, the trends Prometheus, Alertmanager,
-# alert-relay, emporia-collector, scrape-proxy, the pushgateway, Vector, docker-state-exporter and
-# blackbox-exporter. Written by asyla from theOrg observability docker-compose.yml,
+# theOrg's observability stack on d06: Loki, its gateway, Prometheus, the trends Prometheus,
+# Alertmanager, alert-relay, emporia-collector, scrape-proxy, the pushgateway, Vector,
+# docker-state-exporter and blackbox-exporter. Written by asyla from theOrg observability docker-compose.yml,
 # compose.docker-socket.yml and compose.blackbox.yml, last read at main
 # f7579118fdac5d90101a5ec6698200ae2c9d836f (#327; design 4 since #311; DEPLOY.md at that sha).
 # The images follow theOrg's `latest`; the revision is read from the images' provenance at deploy.
 # Project, container names, volume names and the network are theOrg's. asyla's choices:
 # - the Docker-socket and blackbox pieces are folded in; credential-probe, the Ollama log and
 #   MONITOR_THEORG (theOrg's other stacks' jobs and rules) are not here;
-# - no loki-gateway (theOrg lead's option A for d06, 2026-11-03): its f757911 service needs a
-#   loki-gateway identity in the observability-d06 token role and a step-ca provisioner and name
-#   for d06, none of which exist yet (README.md, On, off). observability.sh's `up` removes the
-#   container an earlier deploy left (--remove-orphans);
+# - loki-gateway with d06's own settings (theOrg's option B, asyla #1268): plain HTTP
+#   (LOKI_GATEWAY_TLS off), so no step-ca, provisioner or loki-ca volume; TLS ends at d06's Caddy
+#   as loki.asyla.org (internal-access hosts/d06). Caddy forwards each caller's Basic auth in
+#   plain text, so that hop is on its own internal network, loki-edge (observability-loki-edge),
+#   which only loki-gateway and caddy-internal-d06 join. It checks asyla's own accounts
+#   (loki-clients.toml), read from OpenBao under secret/hubs/asyla/own/loki-clients;
 # - no build sections: theOrg's published images of OBSERVABILITY_TAG (observability.sh: latest);
 # - no port on every address: every port on 127.0.0.1 only (Alertmanager on 9093, the
 #   pushgateway on 9091, docker-state-exporter on 9099);
 # - Loki, both Prometheus and Alertmanager keep their data on d06's local data disk, as named
 #   volumes bound to OBSERVABILITY_ROOT (theOrg decision asyla-network-monitoring §8: never NFS);
 # - no secret is in any file, volume or container environment (asyla SEC-5 and SEC-7; the
-#   operator, 2026-11-03: secrets live only in OpenBao). alert-relay, emporia-collector and
-#   scrape-proxy each read theirs from OpenBao in-process with their own token: deploy_role.py
-#   (beside this file) mints it from the observability-d06 token role and passes it
+#   operator, 2026-11-03: secrets live only in OpenBao). alert-relay, emporia-collector,
+#   scrape-proxy and loki-gateway each read theirs from OpenBao in-process with their own token:
+#   deploy_role.py (beside this file) mints it from the observability-d06 token role and passes it
 #   response-wrapped, single use, in <NAME>_OPENBAO_WRAPPED_TOKEN. Each container spends it at
 #   start, so what Docker keeps is a spent wrapping token. The *_KV settings name asyla's records
 #   (the role's policies, secrets-vault policies/hubs.toml). A tokened service starts only with its
 #   token (observability.sh); after a reboot or a Docker restart it loops until the next deploy.
 #
 # On: alert tasks (alert-relay files each alert as a task in Vikunja project 170, asyla's child of
-# theOrg's Alerts project, ALERT_PROJECTS in observability.sh, with the Vikunja token it reads),
+# theOrg's Alerts project, or 169, theOrg's, for an alert whose alert_repo names theOrg;
+# ALERT_PROJECTS in observability.sh, with the Vikunja token it reads),
 # the email receiver (Alertmanager's email piece, sent by alert-relay with the
 # SMTP login), the Watchdog ping (Alertmanager's watchdog piece, ALERT_WATCHDOG_PING "on" in
 # observability.sh; alert-relay pings healthchecks.io with the URL it reads), the delivery ping
@@ -34,9 +37,9 @@
 # the trends Home Assistant job (through scrape-proxy), emporia-collector, Vector's
 # container-log pipeline (VECTOR_DOCKER_LOGS: this stack's own logs to Loki, plain HTTP inside
 # observability-net), and alert-relay's log lines (an alert's logql annotation run against
-# loki:3100 inside observability-net, the lines put in its task; README.md, On, off).
-# Off (README.md says what turns each on). Each is off here and nowhere else:
-#   Loki gateway          not in this file: no caller off this host pushes to or queries Loki
+# loki:3100 inside observability-net, the lines put in its task; README.md, On, off), and the Loki
+# gateway (pushes and queries from off this host, each with its own account, as loki.asyla.org).
+# Off (README.md says what turns each on): chat-api (CHAT_API_URL empty).
 #
 # Run with observability.sh: it sets OBSERVABILITY_TAG, OBSERVABILITY_ROOT and the settings below
 # and keeps the start order.
@@ -82,8 +85,10 @@ services:
       - observability-net
 
   # Files every alert as a task in Vikunja (VIKUNJA_URL, the relay's default
-  # https://vikunja.asyla.org), off this host, in the ALERT_PROJECTS project (asyla=170: every
-  # alert, since asyla is the only entry and so the default), and sends the critical ones by email.
+  # https://vikunja.asyla.org), off this host, in an ALERT_PROJECTS project (asyla=170, the first
+  # entry and so the default; theOrg=169 for an alert whose alert_repo label's owner part is theOrg,
+  # case-insensitive; a project Vikunja refuses falls back to 170 with a Routing note), and sends
+  # the critical ones by email.
   # Since theOrg b5bd228 the relay has no Gitea sink and no Gitea fallback (theOrg DEPLOY.md,
   # "alert-relay on d06 (asyla)"). It reads every secret from OpenBao in-process
   # (alert-relay/relay.py): ALERT_RELAY_<SECRET>_KV is PATH#FIELD. A record it cannot read switches
@@ -101,8 +106,8 @@ services:
   # for vector-1 and Prometheus), and puts the newest lines in the task (relay.py log_section).
   # The relay fetches only with a query password as well, which it sends as Basic auth and Loki
   # ignores; it is asyla's own Loki account alert-relay (loki-clients.toml beside this file,
-  # created by loki_accounts.py), the account a d06 gateway would check (README.md, On, off). The
-  # chat-api record keeps theOrg's default, which this token cannot read ("refused"); chat-api is
+  # created by loki_accounts.py), which loki-gateway would check were the relay to query through
+  # it. The chat-api record keeps theOrg's default, which this token cannot read ("refused"); chat-api is
   # off here (CHAT_API_URL empty).
   alert-relay:
     image: gitea.asyla.org/theorg/observability-alert-relay:${OBSERVABILITY_TAG:?}
@@ -138,9 +143,10 @@ services:
     image: gitea.asyla.org/theorg/observability-loki:${OBSERVABILITY_TAG:?}
     container_name: loki-1
     # Not published, and plain HTTP (theOrg's only configuration at f757911): Vector pushes and
-    # Prometheus scrapes loki:3100 on observability-net. Nothing off this host reaches it. The
-    # Prometheus job asks plain HTTP since #327 (prometheus/scrape-stack/loki.yml); at 64a2bf3 it
-    # asked https and d06 read up{job="loki"} 0 (2026-11-03).
+    # Prometheus scrapes loki:3100 on observability-net. Nothing off this host reaches it but
+    # through loki-gateway (below), with an account. The Prometheus job asks plain HTTP since #327
+    # (prometheus/scrape-stack/loki.yml); at 64a2bf3 it asked https and d06 read up{job="loki"} 0
+    # (2026-11-03).
     volumes:
       - loki-data:/loki
     # Unset here, so the configs' own defaults apply (744h, 0.05 MB/s, burst 16; DEPLOY.md).
@@ -158,8 +164,52 @@ services:
     networks:
       - observability-net
 
-  # loki-gateway is theOrg's and not here (option A; the header and README.md say why). Option B
-  # adds it back with d06's own settings: identity, provisioner, step-ca address and KV paths.
+  # theOrg's loki-gateway (its docker-compose.yml at f678d8c) with d06's settings (option B, asyla
+  # #1268): it lets each caller push or query Loki with its own account (loki-clients.toml), whose
+  # password it reads from OpenBao at start with its own wrapped token, and forwards to loki:3100;
+  # /ready is open and every other path is 404 (theOrg loki-gateway/gateway.go). TLS ends at d06's
+  # Caddy as loki.asyla.org (Let's Encrypt), as for nats.asyla.org: no port is published, and
+  # LOKI_GATEWAY_TLS off needs no step-ca, provisioner, loki-ca volume or extra_hosts (loadConfig
+  # returns before them). Behind TLS, Caddy sends every caller's Basic-auth password to the gateway
+  # in plain text. observability-net is shared by the whole stack, and caddy-internal-d06 and
+  # communications' vector join it too, so any container there with NET_RAW could ARP-spoof that
+  # hop. So Caddy reaches the gateway only on loki-edge, an internal network that only the two of
+  # them join, by the alias loki-gateway-edge: the alias is on loki-edge alone, so the name
+  # resolves to the gateway's loki-edge address and never to its observability-net one. The
+  # gateway stays on observability-net for loki:3100 and OpenBao (loki-edge has no egress).
+  # alert-relay and Vector stay on loki:3100 inside the stack. Not on a replica: it reads
+  # production's OpenBao.
+  loki-gateway:
+    image: gitea.asyla.org/theorg/observability-loki-gateway:${OBSERVABILITY_TAG:?}
+    container_name: loki-gateway-1
+    environment:
+      OPENBAO_ADDR: ${OPENBAO_ADDR:?}
+      OPENBAO_WRAPPED_TOKEN: ${LOKI_GATEWAY_OPENBAO_WRAPPED_TOKEN:-}
+      # name:scope,... in loki-clients.toml's order (observability.sh; a test checks they agree).
+      LOKI_GATEWAY_ACCOUNTS: ${LOKI_GATEWAY_ACCOUNTS:?}
+      LOKI_CLIENTS_KV_PREFIX: "secret/hubs/asyla/own/loki-clients"
+      LOKI_GATEWAY_TLS: "off"
+      LOKI_UPSTREAM: "http://loki:3100"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      loki:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/loki-gateway", "healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      observability-net: {}
+      loki-edge:
+        aliases:
+          - loki-gateway-edge
 
   prometheus:
     image: gitea.asyla.org/theorg/observability-prometheus:${OBSERVABILITY_TAG:?}
@@ -375,3 +425,12 @@ volumes:
 networks:
   observability-net:
     driver: bridge
+  # Caddy to loki-gateway only (loki-gateway, above): Caddy forwards callers' passwords in plain
+  # text on it. External here as in internal-access hosts/d06, so compose neither makes nor removes
+  # it: observability.sh (ensure_edge_network) creates it before every `up`, with or without the
+  # gateway's token, as an internal bridge (no egress), and refuses one that is not internal;
+  # internal-access's networks.txt makes it the same way, so either stack may start first. `down`
+  # leaves it. A network made outside compose is used as it is, so internal is checked there.
+  loki-edge:
+    name: observability-loki-edge
+    external: true

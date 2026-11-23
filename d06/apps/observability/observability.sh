@@ -1,5 +1,5 @@
 #!/bin/bash
-# theOrg's observability stack on d06 (Loki without its gateway, Prometheus, the trends Prometheus,
+# theOrg's observability stack on d06 (Loki and its gateway, Prometheus, the trends Prometheus,
 # Alertmanager, alert-relay, emporia-collector, scrape-proxy, Vector and the probes). Usage:
 # observability.sh [switch ...], e.g. up|down|restart|verify|update|pull|images|logs|status;
 # switches can be combined. Loads ~/scripts/docker/common.env. From theOrg observability DEPLOY.md,
@@ -12,12 +12,16 @@
 # sends at use over SSH stdin (build_host.py, d06/host.toml):
 # - OBSERVABILITY_REGISTRY_PULL_TOKEN (pull_token_env), for the image pulls, answered by the
 #   credential helper beside this script under a throwaway DOCKER_CONFIG;
-# - ALERT_RELAY_, EMPORIA_ and SCRAPE_PROXY_OPENBAO_WRAPPED_TOKEN (start_env_optional): each a
+# - ALERT_RELAY_, EMPORIA_, SCRAPE_PROXY_ and LOKI_GATEWAY_OPENBAO_WRAPPED_TOKEN
+#   (start_env_optional): each a
 #   single-use wrapping token that deploy_role.py mints from the observability-d06 token role.
 #   Its container unwraps it once at start and holds the real token in memory, so what Docker
 #   keeps in the container's config is spent. A wrapping token lapses 300 s after it is minted, so
 #   `up` never pulls while one is here (the deploy runs `images` first).
 # A tokened service starts only when its token is here; without it, it is left as it is (VAULT_READERS).
+# Every `up` (and restart's) first makes the external network observability-loki-edge, internal,
+# with or without loki-gateway's token and on a replica too, and refuses one that is not internal
+# (ensure_edge_network); `down` never removes it, so d06's proxy can always start.
 # compose.yml's header says what is on and off, README.md what turns each on.
 # Data under /mnt/docker/Observability (d06's local data disk; never NFS).
 
@@ -53,34 +57,47 @@ OBSERVABILITY_TAG="${OBSERVABILITY_TAG_OVERRIDE:-latest}"
 REGISTRY="gitea.asyla.org"
 # Already pulled for the stack, here and on a replica; also the throwaway container that sets the
 # data directories' owners: theOrg's Dockerfile.loki ends USER root on grafana/loki (Alpine: sh,
-# chown). Not the gateway's image any more: it is not in the stack, and at f757911 it is FROM
-# scratch, with no shell.
+# chown). Not the gateway's image: at f757911 it is FROM scratch, with no shell.
 LOKI_IMAGE="$REGISTRY/theorg/observability-loki:$OBSERVABILITY_TAG"
 
 # The host this folder belongs to. On any other host (test01 as a replica of d06) the stack runs
 # the services below only: no alert-relay (it files tasks in Vikunja), no emporia-collector or
-# scrape-proxy (they read production's OpenBao records) and no Vector (its chronicle episodes would
-# reach production's memory-system).
+# scrape-proxy or loki-gateway (they read production's OpenBao records) and no Vector (its chronicle
+# episodes would reach production's memory-system).
 SERVING_HOST="d06"
 REPLICA_SERVICES="loki prometheus prometheus-trends alertmanager pushgateway docker-state-exporter blackbox-exporter"
 
 # The services that read OpenBao in-process, each through the single-use wrapped token in the
 # variable token_var names. Each starts only when its token is here: started without one,
-# emporia-collector exits and the other two serve nothing, so `up --wait` would fail or the
-# service would sit idle. Without its token a service is left as it is, running or not.
-VAULT_READERS="alert-relay emporia-collector scrape-proxy"
+# emporia-collector exits and the others serve nothing (loki-gateway would have no account), so
+# `up --wait` would fail or the service would sit idle. Without its token a service is left as it
+# is, running or not.
+VAULT_READERS="alert-relay emporia-collector scrape-proxy loki-gateway"
+
+# loki-gateway's accounts (theOrg's LOKI_GATEWAY_ACCOUNTS format: name:push or name:query,
+# comma-separated), in loki-clients.toml's order (name order, as theOrg's `loki_clients.py
+# gateway-accounts` prints them); test_d06_loki_accounts.py checks the two agree. The gateway reads
+# each one's record, secret/hubs/asyla/own/loki-clients/<name>, at start (deploy_role.py
+# IDENTITIES), so every record exists first (loki_accounts.py).
+LOKI_GATEWAY_ACCOUNTS="alert-relay:query,grafana-reporting:query,host-agent-ws02:push,observability-check-push:push,observability-check-query:query,staff-alert-triage:query,vector-certificate-management:push,vector-identity-platform:push,vector-memory-system:push,vector-reporting:push,vector-secrets-vault:push,vector-staff:push,vector-workforce-management:push"
 
 # asyla's settings (asyla hub, the observability-on-d06 item).
 PROMETHEUS_EXTERNAL_URL="${PROMETHEUS_EXTERNAL_URL:-https://prometheus.asyla.org}"
 ALERTMANAGER_EXTERNAL_URL="${ALERTMANAGER_EXTERNAL_URL:-https://alertmanager.asyla.org}"
 # The Vikunja projects alert-relay files alerts in, name=id (theOrg DEPLOY.md, "alert-relay on d06
-# (asyla)"): 170 is asyla's child of theOrg's Alerts project. The only entry is the default, so
-# every alert goes there, whatever its alert_repo label.
-ALERT_PROJECTS="asyla=170"
+# (asyla)"): 170 is asyla's child of theOrg's Alerts project, 169 is theOrg's. The first entry,
+# asyla, is the default: an alert whose alert_repo label's owner part names a listed project
+# (case-insensitive) files there, any other in the default, and one in a project Vikunja refuses
+# falls back to the default with a Routing note (theOrg alert-relay). User svc-alert-relay-d06 gets
+# write on 169 from theOrg ticketing 8c1cc236 (theorg #1277), live after d06's next ticketing
+# redeploy; theOrg's rules carry alert_repo once theorg #1278 ships. alert-test with
+# ALERT_TEST_PROJECT=theOrg proves the 169 path.
+ALERT_PROJECTS="asyla=170 theOrg=169"
 # memory-system's Vector on the Mini (theOrg lead, 2026-11-03).
 CHRONICLE_VECTOR_ADDRESS="10.0.0.150:6000"
 COMPOSE_PROJECT_NAME="observability"
-# Where alert-relay, emporia-collector and scrape-proxy read their secrets (theOrg's default).
+# Where alert-relay, emporia-collector, scrape-proxy and loki-gateway read their secrets (theOrg's
+# default).
 OPENBAO_ADDR="https://vault.asyla.org"
 # Critical alerts by email: Alertmanager's email piece posts them to alert-relay, which sends them
 # with the SMTP login it reads from OpenBao (theOrg deploy.yml's recipient).
@@ -132,7 +149,7 @@ DELIVERY_WAIT_S="${OBSERVABILITY_DELIVERY_WAIT_S:-180}"
 
 export DOCKER_DL OBSERVABILITY_ROOT OBSERVABILITY_TAG PROMETHEUS_EXTERNAL_URL ALERTMANAGER_EXTERNAL_URL \
   ALERT_PROJECTS CHRONICLE_VECTOR_ADDRESS COMPOSE_PROJECT_NAME \
-  OPENBAO_ADDR ALERT_EMAIL_TO ALERT_WATCHDOG_PING HOME_ASSISTANT_URL
+  OPENBAO_ADDR ALERT_EMAIL_TO ALERT_WATCHDOG_PING HOME_ASSISTANT_URL LOKI_GATEWAY_ACCOUNTS
 
 info() { echo "[INFO] $*"; }
 warn() { echo "[WARN] $*" >&2; }
@@ -152,6 +169,7 @@ token_var() {
     alert-relay) echo ALERT_RELAY_OPENBAO_WRAPPED_TOKEN ;;
     emporia-collector) echo EMPORIA_OPENBAO_WRAPPED_TOKEN ;;
     scrape-proxy) echo SCRAPE_PROXY_OPENBAO_WRAPPED_TOKEN ;;
+    loki-gateway) echo LOKI_GATEWAY_OPENBAO_WRAPPED_TOKEN ;;
     *) return 1 ;;
   esac
 }
@@ -322,15 +340,36 @@ own_dirs() {
 # --- up -------------------------------------------------------------------------------------------
 
 # Every `up` and `down` passes --remove-orphans: a service taken out of compose.yml leaves its
-# container behind otherwise (loki-gateway-1 when 64a2bf3 dropped the gateway, option A). It
+# container behind otherwise (as loki-gateway-1 was when 64a2bf3 dropped the gateway; it is back
+# since asyla #1268, option B). It
 # removes only containers of this project whose service is not in compose.yml; a tokened service
 # left out of the named list stays as it is. Measured with Compose v5.6.1 (d06's version) on a
 # throwaway busybox project, 2026-11-03: a service dropped from the file was removed by
 # `up -d --wait --remove-orphans <one service>` and another running service kept, while a service
 # kept in the file under an inactive `profiles:` was not removed (so the gateway is dropped, not
 # profiled out).
+# The network Caddy reaches loki-gateway on (compose.yml loki-edge): external, so compose never
+# makes or removes it, and it is here whether or not the gateway starts (its token may be absent),
+# so d06's proxy, which joins it as external, can always start. Made internal (no egress); one that
+# exists but is not internal is refused, as compose would use it as it is. internal-access
+# hosts/d06/networks.txt makes it the same way.
+EDGE_NETWORK="observability-loki-edge"
+ensure_edge_network() {
+  local got
+  if ! docker network inspect "$EDGE_NETWORK" >/dev/null 2>&1; then
+    info "network $EDGE_NETWORK: creating (internal bridge)"
+    docker network create --internal --driver bridge "$EDGE_NETWORK" >/dev/null \
+      || die "cannot create network $EDGE_NETWORK"
+  fi
+  got="$(docker network inspect -f '{{.Internal}}' "$EDGE_NETWORK")" \
+    || die "cannot read network $EDGE_NETWORK"
+  [ "$got" = "true" ] || die "network $EDGE_NETWORK exists but is not internal (Internal=$got); not using it. Stop its containers and remove it (docker network rm $EDGE_NETWORK), then run up again"
+  info "network $EDGE_NETWORK: internal"
+}
+
 do_up() {
   local all svc services="" left=""
+  ensure_edge_network
   ensure_dirs || return
   images_ready || return
   own_dirs || die "cannot set the data directories' owners under $OBSERVABILITY_ROOT"
@@ -613,6 +652,24 @@ default_project_id() {
   printf '%s\n' "${first#*=}"
 }
 
+# alert_test_project <name>: "<name> <project id>" for the ALERT_PROJECTS entry <name> names,
+# matched case-insensitively as alert-relay matches an alert_repo label's owner part, printed with
+# the entry's own spelling. Fails, naming the entries, when it names none.
+alert_test_project() {
+  local want entry entries
+  want="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  read -ra entries <<< "$(printf '%s\n' "$ALERT_PROJECTS" | tr ',' ' ')"
+  for entry in ${entries[@]+"${entries[@]}"}; do
+    [[ "$entry" =~ ^[A-Za-z0-9_.-]+=[1-9][0-9]*$ ]] || continue
+    if [ "$(printf '%s' "${entry%%=*}" | tr '[:upper:]' '[:lower:]')" = "$want" ]; then
+      printf '%s %s\n' "${entry%%=*}" "${entry#*=}"
+      return 0
+    fi
+  done
+  echo "[ERROR] alert-test: ALERT_TEST_PROJECT '$1' is not in ALERT_PROJECTS ($ALERT_PROJECTS); name one of its entries, or unset it for the default" >&2
+  return 1
+}
+
 # "on" when the running Alertmanager loaded the watchdog piece, else "off": its loaded
 # configuration (/api/v2/status config.original) has the piece's receiver "watchdog" and a route
 # to it (theOrg alertmanager-pieces/watchdog/), not only the base's "watchdog-off". The receiver's
@@ -798,9 +855,43 @@ check_vector_logs() {
   return 1
 }
 
+# The HTTP status loki-gateway answers for path $1 with no account, asked from inside
+# observability-net: vector-1's own wget (GNU wget: Dockerfile.vector installs Debian's) to
+# loki-gateway:3100, the address Caddy proxies loki.asyla.org to. -S prints each response's status
+# line; the last one is the answer. Empty when nothing answered. wget exits non-zero on a 401, so
+# its status is not the pipeline's.
+gateway_status() {
+  { docker exec vector-1 wget -S -O /dev/null -T 10 -t 1 "http://loki-gateway:3100$1" < /dev/null 2>&1 || true; } \
+    | awk '$1 ~ /^HTTP\// {code = $2} END {print code}'
+}
+
+# loki-gateway, where its container exists: /ready answers 200 with no account, and an anonymous
+# query (GET /loki/api/v1/labels) 401, so the gateway is up and refuses a caller with no account
+# (theOrg loki-gateway/gateway.go). That each account gets in with its own password, for its own
+# scope only, and a pushed line reads back is theOrg's `loki_clients.py verify`, which
+# loki_accounts.py verify runs through https://loki.asyla.org from the workstation (README.md).
+check_gateway() {
+  local rc=0 got
+  [ "$(service_state loki-gateway)" != missing ] || return 0
+  got="$(gateway_status /ready)"
+  if [ "$got" = 200 ]; then
+    info "loki-gateway: /ready 200 with no account (from vector-1 at loki-gateway:3100)"
+  else
+    echo "[ERROR] loki-gateway: /ready answers '${got:-nothing}', not 200 (from vector-1 at loki-gateway:3100)" >&2; rc=1
+  fi
+  got="$(gateway_status /loki/api/v1/labels)"
+  if [ "$got" = 401 ]; then
+    info "loki-gateway: a query with no account 401 (GET /loki/api/v1/labels)"
+  else
+    echo "[ERROR] loki-gateway: a query with no account answers '${got:-nothing}', not 401 (GET /loki/api/v1/labels from vector-1)" >&2; rc=1
+  fi
+  return "$rc"
+}
+
 # What runs: the services, Prometheus and its Alertmanager, docker-state-exporter, the trends
 # retention, the blackbox self-probes, every operations Prometheus target up, Vector's container
-# logs in Loki (not on a replica: no Vector), the tokened services' secrets (check_tokened), the
+# logs in Loki (not on a replica: no Vector), the tokened services' secrets (check_tokened),
+# loki-gateway's open /ready and its refusal of a query with no account (check_gateway), the
 # Watchdog's ping (check_watchdog) and alert-relay's Vikunja self-test and delivery ping
 # (check_delivery). The pieces that are off (compose.yml's header) have nothing to check.
 do_verify() {
@@ -851,6 +942,7 @@ do_verify() {
   check_stack_targets || rc=1
   if ! is_replica; then check_vector_logs || rc=1; fi
   check_tokened || rc=1
+  check_gateway || rc=1
   check_watchdog || rc=1
   check_delivery || rc=1
 
@@ -915,8 +1007,12 @@ wait_relay_task() {
 # alert-test (theOrg piece 6, alert-relay on d06): proves that an alert from this host's
 # Alertmanager lands as a Vikunja task in the default project (default_project_id: 170) with its
 # log lines, and that its resolve closes the task again, read from alert-relay-1's own log lines
-# and metrics, so no token leaves the relay. Modelled on theOrg scripts/alert_routing_selftest.sh
-# without its routing half (d06 has one project): it pushes one line under
+# and metrics, so no token leaves the relay. With ALERT_TEST_PROJECT=<name> in the environment
+# (switches take no arguments), the alert carries alert_repo="<name>/observability" and the task
+# must land in that ALERT_PROJECTS entry's project instead (alert_test_project; a name not listed
+# is refused): theOrg=169 proves the relay's routing and its write there. Unset, the alert has no
+# alert_repo label. Modelled on theOrg scripts/alert_routing_selftest.sh, one project per run: it
+# pushes one line under
 # {job="asyla-alert-test"} into Loki through loki-1's own wget to 127.0.0.1:3100, and the alert's
 # logql annotation selects it; the relay's logql query must return lines
 # (alert_relay_logql_queries_total{result="lines"} rises: relay_logql), so the task carries them.
@@ -930,6 +1026,7 @@ wait_relay_task() {
 # failed` the relay logs during the run, an unrelated alert's included, fails it.
 do_alert_test() {
   local pid run now started ends deadline fp="" opened="" task got_pid errors rc=0 body logql_before logql_after
+  local target where label_args=()
   if is_replica; then
     echo "[ERROR] alert-test runs on $SERVING_HOST only (this is $(hostname -s))" >&2
     return 1
@@ -941,10 +1038,18 @@ do_alert_test() {
       return 1
       ;;
   esac
-  pid="$(default_project_id)" || {
-    echo "[ERROR] alert-test: ALERT_PROJECTS ('$ALERT_PROJECTS') does not start with name=<project id>" >&2
-    return 1
-  }
+  if [ -n "${ALERT_TEST_PROJECT:-}" ]; then
+    target="$(alert_test_project "$ALERT_TEST_PROJECT")" || return 1
+    pid="${target#* }"
+    label_args=("alert_repo=\"${target%% *}/observability\"")
+    where="project $pid (${target%% *}, ALERT_TEST_PROJECT)"
+  else
+    pid="$(default_project_id)" || {
+      echo "[ERROR] alert-test: ALERT_PROJECTS ('$ALERT_PROJECTS') does not start with name=<project id>" >&2
+      return 1
+    }
+    where="the default project $pid (the first in ALERT_PROJECTS)"
+  fi
   run="$(date -u +%Y%m%dT%H%M%SZ)-$RANDOM"
   now=$(date +%s)
   started="$(date -u -d "@$now" +%Y-%m-%dT%H:%M:%SZ)"
@@ -966,12 +1071,13 @@ do_alert_test() {
   if ! docker exec alertmanager-1 amtool alert add --alertmanager.url=http://127.0.0.1:9093 \
       --start="$started" --end="$ends" \
       alertname=AsylaAlertRelayTest severity=info "test_run=\"$run\"" "name=\"alert-test-$run\"" \
+      ${label_args[@]+"${label_args[@]}"} \
       "--annotation=summary=\"Alert relay test $run from $SERVING_HOST: a task in Vikunja project $pid with its log line, closed on the resolve\"" \
       "--annotation=logql=\"{job=\\\"asyla-alert-test\\\"} |= \\\"$run\\\"\""; then
     echo "[ERROR] alert-test: amtool did not add the alert to alertmanager-1" >&2
     return 1
   fi
-  info "alert-test $run: added AsylaAlertRelayTest (severity info, a logql annotation) to alertmanager-1, ending $ends"
+  info "alert-test $run: added AsylaAlertRelayTest (severity info, a logql annotation${label_args[0]+, ${label_args[0]}}) to alertmanager-1 for $where, ending $ends"
 
   deadline=$(( $(date +%s) + 30 ))
   while :; do
@@ -999,7 +1105,7 @@ do_alert_test() {
       rc=1
     fi
     if [ "$got_pid" != "$pid" ]; then
-      echo "[ERROR] alert-test $run: task $task is in project $got_pid, not the default project $pid (the first in ALERT_PROJECTS)" >&2
+      echo "[ERROR] alert-test $run: task $task is in project $got_pid, not $where" >&2
       rc=1
     elif wait_relay_task 600 "$started" closed "$fp" "$task" >/dev/null; then
       info "alert-test $run: alert-relay closed task $task in project $pid on the resolve"
@@ -1060,7 +1166,8 @@ run_cmd() {
         echo "[ERROR] restart takes down $VAULT_READERS, and no wrapped token is here for: $(tokens_absent). Deploy instead (README.md, Deploy)" >&2
         return 1
       fi
-      images_ready && run_compose down --remove-orphans && do_up
+      # The edge network first: a refused one stops restart while the old stack still runs.
+      images_ready && ensure_edge_network && run_compose down --remove-orphans && do_up
       ;;
     verify)
       do_verify
@@ -1095,12 +1202,16 @@ usage() {
   echo "  verify   - Services running and healthy, Prometheus and its one Alertmanager," >&2
   echo "             docker-state-exporter, trends retention, the blackbox self-probes, every" >&2
   echo "             operations Prometheus target up, Vector's container logs in Loki, the" >&2
-  echo "             tokened services' secrets, the Watchdog's healthchecks.io ping, and" >&2
+  echo "             tokened services' secrets, loki-gateway's /ready and its 401 with no" >&2
+  echo "             account, the Watchdog's healthchecks.io ping, and" >&2
   echo "             alert-relay's Vikunja self-test and delivery check ping" >&2
   echo "  alert-test - On $SERVING_HOST: one test line into Loki and one info alert (no email) whose" >&2
   echo "             logql annotation selects it; passes when alert-relay opens a Vikunja task for" >&2
   echo "             it in the default project (the first in ALERT_PROJECTS: $ALERT_PROJECTS) with" >&2
-  echo "             the line, and closes it on the resolve (about 6 minutes)" >&2
+  echo "             the line, and closes it on the resolve (about 6 minutes). With" >&2
+  echo "             ALERT_TEST_PROJECT=<name> in the environment (an ALERT_PROJECTS name, e.g. theOrg)," >&2
+  echo "             the alert carries alert_repo=\"<name>/observability\" and the task must land in" >&2
+  echo "             that project instead; a name not listed is refused" >&2
   echo "  status   - Containers" >&2
   echo "  logs     - Follow logs (optionally for one service)" >&2
 }

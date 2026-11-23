@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import re
 import subprocess
 import sys
 import tempfile
@@ -55,7 +56,9 @@ def quiet(call):
 
 
 def registry_cases() -> list[bool]:
-    out = [check("accounts: loki-clients.toml lists alert-relay", la.accounts() == ["alert-relay"])]
+    out = [check("accounts: loki-clients.toml lists the 13 accounts, alert-relay and both check accounts among them",
+                 len(la.accounts()) == 13 and "alert-relay" in la.accounts()
+                 and all(n in la.accounts() for n in la.CHECK_ACCOUNTS), repr(la.accounts()))]
     with tempfile.TemporaryDirectory() as d:
         empty = Path(d) / "empty.toml"
         empty.write_text("# none\n")
@@ -104,12 +107,37 @@ def path_cases() -> list[bool]:
     ]
 
 
+def gateway_accounts_cases() -> list[bool]:
+    """observability.sh LOKI_GATEWAY_ACCOUNTS is what loki-clients.toml yields: name:scope per
+    account, comma-joined, in name order (theOrg loki_clients.py gateway-accounts)."""
+    import tomllib
+    clients = tomllib.loads(la.REGISTRY.read_text())["clients"]
+    want = ",".join(f"{n}:{clients[n]['scope'][0]}" for n in sorted(clients))
+    sh = (dr.HERE / "observability.sh").read_text()
+    lines = [ln for ln in sh.splitlines() if ln.startswith("LOKI_GATEWAY_ACCOUNTS=")]
+    got = lines[0].split("=", 1)[1].strip('"') if len(lines) == 1 else ""
+    return [
+        check("gateway: every account has exactly one scope, push or query",
+              all(c.get("scope") in (["push"], ["query"]) for c in clients.values()), repr(clients)),
+        check("gateway: observability.sh LOKI_GATEWAY_ACCOUNTS = loki-clients.toml's name:scope, in name order",
+              got == want, f"{got!r} != {want!r}"),
+        check("gateway: observability.sh exports LOKI_GATEWAY_ACCOUNTS",
+              any("LOKI_GATEWAY_ACCOUNTS" in m.group(0).split()
+                  for m in re.finditer(r"^export (?:[^\n]*\\\n)*[^\n]*", sh, re.M))),
+    ]
+
+
 def argv_cases() -> list[bool]:
     tool_dir = Path("/stand-in/tool")
     argv = la.tool_argv(tool_dir)
+    verify = la.tool_argv(tool_dir, mode="verify")
     return [check("argv: python -I loki_clients.py provision --registry <loki-clients.toml>",
                   argv == [sys.executable, "-I", "/stand-in/tool/loki_clients.py", "provision",
-                           "--registry", str(dr.HERE / "loki-clients.toml")], repr(argv))]
+                           "--registry", str(dr.HERE / "loki-clients.toml")], repr(argv)),
+            check("argv: verify --url https://loki.asyla.org --ca-volume '' (no --cacert)",
+                  verify == [sys.executable, "-I", "/stand-in/tool/loki_clients.py", "verify",
+                             "--registry", str(dr.HERE / "loki-clients.toml"),
+                             "--url", "https://loki.asyla.org", "--ca-volume", ""], repr(verify))]
 
 
 def main_cases() -> list[bool]:
@@ -118,6 +146,12 @@ def main_cases() -> list[bool]:
     out.append(check("dry run: exit 0, the plan, nothing fetched or signed in (any contact fails)",
                      rc == 0 and "secret/hubs/asyla/own/loki-clients/alert-relay" in text
                      and "DRY RUN" in text, text))
+    rc, text = quiet(lambda: la.main(["verify", "--dry-run"]))
+    out.append(check("verify dry run: exit 0, the plan (url, no --cacert, both check accounts, curl), "
+                     "nothing fetched, signed in or curled (any contact fails)",
+                     rc == 0 and "DRY RUN" in text and "https://loki.asyla.org" in text
+                     and "--ca-volume ''" in text and "curlimages/curl" in text
+                     and all(n in text for n in la.CHECK_ACCOUNTS), text))
 
     saved = (dr.git, dr.hub_sign_in, subprocess.run)
     git_calls, runs = [], []
@@ -150,6 +184,17 @@ def main_cases() -> list[bool]:
         ]
 
         runs.clear()
+        subprocess.run = stand_in_run
+        rc, text = quiet(lambda: la.main(["verify"]))
+        argv, env, files = runs[0] if runs else ([], {}, [])
+        out.append(check("verify: the tool runs once as verify, with the same prefix and the hub token, "
+                         "and exit 0 says every check passed",
+                         rc == 0 and len(runs) == 1 and argv[1:] == la.tool_argv(Path(argv[2]).parent, mode="verify")[1:]
+                         and env.get("BAO_ROOT_TOKEN") == HUB_STAND_IN
+                         and env.get("LOKI_CLIENTS_KV_PREFIX") == la.KV_PREFIX
+                         and "every check passed" in text and HUB_STAND_IN not in text, text))
+
+        runs.clear()
         subprocess.run = lambda argv, env=None, **kw: Done(1, "", "::error::stand-in refused\n")
         rc, text = quiet(la.main)
         out.append(check("run: a tool failure exits 1 with its line and a stopped: line",
@@ -167,6 +212,7 @@ def main_cases() -> list[bool]:
     return out
 
 
-results = [*registry_cases(), *env_cases(), *path_cases(), *argv_cases(), *main_cases()]
+results = [*registry_cases(), *env_cases(), *path_cases(), *gateway_accounts_cases(), *argv_cases(),
+           *main_cases()]
 print("all cases passed" if all(results) else f"{results.count(False)} case(s) failed")
 sys.exit(0 if all(results) else 1)

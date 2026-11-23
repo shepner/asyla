@@ -16,8 +16,9 @@
 # `host.docker.internal` resolves to in containers (docker0's) and nowhere else, its data on tmpfs.
 # Not theOrg's loki-gateway: since theOrg f757911 the gateway reads its accounts and its TLS leaf
 # from an OpenBao and a step-ca, which test01 does not have; its account enforcement is proved by
-# theOrg's own `loki_clients.py verify`. Not d06's Loki: d06 runs without the gateway (theOrg's
-# option A) and Loki is not reachable from off d06 (d06/apps/observability/README.md, "Off here").
+# theOrg's own `loki_clients.py verify`. Not d06's Loki: d06's gateway (theOrg's option B, asyla
+# #1268) at loki.asyla.org takes only the accounts of d06/apps/observability/loki-clients.toml,
+# which has none for test01 (d06/apps/observability/README.md, "On, off").
 # Loki here is single-tenant with no authentication; the agent still sends basic auth as its
 # push account, with a random throwaway value made per run (the bundle requires the file).
 # Checked on the workstation 2026-11-20 with upstream grafana/loki:2.9.4 and theOrg's

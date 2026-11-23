@@ -2,7 +2,8 @@
 """Offline test of d06/apps/observability/deploy_role.py: the plan it builds, and what each step
 sends where. No SSH, no vault, no git, no registry: subprocess.run, build_host.ssh and http_get
 are replaced so that any contact fails the test (run_start's own cases run a local python child,
-nothing else; the registry cases answer from a stand-in registry in this file).
+and alert_test_cases a local bash child with docker and the relay stubbed, nothing else; the
+registry cases answer from a stand-in registry in this file).
 
     python3 scripts/tests/test_d06_deploy_role.py
 
@@ -32,13 +33,15 @@ def _no_contact(*a, **kw):
 
 
 REAL_HTTP_GET = dr.http_get
+REAL_RUN = subprocess.run   # alert_test_cases only: a local bash child with every contact stubbed
 subprocess.run = _no_contact
 bh.ssh = _no_contact
 dr.http_get = _no_contact
 
 TAG = "f7579118fdac5d90101a5ec6698200ae2c9d836f"
 REV = "a" * 40   # a stand-in revision
-OBS_TOKENS = ["SCRAPE_PROXY_OPENBAO_WRAPPED_TOKEN", "EMPORIA_OPENBAO_WRAPPED_TOKEN", "ALERT_RELAY_OPENBAO_WRAPPED_TOKEN"]
+OBS_TOKENS = ["SCRAPE_PROXY_OPENBAO_WRAPPED_TOKEN", "EMPORIA_OPENBAO_WRAPPED_TOKEN", "ALERT_RELAY_OPENBAO_WRAPPED_TOKEN",
+              "LOKI_GATEWAY_OPENBAO_WRAPPED_TOKEN"]
 PULL = "stand-in-pull"
 HUB_STAND_IN = "stand-in-hub"
 OTHER_STAND_IN = "stand-in-other"
@@ -398,7 +401,7 @@ def main_cases() -> list[bool]:
                          repr((rc, sorted(env), printed))))
         out.append(check("run: vault_identity.py --token-role observability-d06, one --identity per component, then the app start",
                          argv[1:2] == ["-I"] and argv[2].endswith("vault_identity.py")
-                         and argv[3:5] == ["--token-role", "observability-d06"] and argv.count("--identity") == 3
+                         and argv[3:5] == ["--token-role", "observability-d06"] and argv.count("--identity") == 4
                          and argv[argv.index("--") + 1:][1:] == [str(REPO / "scripts/build_host.py"), "d06", "build", "--only",
                                                                  "apps", "--app", "observability", "--apply"],
                          repr(argv)))
@@ -852,6 +855,153 @@ VIKUNJA_TOKEN = "secret/v2/vikunja/alert-tokens/svc-alert-relay-d06"   # outside
 LOKI_ACCOUNT = "own/loki-clients/alert-relay"   # asyla's own Loki account (loki_accounts.py)
 
 
+def service_block(compose: str, name: str) -> list[str]:
+    """The stripped, uncommented lines of compose.yml's service NAME (indent 2), up to the next one."""
+    lines, inside = [], False
+    for ln in compose.splitlines():
+        if ln.startswith("  ") and not ln.startswith("   ") and ln.rstrip().endswith(":") \
+                and not ln.lstrip().startswith("#"):
+            inside = ln.strip() == f"{name}:"
+            continue
+        if ln and not ln.startswith(" "):
+            inside = False
+        if inside and ln.strip() and not ln.lstrip().startswith("#"):
+            lines.append(ln.strip())
+    return lines
+
+
+def shell_words(sh: str, var: str) -> list[str]:
+    """The words of observability.sh's top-level VAR="..." assignment."""
+    import re
+    m = re.search(rf'^{var}="([^"]*)"$', sh, re.M)
+    return m.group(1).split() if m else []
+
+
+def token_vars(sh: str) -> dict[str, str]:
+    """observability.sh token_var's case arms: service -> variable."""
+    import re
+    body = sh.split("\ntoken_var() {", 1)[1].split("\n}", 1)[0] if "\ntoken_var() {" in sh else ""
+    return dict(re.findall(r"^\s*([a-z][a-z-]*)\) echo ([A-Z_]+) ;;$", body, re.M))
+
+
+def compose_networks(compose: str) -> dict[str, dict]:
+    """Every service's networks, as {network: aliases} (lines of indent 6 and 10 under networks:),
+    and the top-level networks block as {name: its stripped lines} under the key ''."""
+    services: dict[str, dict] = {}
+    top: dict[str, list[str]] = {}
+    section, svc, inside, net = "", "", False, ""
+    for ln in compose.splitlines():
+        if not ln.strip() or ln.lstrip().startswith("#"):
+            continue
+        indent = len(ln) - len(ln.lstrip())
+        text = ln.strip()
+        if indent == 0:
+            section = text.rstrip(":")
+            continue
+        if section == "services":
+            if indent == 2:
+                svc, inside = text.rstrip(":"), False
+                services[svc] = {}
+            elif indent == 4:
+                inside = text == "networks:"
+            elif inside and indent == 6:
+                net = text.lstrip("- ").split(":")[0]
+                services[svc][net] = []
+            elif inside and indent == 10 and text.startswith("- "):
+                services[svc][net].append(text[2:])
+        elif section == "networks":
+            if indent == 2:
+                net = text.rstrip(":")
+                top[net] = []
+            else:
+                top[net].append(text)
+    return {**services, "": top}
+
+
+def gateway_cases() -> list[bool]:
+    """loki-gateway (option B, asyla #1268): its token reads every account of loki-clients.toml,
+    d06/host.toml sends its variable, and compose.yml runs it plain HTTP with no port and asyla's
+    prefix, reached by Caddy only on loki-edge; prometheus has no remote-write receiver."""
+    import tomllib
+    names = list(tomllib.loads((dr.HERE / "loki-clients.toml").read_text())["clients"])
+    ids = {c: (e, rs) for c, e, rs in dr.IDENTITIES}
+    env, records = ids.get("loki-gateway", ("", []))
+    app = [a for a in bh.load_spec("d06").get("app", []) if a.get("name") == "observability"]
+    compose = (dr.HERE / "compose.yml").read_text()
+    gw = service_block(compose, "loki-gateway")
+    prom = service_block(compose, "prometheus")
+    sh = (dr.HERE / "observability.sh").read_text()
+    readers, replica, tvars = shell_words(sh, "VAULT_READERS"), shell_words(sh, "REPLICA_SERVICES"), token_vars(sh)
+    nets = compose_networks(compose)
+    edge = nets[""].get("loki-edge", [])
+    on_edge = sorted(s for s, n in nets.items() if s and "loki-edge" in n)
+    edge_fn = sh.split("\nensure_edge_network() {", 1)[1].split("\n}", 1)[0] if "\nensure_edge_network() {" in sh else ""
+    up_fn = sh.split("\ndo_up() {", 1)[1].split("\n}", 1)[0] if "\ndo_up() {" in sh else ""
+    up_body = [ln.strip() for ln in up_fn.splitlines() if ln.strip() and not ln.strip().startswith(("local ", "#"))]
+    restart_arm = sh.split("\n    restart)", 1)[1].split(";;", 1)[0] if "\n    restart)" in sh else ""
+    return [
+        check("gateway: loki-gateway is a vault reader and not a replica service (it reads production's OpenBao)",
+              "loki-gateway" in readers and "loki-gateway" not in replica and bool(replica), repr((readers, replica))),
+        check("gateway: token_var maps exactly the VAULT_READERS services",
+              bool(readers) and sorted(tvars) == sorted(readers), repr((tvars, readers))),
+        check("gateway: token_var's variables are IDENTITIES' env names, service by service",
+              tvars == {c: e for c, e, _ in dr.IDENTITIES}, repr((tvars, dr.IDENTITIES))),
+        check("gateway: token_var's variables are d06/host.toml observability start_env_optional",
+              len(app) == 1 and sorted(tvars.values()) == sorted(app[0].get("start_env_optional", [])),
+              repr((tvars, app[:1]))),
+        check("gateway: compose.yml loki-gateway is on observability-net and on loki-edge as loki-gateway-edge",
+              nets.get("loki-gateway") == {"observability-net": [], "loki-edge": ["loki-gateway-edge"]},
+              repr(nets.get("loki-gateway"))),
+        check("gateway: loki-edge is the external network observability-loki-edge (no driver or internal in compose)",
+              sorted(edge) == sorted(["name: observability-loki-edge", "external: true"]), repr(edge)),
+        check("gateway: observability.sh's EDGE_NETWORK is compose.yml's loki-edge name",
+              'EDGE_NETWORK="observability-loki-edge"' in sh),
+        check("gateway: do_up calls ensure_edge_network before anything else, so before every up "
+              "(restart's too), replica or not, token or not",
+              bool(up_body) and up_body[0] == "ensure_edge_network"
+              and sh.count("run_compose up ") == up_fn.count("run_compose up ") == 2
+              and "&& do_up" in restart_arm, repr(up_body[:3])),
+        check("gateway: restart checks the edge network before it takes the stack down",
+              "ensure_edge_network && run_compose down" in restart_arm, repr(restart_arm[-200:])),
+        check("gateway: ensure_edge_network creates the network with --internal when it is missing",
+              bool(edge_fn) and 'docker network inspect "$EDGE_NETWORK" >/dev/null' in edge_fn
+              and 'docker network create --internal --driver bridge "$EDGE_NETWORK"' in edge_fn, edge_fn),
+        check("gateway: ensure_edge_network refuses an existing network that is not internal",
+              "docker network inspect -f '{{.Internal}}' \"$EDGE_NETWORK\"" in edge_fn
+              and '[ "$got" = "true" ] || die "network $EDGE_NETWORK exists but is not internal' in edge_fn, edge_fn),
+        check("gateway: nothing in observability.sh removes the edge network (down leaves it)",
+              "network rm" not in "\n".join(ln for ln in sh.splitlines() if "die " not in ln)
+              and "down --remove-orphans -v" not in sh),
+        check("gateway: no other service joins loki-edge, and no other has the alias",
+              on_edge == ["loki-gateway"]
+              and sum("loki-gateway-edge" in ln for ln in compose.splitlines() if not ln.lstrip().startswith("#")) == 1,
+              repr(on_edge)),
+        check("gateway: every other service is on observability-net alone",
+              all(n == {"observability-net": []} for s, n in nets.items() if s and s != "loki-gateway"),
+              repr({s: n for s, n in nets.items() if s})),
+        check("gateway: compose.yml prometheus has no remote-write receiver flag",
+              bool(prom) and not any("remote-write" in ln for ln in prom), repr(prom)),
+        check("gateway: loki-clients.toml has the 13 accounts, in name order",
+              len(names) == 13 and names == sorted(names), repr(names)),
+        check("gateway: IDENTITIES has loki-gateway with every account's own/loki-clients record",
+              env == "LOKI_GATEWAY_OPENBAO_WRAPPED_TOKEN"
+              and records == [f"own/loki-clients/{n}" for n in names], repr(records)),
+        check("gateway: deploy_role.loki_client_names reads the same names",
+              dr.loki_client_names(dr.HERE / "loki-clients.toml") == names),
+        check("gateway: d06/host.toml observability start_env_optional names its variable",
+              len(app) == 1 and "LOKI_GATEWAY_OPENBAO_WRAPPED_TOKEN" in app[0].get("start_env_optional", []),
+              repr(app[:1])),
+        check("gateway: compose.yml runs it with TLS off, asyla's prefix, its token and accounts, no ports",
+              bool(gw) and 'LOKI_GATEWAY_TLS: "off"' in gw
+              and 'LOKI_CLIENTS_KV_PREFIX: "secret/hubs/asyla/own/loki-clients"' in gw
+              and "OPENBAO_WRAPPED_TOKEN: ${LOKI_GATEWAY_OPENBAO_WRAPPED_TOKEN:-}" in gw
+              and "LOKI_GATEWAY_ACCOUNTS: ${LOKI_GATEWAY_ACCOUNTS:?}" in gw
+              and 'LOKI_UPSTREAM: "http://loki:3100"' in gw
+              and not any(ln.startswith(("ports:", "extra_hosts:")) or "loki-ca" in ln or "STEP" in ln
+                          for ln in gw), repr(gw)),
+    ]
+
+
 def relay_records_cases() -> list[bool]:
     """alert-relay's token reads its SMTP login, the Watchdog's ping URL, the Vikunja token (by its
     full path, outside the hub's KV), the delivery check's ping URL and its Loki query account (a
@@ -889,11 +1039,88 @@ def relay_records_cases() -> list[bool]:
         check("relay: compose.yml has no Gitea setting left (forge token, URL, alert repo, repos)",
               not any(ln.startswith(k) for ln in live
                       for k in ("ALERT_RELAY_FORGE_KV", "GITEA_ALERT_REPO", "GITEA_URL", "ALERT_REPOS"))),
-        check("relay: alerts go to Vikunja project 170 (compose.yml takes ALERT_PROJECTS from observability.sh)",
-              "ALERT_PROJECTS: ${ALERT_PROJECTS:?}" in live and '\nALERT_PROJECTS="asyla=170"\n' in sh),
+        check("relay: alerts go to Vikunja project 170 by default, theOrg's to 169 (compose.yml takes "
+              "ALERT_PROJECTS from observability.sh; asyla first, so the default)",
+              "ALERT_PROJECTS: ${ALERT_PROJECTS:?}" in live and '\nALERT_PROJECTS="asyla=170 theOrg=169"\n' in sh),
         check("relay: the watchdog piece is on in observability.sh",
               '\nALERT_WATCHDOG_PING="on"\n' in sh),
     ]
+
+
+def shell_function(sh: str, name: str) -> str:
+    """observability.sh's top-level function NAME, from `NAME() {` to its closing `}` line."""
+    import re
+    m = re.search(rf"^{name}\(\) \{{\n.*?^\}}$", sh, re.M | re.S)
+    if not m:
+        raise AssertionError(f"observability.sh has no function {name}")
+    return m.group(0)
+
+
+# do_alert_test's contacts, stubbed: docker records its arguments one per line (amtool's labels
+# among them) and answers nothing; the relay's log names task 42 in project $STUB_PID; relay_logql
+# reads 0 lines, then 1. date -d is GNU only, so it answers a fixed time.
+ALERT_TEST_STUBS = r'''
+SERVING_HOST=d06
+is_replica() { return 1; }
+service_state() { echo "running (healthy)"; }
+info() { echo "[INFO] $*"; }
+sleep() { :; }
+date() { case "$*" in *-d*) echo 2026-11-22T00:00:00Z ;; *) command date "$@" ;; esac; }
+docker() { printf '%s\n' "$@" >> "$STUB/docker"; }
+alert_test_fingerprint() { echo abc123; }
+relay_logql() {
+  if [ -e "$STUB/logql" ]; then echo "lines=1 empty=0 error=0 unconfigured=0"
+  else echo seen > "$STUB/logql"; echo "lines=0 empty=0 error=0 unconfigured=0"; fi
+}
+wait_relay_task() { if [ "$3" = opened ]; then echo "42 $STUB_PID"; fi; return 0; }
+'''
+
+
+def alert_test_cases() -> list[bool]:
+    """alert-test, run offline: observability.sh's own default_project_id, alert_test_project and
+    do_alert_test in a local bash with every contact stubbed. Unset ALERT_TEST_PROJECT is the
+    default (170) with no alert_repo label; theOrg sets alert_repo="theOrg/observability" and
+    wants 169; a name not in ALERT_PROJECTS is refused before any contact."""
+    import re
+    sh = (dr.HERE / "observability.sh").read_text()
+    projects = re.search(r'^ALERT_PROJECTS="[^"]*"$', sh, re.M).group(0)
+    funcs = "\n".join(shell_function(sh, n) for n in ("default_project_id", "alert_test_project", "do_alert_test"))
+
+    def run(call: str, project: str | None, pid: str = "") -> tuple[int, str, str, list[str]]:
+        with tempfile.TemporaryDirectory() as stub:
+            env = {"PATH": os.environ["PATH"], "STUB": stub, "STUB_PID": pid}
+            if project is not None:
+                env["ALERT_TEST_PROJECT"] = project
+            p = REAL_RUN(["bash", "-c", f"set -euo pipefail\n{projects}\n{funcs}\n{ALERT_TEST_STUBS}\n{call}"],
+                         env=env, capture_output=True, text=True, timeout=60)
+            calls = Path(stub, "docker").read_text().splitlines() if Path(stub, "docker").exists() else []
+        return p.returncode, p.stdout, p.stderr, calls
+
+    out = []
+    rc, so, se, _ = run("default_project_id", None)
+    out.append(check("alert-test: default_project_id is 170 (asyla, the first ALERT_PROJECTS entry)",
+                     rc == 0 and so == "170\n", f"rc={rc} out={so!r} err={se!r}"))
+    rc, so, se, calls = run("do_alert_test", None, "170")
+    out.append(check("alert-test: unset ALERT_TEST_PROJECT wants the default 170, no alert_repo label",
+                     rc == 0 and "alertname=AsylaAlertRelayTest" in calls
+                     and not any(c.startswith("alert_repo=") for c in calls)
+                     and "alert-test OK: task 42 in Vikunja project 170" in so, f"rc={rc} err={se!r}"))
+    rc, so, se, calls = run("do_alert_test", "theOrg", "169")
+    out.append(check('alert-test: ALERT_TEST_PROJECT=theOrg sets alert_repo="theOrg/observability" and wants 169',
+                     rc == 0 and 'alert_repo="theOrg/observability"' in calls
+                     and "alert-test OK: task 42 in Vikunja project 169" in so, f"rc={rc} err={se!r}"))
+    rc, so, se, calls = run("do_alert_test", "theorg", "169")
+    out.append(check("alert-test: the name matches case-insensitively; the label takes ALERT_PROJECTS' spelling",
+                     rc == 0 and 'alert_repo="theOrg/observability"' in calls, f"rc={rc} err={se!r}"))
+    rc, so, se, calls = run("do_alert_test", "theOrg", "170")
+    out.append(check("alert-test: theOrg's task in the default 170 fails (it wants 169)",
+                     rc == 1 and "task 42 is in project 170, not project 169 (theOrg, ALERT_TEST_PROJECT)" in se,
+                     f"rc={rc} err={se!r}"))
+    rc, so, se, calls = run("do_alert_test", "nope", "170")
+    out.append(check("alert-test: a name not in ALERT_PROJECTS is refused, naming the entries, before any contact",
+                     rc == 1 and "ALERT_TEST_PROJECT 'nope' is not in ALERT_PROJECTS (asyla=170 theOrg=169)" in se
+                     and calls == [], f"rc={rc} err={se!r} calls={calls}"))
+    return out
 
 
 with tempfile.TemporaryDirectory() as d:
@@ -923,9 +1150,10 @@ results = [
           == ["--identity", "component=a,env=A_T,kv=secret/hubs/asyla/r1,kv=secret/v2/x/y"]),
     stops("identities: one with no record stops (take its line out instead)", "no KV record",
           lambda: dr.identity_args([("a", "A_T", [])])),
-    check("identities: the static list is scrape-proxy, emporia-collector, alert-relay",
+    check("identities: the list is scrape-proxy, emporia-collector, alert-relay, loki-gateway",
           [(c, e) for c, e, _ in dr.IDENTITIES] == [("scrape-proxy", OBS_TOKENS[0]), ("emporia-collector", OBS_TOKENS[1]),
-                                                    ("alert-relay", OBS_TOKENS[2])]),
+                                                    ("alert-relay", OBS_TOKENS[2]), ("loki-gateway", OBS_TOKENS[3])]),
+    *gateway_cases(),
     check("identities: every record is a plain name or an own/ path under the hub's KV, or a full secret/ "
           "path, none with #",
           all(r and "#" not in r and ("/" not in r or r.startswith(("secret/", "own/")))
@@ -938,6 +1166,7 @@ results = [
           lambda: dr.check_spec(SPEC, [("a", OBS_TOKENS[0], ["r"]), ("b", OBS_TOKENS[0], ["r"])])),
     d06_spec_case(),
     *relay_records_cases(),
+    *alert_test_cases(),
     check("start: --only apps, or late for an after_external app",
           dr.start_argv(SPEC)[4:6] == ["--only", "apps"]
           and dr.start_argv({**SPEC, "app": [{**SPEC["app"][0], "after_external": True}]})[4:6] == ["--only", "late"]),

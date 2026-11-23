@@ -30,8 +30,10 @@ Run on the workstation, from ~/local/asyla (asyla's hub token is the hub of the 
    of the working directory), set only in the minting tool's environment as BAO_TOKEN;
    OPENBAO_TOKEN, VAULT_TOKEN and BAO_ROOT_TOKEN are removed from it. With
    OBSERVABILITY_DEPLOY_VAULT_TOKEN set (below), that token instead: no hub sign-in.
-5. `vault_identity.py --token-role observability-d06` with one --identity per IDENTITIES line,
-   which then runs `build_host.py d06 build --only apps --app observability --apply`: build_host
+5. `vault_identity.py --token-role observability-d06` with one --identity per IDENTITIES line
+   (one wrapped token for each of the four components scrape-proxy, emporia-collector,
+   alert-relay and loki-gateway; the gateway's records are every account of loki-clients.toml,
+   and the role grants them since theorg #1276), which then runs `build_host.py d06 build --only apps --app observability --apply`: build_host
    sends each wrapping token to `observability.sh up` over SSH stdin, as a start_env_optional
    name of d06/host.toml. A mint that fails (a missing record, a policy that does not take) exits
    1 before anything starts, and so does this script. A start that fails may leave the stack
@@ -76,6 +78,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -133,7 +136,12 @@ VERIFY_TIMEOUT = 1800   # s: verify waits up to VERIFY_WAIT_S (300 s) per wait, 
 
 # (component, the variable observability.sh up receives its wrapping token in, KV records): a
 # record is a name under KV, or a full mount-first path when it starts with "secret/" (kv_path).
-# Plain paths: vault_identity.py kv= takes no #field. One line per component.
+# Plain paths: vault_identity.py kv= takes no #field. One line per component: four wrapped tokens.
+def loki_client_names(registry: Path) -> list[str]:
+    """The account names of loki-clients.toml (its [clients.<name>] tables), in the file's order."""
+    return list(tomllib.loads(registry.read_text()).get("clients", {}))
+
+
 IDENTITIES = [
     ("scrape-proxy", "SCRAPE_PROXY_OPENBAO_WRAPPED_TOKEN", ["home-assistant-prometheus-token"]),
     ("emporia-collector", "EMPORIA_OPENBAO_WRAPPED_TOKEN", ["emporia-username", "emporia-password"]),
@@ -147,6 +155,12 @@ IDENTITIES = [
      ["smtp-relay-username", "smtp-relay-password", "observability-watchdog-ping-url",
       "secret/v2/vikunja/alert-tokens/svc-alert-relay-d06", "observability-delivery-ping-url",
       "own/loki-clients/alert-relay"]),
+    # Every Loki account's password, for the gateway to check (compose.yml loki-gateway, asyla
+    # #1268): one record per [clients.<name>] of loki-clients.toml beside this file, so the two
+    # never drift. Each is created by loki_accounts.py first; the token role needs a loki-gateway
+    # component reading them (theorg #1276), else the mint stops the deploy before the stack.
+    ("loki-gateway", "LOKI_GATEWAY_OPENBAO_WRAPPED_TOKEN",
+     [f"own/loki-clients/{name}" for name in loki_client_names(HERE / "loki-clients.toml")]),
 ]
 
 

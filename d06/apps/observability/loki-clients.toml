@@ -4,11 +4,67 @@
 # `loki_accounts.py` and never overwritten. Hub asyla writes only under hubs/asyla/own/
 # (secrets-vault policies/hubs.toml, [token_roles.observability-d06]).
 #
-# d06 has no Loki gateway (README.md, On, off), so nothing checks these accounts today: Loki in the
-# stack has auth_enabled false. A d06 gateway (theOrg's option B) would read them and check them.
+# d06's loki-gateway (compose.yml; theOrg's option B, asyla #1268) checks these accounts: it reads
+# each record at start with its own token (deploy_role.py IDENTITIES, derived from this file) and
+# takes LOKI_GATEWAY_ACCOUNTS from observability.sh, which lists them in this file's order. A push
+# account may only push, a query account may only query. Callers reach it as https://loki.asyla.org
+# (internal-access hosts/d06). Loki itself, inside the stack, still has auth_enabled false.
+#
+# The accounts are in name order, the order theOrg's `loki_clients.py gateway-accounts` prints. None
+# has a `container` key: no sender runs on d06 (check-senders there would see none). Adding or
+# removing one is an edit here and of LOKI_GATEWAY_ACCOUNTS (a test checks they agree), then
+# `loki_accounts.py` (creates the record), then a deploy.
 
 # alert-relay's query account: it runs an alert's logql annotation and puts the lines in the task
 # it opens. It reads the password from OpenBao itself, with its own token (compose.yml
-# ALERT_RELAY_LOKI_KV; deploy_role.py IDENTITIES).
+# ALERT_RELAY_LOKI_KV; deploy_role.py IDENTITIES). It queries loki:3100 inside the stack today.
 [clients.alert-relay]
 scope = ["query"]
+
+# Grafana in theOrg's reporting stack on the Mini (T3/T4; theorg #1270, #1271).
+[clients.grafana-reporting]
+scope = ["query"]
+
+# theOrg's host agent on ws02, the Mini (T2; theorg #1269).
+[clients.host-agent-ws02]
+scope = ["push"]
+
+# theOrg's `loki_clients.py verify` push check, run by `loki_accounts.py verify` from the workstation.
+[clients.observability-check-push]
+scope = ["push"]
+
+# theOrg's `loki_clients.py verify` query check, run by `loki_accounts.py verify` from the workstation.
+[clients.observability-check-query]
+scope = ["query"]
+
+# Staff's alert-triage worker on the Mini (T3/T4; theorg #1270, #1271).
+[clients.staff-alert-triage]
+scope = ["query"]
+
+# certificate-management's Vector on the Mini (T3/T4; theorg #1270, #1271).
+[clients.vector-certificate-management]
+scope = ["push"]
+
+# identity-platform's Vector on the Mini (T3/T4; theorg #1270, #1271).
+[clients.vector-identity-platform]
+scope = ["push"]
+
+# memory-system's Vector on the Mini (T3/T4; theorg #1270, #1271).
+[clients.vector-memory-system]
+scope = ["push"]
+
+# reporting's Vector on the Mini (T3/T4; theorg #1270, #1271).
+[clients.vector-reporting]
+scope = ["push"]
+
+# secrets-vault's Vector on the Mini (T3/T4; theorg #1270, #1271).
+[clients.vector-secrets-vault]
+scope = ["push"]
+
+# Staff's Vector on the Mini (T3/T4; theorg #1270, #1271).
+[clients.vector-staff]
+scope = ["push"]
+
+# workforce-management's Vector on the Mini (T3/T4; theorg #1270, #1271).
+[clients.vector-workforce-management]
+scope = ["push"]
