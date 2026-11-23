@@ -17,21 +17,9 @@ data_disk = { storage = "local-data2", size = "16G" }   # /mnt/docker
 cloudinit_storage = "local-data2"
 disposable = true          # build_host.py may destroy and recreate it without --confirm
 startup = "order=90"       # after every production VM when a node boots; set at create, checked by verify
-# Proves the build path ci01 relies on (ASY-HST-6; asyla #1237): a CPU type, binfmt, the [docker]
-# table and a docker-mode runner. Its build-test label still takes no job.
-cpu = "host"               # qm create --cpu; verify checks qm config
 
 [setup]
-steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "container_dns.sh", "bashrc.sh", "node_exporter.sh", "binfmt.sh"]   # build/setup/, sent by the build
-
-# daemon.json options (build/setup/docker.sh), as ci01's but without its registry mirror (no
-# registry-mirror app here). containerd_root, as ci01's: images and snapshots of Docker's containerd
-# image store live in containerd's root, which data_root does not move, so docker.sh starts
-# containerd with --root on the data disk and checks it (a build here proves that path for ci01).
-[docker]
-data_root = "/mnt/docker/engine"
-containerd_root = "/mnt/docker/containerd"
-default_address_pools = [{ base = "10.210.0.0/16", size = 24 }]
+steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "container_dns.sh", "bashrc.sh", "node_exporter.sh"]   # build/setup/, sent by the build
 
 # Node exporter as on d03 (build/setup/node_exporter.sh); nothing scrapes test01. Its one source is
 # d03's NAS one, read-only here, so a build proves the copy over NFS.
@@ -84,10 +72,6 @@ run = ["scripts/deploy-host.sh {host}", "scripts/fleet.sh --host {host} restore 
 [runner]
 enabled = true
 labels = ["build-test"]    # one label no workflow uses (docker/gitea-runner/gitea-runner.sh)
-mode = "docker"            # as ci01, so a build proves docker-mode registration
-image = "docker.gitea.com/runner-images:ubuntu-latest"
-capacity = 1
-container_options = "--cpus=1 --memory=1g"
 
 # GitLab runners (build/gitlab-runner/gitlab-runner.sh, run by the build's runner phase); one
 # [[gitlab_runner.runners]] table each. GitLab description test01-build; tag build-test only, and

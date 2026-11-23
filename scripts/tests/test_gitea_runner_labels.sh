@@ -69,7 +69,7 @@ case_ "test01 takes its spec's label" test01 $'[runner]\nenabled = true\nlabels 
 if grep -q '^\[replica\]' "$REPO/test01/host.toml"; then
   case_ "test01's hello spec (226904e)" test01 "$(git -C "$REPO" show 226904e:test01/host.toml)" "build-test:host"
 else
-  case_ "the repo's own test01 spec (docker mode, asyla #1237)" test01 "$(cat "$REPO/test01/host.toml")" "build-test:docker://docker.gitea.com/runner-images:ubuntu-latest"
+  case_ "the repo's own test01 spec" test01 "$(cat "$REPO/test01/host.toml")" "build-test:host"
 fi
 case_ "several labels, in order" d04 $'[runner]\nlabels = ["theorg", "prod", "d04"]' "theorg:host,prod:host,d04:host"
 case_ "mode = host said outright" d04 $'[runner]\nlabels = ["theorg"]\nmode = "host"' "theorg:host"
@@ -169,13 +169,17 @@ if git -C "$REPO" show origin/master:docker/gitea-runner/gitea-runner.sh > "$O/s
     else fail "host mode differs from origin/master: $name"$'\n'"--- old ($ca)"$'\n'"$a"$'\n'"--- new ($cb)"$'\n'"$b"; fi
   }
   # Byte-for-byte: compare files, not $(...) (which drops trailing newlines).
-  host_ "$O" d03 ""; run_ "$O" d03 config > "$T/old.yaml"
-  host_ "$T" d03 ""; run_ "$T" d03 config > "$T/new.yaml"
-  cmp -s "$T/old.yaml" "$T/new.yaml" && pass "d03's config.yaml file is byte-identical" || fail "d03's config.yaml bytes differ"
+  for h in d01 d02 d03; do
+    host_ "$O" "$h" ""; run_ "$O" "$h" config > "$T/old.yaml"
+    host_ "$T" "$h" ""; run_ "$T" "$h" config > "$T/new.yaml"
+    [ -s "$T/old.yaml" ] && cmp -s "$T/old.yaml" "$T/new.yaml" && pass "$h's config.yaml file is byte-identical" || fail "$h's config.yaml bytes differ"
+  done
   for h in d01 d02 d03; do same_ "$h (fixed labels)" "$h" ""; done
   for h in d04 d06; do same_ "the repo's $h spec" "$h" "$(cat "$REPO/$h/host.toml")"; done
-  # test01 runs in docker mode since asyla #1237 (it proves ci01's path); its last host-mode spec:
-  same_ "test01's host-mode spec (origin/master da1176c)" test01 "$(git -C "$REPO" show da1176c:test01/host.toml)"
+  # test01 while it runs in host mode (not during a docker-mode proof, asyla #1237).
+  if ! grep -q '^mode = "docker"' "$REPO/test01/host.toml"; then
+    same_ "the repo's test01 spec" test01 "$(cat "$REPO/test01/host.toml")"
+  fi
   same_ "test01's hello spec (226904e)" test01 "$(git -C "$REPO" show 226904e:test01/host.toml)"
   same_ "several labels" d05 $'[runner]\nlabels = ["theorg", "prod", "d05"]'
 else

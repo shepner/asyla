@@ -142,7 +142,7 @@ for spec in "$REPO"/*/host.toml; do
   n=$((n + 1))
 done
 ok "every repo spec ($n): the drop-in only where containerd_root is set (any failure above)"
-for h in ci01 test01; do
+for h in ci01; do
   grep -q '^containerd_root = "/mnt/docker/containerd"$' "$REPO/$h/host.toml" && ok "$h sets containerd_root" || bad "$h sets containerd_root"
 done
 
