@@ -111,10 +111,10 @@ per pass. Unhealthy while the last pass failed (a failed pass retries within the
 
 - `media.sh up` — create dirs and start stack
 - `media.sh down` — stop stack
-- `media.sh backup` — tgz of app dirs to NFS backup
+- `media.sh backup` — per-service rsync mirror of each config dir to `$DOCKER_D1/media-<service>/mirror` (history: nas01 ZFS snapshots)
 - `media.sh logs [service]` — follow logs
 - `media.sh refresh` — pull latest images and start
-- `media.sh update` — pull latest images and start (same as refresh)
+- `media.sh update` — pull latest images only (no restart); `up` or `restart` applies them
 - `media.sh migrate-seerr [--apply]` — the one-time move from Overseerr to Seerr (see Seerr; dry run unless `--apply`)
 - `media.sh reconcile [--apply]` — one radarr-reconcile pass now (dry run unless `--apply`)
 - `media.sh reset-auth sonarr|radarr [--apply]` — forgotten login (no default exists; v4 requires one):
