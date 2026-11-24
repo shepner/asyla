@@ -1,0 +1,91 @@
+# ci01 build spec, read by scripts/build_host.py: theOrg's heavy CI host, with its own Gitea runner
+# (asyla #1237). Operator decision, 2026-11-22: theOrg's heavy CI moves off the Mac Mini (ws02),
+# whose Docker VM stalls when CI waves fill it (theOrg #1197), to ci01, which asyla builds; Colima
+# on the Mini was rejected ("no to Colima"). The daemon's address pool is theOrg #960's, the
+# pull-through cache theOrg #1195's (Docker Hub 429s). theOrg moves the heavy jobs to
+# `runs-on: [theorg, ci]` once ci01 is live (theOrg #1238, theOrg's follow-up). Built as every
+# other Docker host (asyla hub decisions/host-layout.md, decision 6). ci01 is not disposable: a build
+# or a destroy needs --confirm ci01 and the operator's approval of the exact action.
+# ci01 is CI only. It holds no other system's keys (host-layout: no general job runner on a host
+# that does), has no [[secret]] and no NAS: no nfs.sh step, so nas01's exports do not change, and
+# build_host.py's verify checks the NAS mounts only where nfs.sh is a step. No proxy, no tunnel, no
+# internal names: nothing on ci01 serves people. Not built yet.
+
+# Sized 2026-11-22 (asyla #1237 design, tools/report_host_capacity.py --node): vmh02 had 40 GiB and
+# 24 vCPU allocated of 125.7 GiB and 24 threads; with ci01 the fleet is 116 GiB, which still fits on
+# one node (host-layout: a node must carry the other's hosts). VMID 201 opens a CI block of its own.
+# 10.0.0.67 did not answer ping and ci01.asyla.org did not resolve on 10.0.0.10 (2026-11-22).
+# order=30: after d01 (20) and d02 (25) when vmh02 boots. Bridge and VLAN are the defaults, as d01/d02.
+[vm]
+node = "vmh02"
+vmid = 201
+sockets = 1
+cores = 8
+memory_mb = 16384          # 6 jobs at --memory=3g is 18 GiB: an overrun is an OOM inside ci01 only ([runner])
+cpu = "host"               # qm create --cpu host, checked by verify: jobs see the node's SSE4.2 and AVX (no AVX2 on the E5-2620 v2)
+ip = "10.0.0.67/24"
+os_disk = { storage = "local-data2", size = "32G" }
+data_disk = { storage = "local-data2", size = "128G" }   # /mnt/docker: dockerd's data root (images, build cache) and the registry mirror
+cloudinit_storage = "local-data2"
+startup = "order=30"       # set at create, checked by verify
+
+# No nfs.sh: CI needs no NAS. binfmt.sh: QEMU user binfmt, so buildx builds the arm64 legs of
+# theOrg's multi-arch publish (amd64 is native); verify checks qemu-aarch64 is enabled.
+[setup]
+steps = ["systemConfig.sh", "docker.sh", "container_dns.sh", "bashrc.sh", "node_exporter.sh", "binfmt.sh"]   # build/setup/, sent by the build
+
+# Node exporter (build/setup/node_exporter.sh) for theOrg's trends Prometheus (asyla standard
+# ASY-TRD), as d06 and d07: port 9100 from the LAN only. Its pressure and meminfo collectors give
+# ci01's memory PSI and swap (theOrg #1197), which is why ci01 has it. theOrg adds the scrape job
+# asyla-ci01-node (a hand-off; asyla #1237).
+[node_exporter]
+allow = ["10.0.0.0/24"]    # a subnet, not a host (operator, 2026-10-25): the trends Prometheus can move
+
+# dockerd's daemon.json (build/setup/docker.sh renders it from this table; a spec without it keeps
+# the old file). data_root puts dockerd's own data (containers, volumes, build cache) on the data
+# disk, not the 32G OS disk, and docker.service waits for that mount. containerd_root does the same
+# for images and snapshots: Docker 29's containerd image store (the default on a fresh install, and
+# what d06 runs) keeps them in containerd's root, which data_root does not move, so without it CI
+# images would fill the OS disk. docker.sh starts containerd with --root there (a containerd.service
+# drop-in) and checks it does. Not a daemon.json key. The address pool gives 256 job networks of /24 (theOrg #960,
+# address pools). 10.210.0.0/16 was checked free on the LAN on
+# 2026-11-22: no interface or route on d03, vmh01 or vmh02 uses it, and `ip route get 10.210.0.1`
+# there goes via 10.0.0.1 and out to the WAN (traceroute 10.0.0.2 -> 192.168.1.254 -> AT&T). The
+# mirror is registry-mirror below, on loopback only (127.0.0.0/8 is insecure by default, so plain
+# http needs no insecure-registries entry: https://docs.docker.com/reference/cli/dockerd/#insecure-registries).
+[docker]
+data_root = "/mnt/docker/engine"
+containerd_root = "/mnt/docker/containerd"
+default_address_pools = [{ base = "10.210.0.0/16", size = 24 }]
+registry_mirrors = ["http://127.0.0.1:5000"]
+
+# No [[secret]]: ci01 keeps no secret on disk, like d06 and d07, and holds no other system's keys.
+# The runner's registration token comes over SSH stdin at the runner phase only.
+
+# Docker Hub pull-through cache for ci01's own daemon (ci01/apps/registry-mirror; theOrg #1195).
+# Anonymous: no Docker Hub credential on disk or in config. A cache, so nothing to back up or restore:
+# lost, it refills from pulls. No key, so from the workstation:
+#   build_host.py ci01 build --only apps --app registry-mirror --apply
+[[app]]
+name = "registry-mirror"
+restore = false                 # a cache: rebuilt by pulls
+verify = ["verify"]
+
+# Labels: site, `ci` and host (host-layout decision 3's scheme). Never `docker` and never `asyla`:
+# Gitea hands a job to any runner that holds all its labels, and the `[theorg, docker]` jobs include
+# every deploy (host-layout decision 3's caution), which must not run here. theOrg's heavy jobs ask
+# `[theorg, ci]`.
+# Docker mode (docker/gitea-runner/gitea-runner.sh): each job in a container of `image`, the labels
+# registered as NAME:docker://IMAGE, the form the Mini uses. docker_host is left at its default: the
+# runner mounts the daemon's socket into job containers, as on the Mini, since jobs drive the daemon
+# with the docker CLI (Renovate, buildx, test images).
+# capacity 6 jobs at once, each limited to 2 CPUs and 3 GiB (container_options). The limits cover the
+# job container only, not the sibling containers a job starts through the socket; 6 x 3g is more than
+# ci01's 16 GiB, so an overrun is an OOM inside ci01, never on another host.
+[runner]
+enabled = true
+labels = ["theorg", "ci", "ci01"]   # docker/gitea-runner/gitea-runner.sh reads them from here
+mode = "docker"
+image = "docker.gitea.com/runner-images:ubuntu-latest"
+capacity = 6
+container_options = "--cpus=2 --memory=3g"

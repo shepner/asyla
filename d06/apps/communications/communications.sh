@@ -1,8 +1,10 @@
 #!/bin/bash
-# theOrg's communications on d06 (NATS, chat-api and its message store, webhook-to-mq, vector).
-# Usage: communications.sh [switch ...], e.g. up|down|restart|backup|restore|verify|update|logs;
+# theOrg's communications on d06 (NATS, chat-api and its message store, webhook-to-mq, vector, and
+# the mail relay, asyla #657).
+# Usage: communications.sh [switch ...], e.g. up|down|restart|backup|restore|verify|update|logs|relay-status;
 # switches can be combined; `import PATH` stands alone (C4: another host's backup into the mirror,
-# never restored by it). Loads ~/scripts/docker/common.env. No file asyla writes, here or on the
+# never restored by it), as does `relay-arm` (the heal's wrapping token on stdin, for the relay).
+# Loads ~/scripts/docker/common.env. No file asyla writes, here or on the
 # host, holds a secret: the workstation resolves the five values below from OpenBao at deploy and
 # hands them to this process's environment (build_host.py [[app]] start_env); up and restart refuse
 # without them.
@@ -46,7 +48,31 @@ REGISTRY="gitea.asyla.org"
 COMMS_REGISTRY="${COMMS_REGISTRY_OVERRIDE:-$REGISTRY/theorg}"
 SERVED_NAME="theorg.asyla.org"
 
-export DOCKER_DL DOCKER_D1 COMMS_ROOT COMMS_TAG COMMS_REGISTRY
+# The mail relay's own tag (asyla #657): theOrg communications aa1af97a, whose relay image
+# publish-images pushed (theOrg #1097). Separate from COMMS_TAG, so moving one does not move the
+# other. Pin another by hand with COMMS_RELAY_TAG_OVERRIDE=<a published theOrg sha>.
+COMMS_RELAY_TAG="${COMMS_RELAY_TAG_OVERRIDE:-aa1af97aba037256eb10b0de16bd5b91bcab870e}"
+# Found by its compose labels (no container_name); one container is expected.
+RELAY_SERVICE="mail-relay"
+RELAY_TLS_NAME="mail-relay.asyla.org"
+# The relay's log lines (theOrg scripts/openbao.py BROKER_WAITING, mail-relay/relay.py:646).
+RELAY_WAITING_LINE="wrapped token spent: waiting for the token broker"
+RELAY_LISTENING_LINE="listening on 2587"
+# Logged once the heal's wrapping token reached it, before its leaf (mail-relay/token_role.py:156).
+RELAY_DELIVERED_LINE="token broker: wrapping token delivered and unwrapped"
+# arm.py's user: not the relay's own uid 10001, which arm.py refuses (DEPLOY.md, Mail relay on d06).
+RELAY_ARM_UID="10002"
+
+# step-ca's root, "theOrg-v2 Root CA" (expires 2036-08-29), copied from internal-access
+# hosts/d03/upstream-ca/theorg-v2-root.pem (1c4446c), byte-identical to
+# d05/apps/identity-platform/theorg-v2-root.crt. Its SHA-256 in lower-case hex is compose.yml's
+# MAIL_RELAY_STEPCA_ROOT_SHA256; a root rotation re-pins d05 and d06 together.
+CA_SOURCE="$SCRIPT_DIR/theorg-v2-root.crt"
+CA_FINGERPRINT="CD:39:1A:56:AE:00:0B:01:A4:43:3A:73:F2:2D:98:A3:73:E5:BB:08:E8:D7:75:31:DF:2D:B8:6A:4F:29:87:D3"
+CA_DIR="$APP_ROOT/mail-relay-ca"
+CA_FILE="$CA_DIR/root_ca.crt"
+
+export DOCKER_DL DOCKER_D1 COMMS_ROOT COMMS_TAG COMMS_REGISTRY COMMS_RELAY_TAG
 
 # The values the start needs, from OpenBao at deploy (d06/host.toml start_env).
 START_ENV=(COMMS_POSTGRES_PASSWORD COMMS_NATS_WEBHOOK_MQ_USERNAME COMMS_NATS_WEBHOOK_MQ_PASSWORD
@@ -251,6 +277,181 @@ pull_missing() {
   do_pull
 }
 
+sha256_hex() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum | awk '{print $1}'; else shasum -a 256 | awk '{print $1}'; fi
+}
+
+# The certificate's SHA-256 (of its DER) as upper-case colon pairs, for a file holding exactly one
+# certificate; nothing otherwise. As d05/apps/identity-platform/identity-platform.sh.
+ca_fingerprint() {
+  local f="$1" n hex
+  [ -f "$f" ] || return 0
+  n="$(grep -c -- '-----BEGIN CERTIFICATE-----' "$f" 2>/dev/null)" || n=0
+  [ "$n" = 1 ] || return 0
+  hex="$(awk '/-----BEGIN CERTIFICATE-----/{f=1;next} /-----END CERTIFICATE-----/{f=0} f' "$f" \
+    | base64 -d 2>/dev/null | sha256_hex)" || return 0
+  printf '%s' "$hex" | tr '[:lower:]' '[:upper:]' | sed -E 's/(..)/\1:/g; s/:$//'
+}
+
+# step-ca's public root for the relay: the committed copy is checked before it is placed (atomic,
+# 0644), and the placed one after. Fails before anything is started or stopped.
+place_ca() {
+  local fp tmp
+  fp="$(ca_fingerprint "$CA_SOURCE")"
+  if [ "$fp" != "$CA_FINGERPRINT" ]; then
+    echo "[ERROR] $CA_SOURCE does not hold one certificate with SHA-256 $CA_FINGERPRINT (got ${fp:-none}); not placing it, not starting" >&2
+    return 1
+  fi
+  mkdir -p "$CA_DIR" || return
+  if ! cmp -s "$CA_SOURCE" "$CA_FILE"; then
+    tmp="$(mktemp "$CA_DIR/.root_ca.XXXXXX")" || return
+    cp "$CA_SOURCE" "$tmp" && chmod 0644 "$tmp" && mv -f "$tmp" "$CA_FILE" || { rm -f "$tmp"; return 1; }
+    echo "[INFO] placed step-ca's root CA at $CA_FILE"
+  fi
+  check_ca
+}
+
+check_ca() {
+  local fp
+  fp="$(ca_fingerprint "$CA_FILE")"
+  if [ "$fp" = "$CA_FINGERPRINT" ]; then
+    echo "[INFO] $CA_FILE: theOrg-v2 Root CA, SHA-256 $CA_FINGERPRINT"
+  else
+    echo "[ERROR] $CA_FILE does not match SHA-256 $CA_FINGERPRINT (got ${fp:-none})" >&2
+    return 1
+  fi
+}
+
+# Sets RELAY_CID to the one relay container, by its compose labels. Returns 1 when there is none,
+# 2 when docker fails or there is more than one. Its stdin is /dev/null, so relay-arm's stdin is
+# left for arm.py.
+RELAY_CID=""
+relay_find() {
+  local ids n
+  RELAY_CID=""
+  ids="$(docker ps -aq --filter label=com.docker.compose.project=communications \
+    --filter "label=com.docker.compose.service=$RELAY_SERVICE" </dev/null)" || {
+    echo "[ERROR] docker ps failed: the mail-relay container is unknown" >&2
+    return 2
+  }
+  n="$(grep -c . <<< "$ids")" || n=0
+  case "$n" in
+    0) return 1 ;;
+    1) RELAY_CID="$ids" ;;
+    *) echo "[ERROR] $n mail-relay containers in project communications, expected one" >&2; return 2 ;;
+  esac
+}
+
+# Sets RELAY_STATE to one word: absent, waiting, armed, running, stopped or restarting. waiting:
+# running, and its log since this start (docker logs --since its StartedAt, so a restart's wait
+# counts afresh) holds the token wait's line with neither "listening on 2587" nor the broker's
+# delivered line after it. armed: the delivered line follows the last wait, with no listening line
+# after the wait and the container not healthy (no leaf yet: step-ca, the clock, the provisioner).
+# Reads the container's State and that log only, never its Config (which holds its environment).
+RELAY_STATE=""
+relay_state() {
+  local rc=0 st started logs w d l health
+  RELAY_STATE=""
+  relay_find || rc=$?
+  if [ "$rc" = 1 ]; then RELAY_STATE="absent"; return 0; fi
+  [ "$rc" = 0 ] || return 1
+  st="$(docker inspect -f '{{.State.Status}} {{.State.StartedAt}}' "$RELAY_CID" </dev/null)" || {
+    echo "[ERROR] docker inspect of the mail-relay container failed" >&2
+    return 1
+  }
+  started="${st#* }"
+  st="${st%% *}"
+  case "$st" in
+    running) ;;
+    restarting) RELAY_STATE="restarting"; return 0 ;;
+    *) RELAY_STATE="stopped"; return 0 ;;
+  esac
+  logs="$(docker logs --since "$started" "$RELAY_CID" 2>&1 </dev/null)" || {
+    echo "[ERROR] docker logs of the mail-relay container failed" >&2
+    return 1
+  }
+  w="$(grep -nF -- "$RELAY_WAITING_LINE" <<< "$logs" | tail -n 1 | cut -d: -f1)" || w=""
+  d="$(grep -nF -- "$RELAY_DELIVERED_LINE" <<< "$logs" | tail -n 1 | cut -d: -f1)" || d=""
+  l="$(grep -nF -- "$RELAY_LISTENING_LINE" <<< "$logs" | tail -n 1 | cut -d: -f1)" || l=""
+  RELAY_STATE="running"
+  if [ -z "$w" ] || { [ -n "$l" ] && [ "$l" -gt "$w" ]; }; then
+    return 0
+  fi
+  if [ -z "$d" ] || [ "$d" -lt "$w" ]; then
+    RELAY_STATE="waiting"
+    return 0
+  fi
+  # Armed since the wait, not yet listening: running once healthy, else armed.
+  health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$RELAY_CID" </dev/null 2>/dev/null)" || health=""
+  [ "$health" = healthy ] || RELAY_STATE="armed"
+}
+
+# Prints the word. Exit 0, except armed: exit RELAY_ARMED_RC, so the heal (which arms on waiting
+# only) neither judges nor re-arms a relay that already holds its token; 1 when it cannot be read.
+RELAY_ARMED_RC=3
+do_relay_status() {
+  relay_state || return 1
+  echo "$RELAY_STATE"
+  [ "$RELAY_STATE" != armed ] || return "$RELAY_ARMED_RC"
+}
+
+# host-maintenance's heal (runner/heal.py) runs this over ssh with one line on stdin: a single-use
+# wrapping token for the relay (never in argv, an environment or a file). This script reads nothing
+# from stdin and never traces (no set -x), so ssh's stdin goes straight to arm.py, which runs as
+# uid 10002 (the relay's PID 1 is 10001) and hands it to the relay on 127.0.0.1:9117 inside the
+# container. arm.py's ok or fail, and its exit code, are this script's.
+do_relay_arm() {
+  local rc=0
+  relay_find || rc=$?
+  if [ "$rc" = 1 ]; then
+    echo "[ERROR] no mail-relay container in project communications: nothing to arm" >&2
+    exit 1
+  fi
+  [ "$rc" = 0 ] || exit 1
+  exec docker exec -i -u "$RELAY_ARM_UID" "$RELAY_CID" python3 /app/arm.py
+}
+
+COMMS_RELAY_WAIT_S="${COMMS_RELAY_WAIT_S:-60}"
+
+# verify's relay check. Waits up to COMMS_RELAY_WAIT_S for it to reach waiting (just started:
+# not yet logged) or healthy. absent and waiting warn: the heal arms it, so a build's verify right
+# after up passes. healthy: theOrg's STARTTLS probe, verified for mail-relay.asyla.org against
+# step-ca's root (fatal). Anything else (armed but still not healthy, running but unhealthy,
+# stopped, restarting) is fatal.
+check_relay() {
+  local health deadline
+  deadline=$(( $(date +%s) + COMMS_RELAY_WAIT_S ))
+  while :; do
+    relay_state || { echo "[ERROR] mail-relay: its state could not be read" >&2; return 1; }
+    health=""
+    if [ "$RELAY_STATE" = running ]; then
+      health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$RELAY_CID" </dev/null 2>/dev/null)" || health=""
+    fi
+    case "$RELAY_STATE:$health" in absent:*|waiting:*|running:healthy) break ;; esac
+    [ "$(date +%s)" -lt "$deadline" ] || break
+    sleep 5
+  done
+  case "$RELAY_STATE:$health" in
+    absent:*)
+      echo "[WARN] mail-relay is not deployed (no container in project communications)" >&2 ;;
+    waiting:*)
+      echo "[WARN] mail-relay is running unarmed, waiting to be armed; host-maintenance's hourly heal arms it (runner/heal.py; a TASK=heal pipeline arms it now)" >&2 ;;
+    armed:*)
+      echo "[ERROR] mail-relay is armed (its wrapping token delivered) but not healthy after ${COMMS_RELAY_WAIT_S} s: no leaf certificate yet; check step-ca's reach, this host's clock, and the relay's provisioner record (the heal does not re-arm it)" >&2
+      return 1 ;;
+    running:healthy)
+      if docker exec "$RELAY_CID" python3 /app/smoke.py probe --tls-name "$RELAY_TLS_NAME" </dev/null; then
+        echo "[INFO] mail-relay healthy; smoke.py probe (STARTTLS, verified for $RELAY_TLS_NAME) OK"
+      else
+        echo "[ERROR] mail-relay smoke.py probe --tls-name $RELAY_TLS_NAME failed" >&2
+        return 1
+      fi ;;
+    *)
+      echo "[ERROR] mail-relay is $RELAY_STATE${health:+ ($health)}: neither waiting for its token nor healthy" >&2
+      return 1 ;;
+  esac
+}
+
 COMMS_WAIT_S="${COMMS_WAIT_S:-180}"
 
 # DEPLOY.md, Start order 2-3, with the users written before nats starts (nats reads them, and
@@ -258,6 +459,7 @@ COMMS_WAIT_S="${COMMS_WAIT_S:-180}"
 # would re-read the file but not the environment that holds the passwords.
 do_up() {
   local nats_was_running
+  place_ca || return
   ensure_dirs || return
   pull_missing || return
   prepare_nats || return
@@ -282,6 +484,13 @@ do_up() {
     run_compose up -d vector || return
   else
     echo "[WARN] vector not started: network ${COMMS_OBSERVABILITY_NET:-observability_observability-net} does not exist (d06/apps/observability down?); communications' logs and chronicle episodes are lost" >&2
+  fi
+  # No --wait: the relay stays unhealthy until host-maintenance's heal arms it (relay-arm).
+  run_compose up -d "$RELAY_SERVICE" || return
+  if relay_state; then
+    echo "[INFO] mail-relay container started (unarmed until the heal; relay-status says waiting once it waits for its token); now: $RELAY_STATE"
+  else
+    echo "[WARN] mail-relay started, but its state could not be read" >&2
   fi
 }
 
@@ -536,7 +745,7 @@ do_images() {
 }
 
 do_update() {
-  echo "[INFO] Pulling images for tag $COMMS_TAG (not starting; use up or restart)"
+  echo "[INFO] Pulling images for tag $COMMS_TAG, the mail relay's for $COMMS_RELAY_TAG (not starting; use up or restart)"
   do_pull
 }
 
@@ -602,6 +811,7 @@ do_verify() {
     echo "[ERROR] webhook-to-mq-vikunja /health answered ${code:-nothing}, not 200" >&2
     rc=1
   fi
+  check_relay || rc=1
   return "$rc"
 }
 
@@ -641,11 +851,15 @@ run_cmd() {
     restart)
       require_env "${START_ENV[@]}"
       check_nats_users || return
+      place_ca || return
       run_compose down || return
       do_up
       ;;
     verify)
       do_verify
+      ;;
+    relay-status)
+      do_relay_status || exit
       ;;
     *)
       return 1
@@ -669,13 +883,20 @@ usage() {
   echo "  update   - Pull the images for COMMS_TAG (screen if interactive); use up/restart to start" >&2
   echo "  pull     - Pull the images now (inline)" >&2
   echo "  images   - Pull missing images, then list the default services' images (build_host.py's replica guard)" >&2
-  echo "  up       - Write the NATS users, then start in DEPLOY.md's order (pulls missing images first);" >&2
+  echo "  up       - Place and check step-ca's root, write the NATS users, then start in DEPLOY.md's order" >&2
+  echo "             (pulls missing images first), the mail relay last with no wait (unarmed until the heal);" >&2
   echo "             refused unless ${START_ENV[*]}" >&2
   echo "             are in the environment (from OpenBao at deploy; in no file asyla writes)" >&2
   echo "  down     - Stop and remove the containers" >&2
   echo "  restart  - Down then up (checks the environment first, as up)" >&2
   echo "  verify   - chat-api /health and chat_smoke.py, nats /healthz, anonymous refused on 4222 and 8080," >&2
-  echo "             webhook-to-mq-vikunja /health (all fatal; waits up to COMMS_WAIT_S, 180 s, for chat-api)" >&2
+  echo "             webhook-to-mq-vikunja /health (all fatal; waits up to COMMS_WAIT_S, 180 s, for chat-api);" >&2
+  echo "             mail-relay: absent or waiting warns, healthy runs smoke.py probe (fatal), else fatal," >&2
+  echo "             armed but not healthy included (waits up to COMMS_RELAY_WAIT_S, 60 s, for waiting or healthy)" >&2
+  echo "  relay-status - one word for the mail relay: absent, waiting, armed, running, stopped or restarting;" >&2
+  echo "             exit 0, armed exit $RELAY_ARMED_RC (token delivered, no leaf yet: the heal must not re-arm), 1 unreadable" >&2
+  echo "  relay-arm - alone: the wrapping token on stdin to arm.py in the relay as uid $RELAY_ARM_UID" >&2
+  echo "             (host-maintenance's heal sends it over ssh's stdin); prints arm.py's ok or fail" >&2
   echo "  logs     - Follow logs (optionally for one service)" >&2
 }
 
@@ -697,6 +918,15 @@ if [ "$1" = "import" ]; then
   fi
   do_import "$2" || exit 1
   exit 0
+fi
+
+# relay-arm takes ssh's stdin, so it combines with no other switch (none may read that stdin).
+if [ "$1" = "relay-arm" ]; then
+  if [ $# -ne 1 ]; then
+    usage
+    exit 1
+  fi
+  do_relay_arm
 fi
 
 for cmd in "$@"; do

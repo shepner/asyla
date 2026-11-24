@@ -3,7 +3,8 @@
 # from theOrg communications docker-compose.yml and DEPLOY.md at beff7c55 (the asyla hub backlog
 # item "d06: deploy theOrg communications at beff7c55"). Changes from theOrg's file, each asyla's:
 # - images only, no build: (theOrg's publish-images pushes them to gitea.asyla.org/theorg);
-# - no mail-relay and no cloudflared (not part of this hand-off);
+# - no cloudflared (not part of this hand-off); mail-relay from DEPLOY.md "Mail relay on d06" at
+#   aa1af97a (asyla #657), on its own tag and its own network, with 2587 on d06's LAN only;
 # - no container_name but vector's, so containers are communications-<service>-1 (the anonymous
 #   check's NATS_CONTAINER=communications-nats-1); vector keeps the name vector-http.toml excludes;
 # - the network is named communications_net, so internal-access hosts/d06 can join it; vector is
@@ -18,7 +19,8 @@
 # communications.sh, which the workstation hands the values at deploy and which refuses to start
 # when one is empty. nats gets its users' passwords from a compose override communications.sh
 # generates at each start (environment NAMES only); without it nats refuses to start (fail closed).
-# Run with communications.sh (it sets COMMS_ROOT, COMMS_REGISTRY and COMMS_TAG and keeps the order).
+# Run with communications.sh (it sets COMMS_ROOT, COMMS_REGISTRY, COMMS_TAG and COMMS_RELAY_TAG and
+# keeps the order).
 name: communications
 
 services:
@@ -200,9 +202,66 @@ services:
     restart: unless-stopped
     networks: [communications_net, observability]
 
+  # theOrg's SMTP submission relay, mail-relay.asyla.org:2587 (STARTTLS and AUTH required), from
+  # DEPLOY.md "Mail relay on d06" at aa1af97a (asyla #657, theOrg #1097). Its own tag
+  # (COMMS_RELAY_TAG), so the chat images stay where COMMS_TAG pins them. It takes its token from
+  # no file and no environment: started, it logs "wrapped token spent: waiting for the token
+  # broker" and stays unhealthy until host-maintenance's hourly heal arms it through
+  # `communications.sh relay-arm` (a single-use wrapping token over ssh's stdin). Then it makes its
+  # own leaf from step-ca (key in memory, never stored), so no TLS or key mount. The only mount is
+  # step-ca's public root, which communications.sh up places and checks against its pin; the relay
+  # checks it again against MAIL_RELAY_STEPCA_ROOT_SHA256 (the same pin, lower-case hex) before it
+  # takes a token. No container_name: communications.sh finds it by its compose labels.
+  mail-relay:
+    image: ${COMMS_REGISTRY:?}/communications-mail-relay:${COMMS_RELAY_TAG:?}
+    environment:
+      # None of these is a secret (DEPLOY.md's table). There is no OPENBAO_WRAPPED_TOKEN.
+      - OPENBAO_ADDR=https://vault.asyla.org
+      # The relay's own loopback, inside this container only; never published.
+      - OPENBAO_BROKER_PORT=9117
+      - MAIL_RELAY_TLS=stepca
+      - MAIL_RELAY_TOKEN_ROLE=communications-d06
+      - MAIL_RELAY_STEPCA_ROOT_SHA256=cd391a56ae000b01a4433a73f22d98a373e5bb08e8d77531df2db86a4f2987d3
+      # theOrg's defaults, spelled out so this file shows the whole contract.
+      - MAIL_RELAY_STEPCA_URL=https://ca.asyla.org:9000
+      - MAIL_RELAY_STEPCA_ROOT=/etc/mail-relay/ca/root_ca.crt
+      - MAIL_RELAY_STEPCA_PROVISIONER=mail-relay-d06
+      - MAIL_RELAY_STEPCA_PASSWORD_KV=secret/v2/certificate-management/step-ca/provisioners/mail-relay-d06#password
+      - MAIL_RELAY_TLS_NAME=mail-relay.asyla.org
+    volumes:
+      # The file, not its directory: the public root only.
+      - ${COMMS_ROOT:?}/mail-relay-ca/root_ca.crt:/etc/mail-relay/ca/root_ca.crt:ro
+    ports:
+      # SMTP on d06's LAN address only (d05's Keycloak reaches it as mail-relay.asyla.org, a CNAME
+      # to d06); metrics on loopback only.
+      - "10.0.0.65:2587:2587"
+      - "127.0.0.1:9116:9116"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    cpus: 0.5
+    mem_limit: 256m
+    restart: unless-stopped
+    healthcheck:
+      # theOrg's, unchanged: 200 only when it can take and send mail.
+      test: ["CMD", "python", "/app/smoke.py", "health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    # Its own network, egress only: off nats and the message store.
+    networks: [mail_relay_net]
+
 networks:
   communications_net:
     name: communications_net
+    driver: bridge
+  mail_relay_net:
+    name: communications_mail_relay
     driver: bridge
   # d06/apps/observability's network (its project's observability-net). COMMS_OBSERVABILITY_NET
   # names another one for a lab only.

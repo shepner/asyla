@@ -9,7 +9,11 @@
 # that is missing. Then `import PATH` (C4 P2) against a real rsync: a good backup, as a directory
 # and as a tar, mirrored owner-only and never restored; a bad STATUS, a bad sha256, no
 # public.messages and a symlink member refused; an existing mirror refused unless IMPORT_FORCE=1.
-# Last, import_from_host.sh's argument handling and its ssh calls, against an ssh stub.
+# Then import_from_host.sh's argument handling and its ssh calls, against an ssh stub. Last, the
+# mail relay (asyla #657): started last with no --wait, its compose service (no token, no TLS or
+# key mount, 2587 on 10.0.0.65 only, 9117 never published), the root pin agreeing three ways,
+# relay-status's word for stubbed docker output, relay-arm's stdin reaching arm.py as uid 10002,
+# verify's relay check, and a bad root stopping up and restart before compose.
 # Nothing here reaches a registry, the vault or a host; every value is a random stand-in made at run time.
 # Run: bash scripts/tests/test_communications_sh.sh
 # COMMUNICATIONS_SH=PATH tests another copy of communications.sh (a mutated one, to see cases fail).
@@ -27,7 +31,7 @@ bad() { echo "FAIL $1${2:+: $2}"; fail=1; }
 mkdir -p "$T/home/scripts/docker" "$T/bin" "$T/app" "$T/dl" "$T/d1"
 cp "$REPO/docker/backup_lib.sh" "$T/home/scripts/docker/"
 printf 'DOCKER_DL=%s\nDOCKER_D1=%s\n' "$T/dl" "$T/d1" > "$T/home/scripts/docker/common.env"
-cp "$REPO"/d06/apps/communications/{compose.yml,compose.no-ticketing.yml,docker-credential-communications-env} "$T/app/"
+cp "$REPO"/d06/apps/communications/{compose.yml,compose.no-ticketing.yml,docker-credential-communications-env,theorg-v2-root.crt} "$T/app/"
 cp "${COMMUNICATIONS_SH:-$REPO/d06/apps/communications/communications.sh}" "$T/app/communications.sh"
 USERS="$T/dl/Communications/nats-runtime/users.conf"
 
@@ -60,6 +64,16 @@ case "$*" in
   "network inspect ticketing_net"*) [ -z "${STUB_NO_TICKETING:-}" ] ;;
   "network inspect"*) [ -z "${STUB_NO_OBS:-}" ] ;;
   *"ps -q --status running nats"*) if [ -n "${STUB_RUNNING:-}" ]; then echo abc; fi ;;
+  # The mail relay: STUB_RELAY_IDS (space-separated) are its containers, STUB_RELAY_STATE and
+  # STUB_RELAY_HEALTH its State, STUB_RELAY_LOGS a file of its log (on stderr, as python logs).
+  # arm.py keeps its stdin in STUB_ARM_STDIN, says STUB_ARM_SAYS and exits STUB_ARM_RC.
+  "ps -aq --filter label=com.docker.compose.project=communications --filter label=com.docker.compose.service=mail-relay")
+    for i in ${STUB_RELAY_IDS:-}; do echo "$i"; done ;;
+  "inspect -f {{.State.Status}} {{.State.StartedAt}} "*) echo "${STUB_RELAY_STATE:-running} 2026-01-01T00:00:00.000000000Z" ;;
+  "inspect -f {{if .State.Health}}{{.State.Health.Status}}{{end}} "*) echo "${STUB_RELAY_HEALTH:-}" ;;
+  "logs --since 2026-01-01T00:00:00.000000000Z "*) if [ -n "${STUB_RELAY_LOGS:-}" ]; then cat "$STUB_RELAY_LOGS" >&2; fi ;;
+  "exec -i -u 10002 "*" python3 /app/arm.py") cat > "$STUB_ARM_STDIN"; echo "${STUB_ARM_SAYS:-ok}"; exit "${STUB_ARM_RC:-0}" ;;
+  "exec "*" python3 /app/smoke.py probe --tls-name mail-relay.asyla.org") exit "${STUB_PROBE_RC:-0}" ;;
 esac
 EOF
 # stat: backup/ already has the image's owner and mode, so ensure_dirs needs no sudo.
@@ -127,8 +141,8 @@ if run_up "${START5[@]}"; then
     ok "the override names NATS_PW_0 only; nats gets the value pre-quoted"
   else bad "the override names NATS_PW_0 only; nats gets the value pre-quoted" "$LOG"; fi
   order="$(grep -oE 'up -d (--wait --wait-timeout [0-9]+ )?(--force-recreate )?[a-z-]+$' <<< "$LOG" | awk '{print $NF}' | tr '\n' ' ')"
-  if [ "$order" = "nats nats-exporter comms-postgres chat-api webhook-to-mq-vikunja vector " ]; then
-    ok "start order: nats, exporter, postgres, chat-api, webhook-to-mq, vector"
+  if [ "$order" = "nats nats-exporter comms-postgres chat-api webhook-to-mq-vikunja vector mail-relay " ]; then
+    ok "start order: nats, exporter, postgres, chat-api, webhook-to-mq, vector, mail-relay"
   else bad "start order" "$order"; fi
   if has "$OUT" "users.conf changed"; then ok "first up writes users.conf"; else bad "first up writes users.conf" "$OUT"; fi
 else bad "up with the five values starts" "$OUT"; fi
@@ -365,5 +379,150 @@ run_helper -- && refused=1; has "$LOG" "ssh" && refused=1
 if [ "$refused" = 0 ] && has "$OUT" "exactly one"; then
   ok "import_from_host.sh refuses a bad volume name or image, both modes, and neither, before any ssh"
 else bad "import_from_host.sh refuses a bad volume name or image, both modes, and neither" "$OUT"; fi
+
+# --- the mail relay (asyla #657) ---------------------------------------------------------------
+CS_SRC="$REPO/d06/apps/communications/communications.sh"
+[ -n "${COMMUNICATIONS_SH:-}" ] && CS_SRC="$COMMUNICATIONS_SH"
+APP_SRC="$REPO/d06/apps/communications"
+# The mail-relay service's block of compose.yml, comments dropped.
+RELAY_BLOCK="$(awk '/^  mail-relay:$/{f=1;print;next} f && /^  [a-z]|^[a-z]/{f=0} f' "$APP_SRC/compose.yml" | grep -vE '^ *#')"
+
+# R1. up starts the relay last, once, with no --wait; the script names no --wait for it either.
+if run_up "${START5[@]}"; then
+  relay_up="$(grep -E ' mail-relay$' <<< "$LOG")"
+  if [ "$(grep -c . <<< "$relay_up")" = 1 ] && grep -qE '^docker compose (-f [^ ]+ )+up -d mail-relay$' <<< "$relay_up" \
+      && [ "$(tail -n 1 <<< "$(grep -E '^docker compose ' <<< "$LOG")")" = "$relay_up" ] \
+      && ! grep -E -- '--wait' "$CS_SRC" | grep -qE 'RELAY_SERVICE|mail-relay'; then
+    ok "up starts mail-relay once, last, with no --wait"
+  else bad "up starts mail-relay once, last, with no --wait" "$relay_up"; fi
+  placed="$T/dl/Communications/mail-relay-ca/root_ca.crt"
+  if cmp -s "$placed" "$APP_SRC/theorg-v2-root.crt" && [ "$(mode "$placed")" = "-rw-r--r--" ]; then
+    ok "up places the committed root at mail-relay-ca/root_ca.crt, 0644"
+  else bad "up places the committed root at mail-relay-ca/root_ca.crt, 0644" "$(mode "$placed" 2>&1)"; fi
+else bad "up with the five values starts the relay" "$OUT"; fi
+
+# R2. The compose service: no token variable or value, no TLS or key mount, the root file only,
+# restart unless-stopped, 2587 on 10.0.0.65 only, 9116 on loopback only, 9117 never published.
+tok="$(grep -iE 'token' <<< "$RELAY_BLOCK" | grep -vF 'MAIL_RELAY_TOKEN_ROLE=communications-d06')"
+vars="$(grep -oE '\$\{[A-Z_]+' <<< "$RELAY_BLOCK" | sort -u | tr '\n' ' ')"
+vols="$(awk '/^    volumes:/{f=1;next} f && /^    [a-z]/{f=0} f' <<< "$RELAY_BLOCK")"
+ports="$(awk '/^    ports:/{f=1;next} f && /^    [a-z]/{f=0} f' <<< "$RELAY_BLOCK" | tr -d ' ')"
+if [ -z "$tok" ] && [ "$vars" = '${COMMS_REGISTRY ${COMMS_RELAY_TAG ${COMMS_ROOT ' ]; then
+  ok "mail-relay: no token in its environment (MAIL_RELAY_TOKEN_ROLE only), no secret variable"
+else bad "mail-relay: no token in its environment, no secret variable" "$tok / $vars"; fi
+if [ "$vols" = '      - ${COMMS_ROOT:?}/mail-relay-ca/root_ca.crt:/etc/mail-relay/ca/root_ca.crt:ro' ] \
+    && ! grep -qE 'tls|key' <<< "$vols" && grep -qx '    restart: unless-stopped' <<< "$RELAY_BLOCK"; then
+  ok "mail-relay: the root file read-only is its only mount (no TLS or key); restart unless-stopped"
+else bad "mail-relay: the root file is its only mount; restart unless-stopped" "$vols"; fi
+if [ "$ports" = $'-"10.0.0.65:2587:2587"\n-"127.0.0.1:9116:9116"' ] \
+    && ! grep -vE '^ *#' "$APP_SRC/compose.yml" | grep -qE '9117:|:9117"' \
+    && [ "$(grep -vE '^ *#' "$APP_SRC/compose.yml" | grep -cE '2587')" = 1 ]; then
+  ok "mail-relay: 2587 on 10.0.0.65 only, 9116 on 127.0.0.1 only, 9117 never published"
+else bad "mail-relay: 2587 on 10.0.0.65 only, 9116 on 127.0.0.1 only, 9117 never published" "$ports"; fi
+
+# R3. The pin: the script's colon form, compose's lower-case hex, the committed root's SHA-256, and
+# the committed root is d05's copy.
+colon="$(sed -n 's/^CA_FINGERPRINT="\([0-9A-F:]*\)"$/\1/p' "$CS_SRC")"
+hex="$(sed -n 's/^ *- MAIL_RELAY_STEPCA_ROOT_SHA256=\([0-9a-f]*\)$/\1/p' "$APP_SRC/compose.yml")"
+real="$(openssl x509 -in "$APP_SRC/theorg-v2-root.crt" -noout -fingerprint -sha256 | sed 's/^.*=//')"
+if [ -n "$colon" ] && [ "${#hex}" = 64 ] && [ "$colon" = "$real" ] \
+    && [ "$(tr -d ':' <<< "$colon" | tr '[:upper:]' '[:lower:]')" = "$hex" ] \
+    && cmp -s "$APP_SRC/theorg-v2-root.crt" "$REPO/d05/apps/identity-platform/theorg-v2-root.crt"; then
+  ok "the root pin: CA_FINGERPRINT = compose's MAIL_RELAY_STEPCA_ROOT_SHA256 = the committed root (= d05's)"
+else bad "the root pin agrees across the script, compose and the committed root" "$colon / $hex / $real"; fi
+
+# R4. relay-status: one word from the State and the log since this start; never Config.
+LOGF="$T/relay.log"
+W='2026-01-01 00:00:01 WARNING wrapped token spent: waiting for the token broker'
+L='2026-01-01 00:00:09 WARNING listening on 2587 (STARTTLS and AUTH required)'
+D='2026-01-01 00:00:05 WARNING token broker: wrapping token delivered and unwrapped'
+status_case() {  # expected-word label logs-lines... (env words in SC_ENV; exit code SC_RC, 0)
+  local want="$1" label="$2" rc=0; shift 2
+  printf '%s\n' "$@" > "$LOGF"
+  # shellcheck disable=SC2086  # the case's NAME=value words
+  run_cs ${SC_ENV:-} STUB_RELAY_LOGS="$LOGF" -- relay-status || rc=$?
+  if [ "$rc" = "${SC_RC:-0}" ] && [ "$OUT" = "$want" ] && ! has "$LOG" "Config"; then
+    ok "relay-status: $label -> $want, exit $rc"
+  else bad "relay-status: $label -> $want, exit ${SC_RC:-0}" "$OUT (exit $rc)"; fi
+}
+SC_ENV="" status_case absent "no container"
+SC_ENV="STUB_RELAY_IDS=r1" status_case waiting "running, the wait logged" "$W"
+SC_ENV="STUB_RELAY_IDS=r1 STUB_RELAY_HEALTH=starting" SC_RC=3 status_case armed "the wait, then delivered, no leaf yet" "$W" "$D"
+SC_ENV="STUB_RELAY_IDS=r1 STUB_RELAY_HEALTH=unhealthy" SC_RC=3 status_case armed "delivered, unhealthy, not listening" "$W" "$D"
+SC_ENV="STUB_RELAY_IDS=r1 STUB_RELAY_HEALTH=healthy" status_case running "delivered and healthy" "$W" "$D"
+SC_ENV="STUB_RELAY_IDS=r1 STUB_RELAY_HEALTH=unhealthy" status_case waiting "a wait after the delivered line (a restart's)" "$W" "$D" "$W"
+SC_ENV="STUB_RELAY_IDS=r1 STUB_RELAY_HEALTH=unhealthy" status_case waiting "a delivered line before the wait" "$D" "$W"
+SC_ENV="STUB_RELAY_IDS=r1" status_case running "running, listening after the wait" "$W" "$L"
+SC_ENV="STUB_RELAY_IDS=r1" status_case running "running, no wait logged" "$L"
+SC_ENV="STUB_RELAY_IDS=r1 STUB_RELAY_STATE=restarting" status_case restarting "restarting" "$W"
+SC_ENV="STUB_RELAY_IDS=r1 STUB_RELAY_STATE=exited" status_case stopped "exited" "$W"
+if run_cs STUB_RELAY_IDS="r1 r2" -- relay-status; then bad "relay-status refuses two relay containers" "$OUT"
+elif has "$OUT" "expected one"; then ok "relay-status refuses two relay containers"
+else bad "relay-status refuses two relay containers" "$OUT"; fi
+
+# R5. relay-arm: alone, with no start values; its stdin reaches arm.py as uid 10002 unchanged and
+# is in no argv; arm.py's word and exit code are passed back. The line is a plain stand-in.
+ARM_IN="$T/arm.stdin"
+ARM_LINE="stand-in-wrapping-line"
+run_arm() {
+  local rc
+  : > "$T/log"; : > "$ARM_IN"
+  OUT="$(printf '%s\n' "$ARM_LINE" | env -i PATH="$T/bin:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$T/home" \
+    STUB_LOG="$T/log" STUB_ARM_STDIN="$ARM_IN" "$@" bash "$T/app/communications.sh" relay-arm 2>&1)"
+  rc=$?
+  LOG="$(cat "$T/log")"
+  return "$rc"
+}
+if run_arm STUB_RELAY_IDS=r1 && [ "$OUT" = ok ] && [ "$(cat "$ARM_IN")" = "$ARM_LINE" ] \
+    && has "$LOG" "docker exec -i -u 10002 r1 python3 /app/arm.py" && ! has "$LOG" "$ARM_LINE"; then
+  ok "relay-arm without start values: stdin to arm.py as uid 10002, in no argv; ok passed back"
+else bad "relay-arm: stdin to arm.py as uid 10002" "$OUT / $LOG"; fi
+run_arm STUB_RELAY_IDS=r1 STUB_ARM_SAYS=fail STUB_ARM_RC=1; rc=$?
+if [ "$rc" = 1 ] && [ "$OUT" = fail ]; then ok "relay-arm passes arm.py's fail and exit 1 back"
+else bad "relay-arm passes arm.py's fail and exit 1 back" "$rc $OUT"; fi
+if run_arm || has "$LOG" "exec"; then bad "relay-arm with no relay container fails before any exec" "$OUT"
+else ok "relay-arm with no relay container fails before any exec"; fi
+: > "$T/log"
+if printf '%s\n' "$ARM_LINE" | env -i PATH="$T/bin:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$T/home" STUB_LOG="$T/log" \
+    STUB_RELAY_IDS=r1 STUB_ARM_STDIN="$ARM_IN" bash "$T/app/communications.sh" relay-arm verify >/dev/null 2>&1 \
+    || grep -qF "exec" "$T/log"; then
+  bad "relay-arm combined with another switch is refused before any exec"
+else ok "relay-arm combined with another switch is refused before any exec"; fi
+if grep -qE '^[^#]*set -[a-z]*x' "$CS_SRC"; then bad "communications.sh never traces (set -x)"
+else ok "communications.sh never traces (set -x)"; fi
+
+# R6. verify's relay check (the other checks fail here, with nothing listening; only the relay's
+# lines are read).
+verify_case() {  # label want-in-OUT log-file-lines... (env words in VC_ENV)
+  local label="$1" want="$2"; shift 2
+  printf '%s\n' "$@" > "$LOGF"
+  # shellcheck disable=SC2086
+  run_cs COMMS_WAIT_S=0 COMMS_RELAY_WAIT_S=0 ${VC_ENV:-} STUB_RELAY_LOGS="$LOGF" -- verify
+  if has "$OUT" "$want"; then ok "verify: $label"; else bad "verify: $label" "$(grep -i relay <<< "$OUT")"; fi
+}
+VC_ENV="" verify_case "no relay warns" "[WARN] mail-relay is not deployed"
+VC_ENV="STUB_RELAY_IDS=r1 STUB_RELAY_HEALTH=unhealthy" verify_case "a waiting relay warns, not fatal" "[WARN] mail-relay is running unarmed" "$W"
+has "$LOG" "/app/smoke.py" && bad "verify: no probe of a waiting relay" "$LOG"
+VC_ENV="STUB_RELAY_IDS=r1 STUB_RELAY_HEALTH=healthy" verify_case "a healthy relay gets smoke.py probe" "smoke.py probe (STARTTLS, verified for mail-relay.asyla.org) OK" "$W" "$L"
+has "$LOG" "docker exec r1 python3 /app/smoke.py probe --tls-name mail-relay.asyla.org" || bad "verify: the probe names mail-relay.asyla.org" "$LOG"
+VC_ENV="STUB_RELAY_IDS=r1 STUB_RELAY_HEALTH=healthy STUB_PROBE_RC=1" verify_case "a failed probe is fatal" "[ERROR] mail-relay smoke.py probe" "$W" "$L"
+VC_ENV="STUB_RELAY_IDS=r1 STUB_RELAY_HEALTH=unhealthy" verify_case "running, unhealthy, not waiting is fatal" "[ERROR] mail-relay is running (unhealthy)" "$W" "$L"
+VC_ENV="STUB_RELAY_IDS=r1 STUB_RELAY_HEALTH=starting" verify_case "armed and not healthy is fatal, naming step-ca, the clock, the provisioner" "[ERROR] mail-relay is armed" "$W" "$D"
+if has "$OUT" "step-ca" && has "$OUT" "clock" && has "$OUT" "provisioner" && ! has "$OUT" "[WARN] mail-relay is running unarmed"; then
+  ok "verify: the armed error names step-ca, the clock and the provisioner, and does not warn waiting"
+else bad "verify: the armed error names step-ca, the clock and the provisioner" "$(grep -i relay <<< "$OUT")"; fi
+has "$LOG" "/app/smoke.py" && bad "verify: no probe of an armed, unhealthy relay" "$LOG"
+VC_ENV="STUB_RELAY_IDS=r1 STUB_RELAY_HEALTH=unhealthy" verify_case "a wait after the delivered line warns again" "[WARN] mail-relay is running unarmed" "$W" "$D" "$W"
+
+# R7. A bad root: up and restart stop before any compose call.
+cp "$T/app/theorg-v2-root.crt" "$T/root.good"
+printf 'not a certificate\n' > "$T/app/theorg-v2-root.crt"
+if run_up "${START5[@]}"; then bad "up with a bad root is refused"
+elif has "$LOG" "compose" || ! has "$OUT" "not placing it"; then bad "up with a bad root stops before compose" "$OUT"
+else ok "up with a bad root stops before compose"; fi
+if CS_CMD=restart run_up "${START5[@]}"; then bad "restart with a bad root is refused"
+elif has "$LOG" "compose"; then bad "restart with a bad root stops before its down" "$LOG"
+else ok "restart with a bad root stops before its down"; fi
+cp "$T/root.good" "$T/app/theorg-v2-root.crt"
 
 exit "$fail"
