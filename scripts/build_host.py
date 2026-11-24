@@ -91,24 +91,6 @@ hold = "reason" is not built or destroyed.
 Network: [vm].bridge (default vmbr1) and [vm].vlan (default 100; 0 = untagged, no tag=) make
 net0; verify checks net0 against them. d07 on vmh03: vmbr0, untagged (vmh03's only bridge).
 
-CPU type: an optional [vm].cpu (a Proxmox CPU type name, such as "host" or "x86-64-v2-AES") goes to
-`qm create --cpu`, and verify checks that `qm config` shows it. Without it the VM gets Proxmox's
-default, as every host before ci01 (asyla #1237: "host" so its CI jobs see the node's CPU flags).
-
-NAS mounts: verify checks the two NAS docker shares (NAS_DOCKER_MOUNTS) only for a spec whose
-[setup].steps has nfs.sh, the step that mounts them; ci01 has no NFS step (CI needs no NAS).
-binfmt.sh as a step: verify checks that the qemu-aarch64 handler is enabled with flag F.
-[docker] containerd_root with docker.sh as a step: verify checks that the running containerd's
-command line (/proc/PID/cmdline, readable without root) has --root containerd_root (docker.sh's
-header says why).
-
-Gitea runner modes ([runner], read by docker/gitea-runner/gitea-runner.sh): mode = "host" (the
-default: jobs run on the host as `docker`) or "docker" (each job in a container of image =
-"IMAGE"; the labels are registered as NAME:docker://IMAGE). Docker mode also takes capacity =
-1-99 (default 10, as host mode) and container_options = "DOCKER RUN FLAGS". Those three keys are
-refused in host mode, and any other key in [runner]. verify, for docker mode, also reads the
-labels from the host's /var/lib/gitea-runner/config.yaml (the API's label names carry no image).
-
 Image: a node in NODE_IMAGE (vmh03, which mounts no NAS storage) builds from a local copy of IMAGE.
 Before qm create, the vm phase compares its sha256 with IMAGE's on IMAGE_NODE (vmh01) and only on
 a difference copies vmh01 -> workstation -> the node under a temp name, checks the sum there and
@@ -272,38 +254,6 @@ NAMESERVERS = "10.0.0.10 10.0.0.11"
 SEARCHDOMAIN = "asyla.org"
 BRIDGE, VLAN = "vmbr1", 100   # [vm].bridge and [vm].vlan default to these; vlan = 0 is untagged
 BRIDGE_NAME = re.compile(r"vmbr\d+")
-# [vm].cpu: a Proxmox CPU type ("host", "x86-64-v2-AES", "kvm64", ...; qm(1), CPU Type,
-# https://pve.proxmox.com/pve-docs/qm.1.html). Only the name, no flags: it goes into a qm command line.
-VM_CPU = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
-# The NAS docker shares build/setup/nfs.sh mounts; verify checks them only when nfs.sh is a step.
-NAS_DOCKER_MOUNTS = ("/mnt/nas/data1/docker", "/mnt/nas/data2/docker")
-BINFMT_SCRIPT = "binfmt.sh"   # build/setup/: QEMU user binfmt for arm64 buildx legs (ci01)
-BINFMT_AARCH64 = "/proc/sys/fs/binfmt_misc/qemu-aarch64"
-# The running containerd's arguments, one per line ([docker] containerd_root; docker.sh).
-CONTAINERD_CMDLINE = "tr '\\0' '\\n' < /proc/$(systemctl show -p MainPID --value containerd)/cmdline"
-
-
-def containerd_root_flag(args: list[str]) -> str | None:
-    """The value of --root (or --root=X) in a containerd command line's arguments, else None."""
-    for i, a in enumerate(args):
-        if a == "--root" and i + 1 < len(args):
-            return args[i + 1]
-        if a.startswith("--root="):
-            return a.split("=", 1)[1]
-    return None
-
-
-# [runner] (docker/gitea-runner/gitea-runner.sh reads the same keys and refuses the same values).
-RUNNER_KEYS = ("enabled", "labels", "mode", "image", "capacity", "container_options")
-RUNNER_MODES = ("host", "docker")
-RUNNER_DOCKER_KEYS = ("image", "capacity", "container_options")
-RUNNER_LABEL = re.compile(r"[a-z0-9][a-z0-9-]*")   # gitea-runner.sh's label pattern
-# An image reference without a scheme (the label adds docker://), no blank, quote or comma (the
-# label list is comma-separated at register).
-RUNNER_IMAGE = re.compile(r"[a-z0-9][a-z0-9._/-]*(:[0-9]+/[a-z0-9._/-]+)?(:[A-Za-z0-9_][A-Za-z0-9_.-]*)?(@sha256:[0-9a-f]{64})?")
-# theOrg's OPTS_RE for docker run flags: no quote, backslash or shell character.
-RUNNER_OPTS = re.compile(r"-[A-Za-z0-9=,._:/@+ -]*")
-RUNNER_CONFIG = "/var/lib/gitea-runner/config.yaml"   # gitea-runner.sh install writes it; the daemon reads it
 SSH_KEY_PUB = Path.home() / ".ssh/docker_rsa.pub"
 SSH_KEY = SSH_KEY_PUB.with_suffix("")
 GUEST_USER = "docker"
@@ -529,10 +479,9 @@ def load_spec(host: str, node: str | None = None) -> dict:
         raise Fail(f"{path}: [vm].vlan must be a VLAN tag 1-4094, or 0 for untagged, not {vlan!r}")
     if "startup" in vm and not (isinstance(vm["startup"], str) and STARTUP_FORM.fullmatch(vm["startup"])):
         raise Fail(f"{path}: [vm].startup must be order=N[,up=S][,down=S], not {vm['startup']!r}")
-    if "cpu" in vm and not (isinstance(vm["cpu"], str) and VM_CPU.fullmatch(vm["cpu"])):
-        raise Fail(f"{path}: [vm].cpu must be a Proxmox CPU type name such as host or x86-64-v2-AES, "
-                   f"not {vm['cpu']!r}")
-    check_runner_spec(path, spec)
+    labels = spec.get("runner", {}).get("labels", [])
+    if not isinstance(labels, list) or not all(isinstance(l, str) and l for l in labels):
+        raise Fail(f"{path}: [runner].labels must be a list of names")
     check_gitlab_runner_spec(path, spec)
     spec["apps_tree"] = host
     rep = spec.get("replica")
@@ -774,47 +723,6 @@ def gitea_env(section: str, key: str) -> str:
     return f"GITEA__{section.replace('.', '_0x2E_')}__{key}"
 
 
-def check_runner_spec(path: Path, spec: dict) -> None:
-    """[runner]: enabled, labels, and the mode keys (docstring, Gitea runner modes). The same rules
-    as gitea-runner.sh's, so a spec the host script would refuse never reaches the runner phase."""
-    r = spec.get("runner", {})
-    where = f"{path}: [runner]"
-    unknown = set(r) - set(RUNNER_KEYS)
-    if unknown:
-        raise Fail(f"{where}: unknown keys {sorted(unknown)} (known: {', '.join(RUNNER_KEYS)})")
-    labels = r.get("labels", [])
-    if not isinstance(labels, list) or not all(isinstance(l, str) and l for l in labels):
-        raise Fail(f"{where}.labels must be a list of names")
-    bad = [l for l in labels if not RUNNER_LABEL.fullmatch(l)]
-    if bad:
-        raise Fail(f"{where}.labels must be names {RUNNER_LABEL.pattern} (gitea-runner.sh's), not {bad}")
-    mode = r.get("mode", "host")
-    if mode not in RUNNER_MODES:
-        raise Fail(f"{where}.mode must be one of {RUNNER_MODES}, not {mode!r}")
-    if mode == "host":
-        extra = [k for k in RUNNER_DOCKER_KEYS if k in r]
-        if extra:
-            raise Fail(f"{where}: {extra} are for mode = \"docker\" only")
-        return
-    image = r.get("image")
-    if not (isinstance(image, str) and RUNNER_IMAGE.fullmatch(image)):
-        raise Fail(f"{where}: mode = \"docker\" needs image = \"REGISTRY/NAME[:TAG][@sha256:DIGEST]\" "
-                   f"(no scheme), not {image!r}")
-    cap = r.get("capacity", 10)
-    if not isinstance(cap, int) or isinstance(cap, bool) or not 1 <= cap <= 99:
-        raise Fail(f"{where}.capacity must be a whole number 1-99, not {cap!r}")
-    opts = r.get("container_options", "")
-    if not isinstance(opts, str) or (opts and not RUNNER_OPTS.fullmatch(opts)):
-        raise Fail(f"{where}.container_options must be docker run flags ({RUNNER_OPTS.pattern}), not {opts!r}")
-
-
-def runner_label_lines(spec: dict) -> list[str]:
-    """The label lines gitea-runner.sh renders into RUNNER_CONFIG for this spec's labels."""
-    r = spec.get("runner", {})
-    kind = f"docker://{r['image']}" if r.get("mode") == "docker" else "host"
-    return [f'    - "{l}:{kind}"' for l in r.get("labels", [])]
-
-
 def check_gitlab_runner_spec(path: Path, spec: dict) -> None:
     """[gitlab_runner] runners = [{name, scope, tags, executor, and for docker: image, volumes,
     pull_policy}] and optionally user = "NAME" (required with a shell runner), or no table at all.
@@ -1030,8 +938,7 @@ def phase_vm(spec: dict, apply: bool, recreate: bool, confirm: str | None) -> No
         f"--memory {vm['memory_mb']} --ostype l26 --scsihw virtio-scsi-pci --vga std "
         f"--serial0 socket --rng0 source=/dev/urandom "
         f"--net0 {net0_arg(vm)} --onboot 1 "
-        f"--agent 1,fstrim_cloned_disks=1" + (f" --startup {vm['startup']}" if vm.get("startup") else "")
-        + (f" --cpu {vm['cpu']}" if vm.get("cpu") else ""),
+        f"--agent 1,fstrim_cloned_disks=1" + (f" --startup {vm['startup']}" if vm.get("startup") else ""),
         f"{q} --scsi0 {d['storage']}:0,import-from={img},discard=on,ssd=1",
         # import-from skips the image's zero blocks (qemu zeroinit: lvmthin claims sparseinit), but the
         # nodes' thin pools do not zero new chunks, so those blocks keep a deleted volume's bytes; on
@@ -2159,9 +2066,7 @@ def verify(spec: dict) -> int:
     g = r.stdout.split()
     check("docker group asyla, member of docker (GID 1000)", g[:1] == ["asyla"] and g[1:2] == ["1000"], " ".join(g))
     mounts = out[2].split()
-    steps = spec.get("setup", {}).get("steps", [])
-    # The NAS shares only where nfs.sh mounts them (docstring, NAS mounts).
-    for m in (list(NAS_DOCKER_MOUNTS) if "nfs.sh" in steps else []) + (["/mnt/docker"] if spec["vm"].get("data_disk") else []):
+    for m in ["/mnt/nas/data1/docker", "/mnt/nas/data2/docker"] + (["/mnt/docker"] if spec["vm"].get("data_disk") else []):
         check(f"mount {m}", m in mounts)
     if "smb.sh" in spec.get("setup", {}).get("steps", []):
         check("mount /mnt/nas/data1/media", "/mnt/nas/data1/media" in mounts)
@@ -2173,9 +2078,6 @@ def verify(spec: dict) -> int:
     if spec["vm"].get("startup"):
         have = conf.get("startup", "none")
         check("VM start order is the spec's", have == spec["vm"]["startup"], f"{have} vs {spec['vm']['startup']}")
-    if spec["vm"].get("cpu"):
-        have = conf.get("cpu", "none")
-        check("VM CPU type is the spec's", have == spec["vm"]["cpu"], f"{have} vs {spec['vm']['cpu']}")
     want_net = f"bridge={spec['vm']['bridge']}, " + (f"tag={spec['vm']['vlan']}" if spec["vm"]["vlan"] else "untagged")
     check("VM network (net0) is the spec's", net0_matches(conf.get("net0", ""), spec["vm"]),
           f"{conf.get('net0', 'none')} vs {want_net}")
@@ -2212,20 +2114,6 @@ def verify(spec: dict) -> int:
         bad_src = [l.split('file="', 1)[1].split('"', 1)[0] for l in out if l.startswith("asyla_textfile_source_ok{") and l.endswith(" 0")]
         check("node exporter (node_exporter.sh): active, 9100 filtered, textfiles parse", ok, " ".join(out[:3]))
         check("textfile sources copied", ok and not bad_src, ", ".join(bad_src))
-    if BINFMT_SCRIPT in steps:
-        # The kernel's binfmt_misc entry: "enabled", then "interpreter ...", "flags: ...".
-        r = ssh(host, f"cat {BINFMT_AARCH64}", check=False)
-        lines = r.stdout.splitlines()
-        flags = next((l.split(":", 1)[1].strip() for l in lines if l.startswith("flags:")), "")
-        check(f"qemu-aarch64 binfmt enabled with flag F ({BINFMT_SCRIPT})",
-              r.returncode == 0 and lines[:1] == ["enabled"] and "F" in flags,
-              f"{lines[:1]} flags {flags!r}" if r.returncode == 0 else f"no {BINFMT_AARCH64}")
-    croot = spec.get("docker", {}).get("containerd_root")
-    if croot and "docker.sh" in steps:
-        r = ssh(host, CONTAINERD_CMDLINE, check=False)
-        have = containerd_root_flag(r.stdout.splitlines()) if r.returncode == 0 else None
-        check("containerd runs with --root [docker] containerd_root (docker.sh)", have == croot,
-              f"{have or 'no --root'} vs {croot}")
     if "port_proxy.sh" in spec.get("setup", {}).get("steps", []):
         # Each proxy's socket is filtered, and an HTTP GET through it reaches the container (every
         # proxied target today is an exporter's web page).
@@ -2276,12 +2164,6 @@ def verify(spec: dict) -> int:
         if want:
             have = sorted({l["name"].split(":")[0] for e in entries for l in e.get("labels", [])})
             check("Gitea runner labels are the spec's", have == sorted(want), f"{have} vs {sorted(want)}")
-        if want and spec["runner"].get("mode") == "docker":
-            # The API's label names carry no image: read what the daemon runs with.
-            r = ssh(host, f"grep -E '^    - \"' {RUNNER_CONFIG}", check=False)
-            have_l, want_l = r.stdout.splitlines(), runner_label_lines(spec)
-            check(f"Gitea runner labels are docker://{spec['runner']['image']} ({RUNNER_CONFIG})",
-                  r.returncode == 0 and have_l == want_l, f"{have_l} vs {want_l}")
     verify_gitlab_runners(spec, check)
     verify_host_maintenance(spec, check)
     verify_externals(spec, check)
@@ -2292,7 +2174,7 @@ def plan(spec: dict) -> int:
     host, vm = spec["host"], spec["vm"]
     print(f"{host}: VMID {vm['vmid']} on {vm['node']}, {vm['sockets']}x{vm['cores']} cores, "
           f"{vm['memory_mb']} MB, {vm['ip']}, os {vm['os_disk']}, data {vm.get('data_disk', 'none')}, "
-          f"net {net0_arg(vm)}, image {vm_image(vm['node'])}, cpu {vm.get('cpu', 'Proxmox default')}")
+          f"net {net0_arg(vm)}, image {vm_image(vm['node'])}")
     live = find_vm(vm["vmid"])
     if not live:
         print("  live: no such VM")
@@ -2316,11 +2198,6 @@ def plan(spec: dict) -> int:
     print(f"  secrets: {len(spec.get('secret', []))}; apps: {', '.join(a['name'] for a in spec.get('app', []))}")
     gaps = sum(1 for e in spec.get("external", []) if e.get("manual"))
     print(f"  externals: {len(spec.get('external', []))} ({gaps} manual)")
-    gr = spec.get("runner", {})
-    if gr.get("enabled"):
-        print(f"  Gitea runner: {gr.get('mode', 'host')} mode, labels {gr.get('labels') or 'fixed (gitea-runner.sh)'}"
-              + (f", image {gr['image']}, capacity {gr.get('capacity', 10)}, options {gr.get('container_options', '')!r}"
-                 if gr.get("mode") == "docker" else ""))
     for r in gitlab_runners(spec):
         print(f"  GitLab runner {r['description']}: {r['scope']}, {r['executor']}, tags {r['tags']}")
     hm = spec.get("host_maintenance")

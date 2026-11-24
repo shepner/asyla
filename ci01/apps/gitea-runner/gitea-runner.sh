@@ -1,1 +1,0 @@
-../../../docker/gitea-runner/gitea-runner.sh
