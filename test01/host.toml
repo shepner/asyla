@@ -1,41 +1,79 @@
 # test01: the build test host (asyla hub decisions/host-layout.md, decision 4). Created and
-# destroyed as testing needs (operator pre-approved for test01 only, 2026-10-13).
-# The #1247/#1248 proof (asyla #602 G3, G4): test01 built as a d01 replica, as the d01 proof of
-# 2026-10-18 was (1baa08c), restoring media, calibre and duplicati from d01's ordinary nightly NAS
-# mirrors (taken with the apps running) and starting them with no way to write outward
-# (scripts/build_host.py docstring, Replica). #1247: d01's [[external]] where-to-stream has
-# replica = true, so the build pushes where-to-stream's source to test01 and verify checks it.
-# #1248: each app runs, then PRAGMA integrity_check on copies of seerr's and calibre's databases.
-# No [runner], [gitlab_runner], [host_maintenance] or [[external]] of its own: a replica reaches
-# nothing off the LAN and must not answer for d01's names. No smb.sh: the NAS media share is d01's
-# own mount, and smb.sh refuses a replica. No d01 secret: none of the three apps takes one.
-# This commit is reverted after the proof, which brings back the hello test.
+# destroyed as testing needs (operator pre-approved for test01 only, 2026-10-13). Its runners
+# carry only the label or tag build-test, so they never take a real job; the one exception is the
+# hm runner below (tag hm-test01, asyla #605), which takes only host-maintenance jobs naming it.
+# test01 is maintained by that hm runner, not over SSH from d03: no [host_maintenance], so a build
+# installs no host-maintenance key, known_hosts or authorized_keys line (asyla #605).
+# The hello test (test01/apps/hello). To rehearse a production host instead, add
+# [replica] of = "dNN" (scripts/build_host.py docstring; the d03 replica of 2026-10-09 is in git
+# history under d04/, 4decdd6..fad6650).
 [vm]
 node = "vmh01"             # the default; either node may carry it: build_host.py test01 build --node vmh02
 vmid = 901                 # a block of its own, away from the Docker hosts (101 up)
 sockets = 1
-cores = 8                  # as d01 (d01/host.toml)
-memory_mb = 16384          # as d01
+cores = 4
+memory_mb = 8192
 ip = "10.0.0.69/24"
-os_disk = { storage = "local-data2", size = "64G" }     # as d01; local-data2 exists on both nodes
-data_disk = { storage = "local-data2", size = "64G" }   # /mnt/docker: as d01 (Duplicati about 22G)
+os_disk = { storage = "local-data2", size = "32G" }     # local-data2 exists on both nodes
+data_disk = { storage = "local-data2", size = "16G" }   # /mnt/docker
 cloudinit_storage = "local-data2"
 disposable = true          # build_host.py may destroy and recreate it without --confirm
 startup = "order=90"       # after every production VM when a node boots; set at create, checked by verify
 
 [setup]
-steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "container_dns.sh", "bashrc.sh"]   # build/setup/: d01's, without smb.sh and node_exporter.sh
+steps = ["systemConfig.sh", "nfs.sh", "docker.sh", "container_dns.sh", "bashrc.sh", "node_exporter.sh"]   # build/setup/, sent by the build
 
-# Only three of d01's apps run on the replica (as 1baa08c):
-# - homebridge advertises a HomeKit bridge on the LAN, so a second one would clash with d01's;
-# - home-assistant would act on the LAN's devices as d01's does;
-# - cloudflared would join d01's tunnel and take its traffic;
-# - breeding-program loads every kennel from BigQuery when it starts, and its build needs the
-#   internet; the replica's egress block stops both.
-# No verify list: none of the three publishes a web port (d01's where-to-stream check asks /healthz
-# inside its container).
-[replica]
-of = "d01"
-start_apps = true
-apps = ["media", "calibre", "duplicati"]
-exclude_secrets = ["D01_SMBCREDENTIALS", "D01_BREEDING_PROGRAM_APP_ENV", "D01_CLOUDFLARED_ENV", "D01_INTERNAL_PROXY_ENV"]
+# Node exporter as on d03 (build/setup/node_exporter.sh); nothing scrapes test01. Its one source is
+# d03's NAS one, read-only here, so a build proves the copy over NFS.
+[node_exporter]
+allow = ["10.0.0.0/24"]    # as d03
+textfile_sources = ["/mnt/nas/data1/docker/nas01-smart/smart.prom"]
+
+[[secret]]
+var = "TEST01_HELLO_ENV"
+path = "/home/docker/scripts/test01/apps/hello/.env"
+owner = "docker:asyla"
+mode = "600"
+
+[[app]]
+name = "hello"
+verify = ["verify"]
+
+# Deployed onto this host by other repos, from the workstation (asyla gap G5): internal-access's
+# test profile (hosts/test01: Caddy's internal CA only, no secret). `restore` before `up`, so every
+# build proves it: a new host warns (no backup yet); a rebuild takes the NAS snapshot and Caddy
+# keeps its CA and certificate. The backup folder internal-proxy-test01 stays on the NAS.
+[[external]]
+name = "internal-access"
+repo = "~/local/asyla/projects/internal-access"
+run = ["scripts/deploy-host.sh {host}", "scripts/fleet.sh --host {host} restore up verify"]
+
+[runner]
+enabled = true
+labels = ["build-test"]    # one label no workflow uses (docker/gitea-runner/gitea-runner.sh)
+
+# GitLab runners (build/gitlab-runner/gitlab-runner.sh, run by the build's runner phase); one
+# [[gitlab_runner.runners]] table each. GitLab description test01-build; tag build-test only, and
+# untagged jobs off, so it never takes a job. user: the account jobs run as (a unit drop-in), docker
+# for host-maintenance's ~/maint, sudo and docker group (asyla #605). The plain table comes first:
+# TOML puts every key after [[gitlab_runner.runners]] into that runner.
+[gitlab_runner]
+user = "docker"
+
+[[gitlab_runner.runners]]
+name = "build"
+scope = "group:asyla"
+tags = ["build-test"]
+executor = "docker"
+image = "python:3.12-alpine"
+volumes = []
+pull_policy = "if-not-present"
+
+# asyla #605: the per-host host-maintenance runner, proven on test01 first (operator 2026-11-22).
+# A shell runner on host-maintenance only, as docker; GitLab description test01-hm, tag hm-test01,
+# which only host-maintenance's per-host jobs name.
+[[gitlab_runner.runners]]
+name = "hm"
+scope = "project:asyla/host-maintenance"
+tags = ["hm-test01"]
+executor = "shell"
