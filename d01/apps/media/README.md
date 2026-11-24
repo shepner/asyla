@@ -65,8 +65,9 @@ JustWatch (outbound HTTPS to apis.justwatch.com), and serves a filterable page o
 
 No image is built: `python:3.13-alpine` runs `/app/serve.py` as the docker user, read-only, all capabilities
 dropped. `refresh`/`update` pull that public image with the others. It has no config, so it is not in
-`backup`/`restore`; `/data` is a cache it rebuilds. On a rebuilt host, push the source before `up`, or the
-container restarts until it is there.
+`backup`/`restore`; `/data` is a cache it rebuilds. A `build_host.py d01` rebuild pushes the source itself:
+`d01/host.toml`'s `[[external]]` where-to-stream runs this push with `RESTART=1` after `media` is up (the
+container restarts until the source is there), and verify checks `src/` and `/healthz` (asyla #1247).
 
 Update it (after committing in the project):
 

@@ -42,7 +42,9 @@ Build phases, in order (each is safe to re-run):
              (verify runs an entry's `check` on the host, else notes a manual entry, never FAIL).
              An entry's env = ["NAME"...] names values its commands take from build_host.py's
              environment (they inherit it): d06's proxy key, which internal-access's fleet.sh
-             sends over SSH stdin (no .env on d06)
+             sends over SSH stdin (no .env on d06). In a `run` command, {host} is the host
+             built and {hosts_repo} this asyla-hosts checkout (the one running build_host.py),
+             for a deploy script kept here (d01's where-to-stream push)
   late       the apps marked after_external = true: those that need this host's proxy or tunnel
              up before they start (an app that pulls its images through the proxy)
   runner     Gitea runner: check that the Gitea host serves gitea.asyla.org (below), delete this
@@ -132,7 +134,10 @@ values (d06/apps/ticketing/README.md).
 Replica: a spec with [replica] of = "dNN" (test01 as a d03 replica) takes the source spec's
 [[secret]] and [[app]] lists (minus exclude_secrets) and runs the apps from ~/scripts/dNN/ (its
 updater installs that tree too). Its own [vm] and [setup] apply, and the source's [[external]]
-never do: a replica must not answer for the source's hostnames. With start_apps = false the apps
+do not: a replica must not answer for the source's hostnames, and a replica's own [[external]]
+is refused. The one exception is a source entry marked replica = true, which ships code and
+answers for no name (d01's where-to-stream source, asyla #1247): it runs on the replica too, with
+{host} the replica, and verify runs its check there. With start_apps = false the apps
 phase starts nothing and verify checks that no container runs. [replica] keys: of, start_apps,
 exclude_secrets, apps (names: only these of the source's apps), gitea_config, verify, app_verify.
 A replica writes nothing outward: before any app starts, the apps phase pulls the started apps'
@@ -510,7 +515,11 @@ def load_spec(host: str, node: str | None = None) -> dict:
         spec["apps_tree"] = src
         if spec.get("external"):
             raise Fail(f"{path}: a replica has no [[external]] (it must not answer for {src}'s names)")
+        # Only the source's entries marked replica = true (they answer for no name; docstring, Replica).
+        spec["external"] = [e for e in src_spec.get("external", []) if e.get("replica") is True]
     for e in spec.get("external", []):
+        if not isinstance(e.get("replica", False), bool):
+            raise Fail(f"{path}: [[external]] {e.get('name')!r}: replica must be true or false")
         if "check" in e and not (isinstance(e["check"], str) and e["check"].strip()):
             raise Fail(f"{path}: [[external]] {e.get('name')!r}: check must be a shell command")
         en = e.get("env", [])
@@ -1651,7 +1660,7 @@ def phase_external(spec: dict, apply: bool) -> int:
         if e.get("env"):
             print(f"external {e['name']}: from the environment: {', '.join(e['env'])}")
         for c in e["run"]:
-            c = c.format(host=host)
+            c = c.format(host=host, hosts_repo=shlex.quote(str(REPO)))
             print(f"external {e['name']}: (cd {repo} && {c})")
             if apply:
                 r = subprocess.run(c, shell=True, cwd=repo)

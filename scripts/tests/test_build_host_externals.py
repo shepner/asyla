@@ -182,6 +182,56 @@ dm = next((e for e in d03.get("external", []) if e["name"] == "theorg-mini-deadm
 check("d03's theorg-mini-deadman is checked by verify (its timer)",
       "theorg-mini-deadman.timer" in dm.get("check", ""), str(dm))
 
+# A replica takes only the source's externals marked replica = true (asyla #1247), with {host} the
+# replica; its own [[external]] is still refused, and replica must be a boolean.
+def load_pair(src_text: str, rep_text: str) -> dict | str:
+    """load_spec() of d09, a replica of d08: the spec, or the Fail message."""
+    with tempfile.TemporaryDirectory() as t:
+        d = Path(t)
+        for h, text in (("d08", src_text), ("d09", rep_text)):
+            (d / h).mkdir()
+            (d / h / "host.toml").write_text(VM + text)
+        real, build_host.REPO = build_host.REPO, d
+        try:
+            return build_host.load_spec("d09")
+        except build_host.Fail as e:
+            return str(e)
+        finally:
+            build_host.REPO = real
+
+
+NAMES = '[[external]]\nname = "proxy"\nrepo = "~/y"\nrun = ["deploy {host}"]\n'
+SHIP = '[[external]]\nname = "ship"\nrepo = "~/z"\nrun = ["push {host} {hosts_repo}/x.sh"]\ncheck = "test -s /f"\nreplica = true\n'
+rep = load_pair(NAMES + SHIP, '[replica]\nof = "d08"\n')
+check("a replica takes only the source's replica = true externals",
+      isinstance(rep, dict) and [e["name"] for e in rep.get("external", [])] == ["ship"], str(rep))
+check("a replica of a source with no replica = true external has none",
+      isinstance(r := load_pair(NAMES, '[replica]\nof = "d08"\n'), dict) and r.get("external") == [], str(r))
+msg = load_pair(SHIP, '[replica]\nof = "d08"\n' + NAMES)
+check("a replica's own [[external]] is still refused", "a replica has no [[external]]" in str(msg), str(msg))
+msg = load("[[external]]\nname = \"ship\"\nrepo = \"~/z\"\nrun = [\"true\"]\nreplica = \"yes\"\n")
+check("load_spec refuses replica = \"yes\"", "replica must be true or false" in msg, msg)
+if isinstance(rep, dict):
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        build_host.phase_external(rep, False)
+    want = f"(cd {Path('~/z').expanduser()} && push d09 {build_host.shlex.quote(str(build_host.REPO))}/x.sh)"
+    check("the external phase runs it with {host} the replica and {hosts_repo} this checkout (dry)",
+          want in out.getvalue(), out.getvalue())
+    lines, sent, _ = run_verify_externals(rep["external"], {"test -s /f": 0})
+    check("verify runs a replica external's check on the replica", sent == ["test -s /f"] and lines[0][1], f"{lines} {sent}")
+
+d01 = build_host.load_spec("d01")
+wts = next((e for e in d01.get("external", []) if e["name"] == "where-to-stream"), {})
+check("d01's where-to-stream external runs the push script kept here, with a restart, on replicas too",
+      wts.get("replica") is True and len(wts.get("run", [])) == 1
+      and "{hosts_repo}/d01/apps/media/push-where-to-stream.sh" in wts["run"][0] and "RESTART=1" in wts["run"][0]
+      and (build_host.REPO / "d01/apps/media/push-where-to-stream.sh").is_file(), str(wts))
+check("d01's where-to-stream external is checked by verify (src and /healthz)",
+      "where-to-stream/src/serve.py" in wts.get("check", "") and "/healthz" in wts.get("check", ""), str(wts))
+check("d01's internal-access is not run on a replica", not any(
+    e.get("replica") for e in d01.get("external", []) if e["name"] == "internal-access"))
+
 # 2. updaters
 def code(path: Path) -> list[str]:
     """The script's lines without comment-only lines (they name the host)."""

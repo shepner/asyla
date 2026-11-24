@@ -80,5 +80,18 @@ name = "internal-access"
 repo = "~/local/asyla/projects/internal-access"
 run = ["scripts/deploy-host.sh {host}", "scripts/fleet.sh --host {host} restore up verify"]
 
+# where-to-stream's source (asyla #1247): the media stack's where-to-stream runs /app from
+# /mnt/docker/where-to-stream/src, which no NAS mirror holds (media.sh leaves it out; its data/ is a
+# cache). The external phase runs after restore and apps, so media has already created the
+# container (on an empty /app); the push ships the where-to-stream clone's committed HEAD (Gitea
+# personal/where-to-stream), restarts the container and waits for /healthz. replica = true: it
+# ships code and answers for no name, so a test01 replica of d01 runs it too (against test01).
+[[external]]
+name = "where-to-stream"
+repo = "~/local/personal/projects/where-to-stream"
+run = ["D01_SSH=docker@{host} SSH_IDENTITY=\"$HOME/.ssh/docker_rsa\" RESTART=1 {hosts_repo}/d01/apps/media/push-where-to-stream.sh ."]
+check = "test -s /mnt/docker/where-to-stream/src/serve.py && test -s /mnt/docker/where-to-stream/src/.git-sha && docker exec where-to-stream python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=5)\""
+replica = true
+
 [runner]
 enabled = true
