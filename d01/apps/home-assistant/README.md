@@ -258,6 +258,15 @@ not the fridge. Nothing covers the fridge until a probe is placed in it.
 - Test on WS01: `python3 scripts/tests/test_home_assistant_freezer.py` (with the image pulled, it runs
   `check_config` and one boot of the package: the holds, the °F and °C probe, one notice per cause).
 
+## Sensor location names
+
+`packages/sensor_names.yaml` gives each Ambient Weather extra sensor a display name that says where
+it is (operator, 2026-11-24): channel 1 greenhouse, 2 kitchen freezer, 3 basement freezer, 4
+basement far end, 5 attic, and the WH32B beside the ecobee. It sets `friendly_name` only, so entity
+ids, the alerts above and the trends series stay as they are. The placement record is asyla
+`data/home-climate-controls.md`; when a sensor moves, change both. Test on WS01:
+`python3 scripts/tests/test_home_assistant_sensor_names.py`.
+
 ## Restore
 
 `restore` brings back everything but `.storage`. Then `up`: Home Assistant starts as new and `up`

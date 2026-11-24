@@ -1,0 +1,33 @@
+# Location names for the Ambient Weather extra sensors (operator, 2026-11-24: "Yes, rename them").
+# Home Assistant named them from the station (sensor.mke_*_N, and sensor.outside_mke_*_N for channels
+# 3 to 5, a naming accident), so nothing in the UI said where each one is. Only the display name
+# (friendly_name) changes: the entity ids stay, so the freezer and sensor-health alerts and the
+# trends Prometheus series (labelled by entity id) are untouched.
+#
+# Placements as the operator stated them (asyla data/home-climate-controls.md, "Ambient Weather
+# sensor channels"): 1 greenhouse, 2 kitchen freezer, 3 basement deep freezer, 4 far end of the
+# basement, 5 main attic (on a joist above the insulation, from 2026-11-08 16:45Z), the WH32B beside
+# the ecobee. A sensor moved to a new place needs its names changed here and in that data file.
+# The AQIN Pro is left as it is: its placement was planned, not confirmed.
+
+homeassistant:
+  customize:
+    sensor.mke_temperature_1: {friendly_name: "Greenhouse temperature"}
+    sensor.mke_humidity_1: {friendly_name: "Greenhouse humidity"}
+    binary_sensor.mke_battery_1: {friendly_name: "Greenhouse sensor battery"}
+    sensor.mke_temperature_2: {friendly_name: "Kitchen freezer temperature"}
+    sensor.mke_humidity_2: {friendly_name: "Kitchen freezer humidity"}
+    binary_sensor.mke_battery_2: {friendly_name: "Kitchen freezer sensor battery"}
+    sensor.outside_mke_temperature_3: {friendly_name: "Basement freezer temperature"}
+    sensor.outside_mke_humidity_3: {friendly_name: "Basement freezer humidity"}
+    binary_sensor.outside_mke_battery_3: {friendly_name: "Basement freezer sensor battery"}
+    sensor.outside_mke_temperature_4: {friendly_name: "Basement far end temperature"}
+    sensor.outside_mke_humidity_4: {friendly_name: "Basement far end humidity"}
+    binary_sensor.outside_mke_battery_4: {friendly_name: "Basement far end sensor battery"}
+    sensor.outside_mke_temperature_5: {friendly_name: "Attic temperature"}
+    sensor.outside_mke_humidity_5: {friendly_name: "Attic humidity"}
+    binary_sensor.outside_mke_battery_5: {friendly_name: "Attic sensor battery"}
+    sensor.mke_inside_temperature: {friendly_name: "Main floor (by the ecobee) temperature"}
+    sensor.mke_humidity_indoor: {friendly_name: "Main floor (by the ecobee) humidity"}
+    # The station's only indoor transmitter is the WH32B, so this is taken to be its battery.
+    binary_sensor.mke_interior_battery: {friendly_name: "Main floor (by the ecobee) sensor battery"}
