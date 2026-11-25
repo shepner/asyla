@@ -262,7 +262,7 @@ not the fridge. Nothing covers the fridge until a probe is placed in it.
 
 `packages/sensor_names.yaml` gives each Ambient Weather extra sensor a display name that says where
 it is (operator, 2026-11-24): channel 1 greenhouse, 2 kitchen freezer, 3 basement freezer, 4
-basement far end, 5 attic, and the WH32B beside the ecobee. It sets `friendly_name` only, so entity
+basement far end, 5 attic, the WH32B beside the ecobee, and the AQIN Pro in the upstairs bedroom. It sets `friendly_name` only, so entity
 ids, the alerts above and the trends series stay as they are. The placement record is asyla
 `data/home-climate-controls.md`; when a sensor moves, change both. Test on WS01:
 `python3 scripts/tests/test_home_assistant_sensor_names.py`.

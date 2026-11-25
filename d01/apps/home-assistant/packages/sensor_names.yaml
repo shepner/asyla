@@ -7,8 +7,9 @@
 # Placements as the operator stated them (asyla data/home-climate-controls.md, "Ambient Weather
 # sensor channels"): 1 greenhouse, 2 kitchen freezer, 3 basement deep freezer, 4 far end of the
 # basement, 5 main attic (on a joist above the insulation, from 2026-11-08 16:45Z), the WH32B beside
-# the ecobee. A sensor moved to a new place needs its names changed here and in that data file.
-# The AQIN Pro is left as it is: its placement was planned, not confirmed.
+# the ecobee, and the AQIN Pro air quality monitor in the upstairs bedroom (operator, 2026-11-24:
+# "the air quality sensor in the upstairs bedroom"). A sensor moved to a new place needs its names
+# changed here and in that data file.
 
 homeassistant:
   customize:
@@ -31,3 +32,15 @@ homeassistant:
     sensor.mke_humidity_indoor: {friendly_name: "Main floor (by the ecobee) humidity"}
     # The station's only indoor transmitter is the WH32B, so this is taken to be its battery.
     binary_sensor.mke_interior_battery: {friendly_name: "Main floor (by the ecobee) sensor battery"}
+    sensor.outside_mke_indoor_temperature_aqin: {friendly_name: "Upstairs bedroom temperature"}
+    sensor.outside_mke_indoor_humidity_aqin: {friendly_name: "Upstairs bedroom humidity"}
+    sensor.outside_mke_co2_indoor_aqin: {friendly_name: "Upstairs bedroom CO2"}
+    sensor.outside_mke_co2_indoor_24h_average_aqin: {friendly_name: "Upstairs bedroom CO2 24 h average"}
+    sensor.outside_mke_pm2_5_indoor_aqin: {friendly_name: "Upstairs bedroom PM2.5"}
+    sensor.outside_mke_pm2_5_indoor_24h_aqin: {friendly_name: "Upstairs bedroom PM2.5 24 h average"}
+    sensor.outside_mke_pm2_5_indoor_aqi_aqin: {friendly_name: "Upstairs bedroom PM2.5 AQI"}
+    sensor.outside_mke_pm2_5_indoor_aqi_24h_average_aqin: {friendly_name: "Upstairs bedroom PM2.5 AQI 24 h average"}
+    sensor.outside_mke_pm10_indoor_aqin: {friendly_name: "Upstairs bedroom PM10"}
+    sensor.outside_mke_pm10_indoor_24h_average_aqin: {friendly_name: "Upstairs bedroom PM10 24 h average"}
+    sensor.outside_mke_pm10_indoor_aqi_aqin: {friendly_name: "Upstairs bedroom PM10 AQI"}
+    sensor.outside_mke_pm10_indoor_aqi_24h_average_aqin: {friendly_name: "Upstairs bedroom PM10 AQI 24 h average"}
