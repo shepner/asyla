@@ -18,8 +18,10 @@ main `d706369c` (`d706369c435a092948f4e86fad36f1a8a74cac51`, the #98 merge, 2026
 explicit mail switch `KEYCLOAK_MAIL` (`on` or `off`, unset is off) and keycloak-configure's
 read-only `check-mail-off` (`scripts/keycloak_realm.py`). From `bb456ee` to `d706369c` the only
 change to a d05 interface is in `deploy/d05/compose.example.yml`, which adds `- KEYCLOAK_MAIL` by
-name to keycloak-configure; `compose.yml` here leaves it out on purpose (unset is off, so mail and
-"Forgot password?" stay off; operator decision R3). `check-reset-off` and its stdin form,
+name to keycloak-configure; `compose.yml` here sets it, `- KEYCLOAK_MAIL=on`, by the operator's
+decision ("yes", turning on Keycloak's mail once asyla #657, theOrg's relay on d06, landed; this
+replaces R3's mail off; theOrg #1097), so `configure` turns on mail and "Forgot password?" when the
+relay's client record is complete ("Mail on" below). `check-reset-off` and its stdin form,
 `scripts/cutover_bundle.sh`, `scripts/keycloak_backup.sh`, `scripts/openldap_backup.sh`, the
 `Dockerfile.*`, `publish-images.yml` and the rest of `deploy/` did not change; `cutover_mini.py`
 changed on the Mini's side only, and the bundle and manifest formats are unchanged. theOrg's four
@@ -257,10 +259,23 @@ runs the cutover image's `unpack` into the two dirs the restores read (`backup/`
     ```
     cd ~/local/asyla && python3 core/tools/credentials.py exec IDP_DEPLOY_DEX_CLIENT_SECRET -- projects/asyla-hosts/scripts/app_switch.sh d05 identity-platform check-reset-off IDP_DEPLOY_DEX_CLIENT_SECRET
     ```
-  - Mail off: `check-mail-off` (theOrg #98 at `d706369c`; DEPLOY.md "Production on d05" and cutover step 6, and
-    `scripts/keycloak_realm.py check-mail-off`). `compose.yml` lists no `KEYCLOAK_MAIL`, so
-    keycloak-configure sees it unset, which is off: `apply` keeps the realm's SMTP server cleared
-    and `resetPasswordAllowed` false (operator decision R3). `check-mail-off` proves it, read-only.
+  - Mail on (operator "yes" once asyla #657 landed; theOrg #1097): `compose.yml` passes
+    `KEYCLOAK_MAIL=on` to keycloak-configure (theOrg's `mail_switch` at `d706369c` takes `on`,
+    `off`, unset or empty; anything else is refused before any call). `apply` then sets the realm's
+    SMTP server (`mail-relay.asyla.org:2587`) and `resetPasswordAllowed` true only when the relay's
+    client record is complete; otherwise it keeps both off. On d05, past `cutover-done`, mail goes
+    on by re-running `configure` (the command above) once this `compose.yml` is on d05; `configure`
+    removes `counted` and `reset-off`, which nothing past `cutover-done` needs (`up` and `backup`
+    read `cutover-done` alone). From then on:
+    - `check-reset-off` exits 1 (`resetPasswordAllowed` true) and writes no `reset-off`: it is not
+      run on d05 any more. A rebuild (M5 or the mirror path) still needs `reset-off` for
+      `cutover-done` (`cutover_gate`), so a rebuild with mail on stops there: an open gap, for a
+      later change with its own approval.
+    - `check-mail-off` exits 1 (mail on) in both modes: it is run only to prove mail off, after a
+      decision to turn it off again (`KEYCLOAK_MAIL` off or removed here, then `configure`).
+  - `check-mail-off` (theOrg #98 at `d706369c`; DEPLOY.md "Production on d05" and cutover step 6, and
+    `scripts/keycloak_realm.py check-mail-off`): proves mail off, read-only; with
+    `KEYCLOAK_MAIL=on` and a complete relay record it exits 1 ("Mail on" above).
     It reads `IDP_DEPLOY_DEX_CLIENT_SECRET`'s value as one line on stdin and writes it, in theOrg's
     form (exactly one `VAULT_DEX_CLIENT_SECRET=` line, theOrg's only stdin name for it), to the
     stdin of `docker compose --profile ops run --rm -T keycloak-configure check-mail-off [--without-realm]`
@@ -474,7 +489,8 @@ cd ~/local/asyla && projects/asyla-hosts/scripts/app_switch.sh d05 identity-plat
 - `check-mail-off` runs after `configure` (and `check-reset-off`), so `configured` exists and it
   runs in realm mode: it proves mail and "Forgot password?" are off in the restored realm. It
   writes no marker and is not a `cutover-done` gate; a failure (exit 1) stops the runbook here for
-  the operator's decision ("Mail off: check-mail-off" above).
+  the operator's decision. With `KEYCLOAK_MAIL=on` in `compose.yml` both `check-reset-off` and
+  `check-mail-off` exit 1 and `cutover-done` is refused for want of `reset-off` ("Mail on" above).
 
 - The build: d05 is not disposable, so the operator approves the exact command. The line above is
   for a d05 whose VM is gone: its `vm` phase skips a VM that still exists unless `--recreate`

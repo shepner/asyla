@@ -630,11 +630,16 @@ tags="$(awk '/^TAG / {print $2}' "$T/log" | sort -u)"
 cut_commit="$(sed -nE 's/^CUTOVER_BUNDLE_COMMIT="([0-9a-f]{40})"$/\1/p' "$SRC/identity-platform.sh")"
 [ "$cut_commit" = "d706369c435a092948f4e86fad36f1a8a74cac51" ] \
   && ok "the cutover-bundle image is pinned to merged main d706369c's full sha" || bad "cutover pin" "[$cut_commit]"
-# KEYCLOAK_MAIL is left out on purpose (theOrg #98: unset is off): no non-comment line of
-# compose.yml or identity-platform.sh names it, so no compose call can pass it.
-mail_lines="$(cat "$SRC/compose.yml" "$SRC/identity-platform.sh" | grep -vE '^[[:space:]]*#' | grep -F KEYCLOAK_MAIL || true)"
-[ -z "$mail_lines" ] \
-  && ok "KEYCLOAK_MAIL is on no non-comment line of compose.yml or identity-platform.sh (unset: mail off)" || bad "KEYCLOAK_MAIL named" "[$mail_lines]"
+# KEYCLOAK_MAIL=on (operator yes; asyla #657, theOrg #1097): exactly one non-comment line names it,
+# `- KEYCLOAK_MAIL=on` under keycloak-configure in compose.yml (theOrg's accepted on | off); none in
+# identity-platform.sh, so no other service or compose call passes it.
+mail_lines="$(grep -vE '^[[:space:]]*#' "$SRC/compose.yml" | grep -F KEYCLOAK_MAIL || true)"
+mail_svc="$(awk '/^  [A-Za-z0-9_-]+:[[:space:]]*$/ {svc=$1} /^[[:space:]]*#/ {next} /KEYCLOAK_MAIL/ {print svc}' "$SRC/compose.yml")"
+[ "$mail_lines" = "      - KEYCLOAK_MAIL=on" ] && [ "$mail_svc" = "keycloak-configure:" ] \
+  && ok "compose.yml has exactly one non-comment KEYCLOAK_MAIL line, '- KEYCLOAK_MAIL=on', under keycloak-configure" || bad "KEYCLOAK_MAIL in compose.yml" "[$mail_lines] in [$mail_svc]"
+sh_mail="$(grep -vE '^[[:space:]]*#' "$SRC/identity-platform.sh" | grep -F KEYCLOAK_MAIL || true)"
+[ -z "$sh_mail" ] \
+  && ok "KEYCLOAK_MAIL is on no non-comment line of identity-platform.sh" || bad "KEYCLOAK_MAIL in identity-platform.sh" "[$sh_mail]"
 
 # The credential helper: read-only, and it never takes a value with unexpected characters.
 H="$SRC/docker-credential-identity-platform-env"

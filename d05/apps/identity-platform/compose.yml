@@ -9,10 +9,10 @@
 # Pinned to theOrg's merged main d706369c435a092948f4e86fad36f1a8a74cac51 (the #98 merge: the mail
 # switch KEYCLOAK_MAIL and keycloak-configure's check-mail-off; read 2026-11-22), whose images are
 # published. From bb456ee to d706369c the example's only change adds `- KEYCLOAK_MAIL` by name to
-# keycloak-configure; this file leaves it out on purpose: compose passes only the names a service
-# lists, so keycloak-configure sees KEYCLOAK_MAIL unset, which is off (mail, the SMTP server and
-# "Forgot password?" stay off; operator decision R3). Turning mail on is a later change here, with
-# its own approval. Since 5dd8de6 (the #88 merge, after #86 a5415377 and
+# keycloak-configure; this file sets it, `- KEYCLOAK_MAIL=on`, by the operator's decision ("yes",
+# turning on Keycloak's mail once asyla #657, the d06 relay, landed; this replaces R3's mail off), so
+# configure turns on mail, the SMTP server and "Forgot password?" when the relay record is complete
+# (theOrg #1097, #1219). Since 5dd8de6 (the #88 merge, after #86 a5415377 and
 # #87 8ff2201a): keycloak-backup lists no PGPASSWORD (the password goes on stdin,
 # `run -T -e KEYCLOAK_BACKUP_PASSWORD_STDIN=1`), keycloak-configure lists no
 # VAULT_DEX_CLIENT_SECRET (its secrets go on stdin, #86), and openldap's healthcheck is an
@@ -199,7 +199,11 @@ services:
       - KEYCLOAK_LDAP_URL=ldaps://openldap:636
       # DEPLOY.md: defaults to KEYCLOAK_LDAP_URL; set to the same, so the leaf's SAN `openldap` is checked.
       - KEYCLOAK_LDAP_SEARCH_URI=ldaps://openldap:636
-      # The relay on d06; not live yet (2026-11-14): configure's SMTP check fails until it is.
+      # on | off (unset is off): mail, the SMTP server and "Forgot password?", only when on and the
+      # relay record is complete (theOrg #1219; keycloak_realm.py mail_switch at d706369c). On by the
+      # operator's decision ("yes", once asyla #657 landed). Not a secret.
+      - KEYCLOAK_MAIL=on
+      # theOrg's mail relay on d06 (asyla #657).
       - KEYCLOAK_SMTP_HOST=mail-relay.asyla.org
       - KEYCLOAK_SMTP_PORT=2587
       - OPENBAO_ADDR=https://vault.asyla.org

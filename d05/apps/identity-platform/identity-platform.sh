@@ -8,7 +8,7 @@
 # theOrg's merged main 5dd8de6 (#86, #87, #88: every one-shot takes its value on stdin) and
 # bb456ee (#89: keycloak-configure's read-only check-reset-off, DEPLOY.md cutover step 6), then
 # d706369c (#98: the explicit mail switch KEYCLOAK_MAIL, unset is off, and the read-only
-# check-mail-off; d05 lists no KEYCLOAK_MAIL, so mail stays off).
+# check-mail-off; d05's compose.yml sets KEYCLOAK_MAIL=on for keycloak-configure, operator yes, asyla #657).
 # This is M1 (agreed with theOrg): networks, images, theOrg's root
 # CA, a report on the openldap leaf, and keycloak-db alone. openldap and keycloak are never started
 # here: their first start is the M5 cutover (DEPLOY.md steps 5-6), after a restore, and theOrg's
@@ -1753,8 +1753,9 @@ do_check_reset_off() {
 # check-mail-off (theOrg identity-platform #98 at d706369c; DEPLOY.md cutover step 6 and
 # scripts/keycloak_realm.py check-mail-off): keycloak-configure's read-only check that mail (the
 # realm's SMTP server and "Forgot password?") is off and that the next apply would keep it off.
-# compose.yml lists no KEYCLOAK_MAIL, so keycloak-configure sees it unset, which is off; the check
-# still reads the mail relay's client record from OpenBao (the deploy role may read it). Exit 0 when
+# compose.yml sets KEYCLOAK_MAIL=on (operator yes, asyla #657), so with the relay record complete
+# the check exits 1 (mail on): it is a check for an off decision, no longer run on d05. It
+# reads the mail relay's client record from OpenBao (the deploy role may read it). Exit 0 when
 # off; 1 when on, not proven off or refused; 3 when it refused its stdin. The mode follows
 # cutover-state/configured (present as a file or a symlink, even dangling):
 #   realm mode (configured present: after configure): `check-mail-off`, which also reads the live
