@@ -49,8 +49,9 @@ theOrg's own deploy does not target d06.
 ## Images and the tag pin
 
 `gitea.asyla.org/theorg/communications-{nats,chat-api,webhook-to-mq,vector,backup}`, all at one tag:
-`COMMS_TAG` in `communications.sh`, the full `beff7c55` sha (theOrg's publish-images pushed those
-images). Unlike ticketing this does not follow `latest`: the hand-off names a commit. Pin another
+`COMMS_TAG` in `communications.sh`, `beff7c55c9880facd23a1c289f667de5c1692795-20261126`: the same
+`beff7c55` commit, republished as a dated tag after the registry lost the bare-sha tag (asyla #1372,
+theOrg #1373, publish-images run 28646). Unlike ticketing this does not follow `latest`: the hand-off names a commit. Pin another
 by hand with `COMMS_TAG_OVERRIDE=<a theOrg sha whose images are published>` in the call's
 environment, then `communications.sh backup update up verify`. Third-party images are pinned:
 `natsio/prometheus-nats-exporter:0.20.2` by version, and `postgres:16-bookworm` by the digest of

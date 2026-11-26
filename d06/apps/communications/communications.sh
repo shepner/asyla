@@ -38,10 +38,12 @@ BACKUP_DIR="$DOCKER_D1/Communications/mirror"
 # copied from here, a copy owned by this user with the same owner-only modes.
 STAGE_DIR="$APP_ROOT/mirror-stage"
 
-# One tag for every communications image: the theOrg commit the hand-off names (beff7c55, whose
-# images publish-images pushed). Pin another by hand with COMMS_TAG_OVERRIDE=<a theOrg sha whose
-# images are published>, then `backup update up verify` with it.
-COMMS_TAG="${COMMS_TAG_OVERRIDE:-beff7c55c9880facd23a1c289f667de5c1692795}"
+# One tag for every communications image: the theOrg commit the hand-off names (beff7c55). The
+# registry lost the bare-sha tag (asyla #1372), and theOrg republished the same commit as the dated
+# tag below (publish-images run 28646, theOrg #1373; operator 2026-11-24 "Republish beff7c55,
+# dated"). Pin another by hand with COMMS_TAG_OVERRIDE=<a published theOrg tag>, then
+# `backup update up verify` with it.
+COMMS_TAG="${COMMS_TAG_OVERRIDE:-beff7c55c9880facd23a1c289f667de5c1692795-20261126}"
 REGISTRY="gitea.asyla.org"
 # Where the theOrg images are named from. COMMS_REGISTRY_OVERRIDE is for a lab only (locally built
 # images under another prefix: README.md, Lab); the deploy never sets it.
